@@ -1,0 +1,23 @@
+version: '3.8'
+services:
+  zoe-matrix:
+    image: matrixdotorg/synapse:latest
+    container_name: zoe-matrix
+    ports:
+      - "9003:8008"
+    environment:
+      - SYNAPSE_SERVER_NAME=zoe.local
+      - SYNAPSE_REPORT_STATS=no
+    volumes:
+      - matrix_data:/data
+      - ./services/zoe-matrix/homeserver.yaml:/data/homeserver.yaml
+    networks:
+      - zoe-network
+    restart: unless-stopped
+
+volumes:
+  matrix_data:
+
+networks:
+  zoe-network:
+    external: true

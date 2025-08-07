@@ -1,0 +1,66 @@
+# Zoe v3.1 Home Assistant Configuration
+default_config:
+
+# Enable API and webhooks for Zoe integration
+api:
+webhook:
+
+# HTTP integration for external access
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 172.18.0.0/16 # Docker network
+    - 127.0.0.1
+    - ::1
+
+# Automation for Zoe integration
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+# Input helpers for Zoe personality settings
+input_number:
+  zoe_fun_level:
+    name: Zoe Fun Level
+    initial: 7
+    min: 1
+    max: 10
+    step: 1
+    icon: mdi:emoticon-happy
+  
+  zoe_empathy_level:
+    name: Zoe Empathy Level
+    initial: 8
+    min: 1
+    max: 10
+    step: 1
+    icon: mdi:heart
+  
+  zoe_cheeky_level:
+    name: Zoe Cheeky Level
+    initial: 6
+    min: 1
+    max: 10
+    step: 1
+    icon: mdi:emoticon-wink
+
+# Sensors for system monitoring
+sensor:
+  - platform: systemmonitor
+    resources:
+      - type: disk_use_percent
+        arg: /
+      - type: memory_use_percent
+      - type: processor_use
+
+  - platform: template
+    sensors:
+      zoe_status:
+        friendly_name: "Zoe AI Status"
+        value_template: >
+          {% if states('sensor.zoe_last_chat') %}
+            Online
+          {% else %}
+            Offline
+          {% endif %}
+        icon_template: mdi:robot

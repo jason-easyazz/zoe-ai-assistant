@@ -1,0 +1,117 @@
+
+networks:
+  zoe_network:
+    driver: bridge
+
+volumes:
+  ollama_data:
+  redis_data:
+  n8n_data:
+  homeassistant_data:
+  zoe_database:
+
+services:
+  # Zoe Core Backend
+  zoe-core:
+    build:
+      context: ./services/zoe-core
+      dockerfile: Dockerfile
+    container_name: zoe-core
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - zoe_database:/app/data
+      - ./data/logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_PATH=/app/data/zoe.db
+      - OLLAMA_URL=http://ollama:11434
+      - REDIS_URL=redis://redis:6379
+      - CORS_ORIGINS=http://localhost:8080,http://localhost:3000
+    depends_on:
+      - ollama
+      - redis
+    networks:
+      - zoe_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Local AI Model Server
+  ollama:
+    image: ollama/ollama:0.1.32
+    container_name: zoe-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_ORIGINS=*
+    networks:
+      - zoe_network
+
+  # Redis for Caching
+  redis:
+    image: redis:7.2-alpine
+    container_name: zoe-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --requirepass zoe123
+    networks:
+      - zoe_network
+
+  # Workflow Automation (Optional)
+  n8n:
+    image: n8nio/n8n:1.23.1
+    container_name: zoe-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=false
+      - N8N_HOST=0.0.0.0
+      - N8N_ENCRYPTION_KEY=zoe-n8n-key
+    networks:
+      - zoe_network
+
+  # Smart Home Hub (Optional)
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:2024.3.0
+    container_name: zoe-homeassistant
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+    volumes:
+      - homeassistant_data:/config
+    privileged: true
+    networks:
+      - zoe_network
+
+  # Premium UI Service
+  zoe-ui:
+    build:
+      context: ./services/zoe-ui
+      dockerfile: Dockerfile
+    container_name: zoe-ui
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - zoe-core
+    networks:
+      - zoe_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3

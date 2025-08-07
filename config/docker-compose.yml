@@ -1,0 +1,74 @@
+version: '3.8'
+
+networks:
+  zoe_network:
+    driver: bridge
+
+volumes:
+  ollama_data:
+  redis_data:
+  zoe_database:
+
+services:
+  # Core Zoe Backend API
+  zoe-core:
+    build:
+      context: ../services/zoe-core
+      dockerfile: Dockerfile
+    container_name: zoe-core
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - zoe_database:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_PATH=/app/data/zoe.db
+      - OLLAMA_URL=http://ollama:11434
+    depends_on:
+      - ollama
+      - redis
+    networks:
+      - zoe_network
+
+  # Frontend Web UI
+  zoe-ui:
+    build:
+      context: ../services/zoe-ui
+      dockerfile: Dockerfile
+    container_name: zoe-ui
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - zoe-core
+    networks:
+      - zoe_network
+
+  # Local AI Model Server (Ollama)
+  ollama:
+    image: ollama/ollama:0.1.32
+    container_name: zoe-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_ORIGINS=*
+    networks:
+      - zoe_network
+
+  # Redis Cache
+  redis:
+    image: redis:7.2-alpine
+    container_name: zoe-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --requirepass zoe123redis
+    networks:
+      - zoe_network

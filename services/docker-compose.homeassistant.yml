@@ -1,0 +1,21 @@
+version: '3.8'
+services:
+  zoe-homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: zoe-homeassistant
+    privileged: true
+    ports:
+      - "8123:8123"
+    environment:
+      - TZ=Australia/Perth
+    volumes:
+      - ./services/zoe-homeassistant:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+    networks:
+      - zoe-network
+    restart: unless-stopped
+
+networks:
+  zoe-network:
+    external: true

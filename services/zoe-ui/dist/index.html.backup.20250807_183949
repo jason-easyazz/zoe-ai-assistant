@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe v3.1 - Enhanced AI</title>
+    <link rel="stylesheet" href="css/style.css">
+    <style>
+        /* Ensure new interface styles */
+        .app-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background: linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%);
+            color: white;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        
+        .app-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 2rem;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .app-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin: 0;
+        }
+        
+        .status {
+            background: rgba(74, 222, 128, 0.2);
+            color: #4ade80;
+            padding: 0.25rem 0.75rem;
+            border-radius: 1rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+        
+        .time-display {
+            font-size: 1rem;
+            font-weight: 500;
+            opacity: 0.8;
+        }
+        
+        .main-content {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        
+        .sidebar {
+            width: 240px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .nav-items {
+            padding: 1rem;
+        }
+        
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            margin: 0.25rem 0;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: rgba(255, 255, 255, 0.7);
+        }
+        
+        .nav-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+        
+        .nav-item.active {
+            background: rgba(123, 97, 255, 0.3);
+            color: white;
+            border: 1px solid rgba(123, 97, 255, 0.5);
+        }
+        
+        .nav-icon {
+            font-size: 1.25rem;
+        }
+        
+        .nav-label {
+            font-weight: 500;
+        }
+        
+        .content-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        
+        .content-section {
+            display: none;
+            flex: 1;
+            overflow-y: auto;
+            padding: 2rem;
+        }
+        
+        .content-section.active {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            max-width: 800px;
+            margin: 0 auto;
+            width: 100%;
+        }
+        
+        .welcome-screen {
+            text-align: center;
+            padding: 4rem 2rem;
+            opacity: 0.9;
+        }
+        
+        .zoe-avatar {
+            font-size: 4rem;
+            margin-bottom: 1rem;
+        }
+        
+        .welcome-screen h2 {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            background: linear-gradient(45deg, #7b61ff, #5ae0e0);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem 0;
+            min-height: 400px;
+        }
+        
+        .message {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            animation: fadeInUp 0.3s ease;
+        }
+        
+        .message-avatar {
+            font-size: 1.5rem;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+        }
+        
+        .message-content {
+            flex: 1;
+        }
+        
+        .message-text {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 1rem;
+            border-radius: 1rem;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .message.user .message-text {
+            background: rgba(123, 97, 255, 0.3);
+            border-color: rgba(123, 97, 255, 0.5);
+        }
+        
+        .message-time {
+            font-size: 0.75rem;
+            opacity: 0.6;
+            margin-top: 0.5rem;
+        }
+        
+        .chat-input-container {
+            margin-top: 1rem;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 1rem;
+            padding: 1rem;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .input-area {
+            display: flex;
+            gap: 1rem;
+            align-items: flex-end;
+        }
+        
+        .chat-input {
+            flex: 1;
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            color: white;
+            resize: none;
+            font-family: inherit;
+            min-height: 44px;
+            max-height: 120px;
+        }
+        
+        .chat-input::placeholder {
+            color: rgba(255, 255, 255, 0.5);
+        }
+        
+        .chat-input:focus {
+            outline: none;
+            border-color: #7b61ff;
+            box-shadow: 0 0 0 2px rgba(123, 97, 255, 0.3);
+        }
+        
+        .btn-icon {
+            background: #7b61ff;
+            border: none;
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            color: white;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all 0.2s ease;
+            min-width: 44px;
+            height: 44px;
+        }
+        
+        .btn-icon:hover {
+            background: #6d4ec2;
+            transform: scale(1.05);
+        }
+        
+        .btn-icon:disabled {
+            background: rgba(255, 255, 255, 0.2);
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .dashboard-container, .settings-container {
+            max-width: 800px;
+            margin: 0 auto;
+            width: 100%;
+        }
+        
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+        
+        .dashboard-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .dashboard-card h3 {
+            margin: 0 0 1rem 0;
+            font-size: 1.25rem;
+        }
+        
+        .settings-info {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            margin-top: 1.5rem;
+        }
+        
+        .settings-info p {
+            margin: 0.75rem 0;
+            color: #4ade80;
+        }
+        
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .typing-indicator {
+            animation: blink 1s infinite;
+        }
+        
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <div class="header-left">
+                <h1 class="app-title">🎭 Zoe v3.1</h1>
+                <div class="status">✅ Enhanced</div>
+            </div>
+            <div class="header-right">
+                <div id="current-time" class="time-display"></div>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <nav class="sidebar">
+                <div class="nav-items">
+                    <div class="nav-item active" data-section="chat">
+                        <span class="nav-icon">💬</span>
+                        <span class="nav-label">Chat</span>
+                    </div>
+                    <div class="nav-item" data-section="dashboard">
+                        <span class="nav-icon">📊</span>
+                        <span class="nav-label">Dashboard</span>
+                    </div>
+                    <div class="nav-item" data-section="settings">
+                        <span class="nav-icon">⚙️</span>
+                        <span class="nav-label">Settings</span>
+                    </div>
+                </div>
+            </nav>
+
+            <div class="content-area">
+                <section id="chat-section" class="content-section active">
+                    <div class="chat-container">
+                        <div id="welcome-screen" class="welcome-screen">
+                            <div class="zoe-avatar">🎭</div>
+                            <h2>Enhanced Zoe v3.1 💫</h2>
+                            <p>Your upgraded AI companion with working navigation!</p>
+                        </div>
+                        
+                        <div id="chat-messages" class="chat-messages"></div>
+                        
+                        <div class="chat-input-container">
+                            <div class="input-area">
+                                <textarea 
+                                    id="chat-input" 
+                                    class="chat-input" 
+                                    placeholder="Chat with enhanced Zoe..."
+                                    rows="1"
+                                ></textarea>
+                                <button id="send-btn" class="btn-icon send-btn">➤</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="dashboard-section" class="content-section">
+                    <div class="dashboard-container">
+                        <h2>📊 Dashboard</h2>
+                        <div class="dashboard-grid">
+                            <div class="dashboard-card">
+                                <h3>🎭 Zoe Status</h3>
+                                <p>Enhanced AI Active</p>
+                                <p>All systems operational</p>
+                            </div>
+                            <div class="dashboard-card">
+                                <h3>💬 Chat Stats</h3>
+                                <p>Ready for conversation</p>
+                                <p>Enhanced responses enabled</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+                
+                <section id="settings-section" class="content-section">
+                    <div class="settings-container">
+                        <h2>⚙️ Settings</h2>
+                        <div class="settings-info">
+                            <p>✅ Enhanced chat enabled</p>
+                            <p>✅ Real-time responses</p>
+                            <p>✅ Working navigation</p>
+                            <p>✅ Improved interface</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+    
+    <script src="js/api.js"></script>
+    <script src="js/chat.js"></script>
+    <script src="js/nav.js"></script>
+</body>
+</html>

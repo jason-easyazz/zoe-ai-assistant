@@ -1,0 +1,78 @@
+# Zoe AI Assistant - Privacy Protection
+
+# Personal data (NEVER commit)
+data/database/
+data/profiles/
+data/journals/
+data/conversations/
+data/chat_history/
+*.db
+*.sqlite*
+
+# Secrets & credentials
+.env
+.env.local
+.env.production
+secrets/
+credentials/
+certificates/
+*.key
+*.pem
+*.crt
+
+# Runtime data
+logs/
+*.log
+tmp/
+temp/
+cache/
+backups/
+*.backup
+*.bak
+*.tar.gz
+
+# Docker volumes
+data/ollama/
+data/whisper/
+data/tts/
+data/n8n/
+data/homeassistant/
+data/matrix/
+
+# Large model files
+*.bin
+*.gguf
+*.safetensors
+models/
+
+# Development files
+__pycache__/
+*.pyc
+node_modules/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Home Assistant specific exclusions
+services/zoe-homeassistant/.storage/
+services/zoe-homeassistant/config/.storage/
+services/*/.*
+*/.storage/
+*/auth
+*/auth_*
+
+# Docker container generated files
+services/*/data/
+services/*/logs/
+services/*/cache/
+services/*/tmp/
+
+# Permission-protected files
+**/auth
+**/token*
+**/secret*
+**/.storage/
+**/.cloud/
+**/.uuid
+

@@ -1,0 +1,59 @@
+# Zoe Home Assistant Automations
+
+# Sync personality settings to Zoe
+- id: zoe_personality_sync
+  alias: "Zoe: Sync Personality Settings"
+  trigger:
+    - platform: state
+      entity_id:
+        - input_number.zoe_fun_level
+        - input_number.zoe_empathy_level
+        - input_number.zoe_cheeky_level
+  action:
+    - service: rest_command.zoe_update_personality
+
+# Notify Zoe when someone arrives home
+- id: zoe_arrival_notification
+  alias: "Zoe: Arrival Notification"
+  trigger:
+    - platform: state
+      entity_id: device_tracker.phone  # Adjust to your device
+      to: 'home'
+  condition:
+    - condition: state
+      entity_id: input_boolean.zoe_notifications_enabled
+      state: 'on'
+  action:
+    - service: rest_command.zoe_chat
+      data:
+        message: "Welcome home! How was your day? 😊"
+
+# Daily good morning from Zoe
+- id: zoe_good_morning
+  alias: "Zoe: Good Morning"
+  trigger:
+    - platform: time
+      at: "08:00:00"
+  condition:
+    - condition: state
+      entity_id: input_boolean.zoe_notifications_enabled
+      state: 'on'
+  action:
+    - service: rest_command.zoe_chat
+      data:
+        message: "Good morning! Ready to make today amazing? ☀️"
+
+# Evening wind-down reminder
+- id: zoe_evening_reminder
+  alias: "Zoe: Evening Reminder"
+  trigger:
+    - platform: time
+      at: "21:00:00"
+  condition:
+    - condition: state
+      entity_id: input_boolean.zoe_notifications_enabled
+      state: 'on'
+  action:
+    - service: rest_command.zoe_chat
+      data:
+        message: "Evening! How about reflecting on your day in your journal? 📝✨"

@@ -1,0 +1,36 @@
+version: '3.8'
+services:
+  zoe-whisper:
+    image: onerahmet/openai-whisper-asr-webservice:latest-gpu
+    container_name: zoe-whisper
+    ports:
+      - "9001:9001"
+    environment:
+      - ASR_MODEL=base
+      - ASR_ENGINE=openai_whisper
+    volumes:
+      - whisper_models:/root/.cache/whisper
+    networks:
+      - zoe-network
+    restart: unless-stopped
+
+  zoe-tts:
+    image: synesthesiam/mozillatts:latest
+    container_name: zoe-tts
+    ports:
+      - "9002:9002"
+    environment:
+      - TTS_MODEL=tts_models/en/ljspeech/tacotron2-DDC
+    volumes:
+      - tts_models:/root/.local/share/tts
+    networks:
+      - zoe-network
+    restart: unless-stopped
+
+volumes:
+  whisper_models:
+  tts_models:
+
+networks:
+  zoe-network:
+    external: true

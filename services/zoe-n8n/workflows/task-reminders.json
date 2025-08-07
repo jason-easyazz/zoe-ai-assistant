@@ -1,0 +1,119 @@
+{
+  "name": "Zoe Task Reminders",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "value": "0 */2 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Every 2 Hours",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://zoe-core:8000/api/tasks?status=pending",
+        "options": {}
+      },
+      "name": "Get Pending Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.length}}",
+              "operation": "larger",
+              "value2": "0"
+            }
+          ]
+        }
+      },
+      "name": "Has Pending Tasks?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const tasks = items[0].json;\nconst highPriorityTasks = tasks.filter(task => task.priority === 'high' || task.priority === 'urgent');\n\nif (highPriorityTasks.length > 0) {\n  return [{\n    json: {\n      message: `Hey! You have ${highPriorityTasks.length} high-priority tasks waiting: ${highPriorityTasks.map(t => t.title).join(', ')}. Want to tackle one now?`,\n      task_count: highPriorityTasks.length\n    }\n  }];\n}\n\nreturn [];"
+      },
+      "name": "Process High Priority Tasks",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://zoe-core:8000/webhooks/reminder",
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={{$json}}",
+        "options": {}
+      },
+      "name": "Send Reminder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1120, 200]
+    }
+  ],
+  "connections": {
+    "Every 2 Hours": {
+      "main": [
+        [
+          {
+            "node": "Get Pending Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Pending Tasks": {
+      "main": [
+        [
+          {
+            "node": "Has Pending Tasks?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Pending Tasks?": {
+      "main": [
+        [
+          {
+            "node": "Process High Priority Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process High Priority Tasks": {
+      "main": [
+        [
+          {
+            "node": "Send Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {},
+  "id": "zoe-task-reminders"
+}
