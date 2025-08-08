@@ -5,9 +5,12 @@ Workflow automation and background processing
 
 import aiohttp
 import asyncio
+import json
 import logging
 import os
 from typing import Optional, Dict, Any, List
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +18,8 @@ class N8NService:
     def __init__(self):
         self.n8n_url = os.getenv('N8N_URL', 'http://zoe-n8n:5678')
         self.enabled = os.getenv('N8N_ENABLED', 'true').lower() == 'true'
+        self.api_key = os.getenv('N8N_API_KEY', '')
+        self.ollama_url = os.getenv('OLLAMA_URL', 'http://ollama:11434')
         
     async def trigger_workflow(self, workflow_id: str, data: Dict[str, Any]) -> Optional[Dict]:
         """Trigger an n8n workflow with data"""
@@ -49,6 +54,57 @@ class N8NService:
                     return []
         except:
             return []
+
+    async def create_workflow_from_prompt(self, prompt: str) -> Dict[str, Any]:
+        """Generate and deploy a workflow from natural language prompt"""
+        if not self.enabled:
+            raise RuntimeError("n8n integration disabled")
+
+        llm_prompt = (
+            "Convert the following request into a valid n8n workflow JSON. "
+            "Return only JSON.\n" + prompt
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                llm_resp = await client.post(
+                    f"{self.ollama_url}/api/generate",
+                    json={
+                        "model": "mistral:7b",
+                        "prompt": llm_prompt,
+                        "stream": False,
+                    },
+                )
+            llm_data = llm_resp.json()
+            workflow_text = llm_data.get("response", "").strip()
+            workflow = json.loads(workflow_text)
+        except Exception as e:
+            logger.error(f"Workflow generation failed: {e}")
+            raise
+
+        if not isinstance(workflow, dict) or "name" not in workflow:
+            raise ValueError("Invalid workflow JSON returned by LLM")
+
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                n8n_resp = await client.post(
+                    f"{self.n8n_url}/rest/workflows",
+                    headers=headers,
+                    json=workflow,
+                )
+            status = n8n_resp.status_code
+            logger.info(
+                f"Workflow '{workflow.get('name')}' creation status: {status}"
+            )
+            n8n_resp.raise_for_status()
+            return n8n_resp.json()
+        except Exception as e:
+            logger.error(f"n8n workflow creation error: {e}")
+            raise
     
     async def process_task_reminder(self, task_data: Dict[str, Any]) -> None:
         """Process task reminder automation"""

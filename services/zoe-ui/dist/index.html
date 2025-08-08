@@ -152,6 +152,7 @@
             gap: 20px;
         }
 
+
         .nav-menu {
             display: flex;
             gap: 20px;
@@ -168,6 +169,12 @@
 
         .nav-item:hover, .nav-item.active {
             color: #7B61FF;
+
+        .nav-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+
         }
 
         .mini-orb {
@@ -199,6 +206,23 @@
             font-size: 20px;
             cursor: pointer;
             transition: all 0.2s ease;
+        }
+
+        .settings-btn {
+            width: 40px;
+            height: 40px;
+            border: none;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            color: #666;
+            font-size: 18px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .settings-btn:hover {
+            background: rgba(123, 97, 255, 0.2);
+            color: #7B61FF;
         }
 
         .close-btn:hover {
@@ -570,7 +594,10 @@
                     <a href="settings.html" class="nav-item">Settings</a>
                 </div>
             </div>
-            <button class="close-btn" onclick="exitToOrb()">×</button>
+            <div class="nav-right">
+                <button class="settings-btn" onclick="window.location.href='settings.html'">⚙️</button>
+                <button class="close-btn" onclick="exitToOrb()">×</button>
+            </div>
         </div>
 
         <div class="main-container">
@@ -848,6 +875,16 @@
             chatMessages.appendChild(messageDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const voiceEnabled = localStorage.getItem('voice-toggle') !== 'false';
+            if (!voiceEnabled) {
+                const voiceBtn = document.getElementById('voiceBtn');
+                if (voiceBtn) voiceBtn.style.display = 'none';
+                const overlayVoiceBtn = document.querySelector('#overlay .voice-btn');
+                if (overlayVoiceBtn) overlayVoiceBtn.style.display = 'none';
+            }
+        });
 
     </script>
     <script src="js/overlay.js"></script>
