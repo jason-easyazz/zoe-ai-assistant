@@ -493,7 +493,13 @@ async def process_message_integrations(user_message: str, ai_response: str, conv
                 await db.execute("""
                     INSERT INTO events (title, start_date, source, integration_id, created_at)
                     VALUES (?, ?, ?, ?, ?)
-                """, (event["title"], event.get("date", datetime.now().date()), "chat_detection", f"conv_{conversation_id}", datetime.now()))
+                """, (
+                    event["title"],
+                    event.get("date", datetime.now().date()),
+                    "chat_detection",
+                    f"conv_{conversation_id}",
+                    datetime.now(),
+                ))
             
             await db.commit()
         
