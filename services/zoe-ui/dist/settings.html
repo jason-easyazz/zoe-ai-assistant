@@ -74,9 +74,12 @@
                 <a href="index.html" class="nav-item">Chat</a>
                 <a href="dashboard.html" class="nav-item">Dashboard</a>
                 <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <a href="tasks.html" class="nav-item">Tasks</a>
                 <a href="settings.html" class="nav-item active">Settings</a>
             </div>
         </div>
+        <div id="currentUserDisplay" class="nav-item"></div>
         <button class="close-btn" onclick="exitToOrb()">×</button>
     </div>
 
@@ -95,21 +98,67 @@
             <h1>Settings</h1>
             <p>Manage your preferences here.</p>
 
+            <!-- TODO: Add settings options -->
+            <div id="userManagementSection" style="display:none;margin-top:20px;">
+                <h2>User Management</h2>
+                <ul id="userList"></ul>
+                <div style="margin-top:10px;">
+                    <input id="newUsername" placeholder="Username">
+                    <input id="newPasscode" type="password" placeholder="Passcode">
+                    <select id="newRole">
+                        <option value="user">User</option>
+                        <option value="admin">Admin</option>
+                    </select>
+                    <button id="addUserBtn">Add User</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+        let currentMode = 'orb';
+
+        const orbMode = document.getElementById('orbMode');
+        const mainInterface = document.getElementById('mainInterface');
+        const fluidOrb = document.getElementById('fluidOrb');
+
+
             <div class="settings-tabs">
                 <button class="tab-button active" data-tab="general">General</button>
                 <button class="tab-button" data-tab="modules">Modules</button>
             </div>
+
 
             <div id="generalSettings" class="settings-content active">
                 <label><input type="checkbox" id="voice-toggle" checked> Enable Voice</label><br>
                 <label><input type="checkbox" id="notifications-toggle" checked> Enable Notifications</label>
             </div>
 
+        function updateWeather() {
+            fetch('http://localhost:8000/api/weather')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('weatherIcon').textContent = data.icon || '☀️';
+                    document.getElementById('weatherTemp').textContent = `${data.temperature || 23}°`;
+                })
+                .catch(error => {
+                    console.log('Weather API not available, using defaults');
+                    document.getElementById('weatherIcon').textContent = '☀️';
+                    document.getElementById('weatherTemp').textContent = '23°';
+                });
+        }
+</script>
+<script src="js/overlay.js"></script>
+<script src="js/user-management.js"></script>
+
+
             <div id="modulesSettings" class="settings-content">
                 <div id="modulesList">Loading modules...</div>
             </div>
         </div>
     </div>
+
 </div>
 
 <script src="js/api.js"></script>
@@ -128,6 +177,25 @@
         setupTabs();
         loadModules();
         document.querySelectorAll('#generalSettings input[type="checkbox"]').forEach(cb => {
+
+    <div class="settings-container">
+        <h1>Zoe Settings</h1>
+        <div class="settings-section">
+            <h2>General</h2>
+            <label><input type="checkbox" id="voice-toggle" checked> Enable Voice</label><br>
+            <label><input type="checkbox" id="notifications-toggle" checked> Enable Notifications</label>
+        </div>
+        <div class="settings-section">
+            <h2>Integrations</h2>
+            <label><input type="checkbox" id="matrix-sync-toggle"> Enable Matrix Sync</label><br>
+            <a class="integration-link" href="http://localhost:9003" target="_blank">Matrix</a>
+            <a class="integration-link" href="http://localhost:5678" target="_blank">n8n</a>
+            <a class="integration-link" href="http://localhost:8123" target="_blank">Home Assistant</a>
+        </div>
+    </div>
+    <script>
+        document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+
             const saved = localStorage.getItem(cb.id);
             if (saved !== null) {
                 cb.checked = saved === 'true';
@@ -136,6 +204,7 @@
                 localStorage.setItem(cb.id, cb.checked);
             });
         });
+
     });
 
     function enterInterface() {
@@ -217,6 +286,29 @@
             text.textContent = `${mod.name} - ${mod.description}`;
             label.appendChild(toggle);
             label.appendChild(text);
+
+
+        // Load Matrix sync setting from server
+        fetch('/api/settings').then(r => r.json()).then(data => {
+            const cb = document.getElementById('matrix-sync-toggle');
+            if (cb && data.integrations) {
+                cb.checked = data.integrations.matrix_enabled;
+            }
+        });
+
+        // Update server when Matrix sync toggled
+        const matrixToggle = document.getElementById('matrix-sync-toggle');
+        if (matrixToggle) {
+            matrixToggle.addEventListener('change', () => {
+                fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ integrations: { matrix_enabled: matrixToggle.checked } })
+                });
+            });
+        }
+    </script>
+
 
             item.appendChild(label);
             container.appendChild(item);

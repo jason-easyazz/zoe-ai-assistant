@@ -11,13 +11,14 @@ window.zoeAPI = {
             return { error: error.message };
         }
     },
-    async getHealth() {
+      async getHealth() {
         try {
             const response = await fetch('/health');
             return await response.json();
         } catch (error) {
             return { status: 'error' };
         }
+
     },
     async getModules() {
         try {
@@ -40,3 +41,35 @@ window.zoeAPI = {
         }
     }
 };
+
+      },
+      async getMatrixRooms() {
+          try {
+              const response = await fetch('/api/matrix/rooms');
+              return await response.json();
+          } catch (error) {
+              return { error: error.message };
+          }
+      },
+      async sendMatrixMessage(room_id, message) {
+          try {
+              const response = await fetch('/api/matrix/send', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ room_id, message })
+              });
+              return await response.json();
+          } catch (error) {
+              return { error: error.message };
+          }
+      },
+      async receiveMatrixMessages(room_id) {
+          try {
+              const response = await fetch(`/api/matrix/receive?room_id=${encodeURIComponent(room_id)}`);
+              return await response.json();
+          } catch (error) {
+              return { error: error.message };
+          }
+      }
+  };
+

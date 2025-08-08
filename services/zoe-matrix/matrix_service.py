@@ -60,6 +60,8 @@ class MatrixManager:
         self.config: Optional[MatrixConfig] = None
         self.connected = False
         self.rooms: Dict[str, str] = {}  # room_id -> room_name
+        # Store messages per room so UI can retrieve them
+        self.messages: Dict[str, List[Dict[str, str]]] = {}
         
     async def load_config(self):
         """Load Matrix configuration"""
@@ -142,8 +144,15 @@ class MatrixManager:
         """Handle incoming Matrix messages"""
         if event.sender == self.client.user_id:
             return  # Ignore our own messages
-            
+
         logger.info(f"Received message from {event.sender} in {room.display_name}: {event.body}")
+
+        # Store the incoming message
+        self.messages.setdefault(room.room_id, []).append({
+            "sender": event.sender,
+            "message": event.body,
+            "timestamp": datetime.now().isoformat()
+        })
         
         # Forward to Zoe for processing
         try:
@@ -171,7 +180,7 @@ class MatrixManager:
         """Send message to Matrix room"""
         if not self.client or not self.connected:
             raise Exception("Not connected to Matrix")
-            
+
         try:
             await self.client.room_send(
                 room_id=room_id,
@@ -182,10 +191,20 @@ class MatrixManager:
                 }
             )
             logger.info(f"Sent message to {room_id}: {message[:50]}...")
+            # Store the sent message
+            self.messages.setdefault(room_id, []).append({
+                "sender": self.client.user_id if self.client else "", 
+                "message": message,
+                "timestamp": datetime.now().isoformat()
+            })
             return True
         except Exception as e:
             logger.error(f"Failed to send Matrix message: {e}")
             raise
+
+    async def get_room_messages(self, room_id: str):
+        """Retrieve stored messages for a room"""
+        return self.messages.get(room_id, [])
     
     async def get_rooms(self):
         """Get list of joined rooms"""
@@ -286,6 +305,12 @@ async def send_message(message_req: MessageRequest):
         return {"success": True, "message": "Message sent"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/receive")
+async def receive_messages(room_id: str):
+    """Get messages for a Matrix room"""
+    messages = await matrix_manager.get_room_messages(room_id)
+    return {"room_id": room_id, "messages": messages}
 
 @app.post("/api/connect")
 async def connect_matrix():
