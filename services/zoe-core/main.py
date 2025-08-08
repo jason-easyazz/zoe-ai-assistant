@@ -550,7 +550,15 @@ async def extract_entities_advanced(text: str) -> Dict:
     for pattern in event_patterns:
         matches = re.finditer(pattern, text, re.IGNORECASE)
         for match in matches:
-            event_title = match.group(1).strip() if len(match.groups()) > 1 else match.group(0).strip()
+            # Use the first captured group when available to avoid including the
+            # entire matched string (e.g. "birthday is on May 5") as the title.
+            # Previously, patterns with a single capture group returned the whole
+            # match, producing titles like "birthday is on May 5.".  We now
+            # consistently use the first group if it exists; otherwise we fall
+            # back to the full match.
+            event_title = match.group(1).strip() if match.groups() else match.group(0).strip()
+            # Remove leading connecting words like "on" or "at" for cleaner titles
+            event_title = re.sub(r'^(on|at)\s+', '', event_title, flags=re.IGNORECASE)
             entities["events"].append({
                 "title": event_title,
                 "confidence": 0.7,
