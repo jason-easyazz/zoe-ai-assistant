@@ -264,6 +264,7 @@
         </div>
         <div class="settings-section">
             <h2>Integrations</h2>
+            <label><input type="checkbox" id="matrix-sync-toggle"> Enable Matrix Sync</label><br>
             <a class="integration-link" href="http://localhost:9003" target="_blank">Matrix</a>
             <a class="integration-link" href="http://localhost:5678" target="_blank">n8n</a>
             <a class="integration-link" href="http://localhost:8123" target="_blank">Home Assistant</a>
@@ -279,6 +280,26 @@
                 localStorage.setItem(cb.id, cb.checked);
             });
         });
+
+        // Load Matrix sync setting from server
+        fetch('/api/settings').then(r => r.json()).then(data => {
+            const cb = document.getElementById('matrix-sync-toggle');
+            if (cb && data.integrations) {
+                cb.checked = data.integrations.matrix_enabled;
+            }
+        });
+
+        // Update server when Matrix sync toggled
+        const matrixToggle = document.getElementById('matrix-sync-toggle');
+        if (matrixToggle) {
+            matrixToggle.addEventListener('change', () => {
+                fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ integrations: { matrix_enabled: matrixToggle.checked } })
+                });
+            });
+        }
     </script>
 
 </body>

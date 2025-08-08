@@ -886,13 +886,26 @@ async def send_matrix_message(message_data: dict):
     """Send message via Matrix"""
     if not integration_manager.services_status["matrix"]:
         raise HTTPException(status_code=503, detail="Matrix service not available")
-    
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(f"{CONFIG['matrix_url']}/api/send", json=message_data)
             return response.json()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Matrix send error: {str(e)}")
+
+@app.get("/api/matrix/receive")
+async def receive_matrix_messages(room_id: str):
+    """Receive Matrix messages"""
+    if not integration_manager.services_status["matrix"]:
+        raise HTTPException(status_code=503, detail="Matrix service not available")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"{CONFIG['matrix_url']}/api/receive", params={"room_id": room_id})
+            return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Matrix receive error: {str(e)}")
 
 # SETTINGS AND CONFIGURATION
 
