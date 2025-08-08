@@ -3,6 +3,8 @@ services:
   zoe-ollama:
     image: ollama/ollama:latest
     container_name: zoe-ollama
+    command: >
+      bash -c "ollama pull llama3.2:3b && ollama pull mistral:7b && ollama serve"
     ports:
       - "11434:11434"
     volumes:

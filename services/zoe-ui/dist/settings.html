@@ -52,6 +52,9 @@
         .settings-content.active { display: block; }
         .module-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,0.05); }
         .module-item label { display: flex; align-items: center; gap: 10px; color: #333; font-weight: 300; }
+        .model-options { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+        .model-option { display: flex; align-items: center; gap: 10px; }
+        .model-status { margin-left: 6px; }
     </style>
 </head>
 <body>
@@ -111,6 +114,21 @@
                 <div id="updateProgress" style="display:none;margin-top:10px;width:100%;background:#eee;">
                     <div id="updateProgressBar" style="width:0;height:10px;background:#7B61FF;"></div>
                     <p id="updateProgressText" style="font-size:14px;margin-top:5px;"></p>
+
+            <div class="settings-section">
+                <h3>🧠 AI Model Selection</h3>
+                <div class="model-options">
+                    <label class="model-option">
+                        <input type="radio" name="model" value="llama3.2:3b">
+                        <span>Llama 3.2 (3B) - Faster, efficient</span>
+                        <div class="model-status" id="llama-status">●</div>
+                    </label>
+                    <label class="model-option">
+                        <input type="radio" name="model" value="mistral:7b">
+                        <span>Mistral 7B - More capable, original</span>
+                        <div class="model-status" id="mistral-status">●</div>
+                    </label>
+
                 </div>
             </div>
             <div id="userManagementSection" style="display:none;margin-top:20px;">
@@ -165,7 +183,11 @@
 </script>
 <script src="js/overlay.js"></script>
 <script src="js/user-management.js"></script>
+
 <script src="js/update.js"></script>
+
+<script src="js/settings.js"></script>
+
 
 
     <title>Zoe Settings</title>
