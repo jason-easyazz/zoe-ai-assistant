@@ -20,6 +20,12 @@ window.zoeAPI = {
         }
 
     },
+    async getDiagnostics() {
+        try {
+            const response = await fetch('/api/diagnostics');
+
+
+    },
     async getModules() {
         try {
             const response = await fetch('/api/modules/list');
@@ -35,6 +41,7 @@ window.zoeAPI = {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, enabled })
             });
+
             return await response.json();
         } catch (error) {
             return { error: error.message };
