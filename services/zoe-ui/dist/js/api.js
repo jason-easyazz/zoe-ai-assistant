@@ -18,5 +18,25 @@ window.zoeAPI = {
         } catch (error) {
             return { status: 'error' };
         }
+    },
+    async getModules() {
+        try {
+            const response = await fetch('/api/modules/list');
+            return await response.json();
+        } catch (error) {
+            return { modules: [] };
+        }
+    },
+    async toggleModule(name, enabled) {
+        try {
+            const response = await fetch('/api/modules/toggle', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, enabled })
+            });
+            return await response.json();
+        } catch (error) {
+            return { error: error.message };
+        }
     }
 };
