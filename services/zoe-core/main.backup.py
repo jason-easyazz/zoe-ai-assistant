@@ -10,7 +10,6 @@ import os
 import re
 import time
 from datetime import datetime, date, timedelta
-from pathlib import Path
 from typing import List, Dict, Optional, Any
 import hashlib
 
@@ -23,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from textblob import TextBlob
 from contextlib import asynccontextmanager
+from db import init_database
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -65,118 +65,6 @@ class UserSettings(BaseModel):
     timezone: str = "UTC"
     theme: str = "light"
 
-# Database initialization
-async def init_database():
-    """Initialize database with complete schema"""
-    Path(CONFIG["database_path"]).parent.mkdir(parents=True, exist_ok=True)
-    
-    async with aiosqlite.connect(CONFIG["database_path"]) as db:
-        await db.execute("PRAGMA foreign_keys = ON")
-        await db.execute("PRAGMA journal_mode = WAL")
-        
-        # Core conversation tables
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS conversations (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT,
-                user_id TEXT DEFAULT 'default',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                message_count INTEGER DEFAULT 0
-            )
-        """)
-        
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                conversation_id INTEGER,
-                role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
-                content TEXT NOT NULL,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (conversation_id) REFERENCES conversations (id)
-            )
-        """)
-        
-        # Journal system
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS journal_entries (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT DEFAULT 'default',
-                title TEXT,
-                content TEXT NOT NULL,
-                mood_score REAL,
-                word_count INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Task management
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT DEFAULT 'default',
-                title TEXT NOT NULL,
-                description TEXT,
-                status TEXT DEFAULT 'pending',
-                priority TEXT DEFAULT 'medium',
-                due_date DATE,
-                source TEXT DEFAULT 'manual',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Events
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT DEFAULT 'default',
-                title TEXT NOT NULL,
-                description TEXT,
-                start_date DATE NOT NULL,
-                start_time TIME,
-                location TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Profile facts
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS profile_facts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT DEFAULT 'default',
-                category TEXT NOT NULL,
-                fact_key TEXT NOT NULL,
-                fact_value TEXT NOT NULL,
-                confidence REAL DEFAULT 1.0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, category, fact_key)
-            )
-        """)
-        
-        # User settings
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS user_settings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT UNIQUE DEFAULT 'default',
-                personality_fun INTEGER DEFAULT 7,
-                personality_empathy INTEGER DEFAULT 8,
-                personality_humor INTEGER DEFAULT 6,
-                personality_formality INTEGER DEFAULT 3,
-                enable_voice BOOLEAN DEFAULT TRUE,
-                enable_notifications BOOLEAN DEFAULT TRUE,
-                timezone TEXT DEFAULT 'UTC',
-                theme TEXT DEFAULT 'light',
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # Insert default settings
-        await db.execute("""
-            INSERT OR IGNORE INTO user_settings (user_id) VALUES ('default')
-        """)
-        
-        await db.commit()
-        logger.info("✅ Database initialized successfully")
 
 # Personality system
 class ZoePersonality:
@@ -224,7 +112,7 @@ Communication style:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    await init_database()
+    await init_database(CONFIG["database_path"])
     logger.info("🤖 Zoe v3.1 started successfully!")
     yield
     # Shutdown
