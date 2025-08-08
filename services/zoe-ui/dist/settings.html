@@ -268,6 +268,11 @@
             <a class="integration-link" href="http://localhost:5678" target="_blank">n8n</a>
             <a class="integration-link" href="http://localhost:8123" target="_blank">Home Assistant</a>
         </div>
+        <div class="settings-section">
+            <h2>System Diagnostics</h2>
+            <div id="diagnostics-content">Loading...</div>
+            <button id="refresh-diagnostics">Refresh</button>
+        </div>
     </div>
     <script>
         document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
@@ -279,6 +284,35 @@
                 localStorage.setItem(cb.id, cb.checked);
             });
         });
+
+        async function loadDiagnostics() {
+            try {
+                const data = await fetch('/api/diagnostics').then(r => r.json());
+                const diagDiv = document.getElementById('diagnostics-content');
+                if (data.error) {
+                    diagDiv.textContent = 'Error fetching diagnostics';
+                    return;
+                }
+                const diskUsed = (data.disk.used / (1024 * 1024 * 1024)).toFixed(1);
+                const diskTotal = (data.disk.total / (1024 * 1024 * 1024)).toFixed(1);
+                const models = Object.entries(data.models)
+                    .map(([name, status]) => `<li>${name}: ${status}</li>`)
+                    .join('');
+                diagDiv.innerHTML = `
+                    <p>CPU Usage: ${data.cpu}%</p>
+                    <p>Disk Usage: ${diskUsed}GB / ${diskTotal}GB (${data.disk.percent}%)</p>
+                    <p>Running Containers: ${data.containers.join(', ') || 'None'}</p>
+                    <p>Models:</p>
+                    <ul>${models}</ul>
+                `;
+            } catch (err) {
+                document.getElementById('diagnostics-content').textContent = 'Diagnostics unavailable';
+            }
+        }
+
+        document.getElementById('refresh-diagnostics').addEventListener('click', loadDiagnostics);
+        loadDiagnostics();
+        setInterval(loadDiagnostics, 30000);
     </script>
 
 </body>

@@ -18,5 +18,13 @@ window.zoeAPI = {
         } catch (error) {
             return { status: 'error' };
         }
+    },
+    async getDiagnostics() {
+        try {
+            const response = await fetch('/api/diagnostics');
+            return await response.json();
+        } catch (error) {
+            return { error: error.message };
+        }
     }
 };

@@ -12,6 +12,9 @@ import sys
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any
+import subprocess
+
+import psutil
 
 import aiosqlite
 import httpx
@@ -446,6 +449,48 @@ async def health_check():
         "integrations": integration_manager.services_status,
         "features": ["chat", "voice", "journal", "tasks", "events", "integrations"],
         "timestamp": datetime.now().isoformat()
+    }
+
+
+@app.get("/api/diagnostics")
+async def get_diagnostics():
+    """Return basic system diagnostics."""
+    try:
+        cpu = psutil.cpu_percent()
+        disk = psutil.disk_usage("/")
+    except Exception as e:
+        logger.error(f"Diagnostics system info error: {e}")
+        cpu = 0
+        disk = type("disk", (), {"total": 0, "used": 0, "free": 0, "percent": 0})()
+
+    containers: List[str] = []
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        containers = [c for c in result.stdout.splitlines() if c]
+    except Exception as e:
+        logger.error(f"Diagnostics docker error: {e}")
+
+    models = {
+        "mistral": "running" if any("ollama" in c for c in containers) else "stopped",
+        "whisper": "running" if any("whisper" in c for c in containers) else "stopped",
+    }
+
+    return {
+        "cpu": cpu,
+        "disk": {
+            "total": disk.total,
+            "used": disk.used,
+            "free": disk.free,
+            "percent": disk.percent,
+        },
+        "containers": containers,
+        "models": models,
+        "timestamp": datetime.now().isoformat(),
     }
 
 
