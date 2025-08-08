@@ -306,6 +306,32 @@
         }
 
         /* Chat Interface */
+        .matrix-wrapper {
+            display: flex;
+            gap: 20px;
+        }
+        .matrix-rooms {
+            width: 200px;
+            background: rgba(255, 255, 255, 0.6);
+            backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 25px;
+            padding: 10px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.05);
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .matrix-room {
+            padding: 8px;
+            border-radius: 10px;
+            cursor: pointer;
+        }
+        .matrix-room.active {
+            background: rgba(123, 97, 255, 0.2);
+        }
+        .matrix-message {
+            margin-bottom: 10px;
+        }
         .chat-container {
             background: rgba(255, 255, 255, 0.6);
             backdrop-filter: blur(40px);
@@ -622,15 +648,18 @@
             </div>
 
             <!-- Chat Interface -->
-            <div class="chat-container">
-                <div class="chat-messages" id="chatMessages">
-                    <!-- Messages will be populated here -->
-                </div>
-                
-                <div class="chat-input-group">
-                    <input type="text" class="chat-input" id="chatInput" placeholder="Type your message..." autofocus>
-                    <button class="voice-btn" id="voiceBtn" onclick="toggleVoice()">🎤</button>
-                    <button class="send-btn" onclick="sendMessage()">→</button>
+            <div class="matrix-wrapper">
+                <div class="matrix-rooms" id="matrixRooms"></div>
+                <div class="chat-container">
+                    <div class="chat-messages" id="chatMessages">
+                        <!-- Messages will be populated here -->
+                    </div>
+
+                    <div class="chat-input-group">
+                        <input type="text" class="chat-input" id="chatInput" placeholder="Type your message..." autofocus>
+                        <button class="voice-btn" id="voiceBtn" onclick="toggleVoice()">🎤</button>
+                        <button class="send-btn" onclick="sendMessage()">→</button>
+                    </div>
                 </div>
             </div>
 
@@ -889,6 +918,8 @@
         });
 
     </script>
+    <script src="js/api.js"></script>
+    <script src="js/matrix.js"></script>
     <script src="js/overlay.js"></script>
 </body>
 </html>
