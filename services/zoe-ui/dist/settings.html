@@ -105,6 +105,16 @@
             <h1>Settings</h1>
             <p>Manage your preferences here.</p>
 
+            <!-- TODO: Add settings options -->
+            <div id="updateSection" style="margin-top:20px;">
+                <h2>Updates</h2>
+                <p id="updateStatus">Check for updates</p>
+                <button id="checkUpdatesBtn">Check for Updates</button>
+                <button id="runUpdateBtn" style="display:none;">Update Now</button>
+                <div id="updateProgress" style="display:none;margin-top:10px;width:100%;background:#eee;">
+                    <div id="updateProgressBar" style="width:0;height:10px;background:#7B61FF;"></div>
+                    <p id="updateProgressText" style="font-size:14px;margin-top:5px;"></p>
+
             <div class="settings-section">
                 <h3>🧠 AI Model Selection</h3>
                 <div class="model-options">
@@ -118,6 +128,7 @@
                         <span>Mistral 7B - More capable, original</span>
                         <div class="model-status" id="mistral-status">●</div>
                     </label>
+
                 </div>
             </div>
             <div id="userManagementSection" style="display:none;margin-top:20px;">
@@ -172,7 +183,11 @@
 </script>
 <script src="js/overlay.js"></script>
 <script src="js/user-management.js"></script>
+
+<script src="js/update.js"></script>
+
 <script src="js/settings.js"></script>
+
 
 
     <title>Zoe Settings</title>
@@ -307,6 +322,7 @@
 
 <script src="js/api.js"></script>
 <script src="js/overlay.js"></script>
+<script src="js/update.js"></script>
 <script>
     let currentMode = 'orb';
 
@@ -336,7 +352,6 @@
           <a class="integration-link" href="http://localhost:5678" target="_blank">n8n</a>
           <a class="integration-link" href="http://localhost:8123" target="_blank">Home Assistant</a>
         </div>
-
         <div class="settings-section">
             <h2>System</h2>
             <div id="backup-section">

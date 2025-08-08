@@ -211,6 +211,11 @@ class RegisterUser(BaseModel):
     role: str = "user"
 
 
+class UserSwitchRequest(BaseModel):
+    username: str
+    passcode: str
+
+
 class RoleUpdate(BaseModel):
     role: str
 
@@ -614,6 +619,51 @@ async def get_diagnostics():
         "models": models,
         "timestamp": datetime.now().isoformat(),
     }
+
+
+@app.get("/api/update/check")
+async def check_for_updates():
+    """Check if the local repository is behind origin."""
+    repo_dir = Path(__file__).resolve().parents[2]
+    try:
+        subprocess.run(["git", "fetch", "origin"], cwd=repo_dir, check=True, capture_output=True)
+        local = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        remote = subprocess.run(
+            ["git", "rev-parse", "origin/HEAD"],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        return {
+            "update_available": local != remote,
+            "current_commit": local,
+            "remote_commit": remote,
+        }
+    except Exception as e:
+        logger.error(f"Update check failed: {e}")
+        raise HTTPException(status_code=500, detail="Update check failed")
+
+
+@app.post("/api/update/run")
+async def run_update(background_tasks: BackgroundTasks):
+    """Run git pull in the background to update repository."""
+    repo_dir = Path(__file__).resolve().parents[2]
+
+    def do_update():
+        try:
+            subprocess.run(["git", "pull"], cwd=repo_dir, check=True)
+        except Exception as e:
+            logger.error(f"Update run failed: {e}")
+
+    background_tasks.add_task(do_update)
+    return {"message": "Update started"}
 
 
 @app.post("/api/users/switch")
