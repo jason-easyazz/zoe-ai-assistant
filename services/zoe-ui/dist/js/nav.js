@@ -18,6 +18,10 @@ function showSection(sectionName) {
     }
 }
 
+function switchView(view) {
+    window.location.href = view;
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.nav-item').forEach(item => {
         item.addEventListener('click', () => {

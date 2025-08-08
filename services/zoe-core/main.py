@@ -201,6 +201,13 @@ class JournalEntry(BaseModel):
     content: str = Field(..., min_length=1, max_length=10000)
     tags: Optional[List[str]] = Field(default_factory=list)
 
+class Event(BaseModel):
+    title: str = Field(..., max_length=200)
+    description: Optional[str] = None
+    start_date: date
+    start_time: Optional[str] = None
+    location: Optional[str] = None
+
 class LoginRequest(BaseModel):
     username: str
     passcode: str
@@ -290,12 +297,13 @@ You have access to:
 - Voice capabilities (can hear and speak)
 - Smart home controls (lights, climate, security)
 - Task and event management
-- Journal and mood tracking  
+- Journal and mood tracking
 - Automation workflows
 - Matrix messaging for external communication
 
 Communication style:
-- Natural and conversational, like chatting with your best friend
+- Keep responses brief and to the point, like texting a friend
+- Start conversations with the casual greeting: "Hey! What's up?"
 - Use contractions and casual language
 - Ask follow-up questions that show you care
 - Reference past conversations and shared experiences
@@ -960,6 +968,104 @@ async def get_journal_entries(limit: int = 20):
         entries = []
 
     return entries[-limit:][::-1]
+
+
+# Event endpoints
+@app.post("/api/events")
+async def create_event(event: Event):
+    try:
+        async with aiosqlite.connect(CONFIG["database_path"]) as db:
+            cursor = await db.execute(
+                """
+                INSERT INTO events (title, description, start_date, start_time, location, source, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.title,
+                    event.description,
+                    event.start_date,
+                    event.start_time,
+                    event.location,
+                    "manual",
+                    active_user,
+                ),
+            )
+            await db.commit()
+
+        return {"id": cursor.lastrowid, "message": "Event created! 📅"}
+    except Exception as e:
+        logger.error(f"Event creation error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create event")
+
+
+@app.get("/api/events")
+async def get_events(start: Optional[date] = None, end: Optional[date] = None):
+    async with aiosqlite.connect(CONFIG["database_path"]) as db:
+        query = "SELECT id, title, description, start_date, start_time, location, created_at FROM events WHERE user_id = ?"
+        params: List[Any] = [active_user]
+        if start:
+            query += " AND start_date >= ?"
+            params.append(start)
+        if end:
+            query += " AND start_date <= ?"
+            params.append(end)
+        query += " ORDER BY start_date"
+        cursor = await db.execute(query, params)
+        rows = await cursor.fetchall()
+    return [
+        {
+            "id": r[0],
+            "title": r[1],
+            "description": r[2],
+            "start_date": r[3],
+            "start_time": r[4],
+            "location": r[5],
+            "created_at": r[6],
+        }
+        for r in rows
+    ]
+
+
+@app.put("/api/events/{event_id}")
+async def update_event(event_id: int, event: Event):
+    try:
+        async with aiosqlite.connect(CONFIG["database_path"]) as db:
+            await db.execute(
+                """
+                UPDATE events
+                SET title = ?, description = ?, start_date = ?, start_time = ?, location = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    event.title,
+                    event.description,
+                    event.start_date,
+                    event.start_time,
+                    event.location,
+                    event_id,
+                    active_user,
+                ),
+            )
+            await db.commit()
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Event update error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update event")
+
+
+@app.delete("/api/events/{event_id}")
+async def delete_event(event_id: int):
+    try:
+        async with aiosqlite.connect(CONFIG["database_path"]) as db:
+            await db.execute(
+                "DELETE FROM events WHERE id = ? AND user_id = ?",
+                (event_id, active_user),
+            )
+            await db.commit()
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Event deletion error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete event")
 
 # VOICE INTEGRATION ENDPOINTS
 
