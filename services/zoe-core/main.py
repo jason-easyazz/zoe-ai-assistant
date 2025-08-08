@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import sys
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -21,6 +22,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from textblob import TextBlob
+
+sys.path.append(str(Path(__file__).resolve().parent))
+from integrations.n8n import n8n_service
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -93,6 +97,10 @@ class WebhookData(BaseModel):
     type: str
     data: Dict[str, Any]
     source: Optional[str] = "unknown"
+
+
+class WorkflowPrompt(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=2000)
 
 # Enhanced Zoe Personality System
 class ZoePersonalityV31:
@@ -778,9 +786,21 @@ async def process_webhook(source: str, webhook_data: WebhookData):
                 VALUES (?, ?, ?, ?, ?)
             """, (source, webhook_data.type, "processed", f"Webhook processed successfully", datetime.now()))
             await db.commit()
-            
+
     except Exception as e:
         logger.error(f"Webhook processing error: {e}")
+
+# WORKFLOW CREATION ENDPOINT
+
+@app.post("/api/workflows/create")
+async def create_workflow(prompt: WorkflowPrompt):
+    """Create an n8n workflow from natural language prompt"""
+    try:
+        result = await n8n_service.create_workflow_from_prompt(prompt.prompt)
+        return {"workflow": result}
+    except Exception as e:
+        logger.error(f"Workflow creation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # DASHBOARD WITH INTEGRATION DATA
 
