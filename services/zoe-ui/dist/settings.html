@@ -3,12 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
     <title>Zoe - Settings</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif; background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%); overflow: hidden; height: 100vh; user-select: none; -webkit-tap-highlight-color: transparent; }
-
         .orb-mode { position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%); z-index: 1000; opacity: 1; transition: opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1); }
         .orb-mode.hidden { opacity: 0; pointer-events: none; }
         .fluid-orb { position: relative; width: 200px; height: 200px; border-radius: 50%; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); cursor: pointer; overflow: hidden; box-shadow: 0 20px 60px rgba(123, 97, 255, 0.3); transition: all 0.3s ease; }
@@ -47,6 +45,13 @@
         .zoe-greeting { text-align: center; margin-top: 160px; }
         .zoe-greeting h1 { font-size: 32px; font-weight: 300; color: #333; margin-bottom: 10px; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
         .zoe-greeting p { font-size: 18px; color: #666; font-weight: 300; }
+        .settings-tabs { display: flex; justify-content: center; gap: 20px; margin-top: 40px; }
+        .settings-tabs button { background: none; border: none; padding: 10px 20px; cursor: pointer; font-size: 16px; color: #666; border-bottom: 2px solid transparent; }
+        .settings-tabs button.active { color: #7B61FF; border-bottom-color: #7B61FF; }
+        .settings-content { display: none; margin-top: 20px; text-align: left; }
+        .settings-content.active { display: block; }
+        .module-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,0.05); }
+        .module-item label { display: flex; align-items: center; gap: 10px; color: #333; font-weight: 300; }
     </style>
 </head>
 <body>
@@ -92,6 +97,7 @@
         <div class="zoe-greeting">
             <h1>Settings</h1>
             <p>Manage your preferences here.</p>
+
             <!-- TODO: Add settings options -->
             <div id="userManagementSection" style="display:none;margin-top:20px;">
                 <h2>User Management</h2>
@@ -117,39 +123,17 @@
         const mainInterface = document.getElementById('mainInterface');
         const fluidOrb = document.getElementById('fluidOrb');
 
-        document.addEventListener('DOMContentLoaded', function() {
-            updateTime();
-            setInterval(updateTime, 1000);
-            updateWeather();
-        });
 
-        function enterInterface() {
-            currentMode = 'interface';
-            orbMode.classList.add('hidden');
-            mainInterface.classList.add('active');
-        }
+            <div class="settings-tabs">
+                <button class="tab-button active" data-tab="general">General</button>
+                <button class="tab-button" data-tab="modules">Modules</button>
+            </div>
 
-        function exitToOrb() {
-            currentMode = 'orb';
-            mainInterface.classList.remove('active');
-            orbMode.classList.remove('hidden');
-        }
 
-        function updateTime() {
-            const now = new Date();
-            const timeString = now.toLocaleTimeString('en-US', {
-                hour: 'numeric',
-                minute: '2-digit',
-                hour12: true
-            });
-            const dateString = now.toLocaleDateString('en-US', {
-                weekday: 'long',
-                month: 'long',
-                day: 'numeric'
-            });
-            document.getElementById('currentTime').textContent = timeString;
-            document.getElementById('currentDate').textContent = dateString;
-        }
+            <div id="generalSettings" class="settings-content active">
+                <label><input type="checkbox" id="voice-toggle" checked> Enable Voice</label><br>
+                <label><input type="checkbox" id="notifications-toggle" checked> Enable Notifications</label>
+            </div>
 
         function updateWeather() {
             fetch('http://localhost:8000/api/weather')
@@ -168,110 +152,32 @@
 <script src="js/overlay.js"></script>
 <script src="js/user-management.js"></script>
 
-    <title>Zoe Settings</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
-            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
-            margin: 0;
-            padding: 0;
-        }
-        .nav-bar {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 70px;
-            background: rgba(255, 255, 255, 0.8);
-            backdrop-filter: blur(40px);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 20px;
-            z-index: 110;
-        }
-        .nav-left {
-            display: flex;
-            align-items: center;
-            gap: 20px;
-        }
-        .mini-orb {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            cursor: pointer;
-            position: relative;
-            overflow: hidden;
-            transition: transform 0.2s ease;
-        }
-        .mini-orb:hover {
-            transform: scale(1.1);
-        }
-        .mini-orb .fluid-layer {
-            animation: breathe 2s ease-in-out infinite;
-            position: absolute;
-            inset: 0;
-            border-radius: 50%;
-            background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.3) 0%, transparent 70%);
-        }
-        @keyframes breathe {
-            0%,100% { transform: scale(1); opacity: 0.8; }
-            50% { transform: scale(1.1); opacity: 1; }
-        }
-        .close-btn {
-            width: 40px;
-            height: 40px;
-            border: none;
-            background: rgba(255, 255, 255, 0.3);
-            border-radius: 50%;
-            color: #666;
-            font-size: 20px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-        .close-btn:hover {
-            background: rgba(255, 100, 100, 0.2);
-            color: #ff6b6b;
-        }
-        .settings-container {
-            max-width: 600px;
-            margin: 100px auto;
-            padding: 20px;
-        }
-        .settings-section {
-            margin-bottom: 40px;
-        }
-        .settings-section h2 {
-            margin-bottom: 10px;
-            font-size: 20px;
-            color: #333;
-        }
-        .integration-link {
-            display: block;
-            background: rgba(255, 255, 255, 0.8);
-            padding: 15px 20px;
-            border-radius: 12px;
-            margin-bottom: 10px;
-            text-decoration: none;
-            color: #333;
-            transition: background 0.2s ease;
-        }
-        .integration-link:hover {
-            background: rgba(123, 97, 255, 0.1);
-        }
-    </style>
-</head>
-<body>
-    <div class="nav-bar">
-        <div class="nav-left">
-            <div class="mini-orb" onclick="window.location.href='index.html'">
-                <div class="fluid-layer"></div>
+
+            <div id="modulesSettings" class="settings-content">
+                <div id="modulesList">Loading modules...</div>
             </div>
         </div>
-        <button class="close-btn" onclick="window.location.href='index.html'">×</button>
     </div>
+
+</div>
+
+<script src="js/api.js"></script>
+<script src="js/overlay.js"></script>
+<script>
+    let currentMode = 'orb';
+
+    const orbMode = document.getElementById('orbMode');
+    const mainInterface = document.getElementById('mainInterface');
+    const fluidOrb = document.getElementById('fluidOrb');
+
+    document.addEventListener('DOMContentLoaded', function() {
+        updateTime();
+        setInterval(updateTime, 1000);
+        updateWeather();
+        setupTabs();
+        loadModules();
+        document.querySelectorAll('#generalSettings input[type="checkbox"]').forEach(cb => {
+
     <div class="settings-container">
         <h1>Zoe Settings</h1>
         <div class="settings-section">
@@ -289,6 +195,7 @@
     </div>
     <script>
         document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+
             const saved = localStorage.getItem(cb.id);
             if (saved !== null) {
                 cb.checked = saved === 'true';
@@ -297,6 +204,89 @@
                 localStorage.setItem(cb.id, cb.checked);
             });
         });
+
+    });
+
+    function enterInterface() {
+        currentMode = 'interface';
+        orbMode.classList.add('hidden');
+        mainInterface.classList.add('active');
+    }
+
+    function exitToOrb() {
+        currentMode = 'orb';
+        mainInterface.classList.remove('active');
+        orbMode.classList.remove('hidden');
+    }
+
+    function updateTime() {
+        const now = new Date();
+        const timeString = now.toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true
+        });
+        const dateString = now.toLocaleDateString('en-US', {
+            weekday: 'long',
+            month: 'long',
+            day: 'numeric'
+        });
+        document.getElementById('currentTime').textContent = timeString;
+        document.getElementById('currentDate').textContent = dateString;
+    }
+
+    function updateWeather() {
+        fetch('http://localhost:8000/api/weather')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('weatherIcon').textContent = data.icon || '☀️';
+                document.getElementById('weatherTemp').textContent = `${data.temperature || 23}°`;
+            })
+            .catch(error => {
+                console.log('Weather API not available, using defaults');
+                document.getElementById('weatherIcon').textContent = '☀️';
+                document.getElementById('weatherTemp').textContent = '23°';
+            });
+    }
+
+    function setupTabs() {
+        const buttons = document.querySelectorAll('.tab-button');
+        buttons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                buttons.forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.settings-content').forEach(c => c.classList.remove('active'));
+                btn.classList.add('active');
+                document.getElementById(btn.dataset.tab + 'Settings').classList.add('active');
+            });
+        });
+    }
+
+    async function loadModules() {
+        const container = document.getElementById('modulesList');
+        const data = await window.zoeAPI.getModules();
+        container.innerHTML = '';
+        if (!data.modules || !data.modules.length) {
+            container.textContent = 'No modules available';
+            return;
+        }
+        data.modules.forEach(mod => {
+            const item = document.createElement('div');
+            item.className = 'module-item';
+
+            const label = document.createElement('label');
+            const toggle = document.createElement('input');
+            toggle.type = 'checkbox';
+            toggle.checked = mod.enabled;
+            toggle.addEventListener('change', async () => {
+                await window.zoeAPI.toggleModule(mod.name, toggle.checked);
+                const key = (mod.scope === 'user' ? 'user-module-' : 'global-module-') + mod.name;
+                localStorage.setItem(key, toggle.checked);
+            });
+            const text = document.createElement('span');
+            text.textContent = `${mod.name} - ${mod.description}`;
+            label.appendChild(toggle);
+            label.appendChild(text);
+
 
         // Load Matrix sync setting from server
         fetch('/api/settings').then(r => r.json()).then(data => {
@@ -319,5 +309,11 @@
         }
     </script>
 
+
+            item.appendChild(label);
+            container.appendChild(item);
+        });
+    }
+</script>
 </body>
 </html>
