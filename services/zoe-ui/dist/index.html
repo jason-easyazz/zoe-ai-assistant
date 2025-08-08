@@ -375,6 +375,133 @@
             font-weight: 400;
         }
 
+        /* Overlays */
+        .overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+        }
+
+        .overlay.active {
+            display: flex;
+        }
+
+        .chat-window,
+        .shopping-window {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 25px;
+            padding: 20px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .shopping-window {
+            max-width: 400px;
+        }
+
+        .chat-messages-overlay {
+            flex: 1;
+            overflow-y: auto;
+            margin-bottom: 15px;
+        }
+
+        .chat-input-overlay {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .chat-input-overlay textarea {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.5);
+            border: none;
+            border-radius: 15px;
+            padding: 10px;
+            resize: none;
+            outline: none;
+        }
+
+        .typing-indicator {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+        }
+
+        .typing-indicator span {
+            width: 6px;
+            height: 6px;
+            background: #ccc;
+            border-radius: 50%;
+            animation: typing 1.5s infinite;
+        }
+
+        .typing-indicator span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-indicator span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+            0%, 80%, 100% {
+                opacity: 0.2;
+                transform: translateY(0);
+            }
+            40% {
+                opacity: 1;
+                transform: translateY(-4px);
+            }
+        }
+
+        .shopping-list {
+            flex: 1;
+            overflow-y: auto;
+            margin-top: 10px;
+        }
+
+        .shopping-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .shopping-checkbox {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #7B61FF;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+
+        .shopping-checkbox.checked {
+            background: #7B61FF;
+        }
+
+        .shopping-text.completed {
+            text-decoration: line-through;
+            opacity: 0.6;
+        }
+
+        .shopping-delete {
+            background: none;
+            border: none;
+            font-size: 20px;
+            cursor: pointer;
+            color: #999;
+        }
+
         /* Responsive Design */
         @media (max-width: 768px) {
             .main-container {
@@ -457,17 +584,43 @@
             <!-- Quick Actions -->
             <div class="quick-actions">
                 <div class="quick-action" onclick="quickAction('journal')">
-                    <span>📝 New Journal</span>
+                    <span>📝 Journal</span>
+                </div>
+                <div class="quick-action" onclick="quickAction('event')">
+                    <span>📅 Event</span>
                 </div>
                 <div class="quick-action" onclick="quickAction('task')">
-                    <span>✅ Add Task</span>
+                    <span>✅ Task</span>
                 </div>
-                <div class="quick-action" onclick="quickAction('reminder')">
-                    <span>⏰ Set Reminder</span>
+                <div class="quick-action" onclick="quickAction('shopping')">
+                    <span>🛒 Shopping</span>
                 </div>
-                <div class="quick-action" onclick="quickAction('weather')">
-                    <span>🌤️ Weather</span>
-                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Chat Overlay -->
+    <div id="chatOverlay" class="overlay">
+        <div class="chat-window">
+            <div id="chatMessagesOverlay" class="chat-messages-overlay"></div>
+            <div class="chat-input-overlay">
+                <textarea id="chatInputOverlay" placeholder="Type your message..."></textarea>
+                <button class="voice-btn" onclick="toggleVoiceInOverlay()">🎤</button>
+                <button class="send-btn" onclick="sendMessageFromOverlay()">→</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Shopping Overlay -->
+    <div id="shoppingOverlay" class="overlay">
+        <div class="shopping-window">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h2 style="font-weight:400; font-size:18px;">Shopping List</h2>
+                <button class="close-btn" onclick="closeShoppingWindow()">×</button>
+            </div>
+            <div id="shoppingList" class="shopping-list"></div>
+            <div style="display:flex; gap:10px; margin-top:10px;">
+                <input id="shoppingInput" type="text" placeholder="Add item..." style="flex:1; padding:10px; border-radius:10px; border:1px solid #ccc;">
+                <button class="send-btn" onclick="addShoppingItem()">+</button>
             </div>
         </div>
     </div>
@@ -672,30 +825,7 @@
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
-        // Quick actions
-        function quickAction(action) {
-            switch(action) {
-                case 'journal':
-                    chatInput.value = 'I want to write a journal entry';
-                    sendMessage();
-                    break;
-                    
-                case 'task':
-                    chatInput.value = 'Create a new task: ';
-                    chatInput.focus();
-                    break;
-                    
-                case 'reminder':
-                    chatInput.value = 'Set a reminder for: ';
-                    chatInput.focus();
-                    break;
-                    
-                case 'weather':
-                    chatInput.value = 'What\'s the weather like?';
-                    sendMessage();
-                    break;
-            }
-        }
     </script>
+    <script src="js/overlay.js"></script>
 </body>
 </html>
