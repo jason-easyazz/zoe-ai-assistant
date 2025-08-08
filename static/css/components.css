@@ -1,0 +1,216 @@
+.hidden { display:none !important; }
+.fade-in { animation: fadeIn 0.3s ease-in forwards; }
+@keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+
+.card-glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  padding: 1rem;
+  box-shadow: var(--shadow-soft);
+}
+
+.btn-round {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--primary-gradient);
+  color: #fff;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: var(--shadow-soft);
+}
+
+.icon-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 1rem;
+  padding: 0.25rem;
+}
+
+.mini-orb {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--primary-gradient);
+  border: none;
+  cursor: pointer;
+}
+
+#topNav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  backdrop-filter: blur(10px);
+  background: var(--glass-bg);
+  border-bottom: 1px solid var(--glass-border);
+  z-index: 100;
+}
+#topNav ul {
+  display: flex;
+  gap: 0.5rem;
+  list-style: none;
+}
+#topNav li {
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+#topNav li.active {
+  background: var(--primary-gradient);
+  color: #fff;
+}
+
+#panelContainer {
+  padding: 1rem;
+  margin-top: 3rem;
+}
+.panel { display: none; }
+.panel.active { display: block; }
+
+.quick-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+.quick-actions button {
+  flex: 1;
+  padding: 0.5rem;
+  border: none;
+  border-radius: 8px;
+  background: var(--primary-gradient);
+  color: #fff;
+  cursor: pointer;
+}
+
+.cards {
+  display: flex;
+  gap: 1rem;
+}
+.cards .card-glass { flex: 1; }
+.card-glass ul { list-style: none; margin-top: 0.5rem; }
+.card-glass li { padding: 0.25rem 0; cursor: pointer; }
+.card-glass li:hover { color: var(--primary); }
+
+/* Calendar */
+.calendar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.calendar-body { display: flex; gap: 1rem; }
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 0.25rem;
+}
+.calendar-day {
+  padding: 0.5rem;
+  text-align: center;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.calendar-day:hover { transform: scale(1.05); background: var(--glass-bg); }
+.calendar-day.today {
+  background: var(--primary-gradient);
+  color: #fff;
+  box-shadow: var(--shadow-soft);
+}
+.calendar-day.selected { border: 2px solid var(--primary); }
+.calendar-day.has-event::after {
+  content: '';
+  display: block;
+  width: 6px;
+  height: 6px;
+  background: var(--primary);
+  border-radius: 50%;
+  margin: 2px auto 0;
+}
+.day-view ul { list-style: none; margin-top: 0.5rem; }
+
+/* Chat overlay */
+#chatOverlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0,0,0,0.3);
+  z-index: 200;
+}
+#chatOverlay .chat-window {
+  width: 100%;
+  max-width: 500px;
+  margin: 1rem;
+  display: flex;
+  flex-direction: column;
+}
+#chatOverlay .messages {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 0.5rem;
+}
+#chatOverlay .zoe-message {
+  background: var(--primary-gradient);
+  color: #fff;
+  padding: 0.5rem 0.75rem;
+  border-radius: 12px 12px 12px 0;
+  margin: 0.25rem 0;
+}
+#chatOverlay .user-message {
+  background: var(--glass-strong);
+  color: var(--text);
+  padding: 0.5rem 0.75rem;
+  border-radius: 12px 12px 0 12px;
+  margin: 0.25rem 0;
+  align-self: flex-end;
+}
+#chatForm { display: flex; gap: 0.5rem; }
+#chatForm input {
+  flex: 1;
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  padding: 0.5rem 0.75rem;
+  background: var(--glass-bg);
+}
+
+/* Shopping */
+#shoppingForm { display: flex; gap: 0.5rem; }
+#shoppingList { list-style: none; margin-top: 0.5rem; }
+#shoppingList li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.25rem 0;
+}
+#shoppingList li.completed { text-decoration: line-through; color: var(--muted); }
+
+#toast {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  background: var(--glass-strong);
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  box-shadow: var(--shadow-soft);
+}
+
+@media (max-width:768px){
+  .cards { flex-direction: column; }
+  .calendar-body { flex-direction: column; }
+}
+@media (max-width:600px){
+  #chatOverlay .chat-window { max-width: 100%; }
+}

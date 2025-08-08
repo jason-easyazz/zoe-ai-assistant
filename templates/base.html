@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  {% block title %}<title>Zoe</title>{% endblock %}
+  {% include 'partials/_head_meta.html' %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+  {% block head_extra %}{% endblock %}
+</head>
+<body>
+  {% block orb_container %}{% endblock %}
+  {% block nav %}{% endblock %}
+  <header id="topInfo">
+    <div id="timeDisplay"></div>
+    <div id="weatherDisplay"></div>
+  </header>
+  <main id="panelContainer">
+    {% block content %}{% endblock %}
+  </main>
+  <div id="toast" class="hidden"></div>
+  <script src="{{ url_for('static', filename='js/zoe-ui.js') }}" defer></script>
+  {% block scripts_extra %}{% endblock %}
+</body>
+</html>
