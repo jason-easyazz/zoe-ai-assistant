@@ -187,6 +187,11 @@ class RegisterUser(BaseModel):
     role: str = "user"
 
 
+class UserSwitchRequest(BaseModel):
+    username: str
+    passcode: str
+
+
 class RoleUpdate(BaseModel):
     role: str
 
@@ -581,11 +586,62 @@ async def get_diagnostics():
     }
 
 
+@app.get("/api/update/check")
+async def check_for_updates():
+    """Check if the local repository is behind origin."""
+    repo_dir = Path(__file__).resolve().parents[2]
+    try:
+        subprocess.run(["git", "fetch", "origin"], cwd=repo_dir, check=True, capture_output=True)
+        local = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        remote = subprocess.run(
+            ["git", "rev-parse", "origin/HEAD"],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        return {
+            "update_available": local != remote,
+            "current_commit": local,
+            "remote_commit": remote,
+        }
+    except Exception as e:
+        logger.error(f"Update check failed: {e}")
+        raise HTTPException(status_code=500, detail="Update check failed")
+
+
+@app.post("/api/update/run")
+async def run_update(background_tasks: BackgroundTasks):
+    """Run git pull in the background to update repository."""
+    repo_dir = Path(__file__).resolve().parents[2]
+
+    def do_update():
+        try:
+            subprocess.run(["git", "pull"], cwd=repo_dir, check=True)
+        except Exception as e:
+            logger.error(f"Update run failed: {e}")
+
+    background_tasks.add_task(do_update)
+    return {"message": "Update started"}
+
+
 @app.post("/api/users/switch")
 async def switch_active_user(req: UserSwitchRequest):
     """Switch the active local user after verifying passcode."""
     config = load_user_config(req.username)
     if not config or config.get("passcode") != req.passcode:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    global active_user
+    active_user = req.username
+    current_session["username"] = req.username
+    current_session["role"] = config.get("role", "user")
+    return {"username": req.username, "role": current_session["role"]}
 
 @app.post("/api/login")
 async def login(req: LoginRequest):
