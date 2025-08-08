@@ -22,7 +22,17 @@ curl -s http://localhost:8000/api/settings | python3 -c "
 import sys, json
 try:
     data = json.load(sys.stdin)
-    print(f'✅ Settings: Fun level {data[\"personality_fun\"]}')
+    p = data[\"personality\"]
+    assert 1 <= p[\"fun_level\"] <= 10, 'fun_level out of range'
+    assert 1 <= p[\"cheeky_level\"] <= 10, 'cheeky_level out of range'
+    assert 1 <= p[\"empathy_level\"] <= 10, 'empathy_level out of range'
+    assert 1 <= p[\"formality_level\"] <= 10, 'formality_level out of range'
+    print(
+        f'✅ Settings: Fun {p[\"fun_level\"]}, '
+        f'Cheeky {p[\"cheeky_level\"]}, '
+        f'Empathy {p[\"empathy_level\"]}, '
+        f'Formality {p[\"formality_level\"]}'
+    )
 except Exception as e:
     print(f'❌ Settings failed: {e}')
 "
