@@ -26,16 +26,13 @@ Zoe is a **fully offline, privacy-first AI assistant** designed specifically for
 ## 🚀 Quick Start
 
 ```bash
-# Clone and setup
+# Clone the repository
 git clone https://github.com/jason-easyazz/zoe-ai-assistant.git
 cd zoe-ai-assistant
 
-# Run setup
-chmod +x scripts/zoe-core.sh
-./scripts/zoe-core.sh
-
-# Start Zoe
-docker compose up -d
+# Install or upgrade Zoe
+chmod +x scripts/install-or-upgrade.sh
+./scripts/install-or-upgrade.sh
 
 # Access interface
 open http://your-pi-ip:8080
