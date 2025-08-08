@@ -488,11 +488,15 @@
                 const key = (mod.scope === 'user' ? 'user-module-' : 'global-module-') + mod.name;
                 localStorage.setItem(key, toggle.checked);
             });
-            const text = document.createElement('span');
-            text.textContent = `${mod.name} - ${mod.description}`;
-            label.appendChild(toggle);
-            label.appendChild(text);
+              const text = document.createElement('span');
+              text.textContent = `${mod.name} - ${mod.description}`;
+              label.appendChild(toggle);
+              label.appendChild(text);
 
+              item.appendChild(label);
+              container.appendChild(item);
+          });
+      }
 
         // Load Matrix sync setting from server
         fetch('/api/settings').then(r => r.json()).then(data => {
@@ -544,14 +548,6 @@
             });
         }
 
-    </script>
-
-
-
-            item.appendChild(label);
-            container.appendChild(item);
-        });
-    }
 </script>
 </body>
 </html>
