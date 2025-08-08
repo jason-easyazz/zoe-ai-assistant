@@ -48,8 +48,9 @@ zoe/
 ├── 🐳 docker-compose.yml    # Main orchestration
 ├── 🔧 scripts/             # Setup & maintenance
 ├── 🏗️ services/            # All service containers
-├── 📊 data/                # Persistent data (not in git)
-└── 📚 docs/                # Documentation
+├── ⚙️ config/              # Configuration files
+├── 🧪 tests/               # Test suites
+└── 🧠 zoe-core/            # Core application
 ```
 
 ## 🛠️ Key Commands
