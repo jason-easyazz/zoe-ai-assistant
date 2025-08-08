@@ -39,6 +39,32 @@ CONFIG = {
     "cors_origins": os.getenv("CORS_ORIGINS", "*").split(","),
 }
 
+# User profile paths
+BASE_DATA_DIR = Path(os.getenv("ZOE_DATA_DIR", "/home/pi/zoe/data"))
+USERS_DIR = BASE_DATA_DIR / "users"
+USERS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Currently active user
+active_user = "default"
+
+
+def get_user_dir(username: Optional[str] = None) -> Path:
+    """Return path to a user's data directory, creating standard structure."""
+    user = username or active_user
+    user_dir = USERS_DIR / user
+    (user_dir / "logs").mkdir(parents=True, exist_ok=True)
+    (user_dir / "tts").mkdir(parents=True, exist_ok=True)
+    return user_dir
+
+
+def load_user_config(username: str) -> Dict[str, Any]:
+    """Load config.json for a given user."""
+    config_path = get_user_dir(username) / "config.json"
+    if config_path.exists():
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
 # FastAPI app
 app = FastAPI(
     title="Zoe v3.1 Enhanced AI Hub", 
@@ -61,6 +87,21 @@ class ChatMessage(BaseModel):
     source: Optional[str] = "web"
     room_id: Optional[str] = None
     sender: Optional[str] = None
+
+class JournalEntry(BaseModel):
+    title: Optional[str] = Field(None, max_length=200)
+    content: str = Field(..., min_length=1, max_length=10000)
+    tags: Optional[List[str]] = Field(default_factory=list)
+
+class UserSwitchRequest(BaseModel):
+    username: str
+    passcode: str
+
+
+class LinkAccountRequest(BaseModel):
+    matrix_id: str
+    verify_token: str
+    sync_prefs: Dict[str, str] = Field(default_factory=dict)
 
 class VoiceTranscription(BaseModel):
     audio_data: str  # Base64 encoded audio
@@ -230,7 +271,10 @@ class IntegrationManager:
         # Get pending tasks
         try:
             async with aiosqlite.connect(CONFIG["database_path"]) as db:
-                cursor = await db.execute("SELECT COUNT(*) FROM tasks WHERE status = 'pending'")
+                cursor = await db.execute(
+                    "SELECT COUNT(*) FROM tasks WHERE status = 'pending' AND user_id = ?",
+                    (active_user,)
+                )
                 count = (await cursor.fetchone())[0]
                 if count > 0:
                     context["pending_tasks"] = f"{count} pending"
@@ -240,10 +284,13 @@ class IntegrationManager:
         # Get recent journal mood
         try:
             async with aiosqlite.connect(CONFIG["database_path"]) as db:
-                cursor = await db.execute("""
-                    SELECT AVG(mood_score) FROM journal_entries 
-                    WHERE created_at >= date('now', '-3 days')
-                """)
+                cursor = await db.execute(
+                    """
+                    SELECT AVG(mood_score) FROM journal_entries
+                    WHERE created_at >= date('now', '-3 days') AND user_id = ?
+                    """,
+                    (active_user,)
+                )
                 mood = (await cursor.fetchone())[0]
                 if mood:
                     context["recent_journal"] = "positive" if mood > 0.2 else "neutral" if mood > -0.2 else "reflective"
@@ -270,7 +317,8 @@ async def init_database():
                 title TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 message_count INTEGER DEFAULT 0,
-                source TEXT DEFAULT 'web'
+                source TEXT DEFAULT 'web',
+                user_id TEXT DEFAULT 'default'
             );
             
             CREATE TABLE IF NOT EXISTS messages (
@@ -291,7 +339,8 @@ async def init_database():
                 mood_score REAL,
                 word_count INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                source TEXT DEFAULT 'manual'
+                source TEXT DEFAULT 'manual',
+                user_id TEXT DEFAULT 'default'
             );
             
             CREATE TABLE IF NOT EXISTS tasks (
@@ -304,7 +353,8 @@ async def init_database():
                 source TEXT DEFAULT 'manual',
                 integration_id TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                user_id TEXT DEFAULT 'default'
             );
             
             CREATE TABLE IF NOT EXISTS events (
@@ -316,7 +366,8 @@ async def init_database():
                 location TEXT,
                 source TEXT DEFAULT 'manual',
                 integration_id TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                user_id TEXT DEFAULT 'default'
             );
             
             CREATE TABLE IF NOT EXISTS user_settings (
@@ -389,6 +440,26 @@ async def health_check():
         "timestamp": datetime.now().isoformat()
     }
 
+
+@app.post("/api/users/switch")
+async def switch_active_user(req: UserSwitchRequest):
+    """Switch the active local user after verifying passcode."""
+    config = load_user_config(req.username)
+    if not config or config.get("passcode") != req.passcode:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    global active_user
+    active_user = req.username
+    return {"active_user": active_user}
+
+
+@app.post("/api/users/link")
+async def link_user_account(req: LinkAccountRequest):
+    """Link the active user to a cloud Matrix identity."""
+    link_path = get_user_dir() / "linked_account.json"
+    with open(link_path, "w", encoding="utf-8") as f:
+        json.dump(req.dict(), f, indent=2)
+    return {"status": "linked"}
+
 @app.post("/api/chat")
 async def enhanced_chat_endpoint(chat_msg: ChatMessage, background_tasks: BackgroundTasks):
     """Enhanced chat with integration support"""
@@ -396,21 +467,34 @@ async def enhanced_chat_endpoint(chat_msg: ChatMessage, background_tasks: Backgr
         async with aiosqlite.connect(CONFIG["database_path"]) as db:
             # Create or get conversation
             if chat_msg.conversation_id:
-                conv_id = chat_msg.conversation_id
+                cursor = await db.execute(
+                    "SELECT id FROM conversations WHERE id = ? AND user_id = ?",
+                    (chat_msg.conversation_id, active_user),
+                )
+                row = await cursor.fetchone()
+                if not row:
+                    raise HTTPException(status_code=404, detail="Conversation not found")
+                conv_id = row[0]
             else:
-                cursor = await db.execute("""
-                    INSERT INTO conversations (title, created_at, source) 
-                    VALUES (?, ?, ?)
-                """, (f"Chat {datetime.now().strftime('%m/%d %H:%M')}", datetime.now(), chat_msg.source))
+                cursor = await db.execute(
+                    """
+                    INSERT INTO conversations (title, created_at, source, user_id)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (f"Chat {datetime.now().strftime('%m/%d %H:%M')}", datetime.now(), chat_msg.source, active_user),
+                )
                 await db.commit()
                 conv_id = cursor.lastrowid
             
             # Get conversation context
-            cursor = await db.execute("""
-                SELECT role, content, timestamp FROM messages 
-                WHERE conversation_id = ? 
+            cursor = await db.execute(
+                """
+                SELECT role, content, timestamp FROM messages
+                WHERE conversation_id = ?
                 ORDER BY timestamp DESC LIMIT 6
-            """, (conv_id,))
+                """,
+                (conv_id,),
+            )
             context_messages = await cursor.fetchall()
             context_history = [{"role": msg[0], "content": msg[1]} for msg in reversed(context_messages)]
             
@@ -459,6 +543,12 @@ async def enhanced_chat_endpoint(chat_msg: ChatMessage, background_tasks: Backgr
                 VALUES (?, ?, ?, ?, ?)
             """, (conv_id, "assistant", ai_response, datetime.now(), chat_msg.source))
             await db.commit()
+
+        # Append to user chat log
+        log_path = get_user_dir() / "logs" / "chat.log"
+        with open(log_path, "a", encoding="utf-8") as lf:
+            lf.write(f"[{datetime.now().isoformat()}] USER: {chat_msg.message}\n")
+            lf.write(f"[{datetime.now().isoformat()}] AI: {ai_response}\n")
         
         # Process message for integrations in background
         background_tasks.add_task(process_message_integrations, chat_msg.message, ai_response, conv_id)
@@ -483,17 +573,37 @@ async def process_message_integrations(user_message: str, ai_response: str, conv
         async with aiosqlite.connect(CONFIG["database_path"]) as db:
             # Save detected tasks
             for task in entities.get("tasks", []):
-                await db.execute("""
-                    INSERT INTO tasks (title, description, source, integration_id, created_at)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (task["title"], task.get("description"), "chat_detection", f"conv_{conversation_id}", datetime.now()))
+                await db.execute(
+                    """
+                    INSERT INTO tasks (title, description, source, integration_id, created_at, user_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        task["title"],
+                        task.get("description"),
+                        "chat_detection",
+                        f"conv_{conversation_id}",
+                        datetime.now(),
+                        active_user,
+                    ),
+                )
             
             # Save detected events
             for event in entities.get("events", []):
-                await db.execute("""
-                    INSERT INTO events (title, start_date, source, integration_id, created_at)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (event["title"], event.get("date", datetime.now().date()), "chat_detection", f"conv_{conversation_id}", datetime.now()))
+                await db.execute(
+                    """
+                    INSERT INTO events (title, start_date, source, integration_id, created_at, user_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event["title"],
+                        event.get("date", datetime.now().date()),
+                        "chat_detection",
+                        f"conv_{conversation_id}",
+                        datetime.now(),
+                        active_user,
+                    ),
+                )
             
             await db.commit()
         
@@ -566,6 +676,74 @@ async def extract_entities_advanced(text: str) -> Dict:
             })
     
     return entities
+
+# Journal endpoints
+@app.post("/api/journal")
+async def create_journal_entry(entry: JournalEntry):
+    try:
+        blob = TextBlob(entry.content)
+        mood_score = blob.sentiment.polarity
+        word_count = len(entry.content.split())
+
+        async with aiosqlite.connect(CONFIG["database_path"]) as db:
+            cursor = await db.execute(
+                """
+                INSERT INTO journal_entries (title, content, mood_score, word_count, created_at, source, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry.title or f"Entry {datetime.now().strftime('%m/%d')}",
+                    entry.content,
+                    mood_score,
+                    word_count,
+                    datetime.now(),
+                    "manual",
+                    active_user,
+                ),
+            )
+            await db.commit()
+
+        # Also write to user's journal.json
+        journal_path = get_user_dir() / "journal.json"
+        entry_data = {
+            "id": cursor.lastrowid,
+            "title": entry.title or f"Entry {datetime.now().strftime('%m/%d')}",
+            "content": entry.content,
+            "mood_score": mood_score,
+            "word_count": word_count,
+            "created_at": datetime.now().isoformat(),
+        }
+        if journal_path.exists():
+            with open(journal_path, "r", encoding="utf-8") as jf:
+                data = json.load(jf)
+        else:
+            data = []
+        data.append(entry_data)
+        with open(journal_path, "w", encoding="utf-8") as jf:
+            json.dump(data, jf, indent=2)
+
+            return {
+                "id": cursor.lastrowid,
+                "message": "Journal entry saved! 📝",
+                "mood_score": mood_score,
+                "word_count": word_count,
+            }
+
+    except Exception as e:
+        logger.error(f"Journal creation error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save journal entry")
+
+
+@app.get("/api/journal")
+async def get_journal_entries(limit: int = 20):
+    journal_path = get_user_dir() / "journal.json"
+    if journal_path.exists():
+        with open(journal_path, "r", encoding="utf-8") as jf:
+            entries = json.load(jf)
+    else:
+        entries = []
+
+    return entries[-limit:][::-1]
 
 # VOICE INTEGRATION ENDPOINTS
 
@@ -787,25 +965,34 @@ async def get_enhanced_dashboard():
         async with aiosqlite.connect(CONFIG["database_path"]) as db:
             # Today's agenda
             today = date.today()
-            cursor = await db.execute("""
+            cursor = await db.execute(
+                """
                 SELECT 'task' as type, title, priority, status, source
-                FROM tasks WHERE due_date = ? AND status != 'completed'
+                FROM tasks WHERE due_date = ? AND status != 'completed' AND user_id = ?
                 UNION ALL
                 SELECT 'event' as type, title, 'normal' as priority, 'scheduled' as status, source
-                FROM events WHERE start_date = ?
+                FROM events WHERE start_date = ? AND user_id = ?
                 ORDER BY type, title
-            """, (today, today))
+                """,
+                (today, active_user, today, active_user),
+            )
             agenda = await cursor.fetchall()
             
             # Task statistics
-            cursor = await db.execute("SELECT status, COUNT(*) FROM tasks GROUP BY status")
+            cursor = await db.execute(
+                "SELECT status, COUNT(*) FROM tasks WHERE user_id = ? GROUP BY status",
+                (active_user,),
+            )
             task_stats = dict(await cursor.fetchall())
             
             # Recent journal analysis
-            cursor = await db.execute("""
-                SELECT COUNT(*), AVG(mood_score) FROM journal_entries 
-                WHERE created_at >= date('now', '-7 days')
-            """)
+            cursor = await db.execute(
+                """
+                SELECT COUNT(*), AVG(mood_score) FROM journal_entries
+                WHERE created_at >= date('now', '-7 days') AND user_id = ?
+                """,
+                (active_user,),
+            )
             journal_data = await cursor.fetchone()
             
             # Integration activity
