@@ -1,0 +1,96 @@
+{% extends 'base.html' %}
+
+{% block title %}<title>Zoe App</title>{% endblock %}
+
+{% block orb_container %}
+<div id="orbMode" class="orb idle">
+  <div class="fluid-layer layer1"></div>
+  <div class="fluid-layer layer2"></div>
+  <div class="fluid-layer layer3"></div>
+</div>
+{% endblock %}
+
+{% block nav %}
+<nav id="topNav" class="hidden">
+  <button id="navOrb" class="mini-orb"></button>
+  <ul>
+    <li data-panel="dashboardPanel">Dashboard</li>
+    <li data-panel="calendarPanel">Calendar</li>
+    <li data-panel="tasksPanel">Tasks</li>
+    <li data-panel="journalPanel">Journal</li>
+    <li data-panel="shoppingPanel">Shopping</li>
+  </ul>
+  <button id="settingsBtn" class="icon-btn" data-panel="settingsPanel">⚙</button>
+</nav>
+{% endblock %}
+
+{% block content %}
+<section id="dashboardPanel" class="panel">
+  <div class="quick-actions">
+    <button data-action="journal">Journal</button>
+    <button data-action="event">Event</button>
+    <button data-action="task">Task</button>
+    <button data-action="shopping">Shop</button>
+  </div>
+  <div class="cards">
+    <div class="card-glass" id="tasksToday">
+      <h3>Tasks Today</h3>
+      <ul id="taskList"></ul>
+    </div>
+    <div class="card-glass" id="eventsUpcoming">
+      <h3>Upcoming Events</h3>
+      <ul id="eventList"></ul>
+    </div>
+  </div>
+</section>
+
+<section id="calendarPanel" class="panel hidden">
+  <div class="calendar-header">
+    <button id="calPrev" class="icon-btn">&#8249;</button>
+    <h2 id="calMonth"></h2>
+    <button id="calNext" class="icon-btn">&#8250;</button>
+  </div>
+  <div class="calendar-body">
+    <div class="calendar-grid" id="calGrid"></div>
+    <div class="day-view">
+      <h3 id="dayTitle"></h3>
+      <ul id="dayEvents"></ul>
+    </div>
+  </div>
+  <button id="addEventBtn" class="btn-round">+</button>
+</section>
+
+<section id="tasksPanel" class="panel hidden">
+  <div class="card-glass">
+    <h3>Tasks</h3>
+    <ul id="tasksAll"></ul>
+  </div>
+</section>
+
+<section id="journalPanel" class="panel hidden">
+  <div class="card-glass">
+    <h3>Journal</h3>
+    <p>Use chat to create journal entries.</p>
+  </div>
+</section>
+
+<section id="shoppingPanel" class="panel hidden">
+  <div class="card-glass">
+    <h3>Shopping</h3>
+    <form id="shoppingForm">
+      <input type="text" id="shoppingInput" placeholder="Add item">
+      <button type="submit" class="btn-round">+</button>
+    </form>
+    <ul id="shoppingList"></ul>
+  </div>
+</section>
+
+<section id="settingsPanel" class="panel hidden">
+  <div class="card-glass">
+    <h3>Settings</h3>
+    <p>Multi-user, roles, preferences coming soon.</p>
+  </div>
+</section>
+
+{% include 'partials/_chat_overlay.html' %}
+{% endblock %}

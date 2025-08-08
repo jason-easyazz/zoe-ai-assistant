@@ -30,9 +30,10 @@ try:
 except Exception:  # pragma: no cover - fallback if bcrypt unavailable
     bcrypt = None
 from fastapi import FastAPI, Request, WebSocket, HTTPException, BackgroundTasks, Depends
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 from textblob import TextBlob
 
@@ -165,10 +166,14 @@ async def set_setting(category: str, key: str, value: str) -> None:
 
 # FastAPI app
 app = FastAPI(
-    title="Zoe v3.1 Enhanced AI Hub", 
+    title="Zoe v3.1 Enhanced AI Hub",
     version=CONFIG["version"],
     description="Complete personal AI with integrations"
 )
+
+BASE_PATH = Path(__file__).resolve().parent.parent
+templates = Jinja2Templates(directory=str(BASE_PATH / "templates"))
+app.mount("/static", StaticFiles(directory=str(BASE_PATH / "static")), name="static")
 
 app.add_middleware(
     CORSMiddleware,
@@ -187,6 +192,21 @@ async def auth_middleware(request: Request, call_next):
             return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
     response = await call_next(request)
     return response
+
+
+@app.get("/", response_class=HTMLResponse)
+async def ui_root(request: Request):
+    return templates.TemplateResponse("app.html", {"request": request})
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def ui_dashboard():
+    return RedirectResponse("/")
+
+
+@app.get("/calendar", response_class=HTMLResponse)
+async def ui_calendar():
+    return RedirectResponse("/")
 
 # Pydantic Models
 class ChatMessage(BaseModel):
