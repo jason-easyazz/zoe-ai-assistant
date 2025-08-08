@@ -72,6 +72,7 @@
                 <a href="settings.html" class="nav-item active">Settings</a>
             </div>
         </div>
+        <div id="currentUserDisplay" class="nav-item"></div>
         <button class="close-btn" onclick="exitToOrb()">×</button>
     </div>
 
@@ -90,6 +91,19 @@
             <h1>Settings</h1>
             <p>Manage your preferences here.</p>
             <!-- TODO: Add settings options -->
+            <div id="userManagementSection" style="display:none;margin-top:20px;">
+                <h2>User Management</h2>
+                <ul id="userList"></ul>
+                <div style="margin-top:10px;">
+                    <input id="newUsername" placeholder="Username">
+                    <input id="newPasscode" type="password" placeholder="Passcode">
+                    <select id="newRole">
+                        <option value="user">User</option>
+                        <option value="admin">Admin</option>
+                    </select>
+                    <button id="addUserBtn">Add User</button>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -150,6 +164,7 @@
         }
 </script>
 <script src="js/overlay.js"></script>
+<script src="js/user-management.js"></script>
 
     <title>Zoe Settings</title>
     <style>

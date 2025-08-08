@@ -12,11 +12,18 @@ import sys
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any
+import getpass
+import shutil
 
 import aiosqlite
 import httpx
 import uvicorn
-from fastapi import FastAPI, Request, WebSocket, HTTPException, BackgroundTasks
+import hashlib
+try:
+    import bcrypt  # type: ignore
+except Exception:  # pragma: no cover - fallback if bcrypt unavailable
+    bcrypt = None
+from fastapi import FastAPI, Request, WebSocket, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -48,17 +55,73 @@ BASE_DATA_DIR = Path(os.getenv("ZOE_DATA_DIR", "/home/pi/zoe/data"))
 USERS_DIR = BASE_DATA_DIR / "users"
 USERS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Currently active user
-active_user = "default"
+# Currently active user and session
+active_user: Optional[str] = None
+current_session: Dict[str, Optional[str]] = {"username": None, "role": None}
+
+
+def ensure_admin_user() -> None:
+    """Prompt to create an admin user if none exist."""
+    if any(USERS_DIR.iterdir()):
+        return
+    if not sys.stdin.isatty():
+        logger.warning("No users found. Skipping admin setup in non-interactive mode.")
+        return
+    print("No users found. Please create an admin account.")
+    username = input("Admin username: ").strip()
+    passcode = getpass.getpass("Admin passcode: ")
+    hashed = hash_passcode(passcode)
+    user_dir = USERS_DIR / username
+    user_dir.mkdir(parents=True, exist_ok=True)
+    with open(user_dir / "user.json", "w", encoding="utf-8") as f:
+        json.dump({"username": username, "passcode_hash": hashed, "role": "admin"}, f, indent=2)
+    print(f"Admin user '{username}' created.")
+
+
+ensure_admin_user()
 
 
 def get_user_dir(username: Optional[str] = None) -> Path:
     """Return path to a user's data directory, creating standard structure."""
     user = username or active_user
+    if not user:
+        raise HTTPException(status_code=401, detail="No active user")
     user_dir = USERS_DIR / user
     (user_dir / "logs").mkdir(parents=True, exist_ok=True)
     (user_dir / "tts").mkdir(parents=True, exist_ok=True)
     return user_dir
+
+
+def get_user_meta(username: str) -> Dict[str, Any]:
+    meta_path = get_user_dir(username) / "user.json"
+    if meta_path.exists():
+        with open(meta_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def require_auth() -> Dict[str, Optional[str]]:
+    if not current_session["username"]:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return current_session
+
+
+def require_admin(session: Dict[str, Optional[str]] = Depends(require_auth)) -> Dict[str, Optional[str]]:
+    if session.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return session
+
+
+def hash_passcode(passcode: str) -> str:
+    if bcrypt:
+        return bcrypt.hashpw(passcode.encode(), bcrypt.gensalt()).decode()
+    return hashlib.sha256(passcode.encode()).hexdigest()
+
+
+def verify_passcode(passcode: str, hashed: str) -> bool:
+    if bcrypt:
+        return bcrypt.checkpw(passcode.encode(), hashed.encode())
+    return hashlib.sha256(passcode.encode()).hexdigest() == hashed
 
 
 def load_user_config(username: str) -> Dict[str, Any]:
@@ -84,6 +147,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    public_paths = {"/api/login", "/api/logout", "/api/whoami", "/health"}
+    if request.url.path.startswith("/api") and request.url.path not in public_paths:
+        if not current_session["username"]:
+            return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+    response = await call_next(request)
+    return response
+
 # Pydantic Models
 class ChatMessage(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
@@ -97,9 +170,19 @@ class JournalEntry(BaseModel):
     content: str = Field(..., min_length=1, max_length=10000)
     tags: Optional[List[str]] = Field(default_factory=list)
 
-class UserSwitchRequest(BaseModel):
+class LoginRequest(BaseModel):
     username: str
     passcode: str
+
+
+class RegisterUser(BaseModel):
+    username: str
+    passcode: str
+    role: str = "user"
+
+
+class RoleUpdate(BaseModel):
+    role: str
 
 
 class LinkAccountRequest(BaseModel):
@@ -449,15 +532,75 @@ async def health_check():
     }
 
 
-@app.post("/api/users/switch")
-async def switch_active_user(req: UserSwitchRequest):
-    """Switch the active local user after verifying passcode."""
-    config = load_user_config(req.username)
-    if not config or config.get("passcode") != req.passcode:
+@app.post("/api/login")
+async def login(req: LoginRequest):
+    meta = get_user_meta(req.username)
+    if not meta or not verify_passcode(req.passcode, meta.get("passcode_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     global active_user
     active_user = req.username
-    return {"active_user": active_user}
+    current_session["username"] = req.username
+    current_session["role"] = meta.get("role", "user")
+    return {"username": req.username, "role": current_session["role"]}
+
+
+@app.post("/api/logout")
+async def logout():
+    global active_user
+    active_user = None
+    current_session["username"] = None
+    current_session["role"] = None
+    return {"status": "logged_out"}
+
+
+@app.get("/api/whoami")
+async def whoami():
+    if not current_session["username"]:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return {"username": current_session["username"], "role": current_session["role"]}
+
+
+@app.post("/api/users/register")
+async def register_user(req: RegisterUser, session: Dict[str, str] = Depends(require_admin)):
+    if (USERS_DIR / req.username).exists():
+        raise HTTPException(status_code=400, detail="User exists")
+    hashed = hash_passcode(req.passcode)
+    user_dir = USERS_DIR / req.username
+    user_dir.mkdir(parents=True, exist_ok=True)
+    with open(user_dir / "user.json", "w", encoding="utf-8") as f:
+        json.dump({"username": req.username, "passcode_hash": hashed, "role": req.role}, f, indent=2)
+    return {"status": "created"}
+
+
+@app.get("/api/users/list")
+async def list_users(session: Dict[str, str] = Depends(require_admin)):
+    users = []
+    for user_dir in USERS_DIR.iterdir():
+        if user_dir.is_dir():
+            meta = get_user_meta(user_dir.name)
+            if meta:
+                users.append({"username": user_dir.name, "role": meta.get("role", "user")})
+    return {"users": users}
+
+
+@app.delete("/api/users/{username}")
+async def delete_user(username: str, session: Dict[str, str] = Depends(require_admin)):
+    target_dir = USERS_DIR / username
+    if not target_dir.exists():
+        raise HTTPException(status_code=404, detail="User not found")
+    shutil.rmtree(target_dir)
+    return {"status": "deleted"}
+
+
+@app.patch("/api/users/{username}/role")
+async def update_user_role(username: str, req: RoleUpdate, session: Dict[str, str] = Depends(require_admin)):
+    meta = get_user_meta(username)
+    if not meta:
+        raise HTTPException(status_code=404, detail="User not found")
+    meta["role"] = req.role
+    with open(get_user_dir(username) / "user.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
+    return {"status": "updated"}
 
 
 @app.post("/api/users/link")
