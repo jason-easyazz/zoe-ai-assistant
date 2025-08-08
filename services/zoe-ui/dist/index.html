@@ -152,6 +152,24 @@
             gap: 20px;
         }
 
+        .nav-menu {
+            display: flex;
+            gap: 20px;
+        }
+
+        .nav-item {
+            color: #666;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 400;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .nav-item:hover, .nav-item.active {
+            color: #7B61FF;
+        }
+
         .mini-orb {
             width: 40px;
             height: 40px;
@@ -544,6 +562,12 @@
             <div class="nav-left">
                 <div class="mini-orb" onclick="exitToOrb()">
                     <div class="fluid-layer"></div>
+                </div>
+                <div class="nav-menu">
+                    <a href="index.html" class="nav-item active">Chat</a>
+                    <a href="dashboard.html" class="nav-item">Dashboard</a>
+                    <a href="calendar.html" class="nav-item">Calendar</a>
+                    <a href="settings.html" class="nav-item">Settings</a>
                 </div>
             </div>
             <button class="close-btn" onclick="exitToOrb()">×</button>

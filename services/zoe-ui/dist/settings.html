@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Settings</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif; background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%); overflow: hidden; height: 100vh; user-select: none; -webkit-tap-highlight-color: transparent; }
+
+        .orb-mode { position: fixed; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%); z-index: 1000; opacity: 1; transition: opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1); }
+        .orb-mode.hidden { opacity: 0; pointer-events: none; }
+        .fluid-orb { position: relative; width: 200px; height: 200px; border-radius: 50%; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); cursor: pointer; overflow: hidden; box-shadow: 0 20px 60px rgba(123, 97, 255, 0.3); transition: all 0.3s ease; }
+        .fluid-orb:hover { transform: scale(1.05); box-shadow: 0 25px 80px rgba(123, 97, 255, 0.4); }
+        .fluid-layer { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.3) 0%, transparent 70%); }
+        .fluid-layer:nth-child(1) { animation: breathe 3s ease-in-out infinite; }
+        .fluid-layer:nth-child(2) { animation: breathe 3s ease-in-out infinite 1s; opacity: 0.6; }
+        .fluid-layer:nth-child(3) { animation: breathe 3s ease-in-out infinite 2s; opacity: 0.3; }
+        @keyframes breathe { 0%, 100% { transform: scale(1) rotate(0deg); opacity: 0.8; } 50% { transform: scale(1.1) rotate(180deg); opacity: 1; } }
+        .orb-hint { margin-top: 30px; color: #666; font-size: 18px; font-weight: 300; text-align: center; opacity: 0.8; }
+
+        .main-interface { position: fixed; inset: 0; background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%); opacity: 0; pointer-events: none; transition: opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1); }
+        .main-interface.active { opacity: 1; pointer-events: auto; }
+
+        .nav-bar { position: fixed; top: 0; left: 0; right: 0; height: 70px; background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(40px); border-bottom: 1px solid rgba(255, 255, 255, 0.3); display: flex; align-items: center; justify-content: space-between; padding: 0 20px; z-index: 110; }
+        .nav-left { display: flex; align-items: center; gap: 20px; }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { color: #666; text-decoration: none; font-size: 13px; font-weight: 400; transition: all 0.3s ease; cursor: pointer; }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; }
+
+        .mini-orb { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); cursor: pointer; position: relative; overflow: hidden; transition: transform 0.2s ease; }
+        .mini-orb:hover { transform: scale(1.1); }
+        .mini-orb .fluid-layer { animation: breathe 2s ease-in-out infinite; }
+
+        .close-btn { width: 40px; height: 40px; border: none; background: rgba(255, 255, 255, 0.3); border-radius: 50%; color: #666; font-size: 20px; cursor: pointer; transition: all 0.2s ease; }
+        .close-btn:hover { background: rgba(255, 100, 100, 0.2); color: #ff6b6b; }
+
+        .main-container { max-width: 900px; margin: 0 auto; padding: 100px 40px 60px; min-height: 100vh; display: flex; flex-direction: column; gap: 30px; }
+        .time-display { position: fixed; top: 80px; left: 20px; z-index: 90; }
+        .current-time { font-size: 24px; font-weight: 300; color: #333; margin-bottom: 2px; }
+        .current-date { font-size: 14px; color: #666; }
+        .weather-widget { position: fixed; top: 80px; right: 20px; z-index: 90; display: flex; align-items: center; gap: 8px; }
+        .weather-icon { font-size: 24px; }
+        .weather-temp { font-size: 24px; font-weight: 300; color: #333; }
+
+        .zoe-greeting { text-align: center; margin-top: 160px; }
+        .zoe-greeting h1 { font-size: 32px; font-weight: 300; color: #333; margin-bottom: 10px; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+        .zoe-greeting p { font-size: 18px; color: #666; font-weight: 300; }
+    </style>
+</head>
+<body>
+<div class="orb-mode" id="orbMode" onclick="enterInterface()">
+    <div class="fluid-orb" id="fluidOrb">
+        <div class="fluid-layer"></div>
+        <div class="fluid-layer"></div>
+        <div class="fluid-layer"></div>
+    </div>
+    <div class="orb-hint">Touch to interact or just start talking</div>
+</div>
+
+<div class="main-interface" id="mainInterface">
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="exitToOrb()">
+                <div class="fluid-layer"></div>
+            </div>
+            <div class="nav-menu">
+                <a href="index.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="settings.html" class="nav-item active">Settings</a>
+            </div>
+        </div>
+        <button class="close-btn" onclick="exitToOrb()">×</button>
+    </div>
+
+    <div class="main-container">
+        <div class="time-display">
+            <div class="current-time" id="currentTime">2:47 PM</div>
+            <div class="current-date" id="currentDate">Thursday, August 7</div>
+        </div>
+
+        <div class="weather-widget">
+            <div class="weather-icon" id="weatherIcon">☀️</div>
+            <div class="weather-temp" id="weatherTemp">23°</div>
+        </div>
+
+        <div class="zoe-greeting">
+            <h1>Settings</h1>
+            <p>Manage your preferences here.</p>
+            <!-- TODO: Add settings options -->
+        </div>
+    </div>
+</div>
+
+<script>
+        let currentMode = 'orb';
+
+        const orbMode = document.getElementById('orbMode');
+        const mainInterface = document.getElementById('mainInterface');
+        const fluidOrb = document.getElementById('fluidOrb');
+
+        document.addEventListener('DOMContentLoaded', function() {
+            updateTime();
+            setInterval(updateTime, 1000);
+            updateWeather();
+        });
+
+        function enterInterface() {
+            currentMode = 'interface';
+            orbMode.classList.add('hidden');
+            mainInterface.classList.add('active');
+        }
+
+        function exitToOrb() {
+            currentMode = 'orb';
+            mainInterface.classList.remove('active');
+            orbMode.classList.remove('hidden');
+        }
+
+        function updateTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('en-US', {
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+            });
+            const dateString = now.toLocaleDateString('en-US', {
+                weekday: 'long',
+                month: 'long',
+                day: 'numeric'
+            });
+            document.getElementById('currentTime').textContent = timeString;
+            document.getElementById('currentDate').textContent = dateString;
+        }
+
+        function updateWeather() {
+            fetch('http://localhost:8000/api/weather')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('weatherIcon').textContent = data.icon || '☀️';
+                    document.getElementById('weatherTemp').textContent = `${data.temperature || 23}°`;
+                })
+                .catch(error => {
+                    console.log('Weather API not available, using defaults');
+                    document.getElementById('weatherIcon').textContent = '☀️';
+                    document.getElementById('weatherTemp').textContent = '23°';
+                });
+        }
+</script>
+<script src="js/overlay.js"></script>
+</body>
+</html>
