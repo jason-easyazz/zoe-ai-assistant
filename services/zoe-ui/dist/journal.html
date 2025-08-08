@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Journal</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif; background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%); min-height: 100vh; }
+        .nav-bar { position: fixed; top: 0; left: 0; right: 0; height: 70px; background: rgba(255,255,255,0.8); backdrop-filter: blur(40px); border-bottom: 1px solid rgba(255,255,255,0.3); display: flex; align-items: center; padding: 0 20px; z-index: 10; }
+        .nav-left { display: flex; align-items: center; gap: 20px; }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { color: #666; text-decoration: none; font-size: 13px; font-weight: 400; transition: color 0.3s ease; }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; }
+        .mini-orb { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); cursor: pointer; position: relative; overflow: hidden; }
+        .mini-orb .fluid-layer { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.3) 0%, transparent 70%); animation: breathe 2s ease-in-out infinite; }
+        @keyframes breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.1); } }
+        .main-container { max-width: 800px; margin: 100px auto 40px; padding: 0 20px; display: flex; flex-direction: column; gap: 20px; }
+        .journal-entry { background: rgba(255,255,255,0.8); border-radius: 12px; padding: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .journal-date { font-size: 12px; color: #666; margin-bottom: 8px; }
+        .journal-content { font-size: 14px; white-space: pre-wrap; }
+        .journal-new textarea { width: 100%; height: 100px; padding: 10px; border-radius: 8px; border: 1px solid #ccc; resize: vertical; }
+        .journal-new button { margin-top: 10px; padding: 10px 20px; border: none; border-radius: 20px; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); color: #fff; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="window.location.href='index.html'">
+                <div class="fluid-layer"></div>
+            </div>
+            <div class="nav-menu">
+                <a href="index.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item active">Journal</a>
+                <a href="tasks.html" class="nav-item">Tasks</a>
+                <a href="settings.html" class="nav-item">Settings</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <h1>Journal</h1>
+        <div id="journalEntries"></div>
+        <div class="journal-new">
+            <textarea id="journalInput" placeholder="Write a new entry..."></textarea>
+            <button id="saveJournal">Save Entry</button>
+        </div>
+    </div>
+
+    <script>
+    async function loadJournal() {
+        try {
+            const res = await fetch('/api/journal');
+            const entries = await res.json();
+            const container = document.getElementById('journalEntries');
+            container.innerHTML = '';
+            entries.forEach(e => {
+                const entryDiv = document.createElement('div');
+                entryDiv.className = 'journal-entry';
+                const dateDiv = document.createElement('div');
+                dateDiv.className = 'journal-date';
+                dateDiv.textContent = new Date(e.created_at).toLocaleString();
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'journal-content';
+                contentDiv.textContent = e.content;
+                entryDiv.appendChild(dateDiv);
+                entryDiv.appendChild(contentDiv);
+                container.appendChild(entryDiv);
+            });
+        } catch (err) {
+            console.error('Failed to load journal', err);
+        }
+    }
+
+    async function saveJournal() {
+        const textarea = document.getElementById('journalInput');
+        const content = textarea.value.trim();
+        if (!content) return;
+        try {
+            await fetch('/api/journal', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content })
+            });
+            textarea.value = '';
+            loadJournal();
+        } catch (err) {
+            console.error('Failed to save journal', err);
+        }
+    }
+
+    document.getElementById('saveJournal').addEventListener('click', saveJournal);
+    document.addEventListener('DOMContentLoaded', loadJournal);
+    </script>
+    <script src="js/overlay.js"></script>
+</body>
+</html>
