@@ -138,6 +138,30 @@ def load_user_config(username: str) -> Dict[str, Any]:
             return json.load(f)
     return {}
 
+
+async def get_setting(category: str, key: str, default: Optional[str] = None) -> Optional[str]:
+    """Retrieve a setting value from the database."""
+    async with aiosqlite.connect(CONFIG["database_path"]) as db:
+        cursor = await db.execute(
+            "SELECT setting_value FROM user_settings WHERE category = ? AND setting_key = ?",
+            (category, key),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else default
+
+
+async def set_setting(category: str, key: str, value: str) -> None:
+    """Store a setting value in the database."""
+    async with aiosqlite.connect(CONFIG["database_path"]) as db:
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO user_settings (category, setting_key, setting_value, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (category, key, value),
+        )
+        await db.commit()
+
 # FastAPI app
 app = FastAPI(
     title="Zoe v3.1 Enhanced AI Hub", 
@@ -191,6 +215,11 @@ class RoleUpdate(BaseModel):
     role: str
 
 
+class UserSwitchRequest(BaseModel):
+    username: str
+    passcode: str
+
+
 class LinkAccountRequest(BaseModel):
     matrix_id: str
     verify_token: str
@@ -198,6 +227,10 @@ class LinkAccountRequest(BaseModel):
 
 class VoiceTranscription(BaseModel):
     audio_data: str  # Base64 encoded audio
+
+
+class ModelSelection(BaseModel):
+    model_name: str
     format: str = "wav"
 
 class TTSRequest(BaseModel):
@@ -505,6 +538,8 @@ async def init_database():
             ('integrations', 'n8n_enabled', 'true'),
             ('integrations', 'ha_enabled', 'true'),
             ('integrations', 'matrix_enabled', 'false'),
+            ('ai', 'active_model', 'llama3.2:3b'),
+            ('ai', 'available_models', '["llama3.2:3b", "mistral:7b"]'),
         ]
         
         for category, key, value in default_settings:
@@ -586,6 +621,12 @@ async def switch_active_user(req: UserSwitchRequest):
     """Switch the active local user after verifying passcode."""
     config = load_user_config(req.username)
     if not config or config.get("passcode") != req.passcode:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    global active_user
+    active_user = req.username
+    current_session["username"] = req.username
+    current_session["role"] = config.get("role", "user")
+    return {"username": req.username, "role": current_session["role"]}
 
 @app.post("/api/login")
 async def login(req: LoginRequest):
@@ -722,12 +763,13 @@ async def enhanced_chat_endpoint(chat_msg: ChatMessage, background_tasks: Backgr
         enhanced_prompt = await zoe_personality.build_enhanced_prompt(chat_msg.message, context)
         
         # Get AI response
+        selected_model = await get_setting("ai", "active_model", "llama3.2:3b")
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
                     f"{CONFIG['ollama_url']}/api/generate",
                     json={
-                        "model": "mistral:7b",
+                        "model": selected_model,
                         "prompt": enhanced_prompt,
                         "stream": False,
                         "options": {
@@ -737,11 +779,33 @@ async def enhanced_chat_endpoint(chat_msg: ChatMessage, background_tasks: Backgr
                         }
                     }
                 )
+                response.raise_for_status()
                 result = response.json()
                 ai_response = result.get("response", "I'm having trouble thinking right now. Can you try again?")
         except Exception as e:
-            logger.error(f"Ollama error: {e}")
-            ai_response = "I'm having connection issues with my AI brain. Please try again!"
+            logger.error(f"Ollama error with {selected_model}: {e}")
+            fallback_model = "llama3.2:3b" if selected_model != "llama3.2:3b" else "mistral:7b"
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    response = await client.post(
+                        f"{CONFIG['ollama_url']}/api/generate",
+                        json={
+                            "model": fallback_model,
+                            "prompt": enhanced_prompt,
+                            "stream": False,
+                            "options": {
+                                "temperature": 0.7,
+                                "top_p": 0.9,
+                                "num_ctx": 2048
+                            }
+                        }
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+                    ai_response = result.get("response", "I'm having trouble thinking right now. Can you try again?")
+            except Exception as e2:
+                logger.error(f"Ollama fallback error: {e2}")
+                ai_response = "I'm having connection issues with my AI brain. Please try again!"
         
         # Save AI response
         async with aiosqlite.connect(CONFIG["database_path"]) as db:
@@ -1139,9 +1203,51 @@ async def update_settings(settings: dict):
                     INSERT OR REPLACE INTO user_settings (category, setting_key, setting_value, updated_at)
                     VALUES (?, ?, ?, ?)
                 """, (category, key, str(value), datetime.now()))
-        
+
         await db.commit()
         return {"success": True, "message": "Settings updated successfully"}
+
+
+@app.get("/api/settings/model")
+async def get_active_model():
+    """Return the currently selected AI model."""
+    model = await get_setting("ai", "active_model", "llama3.2:3b")
+    return {"active_model": model}
+
+
+@app.post("/api/settings/model")
+async def set_active_model(selection: ModelSelection):
+    """Change the active AI model."""
+    available = await get_setting("ai", "available_models", "[]")
+    try:
+        models = json.loads(available)
+    except json.JSONDecodeError:
+        models = []
+    if selection.model_name not in models:
+        raise HTTPException(status_code=400, detail="Model not available")
+    await set_setting("ai", "active_model", selection.model_name)
+    return {"active_model": selection.model_name}
+
+
+@app.get("/api/models/status")
+async def get_model_status():
+    """Return status of available models from Ollama."""
+    available = await get_setting("ai", "available_models", "[]")
+    try:
+        models = json.loads(available)
+    except json.JSONDecodeError:
+        models = []
+    statuses = []
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{CONFIG['ollama_url']}/api/tags")
+            installed = resp.json().get("models", []) if resp.status_code == 200 else []
+            names = {m.get("name") for m in installed}
+    except Exception:
+        names = set()
+    for m in models:
+        statuses.append({"name": m, "available": m in names})
+    return statuses
 
 # WEBHOOK ENDPOINTS FOR INTEGRATIONS
 
