@@ -244,6 +244,25 @@
         .integration-link:hover {
             background: rgba(123, 97, 255, 0.1);
         }
+        #backup-list {
+            list-style: none;
+            padding: 0;
+        }
+        #backup-list li {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 10px;
+            margin-bottom: 8px;
+            border-radius: 8px;
+        }
+        #backup-section button {
+            margin-top: 10px;
+        }
+        #backup-message {
+            margin-top: 10px;
+        }
     </style>
 </head>
 <body>
@@ -265,21 +284,85 @@
         <div class="settings-section">
             <h2>Integrations</h2>
             <a class="integration-link" href="http://localhost:9003" target="_blank">Matrix</a>
-            <a class="integration-link" href="http://localhost:5678" target="_blank">n8n</a>
-            <a class="integration-link" href="http://localhost:8123" target="_blank">Home Assistant</a>
+          <a class="integration-link" href="http://localhost:5678" target="_blank">n8n</a>
+          <a class="integration-link" href="http://localhost:8123" target="_blank">Home Assistant</a>
         </div>
-    </div>
-    <script>
-        document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        <div class="settings-section">
+            <h2>System</h2>
+            <div id="backup-section">
+                <button id="create-backup-btn">Create Backup Now</button>
+                <ul id="backup-list"></ul>
+                <div class="restore-controls">
+                    <input type="file" id="restore-file" accept=".zip">
+                    <button id="restore-backup-btn">Restore from Backup</button>
+                </div>
+                <div id="backup-message"></div>
+            </div>
+        </div>
+      </div>
+      <script>
+          document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
             const saved = localStorage.getItem(cb.id);
             if (saved !== null) {
                 cb.checked = saved === 'true';
             }
-            cb.addEventListener('change', () => {
-                localStorage.setItem(cb.id, cb.checked);
-            });
+              cb.addEventListener('change', () => {
+                  localStorage.setItem(cb.id, cb.checked);
+              });
+          });
+        const backupListEl = document.getElementById('backup-list');
+        const messageEl = document.getElementById('backup-message');
+
+        async function loadBackups() {
+            if (!backupListEl) return;
+            try {
+                const res = await fetch('/api/backups');
+                if (!res.ok) throw new Error('Unable to load backups');
+                const data = await res.json();
+                const backups = data.backups || data.files || data;
+                backupListEl.innerHTML = '';
+                backups.forEach(name => {
+                    const li = document.createElement('li');
+                    const actions = document.createElement('span');
+                    actions.innerHTML = `<a href="/api/backup/${name}">Download</a> <button data-name="${name}">Delete</button>`;
+                    li.textContent = name + ' ';
+                    li.appendChild(actions);
+                    backupListEl.appendChild(li);
+                });
+                backupListEl.querySelectorAll('button[data-name]').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const resp = await fetch(`/api/backup/${btn.dataset.name}`, { method: 'DELETE' });
+                        messageEl.textContent = resp.ok ? 'Backup deleted' : 'Delete failed';
+                        loadBackups();
+                    });
+                });
+            } catch (err) {
+                messageEl.textContent = err.message;
+            }
+        }
+
+        document.getElementById('create-backup-btn')?.addEventListener('click', async () => {
+            const resp = await fetch('/api/backup', { method: 'POST' });
+            messageEl.textContent = resp.ok ? 'Backup created' : 'Backup failed';
+            loadBackups();
         });
-    </script>
+
+        document.getElementById('restore-backup-btn')?.addEventListener('click', async () => {
+            const fileInput = document.getElementById('restore-file');
+            if (!fileInput?.files.length) {
+                messageEl.textContent = 'Select a backup file';
+                return;
+            }
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            const resp = await fetch('/api/restore', { method: 'POST', body: formData });
+            messageEl.textContent = resp.ok ? 'Restore successful' : 'Restore failed';
+            if (resp.ok) fileInput.value = '';
+            loadBackups();
+        });
+
+        loadBackups();
+      </script>
 
 </body>
 </html>
