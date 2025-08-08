@@ -14,7 +14,6 @@ import re
 import time
 import uuid
 from datetime import datetime, date, timedelta
-from pathlib import Path
 from typing import List, Dict, Optional, Any, AsyncGenerator
 import hashlib
 
@@ -29,6 +28,7 @@ from pydantic import BaseModel, Field, validator
 from textblob import TextBlob
 import asyncio
 from contextlib import asynccontextmanager
+from db import init_database
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -52,7 +52,7 @@ redis_client = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    await init_database()
+    await init_database(CONFIG["database_path"])
     await init_redis()
     logger.info("🤖 Zoe v3.1 started successfully!")
     yield
@@ -119,12 +119,6 @@ async def get_settings():
         "timezone": "UTC",
         "theme": "light"
     }
-
-# Initialize database (simplified for initial testing)
-async def init_database():
-    """Initialize basic database"""
-    Path(CONFIG["database_path"]).parent.mkdir(parents=True, exist_ok=True)
-    logger.info("✅ Database path created")
 
 # Initialize Redis
 async def init_redis():
