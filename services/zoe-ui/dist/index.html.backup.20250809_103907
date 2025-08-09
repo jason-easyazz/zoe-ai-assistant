@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Personal AI Companion</title>
+    <style>
+        /* Reset and Base Styles */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            overflow: hidden;
+            height: 100vh;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* Orb Mode - Default State */
+        .orb-mode {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            z-index: 1000;
+            opacity: 1;
+            transition: opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .orb-mode.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        /* Fluid Orb Animation */
+        .fluid-orb {
+            position: relative;
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            cursor: pointer;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(123, 97, 255, 0.3);
+            transition: all 0.3s ease;
+        }
+
+        .fluid-orb:hover {
+            transform: scale(1.05);
+            box-shadow: 0 25px 80px rgba(123, 97, 255, 0.4);
+        }
+
+        .fluid-layer {
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.3) 0%, transparent 70%);
+        }
+
+        .fluid-layer:nth-child(1) {
+            animation: breathe 3s ease-in-out infinite;
+        }
+
+        .fluid-layer:nth-child(2) {
+            animation: breathe 3s ease-in-out infinite 1s;
+            opacity: 0.6;
+        }
+
+        .fluid-layer:nth-child(3) {
+            animation: breathe 3s ease-in-out infinite 2s;
+            opacity: 0.3;
+        }
+
+        @keyframes breathe {
+            0%, 100% { transform: scale(1) rotate(0deg); opacity: 0.8; }
+            50% { transform: scale(1.1) rotate(180deg); opacity: 1; }
+        }
+
+        /* Animation States */
+        .fluid-orb.listening .fluid-layer {
+            animation: pulse 0.6s ease-in-out infinite;
+        }
+
+        .fluid-orb.speaking .fluid-layer {
+            animation: vibrate 0.3s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 0.8; }
+            50% { transform: scale(1.2); opacity: 1; }
+        }
+
+        @keyframes vibrate {
+            0%, 100% { transform: translateX(0) scale(1); }
+            25% { transform: translateX(-2px) scale(1.05); }
+            75% { transform: translateX(2px) scale(0.95); }
+        }
+
+        .orb-hint {
+            margin-top: 30px;
+            color: #666;
+            font-size: 18px;
+            font-weight: 300;
+            text-align: center;
+            opacity: 0.8;
+        }
+
+        /* Main Interface */
+        .main-interface {
+            position: fixed;
+            inset: 0;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 100;
+        }
+
+        .main-interface.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        /* Navigation Bar */
+        .nav-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 70px;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(40px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            z-index: 110;
+        }
+
+        .nav-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+
+        .nav-menu {
+            display: flex;
+            gap: 20px;
+        }
+
+        .nav-item {
+            color: #666;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 400;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .nav-item:hover, .nav-item.active {
+            color: #7B61FF;
+
+        .nav-right {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+
+        }
+
+        .mini-orb {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.2s ease;
+        }
+
+        .mini-orb:hover {
+            transform: scale(1.1);
+        }
+
+        .mini-orb .fluid-layer {
+            animation: breathe 2s ease-in-out infinite;
+        }
+
+        .close-btn {
+            width: 40px;
+            height: 40px;
+            border: none;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            color: #666;
+            font-size: 20px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .settings-btn {
+            width: 40px;
+            height: 40px;
+            border: none;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            color: #666;
+            font-size: 18px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .settings-btn:hover {
+            background: rgba(123, 97, 255, 0.2);
+            color: #7B61FF;
+        }
+
+        .close-btn:hover {
+            background: rgba(255, 100, 100, 0.2);
+            color: #ff6b6b;
+        }
+
+        /* Main Container */
+        .main-container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 100px 40px 60px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+        }
+
+        /* Time Display - Top left under nav */
+        .time-display {
+            position: fixed;
+            top: 80px;
+            left: 20px;
+            z-index: 90;
+        }
+
+        .current-time {
+            font-size: 24px;
+            font-weight: 300;
+            color: #333;
+            margin-bottom: 2px;
+        }
+
+        .current-date {
+            font-size: 14px;
+            color: #666;
+        }
+
+        /* Weather Widget - Top right under nav, minimalistic */
+        .weather-widget {
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            z-index: 90;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .weather-icon {
+            font-size: 24px;
+        }
+
+        .weather-temp {
+            font-size: 24px;
+            font-weight: 300;
+            color: #333;
+        }
+
+        /* Zoe Greeting */
+        .zoe-greeting {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .zoe-greeting h1 {
+            font-size: 32px;
+            font-weight: 300;
+            color: #333;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .zoe-greeting p {
+            font-size: 18px;
+            color: #666;
+            font-weight: 300;
+        }
+
+        /* Chat Interface */
+        .matrix-wrapper {
+            display: flex;
+            gap: 20px;
+        }
+        .matrix-rooms {
+            width: 200px;
+            background: rgba(255, 255, 255, 0.6);
+            backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 25px;
+            padding: 10px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.05);
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .matrix-room {
+            padding: 8px;
+            border-radius: 10px;
+            cursor: pointer;
+        }
+        .matrix-room.active {
+            background: rgba(123, 97, 255, 0.2);
+        }
+        .matrix-message {
+            margin-bottom: 10px;
+        }
+        .chat-container {
+            background: rgba(255, 255, 255, 0.6);
+            backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 25px;
+            padding: 25px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.05);
+            transition: all 0.3s ease;
+        }
+
+        .chat-container:hover {
+            background: rgba(255, 255, 255, 0.7);
+            box-shadow: 0 25px 80px rgba(0, 0, 0, 0.08);
+        }
+
+        .chat-messages {
+            min-height: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            padding: 10px;
+            border-radius: 15px;
+        }
+
+        .chat-input-group {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .chat-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            font-size: 16px;
+            padding: 15px 20px;
+            border-radius: 25px;
+            background: rgba(255, 255, 255, 0.5);
+            transition: all 0.2s ease;
+        }
+
+        .chat-input:focus {
+            background: rgba(255, 255, 255, 0.8);
+            box-shadow: 0 0 0 2px rgba(123, 97, 255, 0.3);
+        }
+
+        .chat-input::placeholder {
+            color: #999;
+        }
+
+        .voice-btn, .send-btn {
+            width: 50px;
+            height: 50px;
+            border: none;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            font-size: 18px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .voice-btn:hover, .send-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 20px rgba(123, 97, 255, 0.4);
+        }
+
+        .voice-btn.active {
+            animation: pulse 1s ease-in-out infinite;
+            box-shadow: 0 0 30px rgba(123, 97, 255, 0.6);
+        }
+
+        /* Quick Actions */
+        .quick-actions {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .quick-action {
+            background: rgba(255, 255, 255, 0.6);
+            backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 15px;
+            padding: 15px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .quick-action:hover {
+            background: rgba(123, 97, 255, 0.1);
+            transform: translateY(-1px);
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+        }
+
+        .quick-action span {
+            font-size: 14px;
+            color: #333;
+            font-weight: 400;
+        }
+
+        /* Overlays */
+        .overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+        }
+
+        .overlay.active {
+            display: flex;
+        }
+
+        .chat-window,
+        .shopping-window {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 25px;
+            padding: 20px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .shopping-window {
+            max-width: 400px;
+        }
+
+        .chat-messages-overlay {
+            flex: 1;
+            overflow-y: auto;
+            margin-bottom: 15px;
+        }
+
+        .chat-input-overlay {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .chat-input-overlay textarea {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.5);
+            border: none;
+            border-radius: 15px;
+            padding: 10px;
+            resize: none;
+            outline: none;
+        }
+
+        .typing-indicator {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+        }
+
+        .typing-indicator span {
+            width: 6px;
+            height: 6px;
+            background: #ccc;
+            border-radius: 50%;
+            animation: typing 1.5s infinite;
+        }
+
+        .typing-indicator span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-indicator span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+            0%, 80%, 100% {
+                opacity: 0.2;
+                transform: translateY(0);
+            }
+            40% {
+                opacity: 1;
+                transform: translateY(-4px);
+            }
+        }
+
+        .shopping-list {
+            flex: 1;
+            overflow-y: auto;
+            margin-top: 10px;
+        }
+
+        .shopping-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .shopping-checkbox {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #7B61FF;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+
+        .shopping-checkbox.checked {
+            background: #7B61FF;
+        }
+
+        .shopping-text.completed {
+            text-decoration: line-through;
+            opacity: 0.6;
+        }
+
+        .shopping-delete {
+            background: none;
+            border: none;
+            font-size: 20px;
+            cursor: pointer;
+            color: #999;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .main-container {
+                padding: 90px 20px 40px;
+                gap: 20px;
+            }
+
+            .time-display {
+                left: 15px;
+                top: 75px;
+            }
+
+            .weather-widget {
+                right: 15px;
+                top: 75px;
+            }
+
+            .fluid-orb {
+                width: 150px;
+                height: 150px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Orb Mode (Default State) -->
+    <div class="orb-mode" id="orbMode">
+        <div class="fluid-orb idle" id="fluidOrb" onclick="enterInterface()">
+            <div class="fluid-layer"></div>
+            <div class="fluid-layer"></div>
+            <div class="fluid-layer"></div>
+        </div>
+        <div class="orb-hint">Touch to interact or just start talking</div>
+    </div>
+
+    <!-- Main Interface -->
+    <div class="main-interface" id="mainInterface">
+        <!-- Navigation -->
+        <div class="nav-bar">
+            <div class="nav-left">
+                <div class="mini-orb" onclick="exitToOrb()">
+                    <div class="fluid-layer"></div>
+                </div>
+                <div class="nav-menu">
+                    <a href="index.html" class="nav-item active">Chat</a>
+                    <a href="dashboard.html" class="nav-item">Dashboard</a>
+                    <a href="#" class="nav-item" onclick="switchView('calendar.html')">Calendar</a>
+
+                    <a href="workflows.html" class="nav-item">Workflows</a>
+
+                    <a href="journal.html" class="nav-item">Journal</a>
+                    <a href="tasks.html" class="nav-item">Tasks</a>
+
+                    <a href="settings.html" class="nav-item">Settings</a>
+                </div>
+            </div>
+            <div class="nav-right">
+                <button class="settings-btn" onclick="window.location.href='settings.html'">⚙️</button>
+                <button class="close-btn" onclick="exitToOrb()">×</button>
+            </div>
+        </div>
+
+        <div class="main-container">
+            <!-- Time Display - Fixed top left -->
+            <div class="time-display">
+                <div class="current-time" id="currentTime">2:47 PM</div>
+                <div class="current-date" id="currentDate">Thursday, August 7</div>
+            </div>
+
+            <!-- Weather Widget - Fixed top right -->
+            <div class="weather-widget">
+                <div class="weather-icon" id="weatherIcon">☀️</div>
+                <div class="weather-temp" id="weatherTemp">23°</div>
+            </div>
+
+            <!-- Zoe Greeting -->
+            <div class="zoe-greeting">
+                <h1>Hi, I'm Zoe</h1>
+                <p>Hey! What's up?</p>
+            </div>
+
+            <!-- Chat Interface -->
+            <div class="matrix-wrapper">
+                <div class="matrix-rooms" id="matrixRooms"></div>
+                <div class="chat-container">
+                    <div class="chat-messages" id="chatMessages">
+                        <!-- Messages will be populated here -->
+                    </div>
+
+                    <div class="chat-input-group">
+                        <input type="text" class="chat-input" id="chatInput" placeholder="Type your message..." autofocus>
+                        <button class="voice-btn" id="voiceBtn" onclick="toggleVoice()">🎤</button>
+                        <button class="send-btn" onclick="sendMessage()">→</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="quick-actions">
+                <div class="quick-action" onclick="quickAction('journal')">
+                    <span>📝 Journal</span>
+                </div>
+                <div class="quick-action" onclick="quickAction('event')">
+                    <span>📅 Event</span>
+                </div>
+                <div class="quick-action" onclick="quickAction('task')">
+                    <span>✅ Task</span>
+                </div>
+                <div class="quick-action" onclick="quickAction('shopping')">
+                    <span>🛒 Shopping</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Chat Overlay -->
+    <div id="chatOverlay" class="overlay">
+        <div class="chat-window">
+            <div id="chatMessagesOverlay" class="chat-messages-overlay"></div>
+            <div class="chat-input-overlay">
+                <textarea id="chatInputOverlay" placeholder="Type your message..."></textarea>
+                <button class="voice-btn" onclick="toggleVoiceInOverlay()">🎤</button>
+                <button class="send-btn" onclick="sendMessageFromOverlay()">→</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Shopping Overlay -->
+    <div id="shoppingOverlay" class="overlay">
+        <div class="shopping-window">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <h2 style="font-weight:400; font-size:18px;">Shopping List</h2>
+                <button class="close-btn" onclick="closeShoppingWindow()">×</button>
+            </div>
+            <div id="shoppingList" class="shopping-list"></div>
+            <div style="display:flex; gap:10px; margin-top:10px;">
+                <input id="shoppingInput" type="text" placeholder="Add item..." style="flex:1; padding:10px; border-radius:10px; border:1px solid #ccc;">
+                <button class="send-btn" onclick="addShoppingItem()">+</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let isListening = false;
+        let currentMode = 'orb';
+        
+        // DOM Elements
+        const orbMode = document.getElementById('orbMode');
+        const mainInterface = document.getElementById('mainInterface');
+        const fluidOrb = document.getElementById('fluidOrb');
+        const chatMessages = document.getElementById('chatMessages');
+        const chatInput = document.getElementById('chatInput');
+        const voiceBtn = document.getElementById('voiceBtn');
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            updateTime();
+            setInterval(updateTime, 1000);
+            updateWeather();
+            
+            // Focus chat input when interface is active
+            mainInterface.addEventListener('transitionend', function() {
+                if (mainInterface.classList.contains('active')) {
+                    chatInput.focus();
+                }
+            });
+            
+            // Voice activation in orb mode (spacebar)
+            document.addEventListener('keydown', function(e) {
+                if (currentMode === 'orb' && e.code === 'Space') {
+                    e.preventDefault();
+                    toggleVoiceFromOrb();
+                }
+            });
+            
+            // Chat input enter key
+            chatInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+        });
+
+        // Mode switching
+        function enterInterface() {
+            currentMode = 'interface';
+            orbMode.classList.add('hidden');
+            mainInterface.classList.add('active');
+        }
+
+        function exitToOrb() {
+            currentMode = 'orb';
+            mainInterface.classList.remove('active');
+            orbMode.classList.remove('hidden');
+        }
+
+        // Time and Date
+        function updateTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('en-US', {
+                hour: 'numeric',
+                minute: '2-digit',
+                hour12: true
+            });
+            const dateString = now.toLocaleDateString('en-US', {
+                weekday: 'long',
+                month: 'long',
+                day: 'numeric'
+            });
+            
+            document.getElementById('currentTime').textContent = timeString;
+            document.getElementById('currentDate').textContent = dateString;
+        }
+
+        // Weather (integrate with your backend)
+        function updateWeather() {
+            fetch('http://localhost:8000/api/weather')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('weatherIcon').textContent = data.icon || '☀️';
+                    document.getElementById('weatherTemp').textContent = `${data.temperature || 23}°`;
+                })
+                .catch(error => {
+                    console.log('Weather API not available, using defaults');
+                    document.getElementById('weatherIcon').textContent = '☀️';
+                    document.getElementById('weatherTemp').textContent = '23°';
+                });
+        }
+
+        // Voice functionality
+        function toggleVoice() {
+            isListening = !isListening;
+            
+            if (isListening) {
+                startListening();
+            } else {
+                stopListening();
+            }
+        }
+
+        function toggleVoiceFromOrb() {
+            isListening = !isListening;
+            
+            if (isListening) {
+                fluidOrb.className = 'fluid-orb listening';
+                startListening();
+            } else {
+                fluidOrb.className = 'fluid-orb idle';
+                stopListening();
+            }
+        }
+
+        function startListening() {
+            voiceBtn.classList.add('active');
+            console.log('Voice recording started');
+        }
+
+        function stopListening() {
+            voiceBtn.classList.remove('active');
+            console.log('Voice recording stopped');
+        }
+
+        // Chat functionality
+        function sendMessage() {
+            const message = chatInput.value.trim();
+            if (!message) return;
+
+            // Add user message to chat
+            addMessage(message, 'user');
+            chatInput.value = '';
+
+            // Send to your zoe-core backend
+            fetch('http://localhost:8000/api/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    message: message,
+                    context: {
+                        mode: currentMode,
+                        timestamp: new Date().toISOString()
+                    }
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                addMessage(data.response || 'I received your message!', 'assistant');
+            })
+            .catch(error => {
+                console.error('Chat error:', error);
+                addMessage('Sorry, I encountered an error. Please try again.', 'assistant');
+            });
+        }
+
+        function addMessage(content, sender) {
+            const messageDiv = document.createElement('div');
+            messageDiv.style.cssText = `
+                margin-bottom: 12px;
+                display: flex;
+                gap: 10px;
+                ${sender === 'user' ? 'flex-direction: row-reverse;' : ''}
+            `;
+            
+            const avatar = document.createElement('div');
+            avatar.style.cssText = `
+                width: 32px;
+                height: 32px;
+                border-radius: 50%;
+                background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                color: white;
+                font-size: 12px;
+                font-weight: 500;
+                flex-shrink: 0;
+            `;
+            avatar.textContent = sender === 'user' ? 'Y' : 'Z';
+            
+            const messageContent = document.createElement('div');
+            messageContent.style.cssText = `
+                ${sender === 'user' 
+                    ? 'background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); color: white;'
+                    : 'background: rgba(255, 255, 255, 0.8);'
+                }
+                padding: 12px 16px;
+                border-radius: 18px;
+                max-width: 70%;
+                font-size: 14px;
+                line-height: 1.4;
+            `;
+            messageContent.textContent = content;
+            
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(messageContent);
+            
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const voiceEnabled = localStorage.getItem('voice-toggle') !== 'false';
+            if (!voiceEnabled) {
+                const voiceBtn = document.getElementById('voiceBtn');
+                if (voiceBtn) voiceBtn.style.display = 'none';
+                const overlayVoiceBtn = document.querySelector('#overlay .voice-btn');
+                if (overlayVoiceBtn) overlayVoiceBtn.style.display = 'none';
+            }
+        });
+
+    </script>
+    <script src="js/api.js"></script>
+    <script src="js/matrix.js"></script>
+    <script src="js/overlay.js"></script>
+    <script src="js/nav.js"></script>
+</body>
+</html>

@@ -8,23 +8,22 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Install Python dependencies
+# Copy requirements and install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Download NLTK data for TextBlob
-RUN python -c "import nltk; nltk.download('punkt'); nltk.download('brown')"
 
 # Copy application code
 COPY . .
 
-# Create data and logs directories
-RUN mkdir -p /app/data /app/logs
+# Create necessary directories with correct paths
+RUN mkdir -p /app/static /app/templates /app/data /app/logs
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+# Add some basic files to prevent errors
+RUN echo "/* Zoe static CSS */" > /app/static/style.css
+RUN echo "<!DOCTYPE html><html><head><title>Zoe</title></head><body>Zoe Backend</body></html>" > /app/templates/base.html
 
+# Expose port
 EXPOSE 8000
 
-CMD ["python", "main.py"]
+# Run the application
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

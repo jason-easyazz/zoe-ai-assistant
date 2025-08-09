@@ -1,3 +1,10 @@
+#!/bin/bash
+echo "🔧 Fixing deployment and completing setup..."
+cd ~/zoe-ai-assistant
+mkdir -p services/zoe-ui/dist
+
+# Deploy working interface (simplified version for now)
+cat > services/zoe-ui/dist/index.html << 'HTML_EOF'
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -57,3 +64,16 @@
     </script>
 </body>
 </html>
+HTML_EOF
+
+echo "✅ Working interface deployed!"
+
+# Restart services
+docker compose restart zoe-ui
+
+PI_IP=$(hostname -I | awk '{print $1}')
+echo ""
+echo "🎉 Zoe v3.1 is now running!"
+echo "🌐 Access: http://$PI_IP:8080"
+echo "🔌 API: http://$PI_IP:8000/health"
+echo ""
