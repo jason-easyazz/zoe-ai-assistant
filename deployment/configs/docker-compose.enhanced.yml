@@ -1,0 +1,18 @@
+services:
+  enhanced-backend:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - ../backend:/app
+    command: ["python", "main_enhanced.py"]
+    ports:
+      - "8001:8000"
+
+  enhanced-frontend:
+    image: node:18-alpine
+    working_dir: /usr/src/app
+    volumes:
+      - ../frontend:/usr/src/app
+    command: ["node", "integration.js"]
+    ports:
+      - "8081:8080"
