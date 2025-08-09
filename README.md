@@ -36,7 +36,7 @@ cp .env.example .env  # update if needed
 
 - `ZOE_UI_PORT` (default `8080`)
 - `ZOE_CORE_PORT` (default `8000`)
-- `OLLAMA_HOST` (default `ollama:11434`)
+- `OLLAMA_HOST` (default `zoe-ollama:11434`)
 - `WHISPER_HOST` (default `whisper:9000`)
 - `TTS_HOST` (default `coqui-tts:5002`)
 

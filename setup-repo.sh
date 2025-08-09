@@ -194,7 +194,7 @@ API_PORT=8000
 
 # AI Configuration
 OLLAMA_MODEL=llama3.2:3b
-OLLAMA_HOST=ollama:11434
+OLLAMA_HOST=zoe-ollama:11434
 
 # Voice Settings
 VOICE_ENABLED=true

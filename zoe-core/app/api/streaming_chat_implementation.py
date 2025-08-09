@@ -4,7 +4,7 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 import httpx
 
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "ollama:11434")
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "zoe-ollama:11434")
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 

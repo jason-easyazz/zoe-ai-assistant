@@ -19,7 +19,7 @@ class N8NService:
         self.n8n_url = os.getenv('N8N_URL', 'http://zoe-n8n:5678')
         self.enabled = os.getenv('N8N_ENABLED', 'true').lower() == 'true'
         self.api_key = os.getenv('N8N_API_KEY', '')
-        self.ollama_url = os.getenv('OLLAMA_URL', 'http://ollama:11434')
+        self.ollama_url = os.getenv('OLLAMA_URL', 'http://zoe-ollama:11434')
         
     async def trigger_workflow(self, workflow_id: str, data: Dict[str, Any]) -> Optional[Dict]:
         """Trigger an n8n workflow with data"""
