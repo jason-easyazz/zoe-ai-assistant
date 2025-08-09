@@ -1,10 +1,12 @@
 
 services:
-  ollama:
+  zoe-ollama:
     image: ollama/ollama:latest
-    container_name: ollama
+    container_name: zoe-ollama
     command: >
       bash -c "ollama pull mistral:latest && ollama serve"
+    environment:
+      - OLLAMA_HOST=0.0.0.0
     ports:
       - "11434:11434"
     volumes:
@@ -62,7 +64,7 @@ services:
     networks:
       - zoe-net
     depends_on:
-      - ollama
+      - zoe-ollama
 
   zoe-ui:
     build: ./zoe-ui

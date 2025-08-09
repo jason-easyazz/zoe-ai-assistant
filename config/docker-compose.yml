@@ -24,9 +24,9 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_PATH=/app/data/zoe.db
-      - OLLAMA_URL=http://ollama:11434
+      - OLLAMA_URL=http://zoe-ollama:11434
     depends_on:
-      - ollama
+      - zoe-ollama
       - redis
     networks:
       - zoe_network
@@ -46,7 +46,7 @@ services:
       - zoe_network
 
   # Local AI Model Server (Ollama)
-  ollama:
+  zoe-ollama:
     image: ollama/ollama:0.1.32
     container_name: zoe-ollama
     restart: unless-stopped
