@@ -1,2 +1,4 @@
-aiohttp>=3.8.0
+fastapi
+uvicorn
+httpx
 python-multipart>=0.0.6

@@ -23,20 +23,40 @@ Zoe is a **fully offline, privacy-first AI assistant** designed specifically for
 - **⚡ Automation** - n8n workflows for proactive assistance
 - **📝 Life Management** - Journaling, tasks, and intelligent organization
 
-## 🚀 Quick Start
+## 🚀 Fresh Install
 
 ```bash
-# Clone the repository
 git clone https://github.com/jason-easyazz/zoe-ai-assistant.git
 cd zoe-ai-assistant
-
-# Install or upgrade Zoe
-chmod +x scripts/install-or-upgrade.sh
-./scripts/install-or-upgrade.sh
-
-# Access interface
-open http://your-pi-ip:8080
+cp .env.example .env  # update if needed
+./scripts/complete_deployment_script.sh
 ```
+
+### Environment
+
+- `ZOE_UI_PORT` (default `8080`)
+- `ZOE_CORE_PORT` (default `8000`)
+- `OLLAMA_HOST` (default `ollama:11434`)
+- `WHISPER_HOST` (default `whisper:9000`)
+- `TTS_HOST` (default `coqui-tts:5002`)
+
+### Docker
+
+```bash
+# Start services
+docker compose up -d
+
+# Stop services
+docker compose down
+```
+
+### Smoke Test
+
+1. Open `http://zoe-pi.local:${ZOE_UI_PORT}` – new UI renders
+2. Start a chat – tokens stream from Ollama
+3. Weather widget loads data from `/api/weather`
+4. TTS plays audio and STT returns text via `/api/voice`
+5. `/calendar` route loads and navigates
 
 ## 📁 Project Structure
 

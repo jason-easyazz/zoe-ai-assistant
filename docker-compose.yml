@@ -1,129 +1,82 @@
 
 services:
-  zoe-ollama:
+  ollama:
     image: ollama/ollama:latest
-    container_name: zoe-ollama
+    container_name: ollama
     command: >
-      bash -c "ollama pull llama3.2:3b && ollama pull mistral:7b && ollama serve"
+      bash -c "ollama pull mistral:latest && ollama serve"
     ports:
       - "11434:11434"
     volumes:
       - ./data/ollama:/root/.ollama
     networks:
-      - zoe-network
+      - zoe-net
     restart: unless-stopped
 
-  zoe-redis:
-    image: redis:7-alpine
-    container_name: zoe-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    networks:
-      - zoe-network
-    restart: unless-stopped
-
-  zoe-core:
-    build: ./services/zoe-core
-    container_name: zoe-core
-    ports:
-      - "8000:8000"
-    environment:
-      - OLLAMA_URL=http://zoe-ollama:11434
-      - REDIS_URL=redis://zoe-redis:6379
-      - VOICE_ENABLED=true
-      - N8N_ENABLED=true
-      - HA_ENABLED=true
-    volumes:
-      - ./data:/app/data
-    networks:
-      - zoe-network
-    restart: unless-stopped
-    depends_on:
-      - zoe-ollama
-      - zoe-redis
-
-  zoe-ui:
-    build: ./services/zoe-ui
-    container_name: zoe-ui
-    ports:
-      - "8080:80"
-    networks:
-      - zoe-network
-    restart: unless-stopped
-    depends_on:
-      - zoe-core
-
-  # Voice Services
-  zoe-whisper:
+  whisper:
     image: onerahmet/openai-whisper-asr-webservice:latest
-    container_name: zoe-whisper
+    container_name: whisper
     ports:
-      - "9001:9000"
-    environment:
-      - ASR_MODEL=base
-      - ASR_ENGINE=openai_whisper
-    volumes:
-      - whisper_models:/root/.cache/whisper
+      - "9000:9000"
     networks:
-      - zoe-network
+      - zoe-net
     restart: unless-stopped
 
-  zoe-tts:
+  coqui-tts:
     image: synesthesiam/mozillatts:latest
-    container_name: zoe-tts
+    container_name: coqui-tts
     ports:
-      - "9002:9002"
-    environment:
-      - TTS_MODEL=tts_models/en/ljspeech/tacotron2-DDC
-    volumes:
-      - tts_models:/root/.local/share/tts
+      - "5002:5002"
     networks:
-      - zoe-network
+      - zoe-net
     restart: unless-stopped
 
-  # Automation Service
-  zoe-n8n:
+  n8n:
     image: n8nio/n8n:latest
-    container_name: zoe-n8n
+    container_name: n8n
     ports:
       - "5678:5678"
-    environment:
-      - N8N_BASIC_AUTH_ACTIVE=false
-      - N8N_HOST=0.0.0.0
-      - N8N_PORT=5678
-      - WEBHOOK_URL=http://zoe-core:8000
-    volumes:
-      - n8n_data:/home/node/.n8n
     networks:
-      - zoe-network
+      - zoe-net
     restart: unless-stopped
-    depends_on:
-      - zoe-core
 
-  # Smart Home Hub
-  zoe-homeassistant:
+  homeassistant:
     image: ghcr.io/home-assistant/home-assistant:stable
-    container_name: zoe-homeassistant
+    container_name: homeassistant
     privileged: true
     ports:
       - "8123:8123"
-    environment:
-      - TZ=Australia/Perth
-    volumes:
-      - ./services/zoe-homeassistant:/config
-      - /etc/localtime:/etc/localtime:ro
     networks:
-      - zoe-network
+      - zoe-net
     restart: unless-stopped
 
-volumes:
-  redis_data:
-  whisper_models:
-  tts_models:
-  n8n_data:
+  zoe-core:
+    build: ./zoe-core
+    container_name: zoe-core
+    ports:
+      - "${ZOE_CORE_PORT}:8000"
+    environment:
+      - OLLAMA_HOST=${OLLAMA_HOST}
+      - WHISPER_HOST=${WHISPER_HOST}
+      - TTS_HOST=${TTS_HOST}
+    networks:
+      - zoe-net
+    depends_on:
+      - ollama
+
+  zoe-ui:
+    build: ./zoe-ui
+    container_name: zoe-ui
+    ports:
+      - "${ZOE_UI_PORT}:80"
+    volumes:
+      - ./zoe-ui/app/templates:/app/templates
+      - ./zoe-ui/app/static:/app/static
+    networks:
+      - zoe-net
+    depends_on:
+      - zoe-core
 
 networks:
-  zoe-network:
+  zoe-net:
     driver: bridge
