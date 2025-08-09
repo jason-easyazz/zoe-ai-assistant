@@ -19,6 +19,7 @@ import psutil
 
 import getpass
 import shutil
+import zipfile
 
 
 import aiosqlite
@@ -29,7 +30,16 @@ try:
     import bcrypt  # type: ignore
 except Exception:  # pragma: no cover - fallback if bcrypt unavailable
     bcrypt = None
-from fastapi import FastAPI, Request, WebSocket, HTTPException, BackgroundTasks, Depends
+from fastapi import (
+    FastAPI,
+    Request,
+    WebSocket,
+    HTTPException,
+    BackgroundTasks,
+    Depends,
+    UploadFile,
+    File,
+)
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -66,6 +76,32 @@ USERS_DIR.mkdir(parents=True, exist_ok=True)
 # Currently active user and session
 active_user: Optional[str] = None
 current_session: Dict[str, Optional[str]] = {"username": None, "role": None}
+
+# Available modules for plugin system
+AVAILABLE_MODULES = [
+    {
+        "name": "voice",
+        "description": "Enable speech-to-text and text-to-speech services",
+        "scope": "global",
+        "default": True,
+    },
+    {
+        "name": "matrix",
+        "description": "Matrix chat integration",
+        "scope": "user",
+        "default": False,
+    },
+    {
+        "name": "n8n",
+        "description": "Workflow automation via n8n",
+        "scope": "global",
+        "default": True,
+    },
+]
+
+# Directory for backup archives
+BACKUP_DIR = BASE_DATA_DIR / "backups"
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def ensure_admin_user() -> None:
@@ -173,7 +209,11 @@ app = FastAPI(
 
 BASE_PATH = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(Path("/app/templates")))
-app.mount("/static", StaticFiles(directory=str(Path("/app/static"))), name="static")
+static_dir = Path("/app/static")
+if static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+else:
+    logger.warning("Static directory not found: %s", static_dir)
 
 app.add_middleware(
     CORSMiddleware,
@@ -574,6 +614,73 @@ async def run_update(background_tasks: BackgroundTasks):
 
     background_tasks.add_task(do_update)
     return {"message": "Update started"}
+
+
+@app.get("/api/backups")
+async def list_backups(session: Dict[str, Optional[str]] = Depends(require_admin)):
+    files = [f.name for f in BACKUP_DIR.glob("*.zip")]
+    return {"backups": files}
+
+
+@app.post("/api/backup")
+async def create_backup(session: Dict[str, Optional[str]] = Depends(require_admin)):
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_name = f"zoe_backup_{ts}.zip"
+    backup_path = BACKUP_DIR / backup_name
+    with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        db_path = Path(CONFIG["database_path"])
+        if db_path.exists():
+            zf.write(db_path, arcname="database/zoe.db")
+        for path in BASE_DATA_DIR.rglob("*"):
+            if path.is_file():
+                zf.write(path, arcname=str(Path("data") / path.relative_to(BASE_DATA_DIR)))
+    return {"filename": backup_name}
+
+
+@app.delete("/api/backup/{filename}")
+async def delete_backup(filename: str, session: Dict[str, Optional[str]] = Depends(require_admin)):
+    file_path = BACKUP_DIR / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Backup not found")
+    file_path.unlink()
+    return {"status": "deleted"}
+
+
+@app.get("/api/backup/{filename}")
+async def download_backup(filename: str, session: Dict[str, Optional[str]] = Depends(require_admin)):
+    file_path = BACKUP_DIR / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Backup not found")
+    return FileResponse(file_path, filename=filename)
+
+
+@app.post("/api/restore")
+async def restore_backup(
+    file: UploadFile = File(...),
+    session: Dict[str, Optional[str]] = Depends(require_admin),
+):
+    temp_path = BACKUP_DIR / file.filename
+    with open(temp_path, "wb") as f:
+        f.write(await file.read())
+    restore_dir = BACKUP_DIR / "restore_tmp"
+    if restore_dir.exists():
+        shutil.rmtree(restore_dir)
+    with zipfile.ZipFile(temp_path, "r") as zf:
+        zf.extractall(restore_dir)
+    db_src = restore_dir / "database" / "zoe.db"
+    if db_src.exists():
+        shutil.move(str(db_src), CONFIG["database_path"])
+    data_src = restore_dir / "data"
+    if data_src.exists():
+        for item in data_src.rglob("*"):
+            dest = BASE_DATA_DIR / item.relative_to(data_src)
+            if item.is_dir():
+                dest.mkdir(parents=True, exist_ok=True)
+            else:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(item), str(dest))
+    shutil.rmtree(restore_dir)
+    return {"status": "restored"}
 
 
 @app.post("/api/users/switch")
@@ -1306,6 +1413,47 @@ async def get_model_status():
     for m in models:
         statuses.append({"name": m, "available": m in names})
     return statuses
+
+
+class ModuleToggle(BaseModel):
+    name: str
+    enabled: bool
+
+
+def _module_setting_key(module: dict, username: Optional[str]) -> str:
+    if module.get("scope") == "user" and username:
+        return f"{username}:{module['name']}"
+    return module["name"]
+
+
+@app.get("/api/modules/list")
+async def list_modules(session: Dict[str, Optional[str]] = Depends(require_auth)):
+    modules = []
+    for mod in AVAILABLE_MODULES:
+        key = _module_setting_key(mod, session.get("username"))
+        enabled = await get_setting("modules", key, "true" if mod["default"] else "false")
+        modules.append(
+            {
+                "name": mod["name"],
+                "description": mod["description"],
+                "scope": mod["scope"],
+                "enabled": enabled == "true",
+            }
+        )
+    return {"modules": modules}
+
+
+@app.post("/api/modules/toggle")
+async def toggle_module(
+    toggle: ModuleToggle,
+    session: Dict[str, Optional[str]] = Depends(require_auth),
+):
+    mod = next((m for m in AVAILABLE_MODULES if m["name"] == toggle.name), None)
+    if not mod:
+        raise HTTPException(status_code=404, detail="Module not found")
+    key = _module_setting_key(mod, session.get("username"))
+    await set_setting("modules", key, "true" if toggle.enabled else "false")
+    return {"name": toggle.name, "enabled": toggle.enabled}
 
 # WEBHOOK ENDPOINTS FOR INTEGRATIONS
 
