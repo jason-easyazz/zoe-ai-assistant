@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 CONFIG = {
     "version": "3.1.0",
     "database_path": os.getenv("DATABASE_PATH", "/app/data/zoe.db"),
-    "ollama_url": os.getenv("OLLAMA_URL", "http://ollama:11434"),
+    "ollama_url": os.getenv("OLLAMA_URL", "http://zoe-ollama:11434"),
     "cors_origins": os.getenv("CORS_ORIGINS", "http://localhost:8080").split(","),
     "max_context_length": int(os.getenv("MAX_CONTEXT_LENGTH", "2048")),
     "max_conversation_history": int(os.getenv("MAX_CONVERSATION_HISTORY", "20")),

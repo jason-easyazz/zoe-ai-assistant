@@ -26,11 +26,11 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_PATH=/app/data/zoe.db
-      - OLLAMA_URL=http://zoe-ollama:11434
+      - OLLAMA_URL=http://backup-ollama:11434
       - REDIS_URL=redis://redis:6379
       - CORS_ORIGINS=http://localhost:8080,http://localhost:3000
     depends_on:
-      - zoe-ollama
+      - backup-ollama
       - redis
     networks:
       - zoe_network
@@ -41,12 +41,12 @@ services:
       retries: 3
 
   # Local AI Model Server
-  zoe-ollama:
+  backup-ollama:
     image: ollama/ollama:0.1.32
-    container_name: zoe-ollama
+    container_name: backup-zoe-ollama
     restart: unless-stopped
     ports:
-      - "11434:11434"
+      - "11436:11434"
     volumes:
       - ollama_data:/root/.ollama
     environment:
