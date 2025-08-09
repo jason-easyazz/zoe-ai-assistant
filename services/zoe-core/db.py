@@ -73,6 +73,12 @@ async def init_database(database_path: str) -> None:
                 user_id TEXT DEFAULT 'default'
             );
 
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                passcode TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS user_settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 category TEXT NOT NULL,
@@ -123,6 +129,11 @@ async def init_database(database_path: str) -> None:
                 """,
                 (category, key, value),
             )
+
+        await db.execute(
+            "INSERT OR IGNORE INTO users (id, display_name) VALUES (?, ?)",
+            ("default", "Default User"),
+        )
 
         await db.commit()
         logger.info("✅ Enhanced database initialized")

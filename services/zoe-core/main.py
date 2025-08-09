@@ -50,17 +50,25 @@ else:
 class ChatMessage(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
     conversation_id: Optional[int] = None
+    user_id: str = Field(default="default", max_length=100)
 
 class JournalEntry(BaseModel):
     title: Optional[str] = Field(None, max_length=200)
     content: str = Field(..., min_length=1, max_length=10000)
     tags: Optional[List[str]] = Field(default_factory=list)
+    user_id: str = Field(default="default", max_length=100)
 
 class TaskCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = Field(None, max_length=1000)
     due_date: Optional[str] = None
     priority: str = Field(default="medium")
+    user_id: str = Field(default="default", max_length=100)
+
+class UserCreate(BaseModel):
+    user_id: str = Field(..., min_length=1, max_length=100)
+    display_name: Optional[str] = Field(None, max_length=100)
+    passcode: Optional[str] = Field(None, max_length=100)
 
 class PersonalitySettings(BaseModel):
     fun_level: int = Field(default=7, ge=1, le=10)
@@ -123,6 +131,19 @@ async def init_database():
                 user_id TEXT DEFAULT 'default'
             )
         """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                display_name TEXT,
+                passcode TEXT
+            )
+        """)
+
+        await db.execute(
+            "INSERT OR IGNORE INTO users (id, display_name) VALUES (?, ?)",
+            ("default", "Default User")
+        )
         
         await db.commit()
         logger.info("✅ Database initialized")
@@ -256,26 +277,27 @@ async def chat(message_data: ChatMessage):
     """Chat with Zoe - NO AUTHENTICATION REQUIRED"""
     try:
         message = message_data.message
+        user_id = message_data.user_id or "default"
         logger.info(f"Chat message: {message}")
-        
+
         # Generate AI response
         response = await generate_ai_response(message)
-        
+
         # Save to database
         async with aiosqlite.connect(CONFIG["database_path"]) as db:
             await db.execute(
                 "INSERT INTO conversations (message, response, user_id) VALUES (?, ?, ?)",
-                (message, response, "default")
+                (message, response, user_id)
             )
             await db.commit()
-        
+
         return {
             "response": response,
             "timestamp": datetime.now().isoformat(),
             "conversation_id": 1,
             "status": "success"
         }
-        
+
     except Exception as e:
         logger.error(f"Chat error: {e}")
         return {
@@ -303,17 +325,39 @@ async def update_personality(settings: PersonalitySettings):
     personality.update(settings.dict())
     return {"status": "updated", "personality": personality}
 
+
+@app.post("/api/users")
+async def create_user(user: UserCreate):
+    """Create or update a user profile"""
+    async with aiosqlite.connect(CONFIG["database_path"]) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO users (id, display_name, passcode) VALUES (?, ?, ?)",
+            (user.user_id, user.display_name, user.passcode)
+        )
+        await db.commit()
+    return {"id": user.user_id, "display_name": user.display_name}
+
+
+@app.get("/api/users")
+async def list_users():
+    """List available users"""
+    async with aiosqlite.connect(CONFIG["database_path"]) as db:
+        cursor = await db.execute("SELECT id, display_name FROM users ORDER BY id")
+        rows = await cursor.fetchall()
+    users = [{"id": row[0], "display_name": row[1]} for row in rows]
+    return {"users": users}
+
 @app.get("/api/tasks/today")
-async def get_tasks():
+async def get_tasks(user_id: str = "default"):
     """Get today's tasks"""
     try:
         async with aiosqlite.connect(CONFIG["database_path"]) as db:
             cursor = await db.execute(
                 "SELECT id, title, description, completed, priority FROM tasks WHERE user_id = ? ORDER BY created_at DESC LIMIT 10",
-                ("default",)
+                (user_id,)
             )
             rows = await cursor.fetchall()
-            
+
             tasks = []
             for row in rows:
                 tasks.append({
@@ -323,7 +367,7 @@ async def get_tasks():
                     "completed": bool(row[3]),
                     "priority": row[4]
                 })
-            
+
             return {"tasks": tasks}
     except Exception as e:
         logger.error(f"Tasks error: {e}")
@@ -341,8 +385,8 @@ async def create_task(task: TaskCreate):
     try:
         async with aiosqlite.connect(CONFIG["database_path"]) as db:
             cursor = await db.execute(
-                "INSERT INTO tasks (title, description, priority, user_id) VALUES (?, ?, ?, ?) RETURNING id",
-                (task.title, task.description, task.priority, "default")
+                "INSERT INTO tasks (title, description, priority, user_id) VALUES (?, ?, ?, ?)",
+                (task.title, task.description, task.priority, task.user_id)
             )
             task_id = cursor.lastrowid
             await db.commit()
@@ -363,7 +407,7 @@ async def create_journal_entry(entry: JournalEntry):
         async with aiosqlite.connect(CONFIG["database_path"]) as db:
             await db.execute(
                 "INSERT INTO journal_entries (title, content, tags, user_id) VALUES (?, ?, ?, ?)",
-                (entry.title, entry.content, json.dumps(entry.tags), "default")
+                (entry.title, entry.content, json.dumps(entry.tags), entry.user_id)
             )
             await db.commit()
             
