@@ -1,0 +1,1357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh;
+            color: #333;
+            overflow: hidden;
+        }
+
+        /* Orb Mode - Default State */
+        .orb-mode {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            z-index: 1000;
+            transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .orb-mode.hidden {
+            opacity: 0;
+            pointer-events: none;
+            transform: scale(0.8);
+        }
+
+        /* Fluid Orb */
+        .fluid-orb {
+            width: 180px;
+            height: 180px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            position: relative;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 20px 60px rgba(123, 97, 255, 0.2);
+        }
+
+        .fluid-orb:hover {
+            transform: scale(1.05);
+            box-shadow: 0 25px 80px rgba(123, 97, 255, 0.3);
+        }
+
+        /* Fluid layers for organic movement */
+        .fluid-layer {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            opacity: 0.7;
+        }
+
+        .fluid-layer:nth-child(1) {
+            background: radial-gradient(circle at 30% 20%, #7B61FF 0%, transparent 50%);
+            animation: fluid1 4s ease-in-out infinite;
+        }
+
+        .fluid-layer:nth-child(2) {
+            background: radial-gradient(circle at 70% 80%, #5AE0E0 0%, transparent 50%);
+            animation: fluid2 3.5s ease-in-out infinite reverse;
+        }
+
+        .fluid-layer:nth-child(3) {
+            background: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.3) 0%, transparent 60%);
+            animation: fluid3 5s ease-in-out infinite;
+        }
+
+        /* Idle breathing animation */
+        .fluid-orb.idle {
+            animation: breathe 3s ease-in-out infinite;
+        }
+
+        /* Listening state */
+        .fluid-orb.listening {
+            animation: listen-pulse 1.5s ease-in-out infinite;
+            box-shadow: 0 20px 60px rgba(123, 97, 255, 0.4);
+        }
+
+        /* Speaking state - more active fluid movement */
+        .fluid-orb.speaking {
+            animation: speak-vibrate 0.3s ease-in-out infinite;
+            box-shadow: 0 20px 60px rgba(123, 97, 255, 0.6);
+        }
+
+        .fluid-orb.speaking .fluid-layer:nth-child(1) {
+            animation: fluid-speak1 0.4s ease-in-out infinite;
+        }
+
+        .fluid-orb.speaking .fluid-layer:nth-child(2) {
+            animation: fluid-speak2 0.3s ease-in-out infinite reverse;
+        }
+
+        .fluid-orb.speaking .fluid-layer:nth-child(3) {
+            animation: fluid-speak3 0.5s ease-in-out infinite;
+        }
+
+        /* Fluid animations */
+        @keyframes fluid1 {
+            0%, 100% { transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(180deg) scale(1.1); }
+        }
+
+        @keyframes fluid2 {
+            0%, 100% { transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(-120deg) scale(0.9); }
+        }
+
+        @keyframes fluid3 {
+            0%, 100% { transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(90deg) scale(1.05); }
+        }
+
+        @keyframes fluid-speak1 {
+            0%, 100% { transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(60deg) scale(1.2); }
+        }
+
+        @keyframes fluid-speak2 {
+            0%, 100% { transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(-45deg) scale(0.8); }
+        }
+
+        @keyframes fluid-speak3 {
+            0%, 100% { transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(30deg) scale(1.1); }
+        }
+
+        @keyframes breathe {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+        }
+
+        @keyframes listen-pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.9; }
+        }
+
+        @keyframes speak-vibrate {
+            0%, 100% { transform: scale(1) rotate(0deg); }
+            25% { transform: scale(1.03) rotate(0.5deg); }
+            75% { transform: scale(1.03) rotate(-0.5deg); }
+        }
+
+        .orb-hint {
+            margin-top: 30px;
+            text-align: center;
+            color: #666;
+            font-size: 14px;
+            font-weight: 300;
+            opacity: 0.8;
+        }
+
+        /* Main Interface */
+        .main-interface {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            opacity: 0;
+            pointer-events: none;
+            transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+            overflow: hidden;
+        }
+
+        .main-interface.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        /* Navigation */
+        .nav-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px;
+            z-index: 100;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            height: 60px;
+        }
+
+        .nav-left {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .mini-orb {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .mini-orb:hover {
+            transform: scale(1.1);
+        }
+
+        .mini-orb .fluid-layer {
+            animation: fluid1 2s ease-in-out infinite;
+        }
+
+        .nav-menu {
+            display: flex;
+            gap: 20px;
+        }
+
+        .nav-item {
+            color: #666;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 400;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .nav-item:hover, .nav-item.active {
+            color: #7B61FF;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 16px;
+            color: #666;
+            cursor: pointer;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+        }
+
+        .close-btn:hover {
+            background: rgba(255, 255, 255, 0.5);
+            color: #333;
+        }
+
+        /* Constrained Container - No Scrolling */
+        .main-container {
+            width: 100%;
+            height: 100vh;
+            padding-top: 60px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Top Info Bar */
+        .top-info-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            height: 50px;
+            flex-shrink: 0;
+        }
+
+        .time-display {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .current-time {
+            font-size: 18px;
+            font-weight: 300;
+            color: #333;
+            line-height: 1;
+        }
+
+        .current-date {
+            font-size: 11px;
+            color: #666;
+            margin-top: 2px;
+        }
+
+        .weather-widget {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .weather-icon {
+            font-size: 18px;
+        }
+
+        .weather-temp {
+            font-size: 18px;
+            font-weight: 300;
+            color: #333;
+        }
+
+        /* Calendar Header */
+        .calendar-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 15px 8px;
+            height: 40px;
+            flex-shrink: 0;
+        }
+
+        .month-title {
+            font-size: 20px;
+            font-weight: 300;
+            color: #333;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin: 0;
+        }
+
+        .nav-button {
+            background: rgba(255, 255, 255, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: #666;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        .nav-button:hover {
+            background: rgba(123, 97, 255, 0.2);
+            color: #7B61FF;
+            transform: scale(1.05);
+        }
+
+        /* Split Calendar Layout - Optimized for Small Screens */
+        .calendar-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            padding: 0 15px;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        /* Month View */
+        .month-view {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        /* Calendar Grid - Optimized for Touch */
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 3px;
+            background: rgba(255, 255, 255, 0.4);
+            backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 12px;
+            padding: 8px;
+            flex: 1;
+            align-content: start;
+            max-height: 100%;
+            overflow: hidden;
+        }
+
+        .day-header {
+            text-align: center;
+            padding: 6px 4px;
+            font-size: 10px;
+            font-weight: 600;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .calendar-day {
+            aspect-ratio: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            font-weight: 500;
+            min-height: 28px;
+            touch-action: manipulation;
+        }
+
+        .calendar-day:hover {
+            background: rgba(123, 97, 255, 0.1);
+            transform: scale(1.05);
+        }
+
+        .calendar-day.today {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            font-weight: 600;
+            box-shadow: 0 2px 8px rgba(123, 97, 255, 0.3);
+        }
+
+        .calendar-day.selected {
+            background: rgba(123, 97, 255, 0.3);
+            color: #7B61FF;
+            font-weight: 600;
+            border: 2px solid #7B61FF;
+        }
+
+        .calendar-day.today.selected {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            border: 2px solid white;
+        }
+
+        .calendar-day.has-event {
+            background: rgba(123, 97, 255, 0.2);
+            color: #7B61FF;
+            font-weight: 600;
+        }
+
+        .calendar-day.has-event::after {
+            content: '';
+            position: absolute;
+            bottom: 2px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 3px;
+            height: 3px;
+            background: #7B61FF;
+            border-radius: 50%;
+        }
+
+        .calendar-day.today.has-event::after {
+            background: white;
+        }
+
+        .calendar-day.other-month {
+            color: #ccc;
+            opacity: 0.5;
+        }
+
+        /* Day View */
+        .day-view {
+            background: rgba(255, 255, 255, 0.4);
+            backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 12px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .day-header-section {
+            margin-bottom: 12px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        .selected-date {
+            font-size: 18px;
+            font-weight: 300;
+            color: #333;
+            margin-bottom: 2px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .selected-weekday {
+            font-size: 11px;
+            color: #666;
+            font-weight: 400;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .day-events {
+            flex: 1;
+            overflow-y: auto;
+            margin-bottom: 12px;
+            min-height: 0;
+        }
+
+        .event-item {
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .event-item:last-child {
+            border-bottom: none;
+        }
+
+        .event-item:hover {
+            transform: translateX(2px);
+            background: rgba(255, 255, 255, 0.2);
+            margin: 0 -6px;
+            padding: 8px 6px;
+            border-radius: 6px;
+        }
+
+        .event-time {
+            font-size: 10px;
+            color: #7B61FF;
+            font-weight: 600;
+            margin-bottom: 2px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .event-title {
+            font-size: 12px;
+            color: #333;
+            font-weight: 500;
+            margin-bottom: 1px;
+        }
+
+        .event-location {
+            font-size: 10px;
+            color: #666;
+        }
+
+        .day-summary {
+            display: flex;
+            justify-content: space-around;
+            padding: 8px 0;
+            border-top: 1px solid rgba(255, 255, 255, 0.3);
+            flex-shrink: 0;
+        }
+
+        .summary-stat {
+            text-align: center;
+        }
+
+        .stat-number {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            color: #7B61FF;
+            margin-bottom: 1px;
+        }
+
+        .stat-label {
+            font-size: 9px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        /* Floating Add Button */
+        .floating-add-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: none;
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            transition: all 0.3s ease;
+            box-shadow: 0 6px 24px rgba(123, 97, 255, 0.4);
+            z-index: 1000;
+        }
+
+        .floating-add-btn:hover {
+            transform: scale(1.1);
+            box-shadow: 0 8px 32px rgba(123, 97, 255, 0.5);
+        }
+
+        .floating-add-btn:active {
+            transform: scale(0.95);
+        }
+
+        /* Chat Overlay */
+        .chat-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(8px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+
+        .chat-overlay.active {
+            display: flex;
+            opacity: 1;
+        }
+
+        .chat-window {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            border-radius: 16px;
+            width: 85%;
+            max-width: 350px;
+            height: 55%;
+            max-height: 400px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+            animation: slideUpIn 0.3s ease;
+        }
+
+        @keyframes slideUpIn {
+            from {
+                opacity: 0;
+                transform: translateY(30px) scale(0.95);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .chat-header {
+            padding: 15px 15px 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+        }
+
+        .chat-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
+        }
+
+        .mini-orb-chat {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .mini-orb-chat .fluid-layer {
+            animation: fluid1 2s ease-in-out infinite;
+        }
+
+        .close-chat-btn {
+            background: rgba(255, 255, 255, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: #666;
+            font-size: 14px;
+        }
+
+        .close-chat-btn:hover {
+            background: rgba(255, 0, 0, 0.1);
+            color: #ff4444;
+        }
+
+        .chat-messages {
+            flex: 1;
+            padding: 15px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-height: 0;
+        }
+
+        .message {
+            max-width: 80%;
+            padding: 10px 12px;
+            border-radius: 12px;
+            animation: messageSlideIn 0.3s ease;
+        }
+
+        @keyframes messageSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .zoe-message {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+        }
+
+        .user-message {
+            background: rgba(255, 255, 255, 0.8);
+            color: #333;
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message-content {
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        .chat-input-container {
+            padding: 12px 15px 15px;
+            border-top: 1px solid rgba(255, 255, 255, 0.3);
+            flex-shrink: 0;
+        }
+
+        .chat-input-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 12px;
+            padding: 8px 12px;
+        }
+
+        .chat-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            font-size: 13px;
+            color: #333;
+            outline: none;
+        }
+
+        .chat-input::placeholder {
+            color: #666;
+            font-style: italic;
+        }
+
+        .voice-btn {
+            width: 28px;
+            height: 28px;
+            border: none;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(123, 97, 255, 0.3);
+        }
+
+        .voice-btn:hover {
+            transform: scale(1.05);
+        }
+
+        /* Mobile Responsive - Stack layout on very small screens */
+        @media (max-width: 600px) {
+            .calendar-layout {
+                grid-template-columns: 1fr;
+                gap: 8px;
+                padding: 0 10px;
+            }
+
+            .nav-menu {
+                display: none;
+            }
+
+            .month-title {
+                font-size: 18px;
+            }
+
+            .calendar-grid {
+                padding: 6px;
+                gap: 2px;
+            }
+
+            .calendar-day {
+                min-height: 24px;
+                font-size: 11px;
+            }
+
+            .day-header {
+                font-size: 9px;
+                padding: 4px 2px;
+            }
+
+            .floating-add-btn {
+                bottom: 15px;
+                right: 15px;
+                width: 44px;
+                height: 44px;
+                font-size: 18px;
+            }
+
+            .chat-window {
+                width: 95%;
+                height: 70%;
+                max-height: none;
+            }
+        }
+
+        /* Extra small screens - further optimize */
+        @media (max-width: 480px) {
+            .main-container {
+                padding-top: 55px;
+            }
+
+            .nav-bar {
+                padding: 8px 10px;
+                height: 55px;
+            }
+
+            .top-info-bar {
+                padding: 8px 10px;
+                height: 45px;
+            }
+
+            .calendar-header {
+                padding: 0 10px 6px;
+                height: 35px;
+            }
+
+            .current-time, .weather-temp {
+                font-size: 16px;
+            }
+
+            .month-title {
+                font-size: 16px;
+            }
+
+            .nav-button {
+                width: 28px;
+                height: 28px;
+                font-size: 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Orb Mode (Default State) -->
+    <div class="orb-mode" id="orbMode">
+        <div class="fluid-orb idle" id="fluidOrb" onclick="enterInterface()">
+            <div class="fluid-layer"></div>
+            <div class="fluid-layer"></div>
+            <div class="fluid-layer"></div>
+        </div>
+        <div class="orb-hint">Touch to interact or just start talking</div>
+    </div>
+
+    <!-- Main Interface -->
+    <div class="main-interface" id="mainInterface">
+        <!-- Navigation -->
+        <div class="nav-bar">
+            <div class="nav-left">
+                <div class="mini-orb" onclick="exitToOrb()">
+                    <div class="fluid-layer"></div>
+                </div>
+                <div class="nav-menu">
+                    <div class="nav-item">Dashboard</div>
+                    <div class="nav-item">Tasks</div>
+                    <div class="nav-item active">Calendar</div>
+                    <div class="nav-item">Journal</div>
+                    <div class="nav-item">Settings</div>
+                </div>
+            </div>
+            <button class="close-btn" onclick="exitToOrb()">×</button>
+        </div>
+
+        <div class="main-container">
+            <!-- Top Info Bar -->
+            <div class="top-info-bar">
+                <div class="time-display">
+                    <div class="current-time" id="currentTime">2:47 PM</div>
+                    <div class="current-date" id="currentDate">Thursday, August 7</div>
+                </div>
+                
+                <div class="weather-widget">
+                    <div class="weather-icon">☀️</div>
+                    <div class="weather-temp">23°</div>
+                </div>
+            </div>
+
+            <!-- Calendar Header with Month Navigation -->
+            <div class="calendar-header">
+                <button class="nav-button" onclick="previousMonth()">‹</button>
+                <h1 class="month-title" id="currentMonth">August 2025</h1>
+                <button class="nav-button" onclick="nextMonth()">›</button>
+            </div>
+
+            <!-- Split Layout: Month + Day View -->
+            <div class="calendar-layout">
+                <!-- Month View -->
+                <div class="month-view">
+                    <div class="calendar-grid">
+                        <div class="day-header">Sun</div>
+                        <div class="day-header">Mon</div>
+                        <div class="day-header">Tue</div>
+                        <div class="day-header">Wed</div>
+                        <div class="day-header">Thu</div>
+                        <div class="day-header">Fri</div>
+                        <div class="day-header">Sat</div>
+                        
+                        <div class="calendar-day other-month" data-date="27">27</div>
+                        <div class="calendar-day other-month" data-date="28">28</div>
+                        <div class="calendar-day other-month" data-date="29">29</div>
+                        <div class="calendar-day other-month" data-date="30">30</div>
+                        <div class="calendar-day other-month" data-date="31">31</div>
+                        <div class="calendar-day" data-date="1">1</div>
+                        <div class="calendar-day" data-date="2">2</div>
+                        
+                        <div class="calendar-day" data-date="3">3</div>
+                        <div class="calendar-day" data-date="4">4</div>
+                        <div class="calendar-day has-event" data-date="5">5</div>
+                        <div class="calendar-day" data-date="6">6</div>
+                        <div class="calendar-day today selected" data-date="7">7</div>
+                        <div class="calendar-day has-event" data-date="8">8</div>
+                        <div class="calendar-day" data-date="9">9</div>
+                        
+                        <div class="calendar-day" data-date="10">10</div>
+                        <div class="calendar-day" data-date="11">11</div>
+                        <div class="calendar-day has-event" data-date="12">12</div>
+                        <div class="calendar-day" data-date="13">13</div>
+                        <div class="calendar-day" data-date="14">14</div>
+                        <div class="calendar-day has-event" data-date="15">15</div>
+                        <div class="calendar-day" data-date="16">16</div>
+                        
+                        <div class="calendar-day" data-date="17">17</div>
+                        <div class="calendar-day" data-date="18">18</div>
+                        <div class="calendar-day" data-date="19">19</div>
+                        <div class="calendar-day has-event" data-date="20">20</div>
+                        <div class="calendar-day" data-date="21">21</div>
+                        <div class="calendar-day" data-date="22">22</div>
+                        <div class="calendar-day" data-date="23">23</div>
+                        
+                        <div class="calendar-day" data-date="24">24</div>
+                        <div class="calendar-day" data-date="25">25</div>
+                        <div class="calendar-day" data-date="26">26</div>
+                        <div class="calendar-day" data-date="27">27</div>
+                        <div class="calendar-day" data-date="28">28</div>
+                        <div class="calendar-day" data-date="29">29</div>
+                        <div class="calendar-day" data-date="30">30</div>
+                        
+                        <div class="calendar-day" data-date="31">31</div>
+                        <div class="calendar-day other-month" data-date="1">1</div>
+                        <div class="calendar-day other-month" data-date="2">2</div>
+                        <div class="calendar-day other-month" data-date="3">3</div>
+                        <div class="calendar-day other-month" data-date="4">4</div>
+                        <div class="calendar-day other-month" data-date="5">5</div>
+                        <div class="calendar-day other-month" data-date="6">6</div>
+                    </div>
+                </div>
+
+                <!-- Day View -->
+                <div class="day-view">
+                    <div class="day-header-section">
+                        <h2 class="selected-date" id="selectedDate">Today, Aug 7</h2>
+                        <p class="selected-weekday" id="selectedWeekday">Thursday</p>
+                    </div>
+                    
+                    <div class="day-events" id="dayEvents">
+                        <div class="event-item" onclick="editEvent('Team Standup')">
+                            <div class="event-time">10:00 AM</div>
+                            <div class="event-title">Team Standup</div>
+                            <div class="event-location">Conference Room A</div>
+                        </div>
+                        
+                        <div class="event-item" onclick="editEvent('Product Review')">
+                            <div class="event-time">2:00 PM</div>
+                            <div class="event-title">Product Review</div>
+                            <div class="event-location">Zoom Meeting</div>
+                        </div>
+                        
+                        <div class="event-item" onclick="editEvent('Coffee with Maria')">
+                            <div class="event-time">4:30 PM</div>
+                            <div class="event-title">Coffee with Maria</div>
+                            <div class="event-location">Central Café</div>
+                        </div>
+                    </div>
+                    
+                    <div class="day-summary">
+                        <div class="summary-stat">
+                            <span class="stat-number">3</span>
+                            <span class="stat-label">events</span>
+                        </div>
+                        <div class="summary-stat">
+                            <span class="stat-number">2</span>
+                            <span class="stat-label">free hours</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat Overlay -->
+        <div class="chat-overlay" id="chatOverlay">
+            <div class="chat-window">
+                <div class="chat-header">
+                    <div class="chat-title">
+                        <div class="mini-orb-chat">
+                            <div class="fluid-layer"></div>
+                        </div>
+                        <span>Chat with Zoe</span>
+                    </div>
+                    <button class="close-chat-btn" onclick="closeChatWindow()">×</button>
+                </div>
+                
+                <div class="chat-messages" id="chatMessages">
+                    <div class="message zoe-message">
+                        <div class="message-content">Hi! I can help you add events to your calendar. Just tell me what you'd like to schedule!</div>
+                    </div>
+                </div>
+                
+                <div class="chat-input-container">
+                    <div class="chat-input-group">
+                        <input 
+                            type="text" 
+                            class="chat-input" 
+                            placeholder="Schedule dinner tomorrow at 7pm..."
+                            id="chatInputField"
+                        >
+                        <button class="voice-btn" onclick="startVoiceInput()">🎤</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Floating Add Event Button -->
+        <button class="floating-add-btn" onclick="addEventViaChat()" title="Add event with AI">+</button>
+    </div>
+
+    <script>
+        // State management
+        const orbMode = document.getElementById('orbMode');
+        const mainInterface = document.getElementById('mainInterface');
+        const fluidOrb = document.getElementById('fluidOrb');
+
+        // Update time display
+        function updateTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { 
+                hour: 'numeric', 
+                minute: '2-digit',
+                hour12: true 
+            });
+            const dateString = now.toLocaleDateString([], { 
+                weekday: 'long', 
+                month: 'long', 
+                day: 'numeric' 
+            });
+            
+            document.getElementById('currentTime').textContent = timeString;
+            document.getElementById('currentDate').textContent = dateString;
+        }
+
+        // Initialize time and update every minute
+        updateTime();
+        setInterval(updateTime, 60000);
+
+        // Enter main interface
+        function enterInterface() {
+            orbMode.classList.add('hidden');
+            mainInterface.classList.add('active');
+        }
+
+        // Exit to orb mode
+        function exitToOrb() {
+            mainInterface.classList.remove('active');
+            orbMode.classList.remove('hidden');
+        }
+
+        // Orb state management
+        function setOrbState(state) {
+            fluidOrb.className = `fluid-orb ${state}`;
+        }
+
+        // Calendar functions
+        function previousMonth() {
+            setOrbState('listening');
+            setTimeout(() => setOrbState('idle'), 1000);
+            console.log('Previous month');
+        }
+
+        function nextMonth() {
+            setOrbState('listening');
+            setTimeout(() => setOrbState('idle'), 1000);
+            console.log('Next month');
+        }
+
+        // Add event via AI chat
+        function addEventViaChat() {
+            const chatOverlay = document.getElementById('chatOverlay');
+            chatOverlay.classList.add('active');
+            
+            setTimeout(() => {
+                document.getElementById('chatInputField').focus();
+            }, 300);
+            
+            setOrbState('listening');
+            setTimeout(() => setOrbState('idle'), 1000);
+        }
+
+        // Close chat window
+        function closeChatWindow() {
+            const chatOverlay = document.getElementById('chatOverlay');
+            chatOverlay.classList.remove('active');
+        }
+
+        // Voice input
+        function startVoiceInput() {
+            setOrbState('listening');
+            
+            setTimeout(() => {
+                setOrbState('speaking');
+                addMessage('user', 'Schedule dinner with Sarah tomorrow at 7pm');
+                
+                setTimeout(() => {
+                    addMessage('zoe', 'Perfect! I\'ve scheduled "Dinner with Sarah" for tomorrow (August 8th) at 7:00 PM. Would you like me to add a location?');
+                    setOrbState('idle');
+                }, 1000);
+            }, 2000);
+        }
+
+        // Add message to chat
+        function addMessage(sender, text) {
+            const chatMessages = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-message`;
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.textContent = text;
+            
+            messageDiv.appendChild(contentDiv);
+            chatMessages.appendChild(messageDiv);
+            
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Update day view based on selected date
+        function updateDayView(date) {
+            const selectedDateEl = document.getElementById('selectedDate');
+            const selectedWeekdayEl = document.getElementById('selectedWeekday');
+            const dayEventsEl = document.getElementById('dayEvents');
+            
+            const eventsData = {
+                '7': [
+                    { time: '10:00 AM', title: 'Team Standup', location: 'Conference Room A' },
+                    { time: '2:00 PM', title: 'Product Review', location: 'Zoom Meeting' },
+                    { time: '4:30 PM', title: 'Coffee with Maria', location: 'Central Café' }
+                ],
+                '8': [
+                    { time: '9:00 AM', title: 'Doctor Appointment', location: 'Health Center' },
+                    { time: '1:00 PM', title: 'Lunch Meeting', location: 'Downtown Bistro' }
+                ],
+                '12': [
+                    { time: '6:00 PM', title: 'Dinner with Sarah', location: 'The Olive Tree' },
+                    { time: '8:30 PM', title: 'Movie Night', location: 'Home' }
+                ],
+                '15': [
+                    { time: '3:00 PM', title: 'Project Kickoff', location: 'Office Building 2' }
+                ],
+                '20': [
+                    { time: '10:00 AM', title: 'Team Meeting', location: 'Conference Room B' },
+                    { time: '2:00 PM', title: 'Client Call', location: 'Zoom' },
+                    { time: '5:00 PM', title: 'Happy Hour', location: 'Local Bar' }
+                ]
+            };
+            
+            const dateObj = new Date(2025, 7, parseInt(date));
+            const isToday = date === '7';
+            
+            if (isToday) {
+                selectedDateEl.textContent = 'Today, Aug 7';
+            } else {
+                selectedDateEl.textContent = `Aug ${date}`;
+            }
+            
+            selectedWeekdayEl.textContent = dateObj.toLocaleDateString('en-US', { weekday: 'long' });
+            
+            const events = eventsData[date] || [];
+            
+            if (events.length === 0) {
+                dayEventsEl.innerHTML = '<div style="text-align: center; color: #666; font-style: italic; padding: 20px;">No events scheduled</div>';
+            } else {
+                dayEventsEl.innerHTML = events.map(event => `
+                    <div class="event-item" onclick="editEvent('${event.title}')">
+                        <div class="event-time">${event.time}</div>
+                        <div class="event-title">${event.title}</div>
+                        <div class="event-location">${event.location}</div>
+                    </div>
+                `).join('');
+            }
+            
+            const eventCount = events.length;
+            const freeHours = Math.max(0, 8 - eventCount);
+            
+            document.querySelector('.summary-stat:first-child .stat-number').textContent = eventCount;
+            document.querySelector('.summary-stat:last-child .stat-number').textContent = freeHours;
+        }
+
+        // Edit event function
+        function editEvent(title) {
+            setOrbState('listening');
+            setTimeout(() => setOrbState('idle'), 500);
+            console.log('Edit event:', title);
+        }
+
+        // Navigation
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('nav-item')) {
+                document.querySelectorAll('.nav-item').forEach(item => {
+                    item.classList.remove('active');
+                });
+                e.target.classList.add('active');
+                
+                console.log('Navigate to:', e.target.textContent);
+            }
+        });
+
+        // Voice activation from orb mode
+        let isListening = false;
+        
+        document.addEventListener('keydown', function(e) {
+            if (e.code === 'Space' && !mainInterface.classList.contains('active')) {
+                e.preventDefault();
+                if (!isListening) {
+                    isListening = true;
+                    setOrbState('listening');
+                }
+            }
+        });
+
+        document.addEventListener('keyup', function(e) {
+            if (e.code === 'Space' && isListening) {
+                isListening = false;
+                setOrbState('speaking');
+                setTimeout(() => {
+                    setOrbState('idle');
+                }, 2000);
+            }
+        });
+
+        // Auto-return to orb mode after inactivity (optional)
+        let inactivityTimer;
+        function resetInactivityTimer() {
+            clearTimeout(inactivityTimer);
+            inactivityTimer = setTimeout(() => {
+                if (mainInterface.classList.contains('active')) {
+                    exitToOrb();
+                }
+            }, 300000); // 5 minutes
+        }
+
+        document.addEventListener('mousemove', resetInactivityTimer);
+        document.addEventListener('keypress', resetInactivityTimer);
+        document.addEventListener('click', resetInactivityTimer);
+
+        // Handle chat input and calendar interactions
+        document.addEventListener('DOMContentLoaded', function() {
+            const chatInput = document.getElementById('chatInputField');
+            
+            chatInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    const message = this.value.trim();
+                    if (message) {
+                        addMessage('user', message);
+                        this.value = '';
+                        
+                        setOrbState('speaking');
+                        
+                        setTimeout(() => {
+                            addMessage('zoe', 'Got it! I\'ll add that to your calendar. Anything else you\'d like to schedule?');
+                            setOrbState('idle');
+                        }, 1000);
+                    }
+                }
+            });
+            
+            document.getElementById('chatOverlay').addEventListener('click', function(e) {
+                if (e.target === this) {
+                    closeChatWindow();
+                }
+            });
+
+            document.querySelectorAll('.calendar-day').forEach(day => {
+                day.addEventListener('click', function() {
+                    if (this.classList.contains('other-month')) return;
+                    
+                    setOrbState('listening');
+                    setTimeout(() => setOrbState('idle'), 500);
+                    
+                    document.querySelectorAll('.calendar-day').forEach(d => d.classList.remove('selected'));
+                    this.classList.add('selected');
+                    updateDayView(this.dataset.date);
+                });
+            });
+        });
+    </script>
+</body>
+</html>
