@@ -9,3 +9,7 @@ services:
     ports:
       - "11434:11434"
     restart: unless-stopped
+  zoe-core:
+    environment:
+      - OLLAMA_URL=http://zoe-ollama:11434
+      - OLLAMA_MODEL=llama3.2:3b
