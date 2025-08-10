@@ -1,7 +1,9 @@
+const API_BASE_URL = process.env.ZOE_CORE_URL || 'http://zoe-core:8000';
+
 window.zoeAPI = {
     async sendMessage(message) {
         try {
-            const response = await fetch('/api/chat', {
+            const response = await fetch(`${API_BASE_URL}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message })
@@ -14,7 +16,7 @@ window.zoeAPI = {
     },
     async getHealth() {
         try {
-            const response = await fetch('/health');
+            const response = await fetch(`${API_BASE_URL}/health`);
             return await response.json();
         } catch (error) {
             return { status: 'error' };
@@ -22,7 +24,7 @@ window.zoeAPI = {
     },
     async getDiagnostics() {
         try {
-            const response = await fetch('/api/diagnostics');
+            const response = await fetch(`${API_BASE_URL}/api/diagnostics`);
             return await response.json();
         } catch (error) {
             return { status: 'error' };
@@ -30,7 +32,7 @@ window.zoeAPI = {
     },
     async getModules() {
         try {
-            const response = await fetch('/api/modules/list');
+            const response = await fetch(`${API_BASE_URL}/api/modules/list`);
             return await response.json();
         } catch (error) {
             return { modules: [] };
@@ -38,7 +40,7 @@ window.zoeAPI = {
     },
     async toggleModule(name, enabled) {
         try {
-            const response = await fetch('/api/modules/toggle', {
+            const response = await fetch(`${API_BASE_URL}/api/modules/toggle`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, enabled })
@@ -50,7 +52,7 @@ window.zoeAPI = {
     },
     async getMatrixRooms() {
         try {
-            const response = await fetch('/api/matrix/rooms');
+            const response = await fetch(`${API_BASE_URL}/api/matrix/rooms`);
             return await response.json();
         } catch (error) {
             return { error: error.message };
@@ -58,7 +60,7 @@ window.zoeAPI = {
     },
     async sendMatrixMessage(room_id, message) {
         try {
-            const response = await fetch('/api/matrix/send', {
+            const response = await fetch(`${API_BASE_URL}/api/matrix/send`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ room_id, message })
@@ -70,7 +72,7 @@ window.zoeAPI = {
     },
     async receiveMatrixMessages(room_id) {
         try {
-            const response = await fetch(`/api/matrix/receive?room_id=${encodeURIComponent(room_id)}`);
+            const response = await fetch(`${API_BASE_URL}/api/matrix/receive?room_id=${encodeURIComponent(room_id)}`);
             return await response.json();
         } catch (error) {
             return { error: error.message };
@@ -78,7 +80,7 @@ window.zoeAPI = {
     },
     async getDashboard() {
         try {
-            const response = await fetch('/api/dashboard');
+            const response = await fetch(`${API_BASE_URL}/api/dashboard`);
             if (!response.ok) throw new Error('Dashboard unavailable');
             return await response.json();
         } catch (error) {
@@ -87,7 +89,7 @@ window.zoeAPI = {
     },
     async createTask(task) {
         try {
-            const response = await fetch('/api/tasks', {
+            const response = await fetch(`${API_BASE_URL}/api/tasks`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(task)
@@ -99,7 +101,7 @@ window.zoeAPI = {
     },
     async getTasks() {
         try {
-            const response = await fetch('/api/tasks');
+            const response = await fetch(`${API_BASE_URL}/api/tasks`);
             return await response.json();
         } catch (error) {
             return { error: error.message };
@@ -107,7 +109,7 @@ window.zoeAPI = {
     },
     async createJournal(entry) {
         try {
-            const response = await fetch('/api/journal', {
+            const response = await fetch(`${API_BASE_URL}/api/journal`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(entry)
@@ -119,7 +121,7 @@ window.zoeAPI = {
     },
     async getJournal() {
         try {
-            const response = await fetch('/api/journal');
+            const response = await fetch(`${API_BASE_URL}/api/journal`);
             return await response.json();
         } catch (error) {
             return { error: error.message };
@@ -127,7 +129,7 @@ window.zoeAPI = {
     },
     async getSettings() {
         try {
-            const response = await fetch('/api/settings');
+            const response = await fetch(`${API_BASE_URL}/api/settings`);
             return await response.json();
         } catch (error) {
             return { error: error.message };
@@ -135,7 +137,7 @@ window.zoeAPI = {
     },
     async updateSettings(settings) {
         try {
-            const response = await fetch('/api/settings', {
+            const response = await fetch(`${API_BASE_URL}/api/settings`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(settings)
@@ -147,7 +149,7 @@ window.zoeAPI = {
     },
     async getEvents(params = '') {
         try {
-            const response = await fetch(`/api/events${params}`);
+            const response = await fetch(`${API_BASE_URL}/api/events${params}`);
             return await response.json();
         } catch (error) {
             return { error: error.message };
@@ -155,7 +157,7 @@ window.zoeAPI = {
     },
     async createEvent(event) {
         try {
-            const response = await fetch('/api/events', {
+            const response = await fetch(`${API_BASE_URL}/api/events`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(event)
@@ -167,7 +169,7 @@ window.zoeAPI = {
     },
     async updateEvent(id, event) {
         try {
-            const response = await fetch(`/api/events/${id}`, {
+            const response = await fetch(`${API_BASE_URL}/api/events/${id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(event)
@@ -179,7 +181,7 @@ window.zoeAPI = {
     },
     async deleteEvent(id) {
         try {
-            const response = await fetch(`/api/events/${id}`, { method: 'DELETE' });
+            const response = await fetch(`${API_BASE_URL}/api/events/${id}`, { method: 'DELETE' });
             return await response.json();
         } catch (error) {
             return { error: error.message };
