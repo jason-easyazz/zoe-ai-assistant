@@ -1,9 +1,24 @@
-const API_BASE_URL = process.env.ZOE_CORE_URL || 'http://zoe-core:8000';
+const API_BASE_URL = '';
 
 window.zoeAPI = {
     async sendMessage(message) {
         try {
-            const response = await fetch(`${API_BASE_URL}/api/chat`, {
+            const response = await fetch(`${API_BASE_URL}/api/chat/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message })
+            });
+            if (!response.ok) throw new Error('Chat service unavailable');
+            return await response.json();
+        } catch (error) {
+            return { error: error.message };
+        }
+    },
+
+window.zoeAPI = {
+    async sendMessage(message) {
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/chat/`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message })

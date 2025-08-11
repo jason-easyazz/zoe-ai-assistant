@@ -3,8 +3,7 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
-    command: >
-      bash -c "ollama pull mistral:latest && ollama serve"
+    command: serve
     ports:
       - "11434:11434"
     volumes:
@@ -51,10 +50,12 @@ services:
     restart: unless-stopped
 
   zoe-core:
-    build: ./zoe-core
+    build: ./services/zoe-core
     container_name: zoe-core
     ports:
       - "${ZOE_CORE_PORT}:8000"
+    volumes:
+      - ./services/zoe-core:/app
     environment:
       - OLLAMA_HOST=${OLLAMA_HOST}
       - WHISPER_HOST=${WHISPER_HOST}
@@ -65,7 +66,7 @@ services:
       - ollama
 
   zoe-ui:
-    build: ./zoe-ui
+    build: ./services/zoe-ui
     container_name: zoe-ui
     ports:
       - "${ZOE_UI_PORT}:80"
