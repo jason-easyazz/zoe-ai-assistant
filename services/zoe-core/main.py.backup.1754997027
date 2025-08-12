@@ -279,41 +279,6 @@ async def chat(data: dict):
             "created": True
         }
         print(f"✅ Appointment event: {detected_event}")
-        
-        # Save to database
-        try:
-            import aiosqlite
-            async with aiosqlite.connect('/app/data/zoe.db') as db:
-                # Extract time from message
-                time_str = None
-                import re
-                time_match = re.search(r'(\d{1,2}(?::\d{2})?)\s*(pm|am)', message_lower)
-                if time_match:
-                    time_part = time_match.group(1)
-                    period = time_match.group(2).lower()
-                    hour = int(time_part.split(':')[0]) if ':' in time_part else int(time_part)
-                    minute = int(time_part.split(':')[1]) if ':' in time_part else 0
-                    if period == 'pm' and hour != 12:
-                        hour += 12
-                    elif period == 'am' and hour == 12:
-                        hour = 0
-                    time_str = f"{hour:02d}:{minute:02d}"
-                
-                await db.execute("""
-                    INSERT INTO events (title, start_date, start_time, source, user_id, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    "Appointment",
-                    datetime.strptime(detected_event["date"], "%d/%m/%Y").date(),
-                    time_str,
-                    "chat_detection",
-                    "default", 
-                    datetime.now()
-                ))
-                await db.commit()
-                print("✅ Saved appointment to database")
-        except Exception as e:
-            print(f"Database save error: {e}")
     
     print(f"🔍 Final event result: {detected_event}")
     
@@ -392,68 +357,6 @@ async def chat(data: dict):
         return response_data
     else:
         return {"response": "I'm having trouble right now. Please try again!"}
-
-
-
-# Events API Endpoints for Calendar Integration
-@app.get("/api/events")
-async def get_events():
-    """Get all events from database for calendar"""
-    try:
-        import aiosqlite
-        async with aiosqlite.connect('/app/data/zoe.db') as db:
-            cursor = await db.execute("""
-                SELECT id, title, start_date, start_time, source, created_at
-                FROM events 
-                ORDER BY start_date ASC, start_time ASC
-            """)
-            
-            events = []
-            async for row in cursor:
-                events.append({
-                    "id": row[0],
-                    "title": row[1],
-                    "date": row[2],  # Already in YYYY-MM-DD format
-                    "time": row[3] or "",
-                    "source": row[4],
-                    "created_at": row[5]
-                })
-            
-            return {"events": events, "count": len(events)}
-            
-    except Exception as e:
-        print(f"Error fetching events: {e}")
-        return {"events": [], "count": 0}
-
-@app.get("/api/events/today")
-async def get_today_events():
-    """Get today's events for dashboard"""
-    try:
-        import aiosqlite
-        from datetime import date
-        today = date.today()
-        
-        async with aiosqlite.connect('/app/data/zoe.db') as db:
-            cursor = await db.execute("""
-                SELECT id, title, start_time
-                FROM events 
-                WHERE start_date = ?
-                ORDER BY start_time ASC
-            """, (today,))
-            
-            events = []
-            async for row in cursor:
-                events.append({
-                    "id": row[0],
-                    "title": row[1],
-                    "time": row[2] or "All day"
-                })
-            
-            return {"events": events, "date": today.isoformat()}
-            
-    except Exception as e:
-        print(f"Error fetching today's events: {e}")
-        return {"events": [], "date": date.today().isoformat()}
 
 @app.get("/api/shopping")
 def shopping():

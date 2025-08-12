@@ -936,6 +936,8 @@
         document.addEventListener('DOMContentLoaded', function() {
             console.log('🚀 Zoe v3.1 Interface Loaded');
             updateTime();
+            updateWeather();
+            setInterval(updateWeather, 900000); // Update every 15 minutes
             setInterval(updateTime, 1000);
             checkBackendConnection();
             setInterval(checkBackendConnection, 30000);
@@ -1072,6 +1074,21 @@
         }
 
         // Time and Date
+        function updateWeather() {
+            fetch("http://localhost:8000/api/weather")
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById("weatherIcon").textContent = data.icon || "🌤️";
+                    document.getElementById("weatherTemp").textContent = data.temperature + "°";
+                })
+                .catch(error => {
+                    console.log("Weather API not available, using defaults");
+                    document.getElementById("weatherIcon").textContent = "🌤️";
+                    document.getElementById("weatherTemp").textContent = "23°";
+                });
+        }
+
+
         function updateTime() {
             const now = new Date();
             const timeString = now.toLocaleTimeString('en-US', {
