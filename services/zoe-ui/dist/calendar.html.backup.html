@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calendar - Zoe AI Assistant</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        /* Enhanced Calendar Styles for Live Data Integration */
+        
+        /* Loading and Status Indicators */
+        .loading-indicator {
+            display: none;
+            text-align: center;
+            padding: 20px;
+            color: var(--text-muted, #666);
+            font-style: italic;
+            background: var(--surface-color, #f8f9fa);
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .live-indicator {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--success-color, #10b981);
+            font-weight: 500;
+        }
+        
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--success-color, #10b981);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .last-refresh {
+            font-size: 11px;
+            color: var(--text-muted, #666);
+            margin-left: 10px;
+        }
+        
+        /* Calendar Controls */
+        .calendar-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 15px;
+            background: var(--surface-color, #ffffff);
+            border-radius: 12px;
+            border: 1px solid var(--border-color, #e5e7eb);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        
+        .month-navigation {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .nav-btn {
+            background: var(--primary-color, #6366f1);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            min-width: 80px;
+        }
+        
+        .nav-btn:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25);
+        }
+        
+        .nav-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .current-month {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-color, #1f2937);
+            min-width: 180px;
+            text-align: center;
+        }
+        
+        .calendar-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .refresh-btn {
+            background: var(--success-color, #10b981);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 16px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s ease;
+        }
+        
+        .refresh-btn:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25);
+        }
+        
+        .refresh-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        
+        .today-btn {
+            background: var(--secondary-color, #f3f4f6);
+            color: var(--text-color, #1f2937);
+            border: 1px solid var(--border-color, #d1d5db);
+        }
+        
+        .today-btn:hover {
+            background: var(--hover-color, #e5e7eb);
+        }
+        
+        /* Calendar Grid Enhanced */
+        .calendar-container {
+            position: relative;
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+        }
+        
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 1px;
+            background-color: var(--border-color, #e5e7eb);
+        }
+        
+        .calendar-header {
+            background: var(--primary-color, #6366f1);
+            color: white;
+            padding: 12px 8px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        
+        .calendar-day {
+            background: white;
+            min-height: 100px;
+            padding: 8px;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+            position: relative;
+        }
+        
+        .calendar-day:hover {
+            background-color: var(--hover-color, rgba(99, 102, 241, 0.05));
+        }
+        
+        .calendar-day.today {
+            background-color: rgba(99, 102, 241, 0.1);
+            border: 2px solid var(--primary-color, #6366f1);
+            font-weight: 600;
+        }
+        
+        .calendar-day.other-month {
+            opacity: 0.4;
+            background-color: #f9fafb;
+        }
+        
+        .calendar-day.weekend {
+            background-color: #fefefe;
+        }
+        
+        .calendar-day.has-events {
+            background-color: rgba(16, 185, 129, 0.05);
+        }
+        
+        .day-number {
+            font-weight: 500;
+            margin-bottom: 4px;
+            font-size: 14px;
+        }
+        
+        /* Event Elements */
+        .calendar-event {
+            font-size: 10px;
+            padding: 2px 4px;
+            border-radius: 3px;
+            margin-bottom: 2px;
+            cursor: pointer;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            border-left: 3px solid;
+            background-opacity: 0.7;
+        }
+        
+        .calendar-event:hover {
+            opacity: 0.8;
+            transform: scale(1.02);
+        }
+        
+        /* Priority Styles */
+        .calendar-event.priority-high,
+        .event-card.priority-high {
+            background-color: #fee2e2;
+            color: #dc2626;
+            border-left-color: #dc2626;
+        }
+        
+        .calendar-event.priority-medium,
+        .event-card.priority-medium {
+            background-color: #fef3c7;
+            color: #d97706;
+            border-left-color: #d97706;
+        }
+        
+        .calendar-event.priority-low,
+        .event-card.priority-low {
+            background-color: #dcfce7;
+            color: #16a34a;
+            border-left-color: #16a34a;
+        }
+        
+        /* Category Styles */
+        .calendar-event.category-work {
+            background-color: #dbeafe;
+            color: #2563eb;
+        }
+        
+        .calendar-event.category-personal {
+            background-color: #fce7f3;
+            color: #db2777;
+        }
+        
+        .calendar-event.category-health {
+            background-color: #d1fae5;
+            color: #059669;
+        }
+        
+        .calendar-event.category-social {
+            background-color: #e0e7ff;
+            color: #6366f1;
+        }
+        
+        .calendar-event.category-family {
+            background-color: #fef7cd;
+            color: #ca8a04;
+        }
+        
+        .more-events {
+            font-size: 9px;
+            color: var(--text-muted, #666);
+            cursor: pointer;
+            text-decoration: underline;
+            margin-top: 2px;
+        }
+        
+        .more-events:hover {
+            color: var(--primary-color, #6366f1);
+        }
+        
+        /* Event Cards */
+        .upcoming-events {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        
+        .upcoming-header {
+            margin-bottom: 20px;
+        }
+        
+        .upcoming-header h3 {
+            margin: 0 0 8px 0;
+            color: var(--text-color, #1f2937);
+            font-size: 18px;
+        }
+        
+        .upcoming-subtitle {
+            color: var(--text-muted, #666);
+            font-size: 14px;
+        }
+        
+        .events-list {
+            space-y: 12px;
+        }
+        
+        .event-card {
+            border: 1px solid var(--border-color, #e5e7eb);
+            border-radius: 8px;
+            padding: 16px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            margin-bottom: 12px;
+        }
+        
+        .event-card:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        
+        .event-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 8px;
+        }
+        
+        .event-main {
+            flex: 1;
+        }
+        
+        .event-title {
+            font-weight: 600;
+            color: var(--text-color, #1f2937);
+            margin-bottom: 4px;
+            font-size: 16px;
+        }
+        
+        .event-date {
+            color: var(--text-muted, #666);
+            font-size: 14px;
+        }
+        
+        .event-meta {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 4px;
+        }
+        
+        .event-category-badge {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            text-transform: uppercase;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+        }
+        
+        .event-category-badge.category-work {
+            background-color: #dbeafe;
+            color: #2563eb;
+        }
+        
+        .event-category-badge.category-personal {
+            background-color: #fce7f3;
+            color: #db2777;
+        }
+        
+        .event-category-badge.category-health {
+            background-color: #d1fae5;
+            color: #059669;
+        }
+        
+        .event-category-badge.category-social {
+            background-color: #e0e7ff;
+            color: #6366f1;
+        }
+        
+        .event-category-badge.category-family {
+            background-color: #fef7cd;
+            color: #ca8a04;
+        }
+        
+        .event-priority-indicator {
+            font-size: 9px;
+            padding: 1px 4px;
+            border-radius: 6px;
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+        
+        .event-description {
+            color: var(--text-muted, #666);
+            font-size: 14px;
+            line-height: 1.4;
+            margin-top: 8px;
+        }
+        
+        /* No Events State */
+        .no-events {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-muted, #666);
+        }
+        
+        .no-events-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+        
+        .no-events-text {
+            font-size: 18px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: var(--text-color, #1f2937);
+        }
+        
+        .no-events-subtitle {
+            font-size: 14px;
+            opacity: 0.7;
+            line-height: 1.5;
+        }
+        
+        /* Message Elements */
+        .error-message,
+        .success-message {
+            display: none;
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 16px;
+            font-weight: 500;
+        }
+        
+        .error-message {
+            background-color: #fee2e2;
+            color: #dc2626;
+            border: 1px solid #fecaca;
+        }
+        
+        .success-message {
+            background-color: #d1fae5;
+            color: #065f46;
+            border: 1px solid #a7f3d0;
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .calendar-controls {
+                flex-direction: column;
+                gap: 15px;
+            }
+            
+            .month-navigation {
+                width: 100%;
+                justify-content: space-between;
+            }
+            
+            .calendar-actions {
+                justify-content: center;
+            }
+            
+            .calendar-day {
+                min-height: 80px;
+                padding: 6px;
+            }
+            
+            .event-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="header-left">
+                    <h1>📅 Calendar</h1>
+                    <div class="live-indicator">
+                        <div class="live-dot"></div>
+                        <span>Live Data</span>
+                        <span id="lastRefresh" class="last-refresh"></span>
+                    </div>
+                </div>
+                <nav class="nav-links">
+                    <a href="/" class="nav-link">🏠 Home</a>
+                    <a href="/calendar.html" class="nav-link active">📅 Calendar</a>
+                    <a href="/journal.html" class="nav-link">📝 Journal</a>
+                    <a href="/settings.html" class="nav-link">⚙️ Settings</a>
+                </nav>
+            </div>
+        </header>
+
+        <!-- Message Areas -->
+        <div id="errorMessage" class="error-message"></div>
+        <div id="successMessage" class="success-message"></div>
+
+        <!-- Loading Indicator -->
+        <div id="loadingIndicator" class="loading-indicator">
+            <div>📡 Loading events from Zoe...</div>
+        </div>
+
+        <!-- Calendar Controls -->
+        <div class="calendar-controls">
+            <div class="month-navigation">
+                <button id="prevMonth" class="nav-btn">‹ Previous</button>
+                <div id="currentMonth" class="current-month">Loading...</div>
+                <button id="nextMonth" class="nav-btn">Next ›</button>
+            </div>
+            <div class="calendar-actions">
+                <button id="todayBtn" class="nav-btn today-btn">Today</button>
+                <button id="refreshEvents" class="refresh-btn">
+                    <span>🔄</span>
+                    <span>Refresh</span>
+                </button>
+                <button class="nav-btn" onclick="toggleEventForm()">+ Add Event</button>
+            </div>
+        </div>
+
+        <!-- Event Creation Form (Hidden by default) -->
+        <div class="event-form" id="eventForm" style="display: none;">
+            <div class="form-header">
+                <h3>📝 Create New Event</h3>
+                <p>Add a new event to your calendar</p>
+            </div>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label for="eventTitle">Event Title</label>
+                    <input type="text" id="eventTitle" placeholder="Enter event title..." required>
+                </div>
+                <div class="form-group">
+                    <label for="eventDate">Date</label>
+                    <input type="date" id="eventDate" required>
+                </div>
+                <div class="form-group">
+                    <label for="eventTime">Time</label>
+                    <input type="time" id="eventTime">
+                </div>
+                <div class="form-group">
+                    <label for="eventPriority">Priority</label>
+                    <select id="eventPriority">
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="eventCategory">Category</label>
+                    <select id="eventCategory">
+                        <option value="personal">Personal</option>
+                        <option value="work">Work</option>
+                        <option value="health">Health</option>
+                        <option value="social">Social</option>
+                        <option value="family">Family</option>
+                    </select>
+                </div>
+                <div class="form-group full-width">
+                    <label for="eventDescription">Description (Optional)</label>
+                    <textarea id="eventDescription" placeholder="Add event description..."></textarea>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="form-btn secondary" onclick="toggleEventForm()">Cancel</button>
+                <button class="form-btn primary" onclick="saveEvent()">Create Event</button>
+            </div>
+        </div>
+
+        <!-- Calendar Grid -->
+        <div class="calendar-container">
+            <div class="calendar-grid" id="calendarGrid">
+                <!-- Calendar headers -->
+                <div class="calendar-header">Sun</div>
+                <div class="calendar-header">Mon</div>
+                <div class="calendar-header">Tue</div>
+                <div class="calendar-header">Wed</div>
+                <div class="calendar-header">Thu</div>
+                <div class="calendar-header">Fri</div>
+                <div class="calendar-header">Sat</div>
+                
+                <!-- Calendar days will be generated by JavaScript -->
+            </div>
+        </div>
+
+        <!-- Upcoming Events -->
+        <div class="upcoming-events">
+            <div class="upcoming-header">
+                <h3>📋 Upcoming Events</h3>
+                <div class="upcoming-subtitle">Your next scheduled activities</div>
+            </div>
+            <div class="events-list" id="eventsList">
+                <!-- Events will be loaded dynamically by JavaScript -->
+                <div class="loading-placeholder">
+                    <div>🔄 Loading upcoming events...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="calendar.js"></script>
+    <script>
+        // Event form management functions
+        function toggleEventForm() {
+            const form = document.getElementById('eventForm');
+            const isVisible = form.style.display !== 'none';
+            form.style.display = isVisible ? 'none' : 'block';
+            
+            if (!isVisible) {
+                // Set default date to today
+                const today = new Date().toISOString().split('T')[0];
+                document.getElementById('eventDate').value = today;
+                document.getElementById('eventTitle').focus();
+            }
+        }
+        
+        async function saveEvent() {
+            const title = document.getElementById('eventTitle').value.trim();
+            const date = document.getElementById('eventDate').value;
+            const time = document.getElementById('eventTime').value;
+            const priority = document.getElementById('eventPriority').value;
+            const category = document.getElementById('eventCategory').value;
+            const description = document.getElementById('eventDescription').value.trim();
+            
+            if (!title || !date) {
+                alert('Please fill in the required fields (Title and Date)');
+                return;
+            }
+            
+            try {
+                console.log('Creating event via API:', { title, date, time, priority, category });
+                
+                const response = await fetch('/api/events', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        title: title,
+                        date: date,
+                        time: time || null,
+                        priority: priority,
+                        category: category,
+                        description: description || null,
+                        duration: 60
+                    })
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    console.log('Event created successfully:', result);
+                    
+                    // Show success message
+                    const successDiv = document.getElementById('successMessage');
+                    if (successDiv) {
+                        successDiv.textContent = 'Event created successfully!';
+                        successDiv.style.display = 'block';
+                        setTimeout(() => {
+                            successDiv.style.display = 'none';
+                        }, 3000);
+                    }
+                    
+                    // Hide form and clear fields
+                    toggleEventForm();
+                    document.getElementById('eventTitle').value = '';
+                    document.getElementById('eventDescription').value = '';
+                    document.getElementById('eventTime').value = '';
+                    
+                    // Refresh calendar data
+                    if (window.liveCalendar) {
+                        setTimeout(async () => {
+                            await window.liveCalendar.refreshEvents();
+                        }, 500);
+                    }
+                } else {
+                    const error = await response.text();
+                    console.error('Failed to create event:', error);
+                    alert('Failed to create event. Please try again.');
+                }
+            } catch (error) {
+                console.error('Error creating event:', error);
+                alert('Error creating event. Please check your connection and try again.');
+            }
+        }
+        
+        // Initialize month display when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            const currentMonth = document.getElementById('currentMonth');
+            if (currentMonth) {
+                const now = new Date();
+                currentMonth.textContent = now.toLocaleDateString('en-US', {
+                    year: 'numeric',
+                    month: 'long'
+                });
+            }
+            
+            console.log('📅 Calendar HTML initialized, waiting for JavaScript...');
+        });
+        
+        // Handle keyboard shortcuts
+        document.addEventListener('keydown', (event) => {
+            if (event.ctrlKey || event.metaKey) {
+                switch (event.key) {
+                    case 'r':
+                        event.preventDefault();
+                        if (window.liveCalendar) {
+                            window.liveCalendar.refreshEvents();
+                        }
+                        break;
+                    case 'n':
+                        event.preventDefault();
+                        toggleEventForm();
+                        break;
+                }
+            }
+        });
+    </script>
+</body>
+</html>
