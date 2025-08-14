@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe AI Calendar</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh; color: #333;
+        }
+        
+        /* Navigation Bar */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; cursor: pointer; padding: 8px 12px; border-radius: 6px;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        .settings-btn, .close-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666; font-size: 14px;
+        }
+        .settings-btn:hover, .close-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+
+        /* Main Container */
+        .main-container { width: 100%; padding-top: 70px; padding: 70px 20px 20px; }
+        
+        /* Page Header */
+        .page-header { text-align: center; margin-bottom: 30px; }
+        .page-header h1 { 
+            font-size: 2.5rem; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+        }
+        .page-header p { font-size: 1.1rem; color: #666; opacity: 0.9; }
+
+        /* Top Info Bar */
+        .top-info-bar { 
+            display: flex; justify-content: space-between; align-items: center; 
+            margin-bottom: 20px; padding: 0 10px;
+        }
+        .time-display { display: flex; flex-direction: column; }
+        .current-time { font-size: 18px; font-weight: 300; color: #333; line-height: 1; }
+        .current-date { font-size: 11px; color: #666; margin-top: 2px; }
+        .weather-widget { display: flex; align-items: center; gap: 6px; }
+        .weather-icon { font-size: 18px; }
+        .weather-temp { font-size: 18px; font-weight: 300; color: #333; }
+
+        /* Calendar Header */
+        .calendar-header { 
+            display: flex; justify-content: space-between; align-items: center; 
+            margin-bottom: 20px; padding: 0 10px;
+        }
+        .month-title { 
+            font-size: 24px; font-weight: 300; color: #333; margin: 0;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+        }
+        .nav-button { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 8px; width: 40px; height: 40px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; 
+            color: #666; font-size: 16px; font-weight: bold;
+        }
+        .nav-button:hover { 
+            background: rgba(123, 97, 255, 0.2); color: #7B61FF; transform: scale(1.05); 
+        }
+
+        /* Calendar Layout */
+        .calendar-layout { 
+            display: grid; grid-template-columns: 2fr 1fr; gap: 20px; 
+            max-width: 1200px; margin: 0 auto;
+        }
+
+        /* Calendar Grid */
+        .calendar-grid { 
+            display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; 
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px); 
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 16px; padding: 20px;
+        }
+        .day-header { 
+            text-align: center; padding: 12px 8px; font-size: 12px; font-weight: 600; 
+            color: #666; text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .calendar-day { 
+            aspect-ratio: 1; display: flex; align-items: center; justify-content: center; 
+            border-radius: 8px; font-size: 14px; cursor: pointer; transition: all 0.3s ease; 
+            position: relative; font-weight: 500; min-height: 40px; 
+        }
+        .calendar-day:hover { background: rgba(123, 97, 255, 0.1); transform: scale(1.05); }
+        .calendar-day.today { 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            color: white; font-weight: 600; box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+        .calendar-day.selected { 
+            background: rgba(123, 97, 255, 0.3); color: #7B61FF; font-weight: 600; 
+            border: 2px solid #7B61FF;
+        }
+        .calendar-day.today.selected { 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            color: white; border: 2px solid white;
+        }
+        .calendar-day.has-event { background: rgba(123, 97, 255, 0.2); color: #7B61FF; font-weight: 600; }
+        .calendar-day.has-event::after { 
+            content: ''; position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%); 
+            width: 4px; height: 4px; background: #7B61FF; border-radius: 50%;
+        }
+        .calendar-day.today.has-event::after { background: white; }
+        .calendar-day.other-month { color: #ccc; opacity: 0.5; }
+
+        /* Day View */
+        .day-view { 
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px); 
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 16px; 
+            padding: 20px; display: flex; flex-direction: column; min-height: 400px;
+        }
+        .day-header-section { margin-bottom: 15px; text-align: center; }
+        .selected-date { 
+            font-size: 20px; font-weight: 300; color: #333; margin-bottom: 2px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+        }
+        .selected-weekday { 
+            font-size: 12px; color: #666; font-weight: 400; 
+            text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .day-events { flex: 1; overflow-y: auto; margin-bottom: 15px; }
+        .event-item { 
+            padding: 12px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.3); 
+            cursor: pointer; transition: all 0.3s ease;
+        }
+        .event-item:last-child { border-bottom: none; }
+        .event-item:hover { 
+            transform: translateX(4px); background: rgba(255, 255, 255, 0.3); 
+            margin: 0 -10px; padding: 12px 10px; border-radius: 8px;
+        }
+        .event-time { 
+            font-size: 11px; color: #7B61FF; font-weight: 600; margin-bottom: 4px; 
+            text-transform: uppercase; letter-spacing: 0.3px;
+        }
+        .event-title { font-size: 14px; color: #333; font-weight: 500; margin-bottom: 2px; }
+        .event-category { 
+            display: inline-block; padding: 3px 8px; border-radius: 10px; 
+            font-size: 10px; font-weight: 500; margin-top: 4px;
+        }
+        .category-health { background: rgba(239, 68, 68, 0.2); color: #dc2626; }
+        .category-work { background: rgba(59, 130, 246, 0.2); color: #2563eb; }
+        .category-personal { background: rgba(34, 197, 94, 0.2); color: #16a34a; }
+        .day-summary { 
+            display: flex; justify-content: space-around; padding: 15px 0; 
+            border-top: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        .summary-stat { text-align: center; }
+        .stat-number { 
+            display: block; font-size: 18px; font-weight: 600; 
+            color: #7B61FF; margin-bottom: 2px;
+        }
+        .stat-label { 
+            font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.3px;
+        }
+        .loading { 
+            display: flex; align-items: center; justify-content: center; 
+            padding: 40px; color: #666; font-style: italic;
+        }
+        .no-events { text-align: center; color: #666; font-style: italic; padding: 40px; }
+
+        /* Floating Add Button */
+        .floating-add-btn { 
+            position: fixed; bottom: 30px; right: 30px; width: 60px; height: 60px; 
+            border-radius: 50%; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            border: none; color: white; cursor: pointer; display: flex; align-items: center; 
+            justify-content: center; font-size: 24px; transition: all 0.3s ease; 
+            box-shadow: 0 8px 30px rgba(123, 97, 255, 0.4); z-index: 1000;
+        }
+        .floating-add-btn:hover { 
+            transform: scale(1.1); box-shadow: 0 12px 40px rgba(123, 97, 255, 0.5); 
+        }
+
+        /* Chat Overlay */
+        .chat-overlay { 
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; 
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px); display: none; 
+            align-items: flex-end; justify-content: center; z-index: 2000; opacity: 0; 
+            transition: all 0.3s ease; padding: 20px;
+        }
+        .chat-overlay.active { display: flex; opacity: 1; }
+        .chat-window { 
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px); 
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px 20px 0 0; 
+            width: 95%; max-width: none; 
+            height: calc(100vh - 180px); /* Shorter - balanced top/bottom spacing */
+            display: flex; flex-direction: column; box-shadow: 0 25px 80px rgba(0, 0, 0, 0.2);
+            margin-bottom: 100px; /* Space for plus button to remain visible */
+            transform: translateY(100%);
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .chat-overlay.active .chat-window {
+            transform: translateY(0);
+        }
+        .chat-header { 
+            padding: 20px 20px 15px; border-bottom: 1px solid rgba(255, 255, 255, 0.3); 
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .chat-title { 
+            display: flex; align-items: center; gap: 10px; 
+            font-size: 18px; font-weight: 500; color: #333;
+        }
+        .mini-orb-chat { 
+            width: 28px; height: 28px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+        }
+        .close-chat-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; 
+            color: #666; font-size: 16px;
+        }
+        .close-chat-btn:hover { background: rgba(255, 0, 0, 0.1); color: #ff4444; }
+        .chat-messages { 
+            flex: 1; padding: 20px; overflow-y: auto; display: flex; 
+            flex-direction: column; gap: 12px;
+        }
+        .message { 
+            max-width: 85%; padding: 12px 16px; border-radius: 16px; 
+            font-size: 14px; line-height: 1.4;
+        }
+        .zoe-message { 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            color: white; align-self: flex-start; border-bottom-left-radius: 6px;
+        }
+        .user-message { 
+            background: rgba(255, 255, 255, 0.8); color: #333; 
+            align-self: flex-end; border-bottom-right-radius: 6px;
+        }
+        .event-created-notification { 
+            background: rgba(34, 197, 94, 0.1); border: 1px solid rgba(34, 197, 94, 0.3); 
+            border-radius: 10px; padding: 10px; margin-top: 6px; 
+            font-size: 12px; color: #16a34a;
+        }
+        .chat-input-container { 
+            padding: 15px 20px 20px; border-top: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        .chat-input-group { 
+            display: flex; align-items: center; gap: 10px; 
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4); 
+            border-radius: 15px; padding: 10px 15px;
+        }
+        .chat-input { 
+            flex: 1; background: transparent; border: none; 
+            font-size: 14px; color: #333; outline: none;
+        }
+        .chat-input::placeholder { color: #666; font-style: italic; }
+        .voice-btn, .send-btn { 
+            width: 32px; height: 32px; border: none; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); color: white; 
+            cursor: pointer; display: flex; align-items: center; justify-content: center; 
+            font-size: 14px; transition: all 0.3s ease; box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+        .voice-btn:hover, .send-btn:hover { transform: scale(1.05); }
+
+        /* Mobile Responsive */
+        @media (max-width: 768px) { 
+            .calendar-layout { grid-template-columns: 1fr; gap: 15px; }
+            .nav-menu { display: none; }
+            .main-container { padding: 70px 15px 20px; }
+            .calendar-grid { padding: 15px; gap: 2px; }
+            .calendar-day { min-height: 35px; font-size: 12px; }
+            .day-header { font-size: 10px; padding: 8px 4px; }
+            .floating-add-btn { bottom: 20px; right: 20px; width: 50px; height: 50px; font-size: 20px; }
+            .chat-window { 
+                width: 98%; 
+                height: calc(100vh - 200px); 
+                margin-bottom: 80px; /* Smaller margin on mobile */
+            }
+            .chat-overlay { padding: 10px; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation Bar -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
+            <div class="nav-menu">
+                <a href="index.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="calendar.html" class="nav-item active">Calendar</a>
+                <a href="tasks.html" class="nav-item">Tasks</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <a href="workflows.html" class="nav-item">Workflows</a>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator" id="navApiStatus">🔄 Connecting</div>
+            <button class="settings-btn" onclick="window.location.href='settings.html'">⚙️</button>
+        </div>
+    </div>
+
+    <!-- Main Container -->
+    <div class="main-container">
+
+
+        <!-- Top Info Bar -->
+        <div class="top-info-bar">
+            <div class="time-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+            <div class="weather-widget">
+                <div class="weather-icon">☀️</div>
+                <div class="weather-temp">23°</div>
+            </div>
+        </div>
+
+        <!-- Calendar Header -->
+        <div class="calendar-header">
+            <button class="nav-button" onclick="previousMonth()">‹</button>
+            <h1 class="month-title" id="currentMonth">Loading...</h1>
+            <button class="nav-button" onclick="nextMonth()">›</button>
+        </div>
+
+        <!-- Calendar Layout -->
+        <div class="calendar-layout">
+            <!-- Calendar Grid -->
+            <div class="calendar-grid" id="calendarGrid">
+                <div class="loading">Loading calendar...</div>
+            </div>
+
+            <!-- Day View -->
+            <div class="day-view">
+                <div class="day-header-section">
+                    <h2 class="selected-date" id="selectedDate">Select a date</h2>
+                    <p class="selected-weekday" id="selectedWeekday">Click on a date to view events</p>
+                </div>
+                <div class="day-events" id="dayEvents">
+                    <div class="loading">Select a date to view events</div>
+                </div>
+                <div class="day-summary">
+                    <div class="summary-stat">
+                        <span class="stat-number" id="eventCount">0</span>
+                        <span class="stat-label">events</span>
+                    </div>
+                    <div class="summary-stat">
+                        <span class="stat-number" id="freeHours">8</span>
+                        <span class="stat-label">free hours</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chat Overlay -->
+    <div class="chat-overlay" id="chatOverlay">
+        <div class="chat-window">
+            <div class="chat-header">
+                <div class="chat-title">
+                    <div class="mini-orb-chat"></div>
+                    <span>Chat with Zoe</span>
+                </div>
+                <button class="close-chat-btn" onclick="closeChatWindow()">×</button>
+            </div>
+            <div class="chat-messages" id="chatMessages">
+                <div class="message zoe-message">
+                    Hi! I can help you add events to your calendar. Just tell me what you'd like to schedule!
+                </div>
+            </div>
+            <div class="chat-input-container">
+                <div class="chat-input-group">
+                    <input type="text" class="chat-input" placeholder="Schedule dinner tomorrow at 7pm..." id="chatInputField" onkeypress="handleChatKeypress(event)">
+                    <button class="voice-btn" onclick="startVoiceInput()" title="Voice input">🎤</button>
+                    <button class="send-btn" onclick="sendChatMessage()" title="Send message">📤</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Floating Add Event Button -->
+    <button class="floating-add-btn" onclick="addEventViaChat()" title="Add event with AI">+</button>
+
+    <script>
+        // Configuration
+        const API_BASE = 'http://192.168.1.60:8000';
+        
+        // Global state
+        let currentDate = new Date();
+        let selectedDate = null;
+        let allEvents = [];
+        let apiConnected = false;
+        
+        // DOM elements
+        const navApiStatus = document.getElementById('navApiStatus');
+
+        // Utility functions
+        function formatDate(date) {
+            return date.toISOString().split('T')[0];
+        }
+
+        function formatDisplayDate(dateStr) {
+            const date = new Date(dateStr + 'T00:00:00');
+            return date.toLocaleDateString('en-GB', {
+                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+            });
+        }
+
+        function formatTime(timeStr) {
+            if (!timeStr) return '';
+            const [hours, minutes] = timeStr.split(':');
+            const hour12 = hours % 12 || 12;
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            return `${hour12}:${minutes} ${ampm}`;
+        }
+
+        function updateApiStatus(connected, message = '') {
+            apiConnected = connected;
+            if (connected) {
+                navApiStatus.className = 'api-indicator online';
+                navApiStatus.textContent = '✅ Online';
+            } else {
+                navApiStatus.className = 'api-indicator offline';
+                navApiStatus.textContent = '❌ Offline';
+            }
+        }
+
+        // API functions
+        async function apiCall(endpoint, method = 'GET', data = null) {
+            try {
+                const options = {
+                    method,
+                    headers: { 'Content-Type': 'application/json' },
+                };
+                if (data) {
+                    options.body = JSON.stringify(data);
+                }
+                const response = await fetch(`${API_BASE}${endpoint}`, options);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return await response.json();
+            } catch (error) {
+                console.error(`API call failed: ${endpoint}`, error);
+                throw error;
+            }
+        }
+
+        async function testApiConnection() {
+            try {
+                await apiCall('/health');
+                updateApiStatus(true);
+                return true;
+            } catch (error) {
+                updateApiStatus(false, 'Cannot reach Zoe backend');
+                return false;
+            }
+        }
+
+        async function loadEvents() {
+            try {
+                const data = await apiCall('/api/events');
+                allEvents = data.events || [];
+                updateCalendar();
+                console.log(`✅ Loaded ${allEvents.length} events from API`);
+                return true;
+            } catch (error) {
+                console.error('Error loading events:', error);
+                return false;
+            }
+        }
+
+        async function sendApiChatMessage(message) {
+            try {
+                const data = await apiCall('/api/chat', 'POST', { message });
+                return data;
+            } catch (error) {
+                throw error;
+            }
+        }
+
+        // Time updates
+        function updateTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { 
+                hour: 'numeric', minute: '2-digit', hour12: true 
+            });
+            const dateString = now.toLocaleDateString([], { 
+                weekday: 'long', month: 'long', day: 'numeric' 
+            });
+            document.getElementById('currentTime').textContent = timeString;
+            document.getElementById('currentDate').textContent = dateString;
+        }
+
+        // Calendar functions
+        function updateCalendar() {
+            updateCalendarHeader();
+            generateCalendarGrid();
+            if (selectedDate) {
+                updateDayView(selectedDate);
+            }
+        }
+
+        function updateCalendarHeader() {
+            const monthNames = [
+                'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'
+            ];
+            const monthYear = `${monthNames[currentDate.getMonth()]} ${currentDate.getFullYear()}`;
+            document.getElementById('currentMonth').textContent = monthYear;
+        }
+
+        function generateCalendarGrid() {
+            const grid = document.getElementById('calendarGrid');
+            grid.innerHTML = '';
+            
+            // Day headers
+            const dayHeaders = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            dayHeaders.forEach(day => {
+                const headerDiv = document.createElement('div');
+                headerDiv.className = 'day-header';
+                headerDiv.textContent = day;
+                grid.appendChild(headerDiv);
+            });
+            
+            // Get first day of month and number of days
+            const firstDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+            const startDate = new Date(firstDay);
+            startDate.setDate(startDate.getDate() - firstDay.getDay());
+            
+            // Generate calendar days
+            const today = new Date();
+            const todayStr = formatDate(today);
+            
+            for (let i = 0; i < 42; i++) {
+                const cellDate = new Date(startDate);
+                cellDate.setDate(startDate.getDate() + i);
+                
+                const cellDateStr = formatDate(cellDate);
+                const isCurrentMonth = cellDate.getMonth() === currentDate.getMonth();
+                const isToday = cellDateStr === todayStr;
+                const hasEvents = allEvents.some(event => event.date === cellDateStr || event.start_date === cellDateStr);
+                
+                const dayDiv = document.createElement('div');
+                dayDiv.className = 'calendar-day';
+                if (isToday) dayDiv.classList.add('today');
+                if (hasEvents) dayDiv.classList.add('has-event');
+                if (!isCurrentMonth) dayDiv.classList.add('other-month');
+                if (selectedDate === cellDateStr) dayDiv.classList.add('selected');
+                
+                dayDiv.textContent = cellDate.getDate();
+                dayDiv.onclick = () => selectDate(cellDateStr);
+                
+                grid.appendChild(dayDiv);
+            }
+        }
+
+        function selectDate(dateStr) {
+            selectedDate = dateStr;
+            
+            // Update selected state
+            document.querySelectorAll('.calendar-day').forEach(d => d.classList.remove('selected'));
+            document.querySelectorAll('.calendar-day').forEach(d => {
+                if (d.textContent == new Date(dateStr + 'T00:00:00').getDate() && 
+                    !d.classList.contains('other-month')) {
+                    d.classList.add('selected');
+                }
+            });
+            updateDayView(dateStr);
+        }
+
+        function updateDayView(dateStr) {
+            const selectedDateEl = document.getElementById('selectedDate');
+            const selectedWeekdayEl = document.getElementById('selectedWeekday');
+            const dayEventsEl = document.getElementById('dayEvents');
+            const eventCountEl = document.getElementById('eventCount');
+            const freeHoursEl = document.getElementById('freeHours');
+            
+            const dateObj = new Date(dateStr + 'T00:00:00');
+            const today = formatDate(new Date());
+            const isToday = dateStr === today;
+            
+            if (isToday) {
+                selectedDateEl.textContent = 'Today';
+            } else {
+                selectedDateEl.textContent = dateObj.toLocaleDateString('en-US', { 
+                    month: 'short', day: 'numeric' 
+                });
+            }
+            
+            selectedWeekdayEl.textContent = dateObj.toLocaleDateString('en-US', { weekday: 'long' });
+            
+            const dayEvents = allEvents.filter(event => 
+                (event.date === dateStr) || (event.start_date === dateStr)
+            );
+            
+            if (dayEvents.length === 0) {
+                dayEventsEl.innerHTML = '<div class="no-events">No events scheduled</div>';
+            } else {
+                let html = '';
+                dayEvents.forEach(event => {
+                    const category = event.category || 'personal';
+                    const timeStr = event.time || event.start_time;
+                    html += `
+                        <div class="event-item" onclick="editEvent('${event.id}')">
+                            ${timeStr ? `<div class="event-time">${formatTime(timeStr)}</div>` : ''}
+                            <div class="event-title">${event.title}</div>
+                            <span class="event-category category-${category}">${category}</span>
+                        </div>
+                    `;
+                });
+                dayEventsEl.innerHTML = html;
+            }
+            
+            eventCountEl.textContent = dayEvents.length;
+            freeHoursEl.textContent = Math.max(0, 8 - dayEvents.length);
+        }
+
+        function previousMonth() {
+            currentDate.setMonth(currentDate.getMonth() - 1);
+            updateCalendar();
+        }
+
+        function nextMonth() {
+            currentDate.setMonth(currentDate.getMonth() + 1);
+            updateCalendar();
+        }
+
+        // Chat functions
+        function addEventViaChat() {
+            const chatOverlay = document.getElementById('chatOverlay');
+            chatOverlay.classList.add('active');
+            setTimeout(() => {
+                document.getElementById('chatInputField').focus();
+            }, 300);
+        }
+
+        function closeChatWindow() {
+            const chatOverlay = document.getElementById('chatOverlay');
+            chatOverlay.classList.remove('active');
+        }
+
+        function addMessageToChat(content, isUser = false) {
+            const chatMessages = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = isUser ? 'message user-message' : 'message zoe-message';
+            messageDiv.textContent = content;
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function addEventCreatedNotification(event) {
+            const chatMessages = document.getElementById('chatMessages');
+            const notificationDiv = document.createElement('div');
+            notificationDiv.className = 'event-created-notification';
+            notificationDiv.innerHTML = `
+                ✅ <strong>Event Created:</strong> ${event.title}<br>
+                📅 ${formatDisplayDate(event.date || event.start_date)}
+                ${event.time || event.start_time ? ` at ${formatTime(event.time || event.start_time)}` : ''}
+                ${event.category ? ` (${event.category})` : ''}
+            `;
+            chatMessages.appendChild(notificationDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        async function sendChatMessage() {
+            const input = document.getElementById('chatInputField');
+            const message = input.value.trim();
+            
+            if (!message) return;
+            if (!apiConnected) {
+                addMessageToChat('❌ Cannot send message - API not connected', false);
+                return;
+            }
+            
+            addMessageToChat(message, true);
+            input.value = '';
+            
+            try {
+                const response = await sendApiChatMessage(message);
+                addMessageToChat(response.response || 'Message received!', false);
+                
+                if (response.event_created) {
+                    addEventCreatedNotification(response.event_created);
+                    await loadEvents();
+                }
+            } catch (error) {
+                addMessageToChat('Sorry, I encountered an error. Please try again.', false);
+                console.error('Chat error:', error);
+            }
+        }
+
+        function handleChatKeypress(event) {
+            if (event.key === 'Enter') {
+                sendChatMessage();
+            }
+        }
+
+        function startVoiceInput() {
+            addMessageToChat('🎤 Voice input not yet implemented. Type your message instead!', false);
+        }
+
+        function editEvent(eventId) {
+            console.log('Edit event:', eventId);
+        }
+
+        // Event listeners
+        document.getElementById('chatOverlay').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeChatWindow();
+            }
+        });
+
+        // Initialize the application
+        async function initializeApp() {
+            console.log('🚀 Initializing Direct Calendar View...');
+            
+            updateTime();
+            setInterval(updateTime, 60000);
+            
+            const connected = await testApiConnection();
+            
+            if (connected) {
+                await loadEvents();
+                selectedDate = formatDate(new Date());
+                updateCalendar();
+                console.log('✅ Calendar initialized successfully!');
+            } else {
+                console.log('⚠️ Calendar initialized in offline mode');
+                updateCalendarHeader();
+                generateCalendarGrid();
+            }
+        }
+
+        // Auto-refresh events every 30 seconds if connected
+        setInterval(async () => {
+            if (apiConnected) {
+                await loadEvents();
+            }
+        }, 30000);
+
+        // Auto-test API connection every 10 seconds if disconnected
+        setInterval(async () => {
+            if (!apiConnected) {
+                const connected = await testApiConnection();
+                if (connected) {
+                    await loadEvents();
+                }
+            }
+        }, 10000);
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', initializeApp);
+    </script>
+</body>
+</html>

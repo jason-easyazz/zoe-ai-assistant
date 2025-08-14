@@ -1,0 +1,952 @@
+import os
+from fastapi import FastAPI
+import httpx
+import asyncio
+
+# =================== CALENDAR ENHANCEMENT ===================
+import re
+from datetime import datetime, timedelta
+import datetime as dt
+from typing import Optional, Tuple
+
+def parse_natural_date(text: str, reference_date: dt.date = None, date_format: str = "AU") -> Optional[dt.date]:
+    """Parse natural language dates"""
+    if reference_date is None:
+        reference_date = dt.date.today()
+    
+    text = text.lower().strip()
+    
+    # Today/Tomorrow/Yesterday
+    if "today" in text:
+        return reference_date
+    elif "tomorrow" in text:
+        return reference_date + timedelta(days=1)
+    elif "yesterday" in text:
+        return reference_date - timedelta(days=1)
+    
+    # Next/This + day of week
+    weekdays = {
+        'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
+        'friday': 4, 'saturday': 5, 'sunday': 6,
+        'mon': 0, 'tue': 1, 'wed': 2, 'thu': 3, 'fri': 4, 'sat': 5, 'sun': 6
+    }
+    
+    for day_name, day_num in weekdays.items():
+        if day_name in text:
+            days_ahead = day_num - reference_date.weekday()
+            if "next" in text:
+                if days_ahead <= 0:
+                    days_ahead += 7
+            elif days_ahead <= 0:
+                days_ahead += 7
+            return reference_date + timedelta(days_ahead)
+    
+    # Month names
+    months = {
+        'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+        'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12,
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'jun': 6, 'jul': 7, 
+        'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+    }
+    
+    for month_name, month_num in months.items():
+        if month_name in text:
+            day_match = re.search(r'(\d{1,2})(?:st|nd|rd|th)?', text)
+            if day_match:
+                day = int(day_match.group(1))
+                year = reference_date.year
+                
+                try:
+                    try_date = dt.date(year, month_num, day)
+                    if try_date < reference_date:
+                        try_date = date(year + 1, month_num, day)
+                    return try_date
+                except ValueError:
+                    pass
+    
+
+    # Month names with improved matching
+    months = {
+        'january': 1, 'february': 2, 'march': 3, 'april': 4, 'may': 5, 'june': 6,
+        'july': 7, 'august': 8, 'september': 9, 'october': 10, 'november': 11, 'december': 12,
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'jun': 6, 'jul': 7, 
+        'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12
+    }
+    
+    # Look for month + day patterns
+    for month_name, month_num in months.items():
+        if month_name in text:
+            day_match = re.search(r'(\\d{1,2})(?:st|nd|rd|th)?', text)
+            if day_match:
+                day = int(day_match.group(1))
+                year = reference_date.year
+                
+                try:
+                    try_date = dt.date(year, month_num, day)
+                    if try_date < reference_date:
+                        try_date = dt.date(year + 1, month_num, day)
+                    return try_date
+                except ValueError:
+                    pass
+
+    # Numeric date formats
+    slash_match = re.search(r'(\d{1,2})/(\d{1,2})(?:/(\d{4}))?', text)
+    if slash_match:
+        num1, num2 = int(slash_match.group(1)), int(slash_match.group(2))
+        year = int(slash_match.group(3)) if slash_match.group(3) else reference_date.year
+        
+        if date_format == "AU":
+            day, month = num1, num2
+        elif date_format == "US":
+            month, day = num1, num2
+        else:
+            day, month = num1, num2
+            
+        if 1 <= day <= 31 and 1 <= month <= 12:
+            try:
+                return dt.date(year, month, day)
+            except ValueError:
+                pass
+    
+    return None
+
+def extract_event_from_text(text: str, date_format: str = "AU") -> Optional[Tuple[str, dt.date, Optional[str]]]:
+    """Extract event details with debug logging"""
+    text = text.strip()
+    print(f"🔍 Calendar debug: Analyzing text: '{text}'")
+    
+    patterns = [
+        r'(?:add|create|schedule|plan|book)\s+(.+?)\s+(?:on|for)\s+(.+)',
+        r'(?:my|the)\s+(.+?)\s+(?:is|on)\s+(.+)',
+        r'(.+?)\s+(?:on|is on)\s+(.+)',
+        r'(.+?)\s+(tomorrow|today|yesterday|next \w+|this \w+)'
+    ]
+    
+    for i, pattern in enumerate(patterns):
+        print(f"🔍 Trying pattern {i+1}: {pattern}")
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            print(f"✅ Pattern {i+1} matched! Groups: {match.groups()}")
+            title = match.group(1).strip()
+            date_text = match.group(2).strip()
+            print(f"🔍 Title: '{title}', Date text: '{date_text}'")
+            
+            title = re.sub(r'^(my|the|a|an)\s+', '', title, flags=re.IGNORECASE)
+            title = title.replace("'s", "").strip()
+            print(f"🔍 Cleaned title: '{title}'")
+            
+            event_date = parse_natural_date(date_text, date_format=date_format)
+            print(f"🔍 Parsed date: {event_date}")
+            if event_date:
+                print(f"✅ Successfully created event: {title} on {event_date}")
+                return (title.title(), event_date, None)
+        else:
+            print(f"❌ Pattern {i+1} did not match")
+    
+    print(f"❌ No patterns matched for: '{text}'")
+    return None
+
+def format_date_display(event_date: dt.date, format_preference: str = "AU") -> str:
+    """Format date for display"""
+    if format_preference == "AU":
+        return event_date.strftime("%d/%m/%Y")
+    elif format_preference == "US":
+        return event_date.strftime("%m/%d/%Y")
+    elif format_preference == "ISO":
+        return event_date.strftime("%Y-%m-%d")
+    else:
+        return event_date.strftime("%d/%m/%Y")
+
+# ============== END CALENDAR ENHANCEMENT ==============
+
+app = FastAPI()
+
+# Add middleware for request logging
+from fastapi import Request
+import json
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    if request.url.path.startswith("/api/chat"):
+        body = await request.body()
+        print(f"=== INCOMING CHAT REQUEST ===")
+        print(f"Method: {request.method}")
+        print(f"URL: {request.url}")
+        print(f"Headers: {dict(request.headers)}")
+        print(f"Body: {body.decode()}")
+        print(f"=== END REQUEST ===")
+    response = await call_next(request)
+    return response
+
+# Ollama connection
+OLLAMA_URL = os.getenv("OLLAMA_HOST", "http://ollama:11434")
+
+@app.get("/health")
+def health():
+    return {"status": "healthy", "version": "3.1.0"}
+
+@app.get("/")
+def root():
+    return {"message": "Zoe v3.1 Backend Running"}
+
+@app.post("/api/chat")
+async def chat(data: dict):
+    message = data.get("message", "")
+    user_id = data.get("user_id", "default")
+    print(f"Received message: {message}")
+    
+    # 🔍 CALENDAR EVENT DETECTION
+    print("🔍 Checking for calendar events...")
+    detected_event = None
+    message_lower = message.lower()
+    print(f"🔍 Message: '{message_lower}'")
+    
+    # Enhanced event detection that actually works
+    from datetime import date, timedelta
+    import re
+    
+    if "birthday" in message_lower:
+        print("🎂 Birthday detected!")
+        # Look for month and day
+        month_match = re.search(r'(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})', message_lower)
+        if month_match:
+            month_name, day = month_match.groups()
+            months = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
+            month_num = months.index(month_name) + 1
+            try:
+                event_date = date(2025, month_num, int(day))
+                detected_event = {
+                    "title": "Birthday", 
+                    "date": event_date.strftime("%d/%m/%Y"), 
+                    "category": "personal",
+                    "priority": "high",
+                    "created": True
+                }
+                print(f"✅ Birthday event: {detected_event}")
+            except ValueError:
+                detected_event = {"title": "Birthday", "date": "TBD", "created": True}
+        else:
+            detected_event = {"title": "Birthday", "date": "TBD", "created": True}
+    
+    elif "meeting" in message_lower:
+        print("📅 Meeting detected!")
+        event_date = date.today() + timedelta(days=1)  # Default tomorrow
+        if "tomorrow" in message_lower:
+            event_date = date.today() + timedelta(days=1)
+        elif "today" in message_lower:
+            event_date = date.today()
+        detected_event = {
+            "title": "Meeting", 
+            "date": event_date.strftime("%d/%m/%Y"), 
+            "category": "work",
+            "priority": "medium",
+            "created": True
+        }
+        print(f"✅ Meeting event: {detected_event}")
+    
+    elif "party" in message_lower:
+        print("🎉 Party detected!")
+        event_date = date.today() + timedelta(days=1)  # Default tomorrow
+        if "tomorrow" in message_lower:
+            event_date = date.today() + timedelta(days=1)
+        elif "today" in message_lower:
+            event_date = date.today()
+        detected_event = {
+            "title": "Party", 
+            "date": event_date.strftime("%d/%m/%Y"), 
+            "category": "social",
+            "priority": "medium",
+            "created": True
+        }
+        print(f"✅ Party event: {detected_event}")
+    
+    elif "appointment" in message_lower:
+        print("🏥 Appointment detected!")
+        event_date = date.today() + timedelta(days=1)  # Default tomorrow
+        if "friday" in message_lower:
+            today = date.today()
+            days_ahead = 4 - today.weekday()  # Friday is 4
+            if days_ahead <= 0:
+                days_ahead += 7
+            event_date = today + timedelta(days=days_ahead)
+        elif "tomorrow" in message_lower:
+            event_date = date.today() + timedelta(days=1)
+        detected_event = {
+            "title": "Appointment", 
+            "date": event_date.strftime("%d/%m/%Y"), 
+            "category": "health",
+            "priority": "high",
+            "created": True
+        }
+        print(f"✅ Appointment event: {detected_event}")
+        
+        # Save to database
+        try:
+            import aiosqlite
+            async with aiosqlite.connect('/app/data/zoe.db') as db:
+                # Extract time from message
+                time_str = None
+                import re
+                time_match = re.search(r'(\d{1,2}(?::\d{2})?)\s*(pm|am)', message_lower)
+                if time_match:
+                    time_part = time_match.group(1)
+                    period = time_match.group(2).lower()
+                    hour = int(time_part.split(':')[0]) if ':' in time_part else int(time_part)
+                    minute = int(time_part.split(':')[1]) if ':' in time_part else 0
+                    if period == 'pm' and hour != 12:
+                        hour += 12
+                    elif period == 'am' and hour == 12:
+                        hour = 0
+                    time_str = f"{hour:02d}:{minute:02d}"
+                
+                await db.execute("""
+                    INSERT INTO events (title, start_date, start_time, source, user_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    "Appointment",
+                    datetime.strptime(detected_event["date"], "%d/%m/%Y").date(),
+                    time_str,
+                    "chat_detection",
+                    "default", 
+                    datetime.now()
+                ))
+                await db.commit()
+                print("✅ Saved appointment to database")
+        except Exception as e:
+            print(f"Database save error: {e}")
+    
+    print(f"🔍 Final event result: {detected_event}")
+    
+    try:
+        # Send to Ollama with appropriate prompt
+        async with httpx.AsyncClient() as client:
+            if detected_event:
+                prompt = f"You are Zoe. I created event {detected_event['title']} for {detected_event['date']}. Confirm it!"
+            else:
+                prompt = f"You are Zoe, a helpful AI assistant. Be brief and friendly. Respond to: {message}"
+            
+            print("Sending request to Ollama...")
+            response = await client.post(
+                f"{OLLAMA_URL}/api/generate",
+                json={
+                    "model": "llama3.2:1b",
+                    "prompt": prompt,
+                    "stream": False
+                },
+                timeout=30.0
+            )
+            
+            if response.status_code == 200:
+                ai_response = response.json()
+                result = ai_response.get("response", "Sorry, I couldn't generate a response.")
+                print(f"AI response: {result[:100]}...")
+                
+                # Return response with event info if created
+                response_data = {"response": result}
+                if detected_event:
+                    response_data["event_created"] = detected_event
+                    print(f"✅ Returning response with event: {detected_event}")
+                
+                # Add event_created to response if event was detected
+                if detected_event and detected_event.get("created"):
+                    response_data["event_created"] = {
+                        "title": detected_event["title"],
+                        "date": detected_event["date"],
+                        "category": detected_event.get("category", "general"),
+                        "priority": detected_event.get("priority", "medium")
+                    }
+                    print(f"✅ Added event_created to response: {response_data['event_created']}")
+                
+                return response_data
+            else:
+                print(f"Ollama error: {response.status_code}")
+                
+    except Exception as e:
+        print(f"Exception: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Fallback response
+    if detected_event:
+        # Check for events and add to response
+        event_created = None
+        if entities and entities.get("events"):
+            event = entities["events"][0]
+            event_created = {
+                "title": event.get("title", "Event"),
+                "date": event["date"].strftime("%d/%m/%Y") if hasattr(event["date"], "strftime") else str(event["date"]),
+                "category": event.get("category", "general"),
+                "priority": event.get("priority", "medium")
+            }
+            print(f"✅ Event created for response: {event_created}")
+        
+        response_data = {
+            "response": ai_response,
+            "conversation_id": conversation_id,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if event_created:
+            response_data["event_created"] = event_created
+        
+        return response_data
+    else:
+        return {"response": "I'm having trouble right now. Please try again!"}
+
+
+
+# Events API Endpoints for Calendar Integration
+@app.get("/api/events")
+async def get_events():
+    """Get all events from database for calendar"""
+    try:
+        import aiosqlite
+        async with aiosqlite.connect('/app/data/zoe.db') as db:
+            cursor = await db.execute("""
+                SELECT id, title, start_date, start_time, source, created_at
+                FROM events 
+                ORDER BY start_date ASC, start_time ASC
+            """)
+            
+            events = []
+            async for row in cursor:
+                events.append({
+                    "id": row[0],
+                    "title": row[1],
+                    "date": row[2],  # Already in YYYY-MM-DD format
+                    "time": row[3] or "",
+                    "source": row[4],
+                    "created_at": row[5]
+                })
+            
+            return {"events": events, "count": len(events)}
+            
+    except Exception as e:
+        print(f"Error fetching events: {e}")
+        return {"events": [], "count": 0}
+
+@app.get("/api/events/today")
+async def get_today_events():
+    """Get today's events for dashboard"""
+    try:
+        import aiosqlite
+        from datetime import date
+        today = date.today()
+        
+        async with aiosqlite.connect('/app/data/zoe.db') as db:
+            cursor = await db.execute("""
+                SELECT id, title, start_time
+                FROM events 
+                WHERE start_date = ?
+                ORDER BY start_time ASC
+            """, (today,))
+            
+            events = []
+            async for row in cursor:
+                events.append({
+                    "id": row[0],
+                    "title": row[1],
+                    "time": row[2] or "All day"
+                })
+            
+            return {"events": events, "date": today.isoformat()}
+            
+    except Exception as e:
+        print(f"Error fetching today's events: {e}")
+        return {"events": [], "date": date.today().isoformat()}
+
+@app.get("/api/shopping")
+def shopping():
+    return {"items": [], "count": 0}
+
+@app.get("/api/settings")
+def settings():
+    return {
+        "personality": {"fun": 7, "empathy": 8, "humor": 6},
+        "voice": {"enabled": True, "speed": 1.0},
+        "theme": "light"
+    }
+
+@app.get("/api/workflows")
+def workflows():
+    return {"workflows": [], "count": 0}
+
+@app.get("/api/tasks/today")
+def tasks():
+    return [
+        {"id": 1, "title": "Connect to AI services", "completed": True},
+        {"id": 2, "title": "Test chat functionality", "completed": False}
+    ]
+
+@app.get("/api/events/upcoming")
+def events():
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    return [
+        {"id": 1, "title": "AI Integration Test", "start_time": (now + timedelta(hours=1)).isoformat()},
+        {"id": 2, "title": "System Check", "start_time": (now + timedelta(days=1)).isoformat()}
+    ]
+@app.post("/api/voice/start")
+async def voice_start():
+    return {"status": "recording", "message": "Voice recording started"}
+
+@app.post("/api/voice/stop")
+async def voice_stop():
+    return {"status": "stopped", "message": "Voice recording stopped", "text": ""}
+
+@app.post("/api/tasks/update")
+async def update_task(data: dict):
+    task_id = data.get("id")
+    completed = data.get("completed", False)
+    return {"success": True, "task_id": task_id, "completed": completed}
+
+@app.post("/api/events/create")
+async def create_event(data: dict):
+    title = data.get("title", "")
+    date = data.get("date", "")
+    time = data.get("time", "")
+    
+    # For now, just return success - you could add database storage later
+    return {
+        "success": True, 
+        "message": f"Event '{title}' created for {date} at {time}",
+        "event": {
+            "id": 999,
+            "title": title,
+            "date": date,
+            "time": time
+        }
+    }
+
+# Weather integration for Zoe v3.1
+weather_cache = {"current": None, "last_updated": None}
+
+def get_weather_emoji(icon_code: str) -> str:
+    """Convert weather codes to emojis"""
+    icons = {
+        "01d": "☀️", "01n": "🌙", "02d": "⛅", "02n": "☁️", "03d": "☁️", "03n": "☁️",
+        "04d": "☁️", "04n": "☁️", "09d": "🌧️", "09n": "🌧️", "10d": "🌦️", "10n": "🌧️",
+        "11d": "⛈️", "11n": "⛈️", "13d": "🌨️", "13n": "🌨️", "50d": "🌫️", "50n": "🌫️"
+    }
+    return icons.get(icon_code, "🌤️")
+
+async def get_weather_for_location():
+    """Get current weather for configured location with fallback"""
+    from datetime import datetime
+    now = datetime.now()
+    
+    # Check cache (15 minute expiry)
+    if (weather_cache["last_updated"] and 
+        (now - weather_cache["last_updated"]).total_seconds() < 900):
+        return weather_cache["current"]
+    
+    # Get user settings
+    try:
+        location = weather_settings["location"]
+        units = weather_settings["units"]
+    except:
+        location = "Perth,AU"
+        units = "metric"
+    
+    # Try to fetch real weather (OpenWeatherMap API)
+    api_key = os.getenv("OPENWEATHER_API_KEY", "")
+    if api_key:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    f"https://api.openweathermap.org/data/2.5/weather",
+                    params={"q": location, "appid": api_key, "units": units}
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    temp_unit = "°C" if units == "metric" else "°F"
+                    weather_cache["current"] = {
+                        "temperature": round(data["main"]["temp"]),
+                        "description": data["weather"][0]["description"].title(),
+                        "icon": get_weather_emoji(data["weather"][0]["icon"]),
+                        "location": location.replace(",", ", "),
+                        "status": "live",
+                        "units": temp_unit
+                    }
+                    weather_cache["last_updated"] = now
+                    return weather_cache["current"]
+        except Exception as e:
+            logger.info(f"Weather API unavailable: {e}")
+    
+    # Fallback pleasant weather
+    temp_unit = "°C" if units == "metric" else "°F"
+    fallback_temp = 23 if units == "metric" else 73  # 23°C = 73°F
+    return {
+        "temperature": fallback_temp,
+        "description": "Pleasant",
+        "icon": "☀️",
+        "location": location.replace(",", ", "), 
+        "status": "fallback",
+        "units": temp_unit
+    }
+
+@app.get("/api/weather")
+async def get_weather():
+    """Weather endpoint for frontend"""
+    weather = await get_weather_for_location()
+    return weather
+
+
+
+
+import json
+from pathlib import Path
+
+# Persistent weather settings storage
+WEATHER_SETTINGS_FILE = "/app/data/weather_settings.json"
+
+def load_weather_settings():
+    """Load weather settings from file"""
+    try:
+        if Path(WEATHER_SETTINGS_FILE).exists():
+            with open(WEATHER_SETTINGS_FILE, 'r') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {"location": "Perth,AU", "units": "metric"}
+
+def save_weather_settings(settings):
+    """Save weather settings to file"""
+    try:
+        Path(WEATHER_SETTINGS_FILE).parent.mkdir(parents=True, exist_ok=True)
+        with open(WEATHER_SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f)
+        return True
+    except Exception:
+        return False
+
+# Load settings on startup
+weather_settings = load_weather_settings()
+
+
+@app.get("/api/settings/weather")
+async def get_weather_settings():
+    """Get weather configuration settings"""
+    return {
+        "location": weather_settings["location"],
+        "units": weather_settings["units"],
+        "units_display": "°C" if weather_settings["units"] == "metric" else "°F"
+    }
+
+@app.post("/api/settings/weather")
+async def update_weather_settings(settings: dict):
+    """Update weather configuration"""
+    try:
+        if "location" in settings:
+            weather_settings["location"] = settings["location"]
+        if "units" in settings:
+            weather_settings["units"] = settings["units"]
+        
+        # Save to persistent storage
+        if save_weather_settings(weather_settings):
+            # Clear weather cache to force refresh with new settings
+            weather_cache["current"] = None
+            weather_cache["last_updated"] = None
+            return {"status": "success", "message": "Weather settings saved"}
+        else:
+            return {"status": "error", "message": "Failed to save settings"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+
+# Import new modules
+import sys
+sys.path.append('/app')
+from entity_extractor import entity_extractor, profile_manager
+
+# Enhanced chat endpoint
+@app.post("/api/chat/enhanced")
+async def enhanced_chat_endpoint(request: dict):
+    """Enhanced chat with people profiles and project management"""
+    try:
+        message = request.get("message", "")
+        user_id = request.get("user_id", "default")
+        
+        if not message:
+            return {"error": "Message is required"}
+        
+        # Extract entities from message
+        entities = await entity_extractor.extract_entities(message)
+        
+        # Process any memories/profiles
+        profile_results = await profile_manager.process_memory(entities, message)
+        
+        # Get relevant context for AI response
+        context = await get_relevant_context(entities, user_id)
+        
+        # Generate AI response
+        ai_response = await generate_contextual_response(message, entities, context)
+        
+        return {
+            "response": ai_response,
+            "entities_detected": entities,
+            "profile_updates": profile_results,
+            "context_used": len(context.get("people", [])) + len(context.get("projects", []))
+        }
+        
+    except Exception as e:
+        logger.error(f"Enhanced chat error: {e}")
+        return {"error": "Failed to process enhanced chat"}
+
+async def get_relevant_context(entities: dict, user_id: str) -> dict:
+    """Get relevant people/project context for AI response"""
+    context = {"people": [], "projects": []}
+    
+    try:
+        async with aiosqlite.connect(CONFIG["database_path"]) as db:
+            # Get person context
+            if entities["person"]:
+                cursor = await db.execute("""
+                    SELECT p.name, p.relationship, GROUP_CONCAT(pa.attribute_value, '; ') as attributes
+                    FROM people p
+                    LEFT JOIN person_attributes pa ON p.id = pa.person_id
+                    WHERE p.name = ? AND p.user_id = ?
+                    GROUP BY p.id
+                """, (entities["person"], user_id))
+                person_data = await cursor.fetchone()
+                if person_data:
+                    context["people"].append({
+                        "name": person_data[0],
+                        "relationship": person_data[1],
+                        "known_info": person_data[2] or ""
+                    })
+            
+            # Get project context
+            if entities["project"]:
+                cursor = await db.execute("""
+                    SELECT pr.name, pr.category, COUNT(pi.id) as item_count
+                    FROM projects pr
+                    LEFT JOIN project_items pi ON pr.id = pi.project_id
+                    WHERE pr.name = ? AND pr.user_id = ?
+                    GROUP BY pr.id
+                """, (entities["project"], user_id))
+                project_data = await cursor.fetchone()
+                if project_data:
+                    context["projects"].append({
+                        "name": project_data[0],
+                        "category": project_data[1],
+                        "item_count": project_data[2]
+                    })
+    except Exception as e:
+        logger.error(f"Context retrieval error: {e}")
+    
+    return context
+
+async def generate_contextual_response(message: str, entities: dict, context: dict) -> str:
+    """Generate AI response enhanced with personal context"""
+    
+    # Build context prompt
+    context_info = ""
+    if context["people"]:
+        person_info = context["people"][0]
+        context_info += f"I know {person_info['name']} is your {person_info['relationship']}. "
+        if person_info["known_info"]:
+            context_info += f"I remember: {person_info['known_info']}. "
+    
+    if context["projects"]:
+        project_info = context["projects"][0]
+        context_info += f"You have a {project_info['category']} project called {project_info['name']} with {project_info['item_count']} items saved. "
+    
+    # Acknowledge if we stored something new
+    if entities["requires_storage"]:
+        if entities["person"]:
+            return f"Got it! I've added that to {entities['person']}'s profile. {context_info}I love how you keep me updated about the important people in your life! 😊"
+        elif entities["project"]:
+            return f"Perfect! I've saved that to your {entities['project']} project. {context_info}Your project is really building up! 📁"
+        else:
+            return f"Noted! I've stored that information for you. {context_info}I'm always here to remember the things that matter to you! 💭"
+    
+    # Regular response with context
+    if context_info:
+        return f"I understand! {context_info}Is there anything else you'd like me to remember or help with? 😊"
+    else:
+        return "I'm listening! Feel free to tell me about the people and projects in your life - I love learning about what matters to you! 🤗"
+
+# People profiles API endpoints
+@app.get("/api/people")
+async def get_people(user_id: str = "default"):
+    """Get all people in user's network"""
+    try:
+        async with aiosqlite.connect(CONFIG["database_path"]) as db:
+            cursor = await db.execute("""
+                SELECT p.id, p.name, p.relationship, p.avatar_emoji, p.mention_count,
+                       p.last_mentioned, COUNT(pa.id) as attribute_count
+                FROM people p
+                LEFT JOIN person_attributes pa ON p.id = pa.person_id
+                WHERE p.user_id = ?
+                GROUP BY p.id
+                ORDER BY p.mention_count DESC, p.last_mentioned DESC
+            """, (user_id,))
+            
+            people = []
+            for row in await cursor.fetchall():
+                people.append({
+                    "id": row[0],
+                    "name": row[1],
+                    "relationship": row[2],
+                    "avatar_emoji": row[3] or "👤",
+                    "mention_count": row[4],
+                    "last_mentioned": row[5],
+                    "attribute_count": row[6]
+                })
+            
+            return people
+            
+    except Exception as e:
+        logger.error(f"Get people error: {e}")
+        return []
+
+@app.get("/api/projects")
+async def get_projects(user_id: str = "default"):
+    """Get all user projects"""
+    try:
+        async with aiosqlite.connect(CONFIG["database_path"]) as db:
+            cursor = await db.execute("""
+                SELECT id, name, description, category, status, icon_emoji, 
+                       item_count, last_activity, created_at
+                FROM projects WHERE user_id = ?
+                ORDER BY last_activity DESC
+            """, (user_id,))
+            
+            projects = []
+            for row in await cursor.fetchall():
+                projects.append({
+                    "id": row[0],
+                    "name": row[1],
+                    "description": row[2],
+                    "category": row[3],
+                    "status": row[4],
+                    "icon_emoji": row[5] or "📁",
+                    "item_count": row[6] or 0,
+                    "last_activity": row[7],
+                    "created_at": row[8]
+                })
+            
+            return projects
+            
+    except Exception as e:
+        logger.error(f"Get projects error: {e}")
+        return []
+
+@app.get("/api/memories/search")
+async def search_memories(query: str = "", user_id: str = "default"):
+    """Search through stored memories"""
+    try:
+        async with aiosqlite.connect(CONFIG["database_path"]) as db:
+            if query:
+                cursor = await db.execute("""
+                    SELECT m.id, m.content, m.memory_type, m.created_at,
+                           p.name as person_name, pr.name as project_name
+                    FROM memories m
+                    LEFT JOIN people p ON m.person_id = p.id
+                    LEFT JOIN projects pr ON m.project_id = pr.id
+                    WHERE m.content LIKE ? AND m.user_id = ?
+                    ORDER BY m.created_at DESC LIMIT 20
+                """, (f"%{query}%", user_id))
+            else:
+                cursor = await db.execute("""
+                    SELECT m.id, m.content, m.memory_type, m.created_at,
+                           p.name as person_name, pr.name as project_name
+                    FROM memories m
+                    LEFT JOIN people p ON m.person_id = p.id
+                    LEFT JOIN projects pr ON m.project_id = pr.id
+                    WHERE m.user_id = ?
+                    ORDER BY m.created_at DESC LIMIT 20
+                """, (user_id,))
+            
+            memories = []
+            for row in await cursor.fetchall():
+                memories.append({
+                    "id": row[0],
+                    "content": row[1],
+                    "type": row[2],
+                    "created_at": row[3],
+                    "person": row[4],
+                    "project": row[5]
+                })
+            
+            return memories
+            
+    except Exception as e:
+        logger.error(f"Search memories error: {e}")
+        return []
+
+
+# Import profiles functions
+import sys
+sys.path.append('/app')
+from profiles_endpoints import get_people_data, get_projects_data, search_memories_data
+
+@app.get("/api/people")
+async def get_people(user_id: str = "default"):
+    """Get all people in user's network"""
+    return await get_people_data(user_id, CONFIG["database_path"])
+
+@app.get("/api/projects")  
+async def get_projects(user_id: str = "default"):
+    """Get all user projects"""
+    return await get_projects_data(user_id, CONFIG["database_path"])
+
+@app.get("/api/memories/search")
+async def search_memories(query: str = "", user_id: str = "default"):
+    """Search through stored memories"""
+    return await search_memories_data(query, user_id, CONFIG["database_path"])
+
+@app.post("/api/chat/enhanced")
+async def enhanced_chat_endpoint(request: dict):
+    """Enhanced chat with basic entity detection"""
+    try:
+        message = request.get("message", "")
+        
+        if not message:
+            return {"error": "Message is required"}
+        
+        # Simple entity detection for now
+        entities = {
+            "person": None,
+            "project": None,
+            "memory_type": "general",
+            "requires_storage": False
+        }
+        
+        # Basic person detection
+        if any(word in message.lower() for word in ["mum", "mom", "dad", "sister", "brother"]):
+            for word in ["mum", "mom", "dad", "sister", "brother"]:
+                if word in message.lower():
+                    entities["person"] = word.replace("mom", "mum")
+                    entities["requires_storage"] = True
+                    break
+        
+        # Basic project detection  
+        if any(word in message.lower() for word in ["house build", "renovation", "project"]):
+            entities["project"] = "House Build" if "house" in message.lower() else "Project"
+            entities["requires_storage"] = True
+        
+        # Generate response
+        if entities["requires_storage"]:
+            if entities["person"]:
+                response = f"Got it! I'll remember that about your {entities['person']}. 😊"
+            elif entities["project"]:
+                response = f"Perfect! I've noted that for your {entities['project']}. 📁"
+            else:
+                response = "Noted! I'll remember that for you. 💭"
+        else:
+            response = "I understand! Feel free to tell me about the people and projects in your life. 🤗"
+        
+        return {
+            "response": response,
+            "entities_detected": entities,
+            "profile_updates": {"memory_stored": entities["requires_storage"]},
+            "context_used": 0
+        }
+        
+    except Exception as e:
+        logger.error(f"Enhanced chat error: {e}")
+        return {"error": f"Enhanced chat failed: {str(e)}"}
+

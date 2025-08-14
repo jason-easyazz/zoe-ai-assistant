@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Test</title>
+</head>
+<body>
+    <h1>Zoe API Test</h1>
+    <button onclick="testAPI()">Test Events API</button>
+    <div id="result"></div>
+    
+    <script>
+        async function testAPI() {
+            const result = document.getElementById('result');
+            result.innerHTML = 'Testing API...';
+            
+            try {
+                const response = await fetch('/api/events');
+                const data = await response.json();
+                result.innerHTML = `
+                    <h3>API Test Results:</h3>
+                    <p>Status: SUCCESS</p>
+                    <p>Events found: ${data.events ? data.events.length : 0}</p>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                `;
+            } catch (error) {
+                result.innerHTML = `
+                    <h3>API Test Results:</h3>
+                    <p>Status: ERROR</p>
+                    <p>Error: ${error.message}</p>
+                `;
+            }
+        }
+        
+        console.log('API Test page loaded');
+    </script>
+</body>
+</html>
