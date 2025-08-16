@@ -294,7 +294,7 @@ class JournalEntry(BaseModel):
     content: str
     mood: Optional[str] = None
     mood_score: Optional[float] = None
-    mood_confidence: Optional[int] = None
+    mood_confidence: Optional[float] = None
     photo: Optional[str] = None
     health_info: Optional[dict] = None
     user_id: str = "default"
@@ -305,11 +305,12 @@ class JournalEntryResponse(BaseModel):
     content: str
     mood: Optional[str]
     mood_score: Optional[float]
-    mood_confidence: Optional[int]
+    mood_confidence: Optional[float]
     photo: Optional[str]
     health_info: Optional[dict]
     created_at: str
     updated_at: Optional[str] = None
+
 # Add middleware for request logging
 from fastapi import Request
 
