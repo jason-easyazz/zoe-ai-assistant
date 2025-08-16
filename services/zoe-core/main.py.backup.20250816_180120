@@ -723,21 +723,6 @@ async def get_today_events():
         print(f"Error fetching today's events: {e}")
         return {"events": [], "date": date.today().isoformat()}
 
-
-@app.get("/api/shopping")
-async def get_shopping_items():
-    """Get shopping items - guaranteed working version"""
-    try:
-        async with aiosqlite.connect("/app/data/zoe.db") as db:
-            cursor = await db.execute("SELECT id, text, completed FROM shopping_items ORDER BY id ASC")
-            items = await cursor.fetchall()
-            
-            return {
-                "list_id": 1,
-                "items": [{"id": item[0], "text": item[1], "completed": bool(item[2])} for item in items]
-            }
-    except Exception as e:
-        return {"error": str(e)}
 @app.get("/api/shopping")
 def shopping():
     return {"items": [], "count": 0}
@@ -1590,51 +1575,3 @@ async def get_due_notifications(user_id: str = "default"):
         print(f"❌ Error getting due notifications: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@app.post("/api/shopping")
-async def add_shopping_item(request: dict):
-    """Add shopping item"""
-    try:
-        text = request.get("text", "").strip()
-        if not text:
-            return {"error": "Text required"}
-        async with aiosqlite.connect("/app/data/zoe.db") as db:
-            cursor = await db.execute("INSERT INTO shopping_items (list_id, text, completed) VALUES (1, ?, FALSE) RETURNING id", (text,))
-            item_id = (await cursor.fetchone())[0]
-            await db.commit()
-            return {"id": item_id, "text": text, "completed": False, "message": f"Added '{text}'"}
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.put("/api/shopping/{item_id}")
-async def update_shopping_item(item_id: int, request: dict):
-    """Update shopping item"""
-    try:
-        completed = request.get("completed", False)
-        async with aiosqlite.connect("/app/data/zoe.db") as db:
-            await db.execute("UPDATE shopping_items SET completed = ? WHERE id = ?", (completed, item_id))
-            await db.commit()
-            cursor = await db.execute("SELECT text, completed FROM shopping_items WHERE id = ?", (item_id,))
-            item = await cursor.fetchone()
-            if item:
-                return {"id": item_id, "text": item[0], "completed": bool(item[1]), "message": f"Updated '{item[0]}'"}
-            else:
-                return {"error": "Item not found"}
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.delete("/api/shopping/{item_id}")
-async def delete_shopping_item(item_id: int):
-    """Delete shopping item"""
-    try:
-        async with aiosqlite.connect("/app/data/zoe.db") as db:
-            cursor = await db.execute("SELECT text FROM shopping_items WHERE id = ?", (item_id,))
-            item = await cursor.fetchone()
-            if item:
-                await db.execute("DELETE FROM shopping_items WHERE id = ?", (item_id,))
-                await db.commit()
-                return {"message": f"Deleted '{item[0]}'"}
-            else:
-                return {"error": "Item not found"}
-    except Exception as e:
-        return {"error": str(e)}

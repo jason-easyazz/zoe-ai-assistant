@@ -1,0 +1,167 @@
+<!-- settings.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Zoe - Settings</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh; color: #333; font-size: clamp(14px, 1.6vw, 16px);
+        }
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .main-container { 
+            padding: 80px 20px 20px; max-width: 600px; margin: 0 auto; min-height: calc(100vh - 80px);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+        }
+        .coming-soon {
+            text-align: center; padding: 60px 40px;
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 20px;
+        }
+        .coming-soon-icon { font-size: 80px; margin-bottom: 30px; opacity: 0.7; }
+        .coming-soon h1 {
+            font-size: 32px; font-weight: 300; color: #333; margin-bottom: 15px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .coming-soon p { font-size: 16px; color: #666; line-height: 1.6; margin-bottom: 30px; }
+        .back-btn {
+            padding: 12px 24px; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; border: none; border-radius: 12px; font-size: 14px;
+            font-weight: 500; cursor: pointer; transition: all 0.3s ease;
+            text-decoration: none; display: inline-block;
+        }
+        .back-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3); }
+        @media (max-width: 768px) { .nav-menu { display: none; } }
+    </style>
+</head>
+<body>
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
+            <div class="nav-menu">
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="tasks.html" class="nav-item">Tasks</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <a href="shopping.html" class="nav-item">Shopping</a>
+                <a href="workflows.html" class="nav-item">Workflows</a>
+            </div>
+        </div>
+    </div>
+    <div class="main-container">
+        <div class="coming-soon">
+            <div class="coming-soon-icon">⚙️</div>
+            <h1>Settings</h1>
+            <p>Configure Zoe's personality, preferences, and system settings to make her truly yours.</p>
+            <a href="dashboard.html" class="back-btn">← Back to Dashboard</a>
+        </div>
+    </div>
+</body>
+</html>
+
+<!-- memories.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Zoe - Memories</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh; color: #333; font-size: clamp(14px, 1.6vw, 16px);
+        }
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .main-container { 
+            padding: 80px 20px 20px; max-width: 600px; margin: 0 auto; min-height: calc(100vh - 80px);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+        }
+        .coming-soon {
+            text-align: center; padding: 60px 40px;
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 20px;
+        }
+        .coming-soon-icon { font-size: 80px; margin-bottom: 30px; opacity: 0.7; }
+        .coming-soon h1 {
+            font-size: 32px; font-weight: 300; color: #333; margin-bottom: 15px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .coming-soon p { font-size: 16px; color: #666; line-height: 1.6; margin-bottom: 30px; }
+        .back-btn {
+            padding: 12px 24px; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; border: none; border-radius: 12px; font-size: 14px;
+            font-weight: 500; cursor: pointer; transition: all 0.3s ease;
+            text-decoration: none; display: inline-block;
+        }
+        .back-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3); }
+        @media (max-width: 768px) { .nav-menu { display: none; } }
+    </style>
+</head>
+<body>
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
+            <div class="nav-menu">
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="tasks.html" class="nav-item">Tasks</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <a href="shopping.html" class="nav-item">Shopping</a>
+                <a href="workflows.html" class="nav-item">Workflows</a>
+            </div>
+        </div>
+    </div>
+    <div class="main-container">
+        <div class="coming-soon">
+            <div class="coming-soon-icon">🧠</div>
+            <h1>Memories</h1>
+            <p>Browse and manage Zoe's memories about you, including people profiles, important facts, and personal preferences.</p>
+            <a href="dashboard.html" class="back-btn">← Back to Dashboard</a>
+        </div>
+    </div>
+</body>
+</html>
