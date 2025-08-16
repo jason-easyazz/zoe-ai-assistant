@@ -1578,6 +1578,67 @@
             analyzeMood();
         }
 
+
+        // Save entry
+        async function saveEntry() {
+            const title = document.getElementById('entryTitle').value.trim();
+            const content = document.getElementById('entryContent').value.trim();
+
+            if (!title && !content) {
+                alert('Please add a title or write some content!');
+                return;
+            }
+
+            // Get current mood analysis
+            const moodData = analyzeTextMood((title + ' ' + content).toLowerCase());
+
+            // Get health info
+            const healthInfo = isHealthCheckEnabled ? {
+                feeling_unwell: true,
+                symptoms: document.getElementById('symptomsInput').value.trim()
+            } : null;
+
+            if (isEditMode) {
+                // Update existing entry
+                updateEntry(editingEntryId, title, content, moodData, healthInfo);
+                renderEntries();
+                clearForm();
+                exitEditMode();
+                showNotification('Entry updated! ✏️');
+            } else {
+                // Create new entry
+                const newEntry = {
+                    title: title || `Entry ${new Date().toLocaleDateString()}`,
+                    content: content,
+                    mood: moodData.mood,
+                    mood_score: moodData.score,
+                    mood_confidence: moodData.confidence,
+                    photo: uploadedPhoto,
+                    health_info: healthInfo,
+                    createdAt: new Date()
+                };
+
+                try {
+                    const entryId = await saveEntryToBackend(newEntry);
+                    if (entryId) {
+                        newEntry.id = entryId;
+                        entries.unshift(newEntry);
+                        renderEntries();
+                        clearForm();
+                        exitEditMode();
+                        showNotification('Entry saved! 📝');
+                        await loadEntriesFromBackend();
+                    } else {
+                        showNotification('Failed to save entry! ❌');
+                    }
+                } catch (error) {
+                    console.error('Error saving entry:', error);
+                    showNotification('Failed to save entry! ❌');
+                }
+            }
+        }
+
+
         // Update existing entry
         function updateEntry(entryId, title, content, moodData, healthInfo) {
             const entryIndex = entries.findIndex(e => e.id === entryId);
@@ -1677,6 +1738,37 @@
                 card.classList.remove('selected');
             });
         }
+
+
+        // Save entry to backend
+        async function saveEntryToBackend(entry) {
+            try {
+                const response = await fetch('/api/journal', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        title: entry.title,
+                        content: entry.content,
+                        mood: entry.mood,
+                        mood_score: entry.mood_score,
+                        photo: entry.photo,
+                        health_info: entry.health_info,
+                        user_id: 'default'
+                    })
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    return result.id;
+                }
+            } catch (error) {
+                console.error('Error saving journal entry:', error);
+            }
+            return null;
+        }
+
 
         // Update entry in backend
         async function updateEntryInBackend(entryId, title, content, mood, healthInfo) {
