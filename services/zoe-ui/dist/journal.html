@@ -1578,52 +1578,6 @@
             analyzeMood();
         }
 
-        // Save entry
-        function saveEntry() {
-            const title = document.getElementById('entryTitle').value.trim();
-            const content = document.getElementById('entryContent').value.trim();
-            
-            if (!title && !content) {
-                alert('Please add a title or write some content!');
-                return;
-            }
-            
-            // Get current mood analysis
-            const moodData = analyzeTextMood((title + ' ' + content).toLowerCase());
-            
-            // Get health info
-            const healthInfo = isHealthCheckEnabled ? {
-                feeling_unwell: true,
-                symptoms: document.getElementById('symptomsInput').value.trim()
-            } : null;
-
-            if (isEditMode) {
-                // Update existing entry
-                updateEntry(editingEntryId, title, content, moodData, healthInfo);
-            } else {
-                // Create new entry
-                const newEntry = {
-                    id: Date.now(),
-                    title: title || `Entry ${new Date().toLocaleDateString()}`,
-                    content: content,
-                    mood: moodData.mood,
-                    mood_score: moodData.score,
-                    mood_confidence: moodData.confidence,
-                    photo: uploadedPhoto,
-                    health_info: healthInfo,
-                    createdAt: new Date()
-                };
-
-                entries.unshift(newEntry);
-                saveEntryToBackend(newEntry);
-            }
-            
-            renderEntries();
-            clearForm();
-            exitEditMode();
-            showNotification(isEditMode ? 'Entry updated! ✏️' : 'Entry saved! 📝');
-        }
-
         // Update existing entry
         function updateEntry(entryId, title, content, moodData, healthInfo) {
             const entryIndex = entries.findIndex(e => e.id === entryId);
@@ -1722,37 +1676,6 @@
             document.querySelectorAll('.entry-card').forEach(card => {
                 card.classList.remove('selected');
             });
-        }
-
-        // Save entry to backend
-        async function saveEntryToBackend(entry) {
-            try {
-                const response = await fetch('/api/journal', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        title: entry.title,
-                        content: entry.content,
-                        mood: entry.mood,
-                        mood_score: entry.mood_score,
-                        photo: entry.photo,
-                        health_info: entry.health_info,
-                        user_id: 'default'
-                    })
-                });
-                
-                if (response.ok) {
-                    const result = await response.json();
-                    const localEntry = entries.find(e => e.id === entry.id);
-                    if (localEntry && result.id) {
-                        localEntry.id = result.id;
-                    }
-                }
-            } catch (error) {
-                console.error('Error saving journal entry:', error);
-            }
         }
 
         // Update entry in backend
@@ -2170,5 +2093,6 @@ Perfect for daily reflection and wellness tracking! 🌟
         });
 
     </script>
+    <script src="fix_journal.js"></script>
 </body>
 </html>
