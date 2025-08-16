@@ -1579,18 +1579,18 @@
         }
 
         // Save entry
-        function saveEntry() {
+        async function saveEntry() {
             const title = document.getElementById('entryTitle').value.trim();
             const content = document.getElementById('entryContent').value.trim();
-            
+
             if (!title && !content) {
                 alert('Please add a title or write some content!');
                 return;
             }
-            
+
             // Get current mood analysis
             const moodData = analyzeTextMood((title + ' ' + content).toLowerCase());
-            
+
             // Get health info
             const healthInfo = isHealthCheckEnabled ? {
                 feeling_unwell: true,
@@ -1600,10 +1600,13 @@
             if (isEditMode) {
                 // Update existing entry
                 updateEntry(editingEntryId, title, content, moodData, healthInfo);
+                renderEntries();
+                clearForm();
+                exitEditMode();
+                showNotification('Entry updated! ✏️');
             } else {
                 // Create new entry
                 const newEntry = {
-                    id: Date.now(),
                     title: title || `Entry ${new Date().toLocaleDateString()}`,
                     content: content,
                     mood: moodData.mood,
@@ -1614,14 +1617,24 @@
                     createdAt: new Date()
                 };
 
-                entries.unshift(newEntry);
-                saveEntryToBackend(newEntry);
+                try {
+                    const entryId = await saveEntryToBackend(newEntry);
+                    if (entryId) {
+                        newEntry.id = entryId;
+                        entries.unshift(newEntry);
+                        renderEntries();
+                        clearForm();
+                        exitEditMode();
+                        showNotification('Entry saved! 📝');
+                        await loadEntriesFromBackend();
+                    } else {
+                        showNotification('Failed to save entry! ❌');
+                    }
+                } catch (error) {
+                    console.error('Error saving entry:', error);
+                    showNotification('Failed to save entry! ❌');
+                }
             }
-            
-            renderEntries();
-            clearForm();
-            exitEditMode();
-            showNotification(isEditMode ? 'Entry updated! ✏️' : 'Entry saved! 📝');
         }
 
         // Update existing entry
@@ -1742,17 +1755,15 @@
                         user_id: 'default'
                     })
                 });
-                
+
                 if (response.ok) {
                     const result = await response.json();
-                    const localEntry = entries.find(e => e.id === entry.id);
-                    if (localEntry && result.id) {
-                        localEntry.id = result.id;
-                    }
+                    return result.id;
                 }
             } catch (error) {
                 console.error('Error saving journal entry:', error);
             }
+            return null;
         }
 
         // Update entry in backend
