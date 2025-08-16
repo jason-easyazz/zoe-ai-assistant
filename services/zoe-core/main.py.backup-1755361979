@@ -1,25 +1,11 @@
 from typing import List, Optional
 import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 import httpx
 import asyncio
 import aiosqlite
 import json
 from pydantic import BaseModel
-
-# Configuration
-CONFIG = {
-    "version": "3.1.0",
-    "database_path": os.getenv("DATABASE_PATH", "/app/data/zoe.db"),
-    "ollama_url": os.getenv("OLLAMA_URL", "http://zoe-ollama:11434"),
-    "whisper_url": os.getenv("WHISPER_URL", "http://zoe-whisper:9001"),
-    "tts_url": os.getenv("TTS_URL", "http://zoe-tts:9002"),
-    "n8n_url": os.getenv("N8N_URL", "http://zoe-n8n:5678"),
-    "ha_url": os.getenv("HA_URL", "http://zoe-homeassistant:8123"),
-    "matrix_url": os.getenv("MATRIX_URL", "http://zoe-matrix:9003"),
-    "cors_origins": os.getenv("CORS_ORIGINS", "*").split(","),
-}
-
 
 # =============================================================================
 # NOTIFICATION PARSING AND MANAGEMENT

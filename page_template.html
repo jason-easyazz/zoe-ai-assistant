@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Zoe AI - {{PAGE_NAME}}</title>
+    <!-- STANDARD ZOEUI STYLES - Copy from working page -->
+</head>
+<body>
+    <!-- STANDARD NAVIGATION - Copy from dashboard.html -->
+    
+    <!-- PAGE CONTENT -->
+    <div class="page-container">
+        <h1>{{PAGE_TITLE}}</h1>
+        <!-- Page-specific content here -->
+    </div>
+    
+    <!-- STANDARD CHAT OVERLAY - Copy from calendar.html -->
+    
+    <script>
+        // STANDARD API CONFIGURATION
+        const ZOE_API = {
+            BASE: '/api',
+            HEALTH: '/health',
+            ENDPOINTS: {
+                HEALTH: '/health',
+                TASKS_TODAY: '/api/tasks/today',
+                TASKS: '/api/tasks',
+                EVENTS: '/api/calendar/events',
+                SHOPPING: '/api/shopping',
+                CHAT: '/api/chat',
+                CHAT_ENHANCED: '/api/chat/enhanced'
+            }
+        };
+        
+        // STANDARD INITIALIZATION
+        document.addEventListener('DOMContentLoaded', function() {
+            checkAPIConnection();
+            loadPageData();
+        });
+        
+        // STANDARD API CONNECTION CHECK
+        async function checkAPIConnection() {
+            try {
+                const response = await fetch(ZOE_API.HEALTH);
+                const data = await response.json();
+                updateAPIStatus(data.status === 'healthy');
+            } catch {
+                updateAPIStatus(false);
+            }
+        }
+        
+        function updateAPIStatus(connected) {
+            const indicator = document.getElementById('apiStatus');
+            if (connected) {
+                indicator.textContent = '🟢 Connected';
+                indicator.style.color = '#22c55e';
+            } else {
+                indicator.textContent = '🔴 Offline';
+                indicator.style.color = '#ef4444';
+            }
+        }
+        
+        // PAGE-SPECIFIC FUNCTIONS GO HERE
+        async function loadPageData() {
+            // Implement page-specific data loading
+        }
+    </script>
+</body>
+</html>

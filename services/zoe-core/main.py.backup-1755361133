@@ -1,25 +1,8 @@
-from typing import List, Optional
 import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 import httpx
 import asyncio
 import aiosqlite
-import json
-from pydantic import BaseModel
-
-# Configuration
-CONFIG = {
-    "version": "3.1.0",
-    "database_path": os.getenv("DATABASE_PATH", "/app/data/zoe.db"),
-    "ollama_url": os.getenv("OLLAMA_URL", "http://zoe-ollama:11434"),
-    "whisper_url": os.getenv("WHISPER_URL", "http://zoe-whisper:9001"),
-    "tts_url": os.getenv("TTS_URL", "http://zoe-tts:9002"),
-    "n8n_url": os.getenv("N8N_URL", "http://zoe-n8n:5678"),
-    "ha_url": os.getenv("HA_URL", "http://zoe-homeassistant:8123"),
-    "matrix_url": os.getenv("MATRIX_URL", "http://zoe-matrix:9003"),
-    "cors_origins": os.getenv("CORS_ORIGINS", "*").split(","),
-}
-
 
 # =============================================================================
 # NOTIFICATION PARSING AND MANAGEMENT
@@ -277,52 +260,19 @@ def format_date_display(event_date: dt.date, format_preference: str = "AU") -> s
 
 app = FastAPI()
 
-# CORS middleware configuration
+# CORS middleware for calendar access
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
-
-
-# Journal Entry Models
-class JournalEntry(BaseModel):
-    title: Optional[str] = None
-    content: str
-    mood: Optional[str] = None
-    mood_score: Optional[float] = None
-    mood_confidence: Optional[int] = None
-    photo: Optional[str] = None
-    health_info: Optional[dict] = None
-    user_id: str = "default"
-
-class JournalEntryResponse(BaseModel):
-    id: int
-    title: Optional[str]
-    content: str
-    mood: Optional[str]
-    mood_score: Optional[float]
-    mood_confidence: Optional[int]
-    photo: Optional[str]
-    health_info: Optional[dict]
-    created_at: str
-    updated_at: Optional[str] = None
-# CORS middleware for calendar access
-class JournalEntryResponse(BaseModel):
-    id: int
-    title: Optional[str]
-    content: str
-    mood: Optional[str]
-    mood_score: Optional[float]
-    mood_confidence: Optional[int]
-    photo: Optional[str]
-    health_info: Optional[dict]
 
 # Add middleware for request logging
 from fastapi import Request
+import json
 
 
 # Event persistence function
@@ -927,6 +877,7 @@ async def get_weather():
 
 
 
+import json
 from pathlib import Path
 
 # Persistent weather settings storage
@@ -1687,156 +1638,3 @@ async def delete_shopping_item(item_id: int):
                 return {"error": "Item not found"}
     except Exception as e:
         return {"error": str(e)}
-
-
-
-# Journal API Endpoints
-@app.get("/api/journal", response_model=List[JournalEntryResponse])
-async def get_journal_entries(limit: int = 20, user_id: str = "default"):
-    """Get journal entries for user"""
-    try:
-        async with aiosqlite.connect(CONFIG["database_path"]) as db:
-            cursor = await db.execute("""
-                SELECT id, title, content, mood, mood_score, mood_confidence, 
-                       photo, health_info, created_at, updated_at
-                FROM journal_entries 
-                WHERE user_id = ?
-                ORDER BY created_at DESC 
-                LIMIT ?
-            """, (user_id, limit))
-            
-            entries = await cursor.fetchall()
-            
-            result = []
-            for entry in entries:
-                health_info = None
-                if entry[7]:  # health_info column
-                    try:
-                        health_info = json.loads(entry[7])
-                    except:
-                        health_info = None
-                
-                result.append({
-                    "id": entry[0],
-                    "title": entry[1],
-                    "content": entry[2],
-                    "mood": entry[3],
-                    "mood_score": entry[4],
-                    "mood_confidence": entry[5],
-                    "photo": entry[6],
-                    "health_info": health_info,
-                    "created_at": entry[8],
-                    "updated_at": entry[9]
-                })
-            
-            return result
-            
-    except Exception as e:
-        logger.error(f"Error fetching journal entries: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch journal entries")
-
-@app.post("/api/journal")
-async def create_journal_entry(entry: JournalEntry):
-    """Create new journal entry"""
-    try:
-        async with aiosqlite.connect(CONFIG["database_path"]) as db:
-            health_info_json = None
-            if entry.health_info:
-                health_info_json = json.dumps(entry.health_info)
-            
-            cursor = await db.execute("""
-                INSERT INTO journal_entries 
-                (user_id, title, content, mood, mood_score, mood_confidence, photo, health_info)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                entry.user_id,
-                entry.title,
-                entry.content,
-                entry.mood,
-                entry.mood_score,
-                entry.mood_confidence,
-                entry.photo,
-                health_info_json
-            ))
-            
-            await db.commit()
-            
-            return {
-                "id": cursor.lastrowid,
-                "message": "Journal entry created successfully",
-                "status": "success"
-            }
-            
-    except Exception as e:
-        logger.error(f"Error creating journal entry: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create journal entry")
-
-@app.put("/api/journal/{entry_id}")
-async def update_journal_entry(entry_id: int, entry: JournalEntry):
-    """Update existing journal entry"""
-    try:
-        async with aiosqlite.connect(CONFIG["database_path"]) as db:
-            health_info_json = None
-            if entry.health_info:
-                health_info_json = json.dumps(entry.health_info)
-            
-            cursor = await db.execute("""
-                UPDATE journal_entries 
-                SET title = ?, content = ?, mood = ?, mood_score = ?, 
-                    mood_confidence = ?, photo = ?, health_info = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ? AND user_id = ?
-            """, (
-                entry.title,
-                entry.content,
-                entry.mood,
-                entry.mood_score,
-                entry.mood_confidence,
-                entry.photo,
-                health_info_json,
-                entry_id,
-                entry.user_id
-            ))
-            
-            await db.commit()
-            
-            if cursor.rowcount == 0:
-                raise HTTPException(status_code=404, detail="Journal entry not found")
-            
-            return {
-                "message": "Journal entry updated successfully",
-                "status": "success"
-            }
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating journal entry: {e}")
-        raise HTTPException(status_code=500, detail="Failed to update journal entry")
-
-@app.delete("/api/journal/{entry_id}")
-async def delete_journal_entry(entry_id: int, user_id: str = "default"):
-    """Delete journal entry"""
-    try:
-        async with aiosqlite.connect(CONFIG["database_path"]) as db:
-            cursor = await db.execute("""
-                DELETE FROM journal_entries 
-                WHERE id = ? AND user_id = ?
-            """, (entry_id, user_id))
-            
-            await db.commit()
-            
-            if cursor.rowcount == 0:
-                raise HTTPException(status_code=404, detail="Journal entry not found")
-            
-            return {
-                "message": "Journal entry deleted successfully",
-                "status": "success"
-            }
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting journal entry: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete journal entry")
-
