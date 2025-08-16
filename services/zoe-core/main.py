@@ -310,16 +310,6 @@ class JournalEntryResponse(BaseModel):
     health_info: Optional[dict]
     created_at: str
     updated_at: Optional[str] = None
-# CORS middleware for calendar access
-class JournalEntryResponse(BaseModel):
-    id: int
-    title: Optional[str]
-    content: str
-    mood: Optional[str]
-    mood_score: Optional[float]
-    mood_confidence: Optional[float]
-    photo: Optional[str]
-    health_info: Optional[dict]
 
 # Add middleware for request logging
 from fastapi import Request
