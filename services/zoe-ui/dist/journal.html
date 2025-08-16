@@ -1578,6 +1578,7 @@
             analyzeMood();
         }
 
+
         // Save entry
         async function saveEntry() {
             const title = document.getElementById('entryTitle').value.trim();
@@ -1636,6 +1637,7 @@
                 }
             }
         }
+
 
         // Update existing entry
         function updateEntry(entryId, title, content, moodData, healthInfo) {
@@ -1737,6 +1739,7 @@
             });
         }
 
+
         // Save entry to backend
         async function saveEntryToBackend(entry) {
             try {
@@ -1765,6 +1768,7 @@
             }
             return null;
         }
+
 
         // Update entry in backend
         async function updateEntryInBackend(entryId, title, content, mood, healthInfo) {
@@ -2181,5 +2185,6 @@ Perfect for daily reflection and wellness tracking! 🌟
         });
 
     </script>
+    <script src="fix_journal.js"></script>
 </body>
 </html>
