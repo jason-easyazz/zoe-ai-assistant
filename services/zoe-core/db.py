@@ -40,8 +40,13 @@ async def init_database(database_path: str) -> None:
                 title TEXT,
                 content TEXT NOT NULL,
                 mood_score REAL,
+                mood TEXT,
+                mood_confidence REAL,
+                photo TEXT,
+                health_info TEXT,
                 word_count INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 source TEXT DEFAULT 'manual',
                 user_id TEXT DEFAULT 'default'
             );
