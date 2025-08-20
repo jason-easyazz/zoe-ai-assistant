@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Core API Service
   zoe-core:
