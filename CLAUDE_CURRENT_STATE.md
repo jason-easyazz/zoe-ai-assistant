@@ -1,34 +1,32 @@
-# Zoe AI Assistant - State for Claude
-Last Updated: See GitHub timestamp
+# Zoe AI Assistant - Current State
+Updated: $(date)
 
-## WORKING SETUP:
+## Location & Access:
 - Directory: /home/pi/zoe
 - GitHub: https://github.com/jason-easyazz/zoe-ai-assistant
 - Web UI: http://192.168.1.60:8080
 - API: http://192.168.1.60:8000
 
-## DOCKER SERVICES:
-- zoe-core (FastAPI backend) - Port 8000
-- zoe-ui (Nginx frontend) - Port 8080
-- zoe-ollama (llama3.2:3b) - Port 11434
-- zoe-redis (Cache) - Port 6379
+## Running Services:
+$(docker ps --format "table {{.Names}}\t{{.Status}}" | grep zoe-)
 
-## COMPLETED:
-✅ Basic chat working with AI
-✅ SQLite database storing conversations
-✅ Event system operational
-✅ GitHub sync configured
-✅ Samba share working
+## Recent Changes:
+$(git log --oneline -5)
 
-## READY TO BUILD:
-1. Enhanced glass-morphic UI
-2. Natural language calendar
-3. Developer dashboard
-4. Memory system
-5. Voice integration
+## Database Activity:
+Total conversations: $(sqlite3 data/zoe.db "SELECT COUNT(*) FROM conversations;" 2>/dev/null || echo "0")
+Total events: $(sqlite3 data/zoe.db "SELECT COUNT(*) FROM events;" 2>/dev/null || echo "0")
 
-## KEY RULES:
-- Always work in /home/pi/zoe
-- Never rebuild zoe-ollama
-- Use zoe- prefix for containers
-- Test immediately after changes
+## Available Features:
+- ✅ AI Chat (llama3.2:3b)
+- ✅ Event system
+- ✅ Basic UI
+- 🔧 Enhanced UI (ready to install)
+- 🔧 Natural language calendar (ready)
+- 🔧 Developer dashboard (ready)
+- 🔧 Memory system (ready)
+
+## Next Steps Available:
+1. Run: bash scripts/permanent/deployment/master_enhancements.sh
+2. Choose feature to add
+3. Or continue custom development
