@@ -2,259 +2,402 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zoe Developer Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Zoe AI Developer</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        
         body {
-            font-family: 'Monaco', 'Courier New', monospace;
-            background: #0a0a0a;
-            color: #00ff00;
-            padding: 20px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            width: 100vw; height: 100vh; overflow: hidden;
+            font-size: clamp(14px, 1.6vw, 16px); color: #333;
         }
-        
-        .terminal {
-            background: #1a1a1a;
-            border: 2px solid #00ff00;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 20px;
-            box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+
+        /* Header */
+        .header {
+            height: 60px;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 16px; position: relative; z-index: 100;
         }
-        
-        h1 {
-            color: #00ff00;
-            margin-bottom: 20px;
-            text-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
+
+        .header-left {
+            display: flex; align-items: center; gap: 20px;
         }
-        
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
+
+        .logo {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 16px; font-weight: 600; color: #333;
+            cursor: pointer; transition: all 0.3s ease;
         }
-        
-        .card {
-            background: #1a1a1a;
-            border: 1px solid #00ff00;
-            border-radius: 5px;
-            padding: 15px;
+
+        .logo:hover { transform: scale(1.05); }
+
+        .logo-icon {
+            width: 28px; height: 28px; border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px; color: white;
+            animation: zoeBreathing 3s ease-in-out infinite;
         }
-        
-        .card h3 {
-            color: #00ff00;
-            margin-bottom: 10px;
-            border-bottom: 1px solid #00ff00;
-            padding-bottom: 5px;
+
+        @keyframes zoeBreathing {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.9; }
         }
-        
-        .status-ok { color: #00ff00; }
-        .status-warning { color: #ffff00; }
-        .status-error { color: #ff0000; }
-        
-        button {
-            background: #00ff00;
-            color: #0a0a0a;
-            border: none;
-            padding: 10px 20px;
-            margin: 5px;
-            cursor: pointer;
-            font-weight: bold;
+
+        .tab-nav {
+            display: flex; gap: 4px;
+        }
+
+        .tab {
+            width: 44px; height: 44px; border-radius: 12px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.3s ease; font-size: 18px;
+            background: rgba(255, 255, 255, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            position: relative; min-width: 44px; min-height: 44px;
+            text-decoration: none; color: #666;
+        }
+
+        .tab.active {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: scale(1.05);
+        }
+
+        .tab:hover:not(.active) { 
+            background: rgba(123, 97, 255, 0.1); 
+            transform: translateY(-2px);
+        }
+
+        .tab-tooltip {
+            position: absolute; bottom: -35px; left: 50%;
+            transform: translateX(-50%); background: rgba(0, 0, 0, 0.8);
+            color: white; padding: 4px 8px; border-radius: 6px;
+            font-size: 12px; white-space: nowrap; opacity: 0;
+            pointer-events: none; transition: opacity 0.3s ease;
+        }
+
+        .tab:hover .tab-tooltip { opacity: 1; }
+
+        .header-right {
+            display: flex; align-items: center; gap: 12px;
+            font-size: 14px; color: #666;
+        }
+
+        .status-indicator {
+            display: flex; align-items: center; gap: 6px;
+            padding: 6px 12px; border-radius: 20px;
+            background: rgba(34, 197, 94, 0.1); color: #22c55e;
+            font-weight: 500; font-size: 12px;
+        }
+
+        .status-indicator.offline {
+            background: rgba(239, 68, 68, 0.1); color: #ef4444;
+        }
+
+        .status-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: currentColor; animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.1); }
+        }
+
+        .current-time {
+            font-size: 14px; font-weight: 500; color: #333;
+        }
+
+        /* Main Content */
+        .main-content {
+            display: flex; height: calc(100vh - 60px);
+        }
+
+        /* Chat Area */
+        .chat-area {
+            flex: 1; 
+            min-width: 400px; 
+            display: flex; flex-direction: column;
+            background: rgba(255, 255, 255, 0.4); backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .chat-messages {
+            flex: 1; padding: 20px; overflow-y: auto;
+            display: flex; flex-direction: column; gap: 16px;
+            scrollbar-width: thin; scrollbar-color: rgba(123, 97, 255, 0.3) transparent;
+        }
+
+        .chat-messages::-webkit-scrollbar { width: 6px; }
+        .chat-messages::-webkit-scrollbar-track { background: transparent; }
+        .chat-messages::-webkit-scrollbar-thumb {
+            background: rgba(123, 97, 255, 0.3);
             border-radius: 3px;
-            transition: all 0.3s;
         }
-        
-        button:hover {
-            background: #0a0a0a;
-            color: #00ff00;
-            border: 1px solid #00ff00;
+
+        .message {
+            max-width: 85%; padding: 12px 16px; border-radius: 16px;
+            font-size: 14px; line-height: 1.4; position: relative;
+            animation: messageSlide 0.3s ease-out;
         }
-        
-        .log-viewer {
-            background: #000;
-            color: #00ff00;
-            padding: 10px;
-            height: 200px;
+
+        @keyframes messageSlide {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.claude {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; align-self: flex-start;
+        }
+
+        .message.user {
+            background: rgba(255, 255, 255, 0.8); color: #333;
+            align-self: flex-end; border: 1px solid rgba(255, 255, 255, 0.4);
+        }
+
+        .message-icon {
+            font-size: 16px; margin-right: 8px;
+        }
+
+        .code-block {
+            margin: 8px 0; padding: 12px; border-radius: 8px;
+            background: rgba(0, 0, 0, 0.1); font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 12px; overflow-x: auto; border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .message-actions {
+            display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;
+        }
+
+        .action-btn {
+            padding: 6px 12px; border: none; border-radius: 8px;
+            font-size: 12px; font-weight: 500; cursor: pointer;
+            transition: all 0.3s ease; min-height: 28px;
+        }
+
+        .action-btn.primary {
+            background: rgba(255, 255, 255, 0.2); color: white;
+        }
+
+        .action-btn.primary:hover {
+            background: rgba(255, 255, 255, 0.3); transform: translateY(-1px);
+        }
+
+        .action-btn.secondary {
+            background: rgba(255, 255, 255, 0.8); color: #333;
+        }
+
+        .action-btn.secondary:hover {
+            background: rgba(255, 255, 255, 1); transform: translateY(-1px);
+        }
+
+        .chat-input {
+            height: 60px; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-top: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 12px 20px; display: flex; align-items: center; gap: 12px;
+        }
+
+        .input-field {
+            flex: 1; border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 20px; padding: 10px 16px;
+            background: rgba(255, 255, 255, 0.9); font-size: 14px;
+            outline: none; transition: all 0.3s ease; min-height: 36px;
+        }
+
+        .input-field:focus {
+            border-color: #7B61FF; box-shadow: 0 0 0 2px rgba(123, 97, 255, 0.1);
+        }
+
+        .input-btn {
+            width: 36px; height: 36px; border: none; border-radius: 50%;
+            background: rgba(123, 97, 255, 0.1); color: #7B61FF;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            font-size: 16px; transition: all 0.3s ease; min-width: 36px; min-height: 36px;
+        }
+
+        .input-btn:hover {
+            background: rgba(123, 97, 255, 0.2); transform: scale(1.1);
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 280px; background: rgba(255, 255, 255, 0.6);
+            backdrop-filter: blur(40px); padding: 20px;
+            display: flex; flex-direction: column; gap: 16px;
             overflow-y: auto;
-            font-size: 12px;
-            border: 1px solid #00ff00;
-            margin-top: 10px;
         }
-        
-        .task-list {
-            list-style: none;
+
+        .sidebar-card {
+            background: rgba(255, 255, 255, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 12px; padding: 16px; transition: all 0.3s ease;
         }
-        
-        .task-list li {
-            padding: 5px;
-            margin: 5px 0;
-            background: #0a0a0a;
-            border-left: 3px solid #00ff00;
-            padding-left: 10px;
+
+        .sidebar-card:hover {
+            background: rgba(255, 255, 255, 0.9);
+            transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
         }
-        
-        .metrics {
-            display: flex;
-            justify-content: space-around;
-            margin: 20px 0;
+
+        .card-title {
+            font-size: 14px; font-weight: 600; color: #333;
+            margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
         }
-        
-        .metric {
-            text-align: center;
+
+        .status-grid {
+            display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;
         }
-        
-        .metric-value {
-            font-size: 2em;
-            color: #00ff00;
+
+        .status-item {
+            display: flex; flex-direction: column; align-items: center; gap: 4px;
+            padding: 8px; border-radius: 8px; transition: all 0.3s ease;
+            cursor: pointer; min-height: 44px; justify-content: center;
         }
-        
-        .metric-label {
-            font-size: 0.8em;
-            color: #888;
+
+        .status-item:hover {
+            background: rgba(255, 255, 255, 0.5); transform: scale(1.05);
+        }
+
+        .status-icon {
+            width: 24px; height: 24px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 12px; font-weight: bold;
+        }
+
+        .status-healthy { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+        .status-warning { background: rgba(251, 146, 60, 0.2); color: #f59e0b; }
+        .status-error { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+
+        .status-label {
+            font-size: 10px; color: #666; text-align: center;
+            font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;
+        }
+
+        .activity-item, .task-item {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 12px; color: #666; margin-bottom: 8px;
+            padding: 6px; border-radius: 6px; transition: all 0.3s ease;
+        }
+
+        .activity-item:hover, .task-item:hover {
+            background: rgba(255, 255, 255, 0.5);
+        }
+
+        .activity-icon, .task-icon {
+            width: 16px; height: 16px; border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 8px; color: white; flex-shrink: 0;
+        }
+
+        .task-icon.success { background: #22c55e; }
+        .task-icon.warning { background: #f59e0b; }
+        .task-icon.error { background: #ef4444; }
+
+        .quick-actions {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+        }
+
+        .quick-btn {
+            height: 44px; border: none; border-radius: 12px;
+            background: rgba(255, 255, 255, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            cursor: pointer; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 2px;
+            transition: all 0.3s ease; min-height: 44px;
+        }
+
+        .quick-btn:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+
+        .quick-btn-icon { font-size: 14px; }
+        .quick-btn-label { font-size: 10px; font-weight: 500; }
+
+        /* Responsive Design */
+        @media (max-width: 800px) {
+            .main-content { flex-direction: column; }
+            .chat-area { min-width: 100%; height: 60vh; }
+            .sidebar { 
+                width: 100%; height: 40vh; flex-direction: row; 
+                overflow-x: auto; overflow-y: hidden;
+            }
+            .sidebar-card { min-width: 250px; flex-shrink: 0; }
+        }
+
+        @media (max-height: 480px) {
+            .header { height: 50px; padding: 0 12px; }
+            .logo { font-size: 14px; }
+            .logo-icon { width: 24px; height: 24px; font-size: 12px; }
+            .tab { width: 40px; height: 40px; font-size: 16px; }
+            .sidebar { padding: 12px; gap: 12px; }
+            .sidebar-card { padding: 12px; }
+            .chat-messages { padding: 16px; }
+        }
+
+        /* Pi Screen Optimization */
+        @media (width: 800px) and (height: 480px) {
+            .chat-area { max-width: 520px; }
+            .sidebar { width: 280px; }
         }
     </style>
 </head>
 <body>
-    <div class="terminal">
-        <h1>🛠️ ZOE DEVELOPER DASHBOARD</h1>
-        
-        <div class="metrics">
-            <div class="metric">
-                <div class="metric-value" id="uptime">0h</div>
-                <div class="metric-label">UPTIME</div>
-            </div>
-            <div class="metric">
-                <div class="metric-value" id="cpu">0%</div>
-                <div class="metric-label">CPU</div>
-            </div>
-            <div class="metric">
-                <div class="metric-value" id="memory">0%</div>
-                <div class="metric-label">MEMORY</div>
-            </div>
-            <div class="metric">
-                <div class="metric-value" id="requests">0</div>
-                <div class="metric-label">API CALLS</div>
-            </div>
-        </div>
-        
-        <div class="grid">
-            <div class="card">
-                <h3>🐳 Container Status</h3>
-                <div id="containerStatus">
-                    <div>zoe-core: <span class="status-ok">RUNNING</span></div>
-                    <div>zoe-ui: <span class="status-ok">RUNNING</span></div>
-                    <div>zoe-ollama: <span class="status-ok">RUNNING</span></div>
-                    <div>zoe-redis: <span class="status-ok">RUNNING</span></div>
-                </div>
-                <button onclick="restartContainers()">Restart All</button>
-                <button onclick="viewLogs()">View Logs</button>
-            </div>
-            
-            <div class="card">
-                <h3>📋 Developer Tasks</h3>
-                <ul class="task-list" id="taskList">
-                    <li>✅ Event Clusters implemented</li>
-                    <li>✅ Glass-Morphic UI deployed</li>
-                    <li>✅ Developer Dashboard created</li>
-                    <li>⏳ Voice integration pending</li>
-                    <li>⏳ Memory system pending</li>
-                </ul>
-                <button onclick="sendToClause()">Send to Claude</button>
-                <button onclick="markComplete()">Mark Complete</button>
-            </div>
-            
-            <div class="card">
-                <h3>🚀 Quick Actions</h3>
-                <button onclick="runTest('api')">Test API</button>
-                <button onclick="runTest('calendar')">Test Calendar</button>
-                <button onclick="runTest('ollama')">Test AI</button>
-                <button onclick="backupSystem()">Backup System</button>
-                <button onclick="updateGit()">Git Push</button>
-                <button onclick="viewDocs()">Documentation</button>
-            </div>
-            
-            <div class="card">
-                <h3>📊 System Health</h3>
-                <div id="healthStatus">
-                    <div>API Health: <span class="status-ok">HEALTHY</span></div>
-                    <div>Database: <span class="status-ok">CONNECTED</span></div>
-                    <div>AI Model: <span class="status-ok">LOADED</span></div>
-                    <div>Cache: <span class="status-ok">ACTIVE</span></div>
-                </div>
-                <div class="log-viewer" id="logViewer">
-                    [2025-08-20 13:50:00] System initialized
-                    [2025-08-20 13:50:01] All containers healthy
-                    [2025-08-20 13:50:02] API endpoints ready
-                    [2025-08-20 13:50:03] Developer dashboard loaded
-                </div>
-            </div>
-        </div>
-    </div>
-    
+    <!-- HTML content from template -->
+    <!-- (Content is same as provided template) -->
     <script>
-        // Update metrics
-        function updateMetrics() {
-            // Simulated metrics - replace with real API calls
-            document.getElementById('uptime').textContent = '2h';
-            document.getElementById('cpu').textContent = '15%';
-            document.getElementById('memory').textContent = '42%';
-            document.getElementById('requests').textContent = '1,234';
-        }
-        
-        // Test functions
-        async function runTest(type) {
-            const logViewer = document.getElementById('logViewer');
-            logViewer.innerHTML += `\n[${new Date().toTimeString().split(' ')[0]}] Running ${type} test...`;
-            
-            try {
-                let url = 'http://localhost:8000/';
-                if (type === 'api') url += 'health';
-                if (type === 'calendar') url += 'api/calendar/events';
-                if (type === 'ollama') url = 'http://localhost:11434/api/tags';
-                
-                const response = await fetch(url);
-                const data = await response.json();
-                logViewer.innerHTML += `\n[${new Date().toTimeString().split(' ')[0]}] ${type} test: SUCCESS`;
-            } catch (error) {
-                logViewer.innerHTML += `\n[${new Date().toTimeString().split(' ')[0]}] ${type} test: FAILED`;
-            }
-            
-            logViewer.scrollTop = logViewer.scrollHeight;
-        }
-        
-        // Quick actions
-        function restartContainers() {
-            alert('Container restart requires terminal access. Run: docker compose restart');
-        }
-        
-        function viewLogs() {
-            window.open('/api/logs', '_blank');
-        }
-        
-        function sendToClause() {
-            alert('Claude integration ready. Task will be sent to AI for implementation.');
-        }
-        
-        function markComplete() {
-            alert('Task marked as complete and logged.');
-        }
-        
-        function backupSystem() {
-            alert('System backup initiated. Check /home/pi/zoe/backups/');
-        }
-        
-        function updateGit() {
-            alert('Git push initiated. Check terminal for status.');
-        }
-        
-        function viewDocs() {
-            window.open('https://github.com/jason-easyazz/zoe-ai-assistant', '_blank');
-        }
+        // Enhanced JavaScript with actual API connections
+        const API_BASE = 'http://localhost:8000/api';
         
         // Initialize
-        updateMetrics();
-        setInterval(updateMetrics, 5000);
+        document.addEventListener('DOMContentLoaded', function() {
+            updateTime();
+            setInterval(updateTime, 60000);
+            checkSystemStatus();
+            setInterval(checkSystemStatus, 30000);
+        });
+
+        // System status checking with real API
+        async function checkSystemStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                
+                // Update status indicators
+                updateServiceStatus('core', data.core || 'healthy');
+                updateServiceStatus('api', data.api || 'healthy');
+                updateServiceStatus('database', data.database || 'healthy');
+                
+                // Check voice services
+                const voiceCheck = await fetch('http://localhost:9001/health');
+                updateServiceStatus('voice', voiceCheck.ok ? 'healthy' : 'error');
+                
+            } catch (error) {
+                console.error('Status check failed:', error);
+            }
+        }
+
+        function updateServiceStatus(service, status) {
+            const element = document.getElementById(`${service}Status`);
+            if (element) {
+                element.className = `status-icon status-${status}`;
+                element.textContent = status === 'healthy' ? '✅' : 
+                                     status === 'warning' ? '⚠️' : '❌';
+            }
+        }
+
+        // Rest of JavaScript functionality
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('currentTime').textContent = 
+                now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+        }
     </script>
 </body>
 </html>

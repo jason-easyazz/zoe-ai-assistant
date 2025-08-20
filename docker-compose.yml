@@ -1,87 +1,125 @@
 version: '3.8'
 
 services:
-  zoe-redis:
-    image: redis:7-alpine
-    container_name: zoe-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - ./data/redis:/data
-    networks:
-      - zoe-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  zoe-ollama:
-    image: ollama/ollama:latest
-    container_name: zoe-ollama
-    restart: unless-stopped
-    ports:
-      - "11434:11434"
-    volumes:
-      - ./models:/root/.ollama
-    networks:
-      - zoe-network
-    environment:
-      - OLLAMA_MODELS=/root/.ollama
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-
+  # Core API Service
   zoe-core:
     build: ./services/zoe-core
     container_name: zoe-core
-    restart: unless-stopped
     ports:
       - "8000:8000"
-    depends_on:
-      - zoe-redis
-      - zoe-ollama
     volumes:
-      - ./data:/app/data
       - ./services/zoe-core:/app
+      - ./data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OLLAMA_HOST=http://zoe-ollama:11434
+      - REDIS_HOST=zoe-redis
+      - WHISPER_HOST=http://zoe-whisper:9001
+      - TTS_HOST=http://zoe-tts:9002
+    depends_on:
+      - zoe-ollama
+      - zoe-redis
     networks:
       - zoe-network
-    environment:
-      - REDIS_URL=redis://zoe-redis:6379
-      - OLLAMA_URL=http://zoe-ollama:11434
-      - DATABASE_PATH=/app/data/zoe.db
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    restart: unless-stopped
 
+  # Web UI
   zoe-ui:
     image: nginx:alpine
     container_name: zoe-ui
-    restart: unless-stopped
     ports:
       - "8080:80"
     volumes:
-      - ./services/zoe-ui/dist:/usr/share/nginx/html:ro
-      - ./services/zoe-ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    depends_on:
-      - zoe-core
+      - ./services/zoe-ui/dist:/usr/share/nginx/html
+      - ./services/zoe-ui/nginx.conf:/etc/nginx/nginx.conf:ro
     networks:
       - zoe-network
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    restart: unless-stopped
+
+  # Ollama AI Service
+  zoe-ollama:
+    image: ollama/ollama:latest
+    container_name: zoe-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - zoe_ollama_data:/root/.ollama
+    networks:
+      - zoe-network
+    restart: unless-stopped
+
+  # Redis Cache
+  zoe-redis:
+    image: redis:alpine
+    container_name: zoe-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - zoe_redis_data:/data
+    networks:
+      - zoe-network
+    restart: unless-stopped
+
+  # Whisper STT Service
+  zoe-whisper:
+    build: ./services/zoe-whisper
+    container_name: zoe-whisper
+    ports:
+      - "9001:9001"
+    volumes:
+      - zoe_whisper_models:/root/.cache/whisper
+    devices:
+      - /dev/snd:/dev/snd
+    environment:
+      - PULSE_SERVER=unix:/run/user/1000/pulse/native
+    networks:
+      - zoe-network
+    restart: unless-stopped
+
+  # TTS Service
+  zoe-tts:
+    build: ./services/zoe-tts
+    container_name: zoe-tts
+    ports:
+      - "9002:9002"
+    volumes:
+      - zoe_tts_models:/root/.local/share/tts
+    devices:
+      - /dev/snd:/dev/snd
+    environment:
+      - PULSE_SERVER=unix:/run/user/1000/pulse/native
+    networks:
+      - zoe-network
+    restart: unless-stopped
+
+  # N8N Automation
+  zoe-n8n:
+    image: n8nio/n8n
+    container_name: zoe-n8n
+    ports:
+      - "5678:5678"
+    volumes:
+      - zoe_n8n_data:/home/node/.n8n
+      - ./scripts/n8n/workflows:/workflows
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=zoe
+      - N8N_BASIC_AUTH_PASSWORD=zoe2025
+      - N8N_PROTOCOL=http
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+    networks:
+      - zoe-network
+    restart: unless-stopped
 
 networks:
   zoe-network:
     driver: bridge
 
 volumes:
+  zoe_ollama_data:
   zoe_redis_data:
-  zoe_ollama_models:
+  zoe_whisper_models:
+  zoe_tts_models:
+  zoe_n8n_data:
+  zoe_database:
