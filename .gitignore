@@ -51,3 +51,5 @@ Thumbs.db
 # Keep structure files
 !.gitkeep
 !README.md
+SMART_CONTINUATION_PROMPT.txt
+smart_continuation.sh
