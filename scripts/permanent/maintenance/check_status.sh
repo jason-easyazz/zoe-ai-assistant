@@ -1,0 +1,10 @@
+#!/bin/bash
+echo "🔍 Zoe System Status"
+echo "===================="
+echo "Docker: $(docker --version 2>/dev/null || echo 'Not installed')"
+echo "Docker Compose: $(docker-compose --version 2>/dev/null || echo 'Not installed')"
+echo "Git: $(git --version 2>/dev/null || echo 'Not installed')"
+echo "Samba: $(systemctl is-active smbd)"
+echo "IP: $(hostname -I | awk '{print $1}')"
+echo "Scripts: $(ls -1 /home/pi/zoe/scripts/permanent/deployment/*.sh 2>/dev/null | wc -l) deployment scripts"
+echo "Free Space: $(df -h / | tail -1 | awk '{print $4}')"

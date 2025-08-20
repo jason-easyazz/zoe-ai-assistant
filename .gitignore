@@ -1,0 +1,45 @@
+# Data and databases
+data/*.db
+data/*.sqlite
+data/billing/
+data/logs/
+
+# Docker volumes
+volumes/
+
+# Environment files with secrets
+.env
+config/.env
+*.key
+*.pem
+
+# Temporary files
+*.tmp
+*.backup_*
+scripts/temporary/*
+!scripts/temporary/.gitkeep
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+env/
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Keep structure files
+!.gitkeep
+!README.md

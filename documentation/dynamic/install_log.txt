@@ -1,0 +1,8 @@
+# Zoe Installation Log
+Wed 20 Aug 19:49:42 AWST 2025: Bootstrap installer created
+Wed 20 Aug 19:49:42 AWST 2025: All phase scripts generated
+Wed 20 Aug 19:53:30 AWST 2025: Phase 0: System Update completed
+Wed 20 Aug 19:55:36 AWST 2025: Phase 1: Dependencies completed
+Wed 20 Aug 19:55:38 AWST 2025: Phase 2: Directory Structure completed
+Wed 20 Aug 19:55:41 AWST 2025: Phase 3: Samba Configuration completed
+Wed 20 Aug 19:55:43 AWST 2025: Phase 4: Cloudflare Check completed
