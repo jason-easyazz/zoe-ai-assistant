@@ -1,0 +1,13 @@
+I need to continue working on my Zoe AI Assistant.
+
+Please:
+1. Check my GitHub: https://github.com/jason-easyazz/zoe-ai-assistant
+2. Read CLAUDE_CURRENT_STATE.md
+3. Tell me what's working and what's next
+4. Let me pick what to work on
+
+Always provide complete copy-paste scripts that:
+- Start with cd /home/pi/zoe
+- Include full file contents
+- Update GitHub after success
+- Test immediately
