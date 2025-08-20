@@ -196,3 +196,146 @@ def check_service(host, port):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# ============================================
+# AUTONOMOUS SYSTEM INTEGRATION
+# ============================================
+
+# Import the autonomous router
+try:
+    from routers import autonomous
+    app.include_router(autonomous.router)
+    print("✅ Autonomous developer system loaded")
+except Exception as e:
+    print(f"⚠️ Could not load autonomous system: {e}")
+
+# Add developer dashboard endpoint
+@app.get("/api/developer/dashboard")
+async def developer_dashboard():
+    """Get complete developer dashboard data"""
+    
+    # Get system overview
+    system_data = {}
+    try:
+        import docker
+        client = docker.from_env()
+        containers = []
+        for c in client.containers.list(all=True):
+            if c.name.startswith('zoe-'):
+                containers.append({
+                    "name": c.name,
+                    "status": c.status,
+                    "health": "healthy" if c.status == "running" else "unhealthy"
+                })
+        system_data["containers"] = containers
+    except:
+        system_data["containers"] = []
+    
+    # Get pending tasks
+    tasks = []
+    try:
+        conn = sqlite3.connect("/app/data/developer_tasks.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT task_id, title, priority, status 
+            FROM tasks 
+            WHERE status IN ('pending', 'in_progress')
+            ORDER BY 
+                CASE priority 
+                    WHEN 'critical' THEN 1 
+                    WHEN 'high' THEN 2 
+                    WHEN 'medium' THEN 3 
+                    WHEN 'low' THEN 4 
+                END
+            LIMIT 5
+        """)
+        for row in cursor.fetchall():
+            tasks.append({
+                "task_id": row[0],
+                "title": row[1],
+                "priority": row[2],
+                "status": row[3]
+            })
+        conn.close()
+    except:
+        pass
+    
+    # Get recent solutions
+    solutions = []
+    try:
+        conn = sqlite3.connect("/app/data/knowledge.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT problem, solution, timestamp 
+            FROM proven_solutions 
+            ORDER BY timestamp DESC 
+            LIMIT 3
+        """)
+        for row in cursor.fetchall():
+            solutions.append({
+                "problem": row[0],
+                "solution": row[1],
+                "timestamp": row[2]
+            })
+        conn.close()
+    except:
+        pass
+    
+    return {
+        "system": system_data,
+        "tasks": tasks,
+        "recent_solutions": solutions,
+        "claude_available": bool(os.getenv("CLAUDE_API_KEY"))
+    }
+
+# Chat endpoint with autonomous capabilities
+@app.post("/api/developer/chat")
+async def developer_chat(request: dict):
+    """Enhanced chat that can execute fixes"""
+    message = request.get("message", "")
+    
+    # Check for action keywords
+    action_keywords = {
+        "fix": "execute_fix",
+        "deploy": "deploy_feature",
+        "debug": "debug_issue",
+        "optimize": "optimize_performance",
+        "backup": "create_backup",
+        "test": "run_tests"
+    }
+    
+    action = None
+    for keyword, action_type in action_keywords.items():
+        if keyword in message.lower():
+            action = action_type
+            break
+    
+    response = {
+        "message": message,
+        "action_detected": action,
+        "response": "",
+        "execution_result": None
+    }
+    
+    # If action detected, prepare for execution
+    if action:
+        response["response"] = f"I'll {action.replace('_', ' ')} for you. Analyzing the system..."
+        
+        # Get system context
+        try:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                overview = await client.get("http://localhost:8000/api/developer/system/overview")
+                diagnostics = await client.get("http://localhost:8000/api/developer/system/diagnostics")
+                
+                response["execution_result"] = {
+                    "system_healthy": overview.status_code == 200,
+                    "issues_found": diagnostics.json().get("issues", []) if diagnostics.status_code == 200 else [],
+                    "ready_to_execute": True
+                }
+        except:
+            response["execution_result"] = {"error": "Could not analyze system"}
+    else:
+        response["response"] = "I understand. How can I help you improve the Zoe system?"
+    
+    return response

@@ -1,11 +1,12 @@
 # Proven Solutions
+*Auto-updated when solutions work*
 
-## Installation
-- ✅ Phased installation approach works well
-- ✅ Samba with guest access for easy file editing
-- ✅ GitHub sync for code backup
+## Docker Management
+- ✅ Always use --build flag when updating Python code
+- ✅ Use zoe- prefix for all containers
+- ✅ Check container status before modifications
 
-## Docker
-- ✅ Always use zoe- prefix for containers
-- ✅ Single docker-compose.yml file
-- ✅ Use --build flag for Python changes
+## Python Development
+- ✅ Two-stage processing: Python extracts, Ollama responds
+- ✅ Use FastAPI for all endpoints
+- ✅ Always create backups before modifications
