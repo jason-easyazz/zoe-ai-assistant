@@ -1,0 +1,9 @@
+Continue Zoe AI Assistant development:
+- GitHub: https://github.com/jason-easyazz/zoe-ai-assistant
+- Check CLAUDE_CURRENT_STATE.md file on GitHub
+- Working in: /home/pi/zoe
+- All services running
+- Ready for enhancements
+
+Need: [tell me what feature to add next]
+Provide complete copy-paste scripts please.
