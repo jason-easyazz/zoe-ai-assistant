@@ -3,165 +3,466 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zoe AI Assistant</title>
+    <title>Zoe AI - Your Personal Assistant</title>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             display: flex;
-            justify-content: center;
             align-items: center;
+            justify-content: center;
             padding: 20px;
+            position: relative;
+            overflow: hidden;
         }
-        
+
+        /* Animated background orbs */
+        .orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(60px);
+            opacity: 0.7;
+            animation: float 20s infinite ease-in-out;
+        }
+
+        .orb1 {
+            width: 300px;
+            height: 300px;
+            background: rgba(120, 119, 198, 0.5);
+            top: -150px;
+            left: -150px;
+        }
+
+        .orb2 {
+            width: 400px;
+            height: 400px;
+            background: rgba(255, 119, 198, 0.3);
+            bottom: -200px;
+            right: -200px;
+            animation-delay: 5s;
+        }
+
+        .orb3 {
+            width: 200px;
+            height: 200px;
+            background: rgba(119, 198, 255, 0.4);
+            top: 50%;
+            left: 50%;
+            animation-delay: 10s;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            25% { transform: translate(30px, -50px) scale(1.1); }
+            50% { transform: translate(-20px, 30px) scale(0.9); }
+            75% { transform: translate(40px, 20px) scale(1.05); }
+        }
+
+        /* Glass container */
         .container {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 20px;
-            padding: 30px;
             width: 100%;
-            max-width: 600px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 1200px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            animation: slideUp 0.5s ease-out;
+            position: relative;
+            z-index: 1;
         }
-        
-        h1 {
-            color: #333;
-            text-align: center;
-            margin-bottom: 10px;
-            font-size: 2.5em;
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
-        
-        .subtitle {
-            text-align: center;
-            color: #666;
+
+        /* Header */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
             margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         }
-        
-        .chat-container {
-            background: #f8f9fa;
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .logo-icon {
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
             border-radius: 15px;
-            padding: 20px;
-            min-height: 300px;
-            max-height: 400px;
-            overflow-y: auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .logo-text {
+            color: white;
+            font-size: 28px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 30px;
+            color: white;
+            font-size: 14px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #4ade80;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Main content area */
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 350px;
+            gap: 30px;
             margin-bottom: 20px;
         }
-        
-        .message {
-            margin-bottom: 15px;
-            padding: 10px 15px;
+
+        /* Chat area */
+        .chat-container {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            height: 500px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .messages::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .messages::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
             border-radius: 10px;
         }
-        
-        .user-message {
-            background: #667eea;
+
+        .messages::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+        }
+
+        .message {
+            max-width: 70%;
+            padding: 15px 20px;
+            border-radius: 15px;
+            animation: messageSlide 0.3s ease-out;
+        }
+
+        @keyframes messageSlide {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background: linear-gradient(135deg, #667eea, #764ba2);
             color: white;
-            margin-left: 20%;
-            text-align: right;
         }
-        
-        .assistant-message {
-            background: white;
-            color: #333;
-            margin-right: 20%;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+
+        .message.assistant {
+            align-self: flex-start;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
         }
-        
+
+        /* Input area */
         .input-container {
             display: flex;
-            gap: 10px;
+            gap: 15px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
         }
-        
-        input {
+
+        .input-field {
             flex: 1;
-            padding: 15px;
-            border: 2px solid #e0e0e0;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
             border-radius: 10px;
-            font-size: 16px;
-            transition: border-color 0.3s;
-        }
-        
-        input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        
-        button {
-            padding: 15px 30px;
-            background: #667eea;
+            padding: 15px;
             color: white;
+            font-size: 16px;
+            transition: all 0.3s ease;
+        }
+
+        .input-field::placeholder {
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        .input-field:focus {
+            outline: none;
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .send-button {
+            padding: 15px 30px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
             border: none;
             border-radius: 10px;
+            color: white;
             font-size: 16px;
+            font-weight: 600;
             cursor: pointer;
-            transition: background 0.3s;
+            transition: all 0.3s ease;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
         }
-        
-        button:hover {
-            background: #5a67d8;
+
+        .send-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(102, 126, 234, 0.4);
         }
-        
-        .status {
-            text-align: center;
-            margin-top: 20px;
-            padding: 10px;
-            background: #e8f5e9;
+
+        .send-button:active {
+            transform: translateY(0);
+        }
+
+        /* Side panel */
+        .side-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .panel-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            padding: 20px;
+            transition: all 0.3s ease;
+        }
+
+        .panel-card:hover {
+            background: rgba(255, 255, 255, 0.08);
+            transform: translateY(-2px);
+        }
+
+        .panel-card h3 {
+            color: white;
+            font-size: 18px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .quick-action {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.05);
             border-radius: 10px;
-            color: #2e7d32;
+            color: rgba(255, 255, 255, 0.8);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 10px;
         }
-        
-        .status.error {
-            background: #ffebee;
-            color: #c62828;
+
+        .quick-action:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            transform: translateX(5px);
+        }
+
+        /* Stats */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+        }
+
+        .stat-item {
+            text-align: center;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+        }
+
+        .stat-value {
+            color: white;
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+            
+            .side-panel {
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 15px;
+            }
+            
+            .message {
+                max-width: 85%;
+            }
         }
     </style>
 </head>
 <body>
+    <div class="orb orb1"></div>
+    <div class="orb orb2"></div>
+    <div class="orb orb3"></div>
+
     <div class="container">
-        <h1>🤖 Zoe</h1>
-        <p class="subtitle">Your AI Assistant</p>
-        
-        <div class="chat-container" id="chatContainer">
-            <div class="message assistant-message">
-                Hello! I'm Zoe, your AI assistant. How can I help you today?
+        <div class="header">
+            <div class="logo">
+                <div class="logo-icon">🤖</div>
+                <div class="logo-text">Zoe AI</div>
+            </div>
+            <div class="status">
+                <div class="status-dot"></div>
+                <span>All Systems Operational</span>
             </div>
         </div>
-        
-        <div class="input-container">
-            <input type="text" id="messageInput" placeholder="Type your message..." 
-                   onkeypress="if(event.key==='Enter') sendMessage()">
-            <button onclick="sendMessage()">Send</button>
+
+        <div class="main-content">
+            <div class="chat-container">
+                <div class="messages" id="messages">
+                    <div class="message assistant">
+                        <div>Hello! I'm Zoe, your AI assistant. I can help you with tasks, calendar events, and much more. What would you like to do today?</div>
+                    </div>
+                </div>
+                <div class="input-container">
+                    <input type="text" class="input-field" id="messageInput" placeholder="Type your message..." />
+                    <button class="send-button" onclick="sendMessage()">Send</button>
+                </div>
+            </div>
+
+            <div class="side-panel">
+                <div class="panel-card">
+                    <h3>⚡ Quick Actions</h3>
+                    <div class="quick-action" onclick="quickAction('calendar')">
+                        📅 View Calendar
+                    </div>
+                    <div class="quick-action" onclick="quickAction('tasks')">
+                        ✅ Today's Tasks
+                    </div>
+                    <div class="quick-action" onclick="quickAction('journal')">
+                        📝 Journal Entry
+                    </div>
+                    <div class="quick-action" onclick="quickAction('developer')">
+                        🛠️ Developer Tools
+                    </div>
+                </div>
+
+                <div class="panel-card">
+                    <h3>📊 Today's Stats</h3>
+                    <div class="stats">
+                        <div class="stat-item">
+                            <div class="stat-value" id="eventCount">0</div>
+                            <div class="stat-label">Events</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="taskCount">0</div>
+                            <div class="stat-label">Tasks</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="chatCount">1</div>
+                            <div class="stat-label">Chats</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-card">
+                    <h3>🎯 Upcoming</h3>
+                    <div id="upcomingEvents" style="color: rgba(255,255,255,0.8); font-size: 14px;">
+                        Loading events...
+                    </div>
+                </div>
+            </div>
         </div>
-        
-        <div class="status" id="status">Ready</div>
     </div>
-    
+
     <script>
-        const API_URL = '/api';
-        const chatContainer = document.getElementById('chatContainer');
-        const messageInput = document.getElementById('messageInput');
-        const status = document.getElementById('status');
-        
+        const API_BASE = 'http://localhost:8000';
+        let chatCount = 1;
+
+        // Send message
         async function sendMessage() {
-            const message = messageInput.value.trim();
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
             if (!message) return;
             
-            // Add user message to chat
+            // Add user message
             addMessage(message, 'user');
-            messageInput.value = '';
+            input.value = '';
             
-            // Update status
-            setStatus('Thinking...', false);
+            // Update chat count
+            chatCount++;
+            document.getElementById('chatCount').textContent = chatCount;
             
             try {
-                const response = await fetch(`${API_URL}/chat`, {
+                const response = await fetch(`${API_BASE}/api/chat`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -169,50 +470,81 @@
                     body: JSON.stringify({ message })
                 });
                 
-                if (!response.ok) throw new Error('Failed to get response');
-                
                 const data = await response.json();
-                addMessage(data.response, 'assistant');
                 
-                if (data.detected_events?.length > 0) {
-                    setStatus(`Detected ${data.detected_events.length} event(s)`, false);
-                } else {
-                    setStatus('Ready', false);
+                // Add assistant response
+                addMessage(data.response || 'I received your message!', 'assistant');
+                
+                // Update stats if events were created
+                if (data.events_created) {
+                    updateStats();
                 }
             } catch (error) {
-                console.error('Error:', error);
-                setStatus('Error: Could not connect to API', true);
                 addMessage('Sorry, I encountered an error. Please try again.', 'assistant');
             }
         }
-        
+
         function addMessage(text, sender) {
+            const messagesDiv = document.getElementById('messages');
             const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${sender}-message`;
-            messageDiv.textContent = text;
-            chatContainer.appendChild(messageDiv);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
+            messageDiv.className = `message ${sender}`;
+            messageDiv.innerHTML = `<div>${text}</div>`;
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
-        
-        function setStatus(text, isError) {
-            status.textContent = text;
-            status.className = isError ? 'status error' : 'status';
-        }
-        
-        // Check API health on load
-        async function checkHealth() {
-            try {
-                const response = await fetch(`${API_URL}/health`);
-                const data = await response.json();
-                if (data.status === 'healthy') {
-                    setStatus('Connected to Zoe API', false);
-                }
-            } catch (error) {
-                setStatus('API not available', true);
+
+        // Quick actions
+        function quickAction(action) {
+            switch(action) {
+                case 'calendar':
+                    window.location.href = '/calendar.html';
+                    break;
+                case 'tasks':
+                    addMessage('Show me today\'s tasks', 'user');
+                    sendMessage();
+                    break;
+                case 'journal':
+                    addMessage('I want to make a journal entry', 'user');
+                    sendMessage();
+                    break;
+                case 'developer':
+                    window.location.href = '/developer/';
+                    break;
             }
         }
-        
-        checkHealth();
+
+        // Update stats
+        async function updateStats() {
+            try {
+                const response = await fetch(`${API_BASE}/api/calendar/events`);
+                const events = await response.json();
+                
+                // Update event count
+                const today = new Date().toISOString().split('T')[0];
+                const todayEvents = events.filter(e => e.start_date === today);
+                document.getElementById('eventCount').textContent = todayEvents.length;
+                
+                // Update upcoming events
+                const upcoming = events.slice(0, 3);
+                const upcomingHtml = upcoming.map(e => 
+                    `<div style="margin-bottom: 10px;">📅 ${e.title} - ${new Date(e.start_date).toLocaleDateString()}</div>`
+                ).join('');
+                document.getElementById('upcomingEvents').innerHTML = upcomingHtml || 'No upcoming events';
+                
+            } catch (error) {
+                console.error('Failed to update stats:', error);
+            }
+        }
+
+        // Handle enter key
+        document.getElementById('messageInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        // Load initial stats
+        updateStats();
     </script>
 </body>
 </html>

@@ -182,3 +182,52 @@ async def create_event(event: Event):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# Developer API Endpoints
+@app.get("/api/developer/tasks")
+async def get_developer_tasks():
+    """Get all developer tasks"""
+    return {
+        "tasks": [
+            {"id": 1, "title": "Event Clusters", "status": "complete", "priority": "high"},
+            {"id": 2, "title": "Glass-Morphic UI", "status": "complete", "priority": "high"},
+            {"id": 3, "title": "Developer Dashboard", "status": "complete", "priority": "medium"},
+            {"id": 4, "title": "Voice Integration", "status": "pending", "priority": "medium"},
+            {"id": 5, "title": "Memory System", "status": "pending", "priority": "low"}
+        ]
+    }
+
+@app.post("/api/developer/execute")
+async def execute_command(command: dict):
+    """Execute safe developer commands"""
+    allowed_commands = ["docker ps", "git status", "df -h", "uptime"]
+    cmd = command.get("command")
+    
+    if any(cmd.startswith(allowed) for allowed in allowed_commands):
+        import subprocess
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        return {"output": result.stdout, "error": result.stderr}
+    else:
+        return {"error": "Command not allowed"}
+
+@app.get("/api/system/metrics")
+async def get_system_metrics():
+    """Get system performance metrics"""
+    import psutil
+    
+    return {
+        "cpu_percent": psutil.cpu_percent(),
+        "memory_percent": psutil.virtual_memory().percent,
+        "disk_usage": psutil.disk_usage('/').percent,
+        "uptime": time.time() - psutil.boot_time()
+    }
+
+@app.get("/api/logs")
+async def get_logs(service: str = "zoe-core", lines: int = 50):
+    """Get container logs"""
+    import subprocess
+    
+    cmd = f"docker logs {service} --tail {lines}"
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    
+    return {"logs": result.stdout.split('\n')}
