@@ -2,7 +2,9 @@
 data/*.db
 data/*.sqlite
 data/billing/
-data/logs/
+data/redis/
+logs/
+*.log
 
 # Docker volumes
 volumes/
@@ -12,6 +14,16 @@ volumes/
 config/.env
 *.key
 *.pem
+
+# SSH Keys - NEVER commit!
+id_ed25519*
+id_rsa*
+*.pub
+
+# Ollama model data (too large)
+models/blobs/
+models/manifests/
+models/.ollama/
 
 # Temporary files
 *.tmp
@@ -31,10 +43,6 @@ __pycache__/
 .Python
 venv/
 env/
-
-# Logs
-logs/
-*.log
 
 # OS files
 .DS_Store
