@@ -1,16 +1,17 @@
-"""Multi-model AI client"""
+"""Multi-model AI client with timeout handling"""
 import os
 import json
 import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
+import asyncio
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class MultiModelAI:
     def __init__(self):
-        """Initialize AI system with Ollama and Anthropic"""
+        """Initialize AI system"""
         self.usage_file = "/app/data/ai_usage.json"
         self.daily_budget = 5.00
         self.load_usage()
@@ -21,26 +22,26 @@ class MultiModelAI:
         
         try:
             import ollama
-            self.ollama_client = ollama.Client(host='http://zoe-ollama:11434')
+            self.ollama_client = ollama.Client(
+                host='http://zoe-ollama:11434',
+                timeout=20  # Set timeout
+            )
             models = self.ollama_client.list()
             self.ollama_available = True
-            model_names = [m.get('name') for m in models.get('models', [])]
-            logger.info(f"✅ Ollama initialized with models: {model_names}")
-        except ImportError:
-            logger.error("❌ Ollama package not installed")
+            logger.info(f"✅ Ollama connected with {len(models.get('models', []))} models")
         except Exception as e:
-            logger.error(f"❌ Ollama connection failed: {e}")
+            logger.error(f"❌ Ollama not available: {e}")
             
         # Initialize Anthropic
         self.anthropic_client = None
         api_key = os.getenv('ANTHROPIC_API_KEY', '').strip()
-        if api_key and api_key not in ['', 'your-key-here']:
+        if api_key and api_key not in ['', 'your-key-here', 'sk-ant-api03-YOUR-KEY-HERE']:
             try:
                 import anthropic
                 self.anthropic_client = anthropic.Anthropic(api_key=api_key)
                 logger.info("✅ Anthropic initialized")
-            except:
-                logger.warning("⚠️ Anthropic not available")
+            except Exception as e:
+                logger.warning(f"⚠️ Anthropic not available: {e}")
     
     def load_usage(self):
         try:
@@ -66,56 +67,80 @@ class MultiModelAI:
     
     def classify_complexity(self, message: str) -> str:
         msg = message.lower()
-        if len(message) < 50 and any(w in msg for w in ['hello', 'hi', 'test']):
+        
+        # Simple - use fast model
+        if len(message) < 50 and any(w in msg for w in ['hello', 'hi', 'test', 'time']):
             return 'simple'
-        elif any(w in msg for w in ['debug', 'analyze', 'optimize']):
+        
+        # Complex - use best model
+        elif any(w in msg for w in ['debug', 'analyze', 'optimize', 'script']):
             return 'complex'
+        
         return 'medium'
     
     async def generate_response(self, message: str, context: Optional[Dict] = None) -> Dict[str, Any]:
-        """Generate AI response"""
+        """Generate AI response with timeout handling"""
         complexity = self.classify_complexity(message)
-        response_text = "Hello from Zoe AI!"
+        response_text = "Hello! I'm ready to help."
         model_used = "none"
         
-        # Try Claude for complex queries
-        if complexity == 'complex' and self.anthropic_client and self.usage['total'] < self.daily_budget:
-            try:
-                response = self.anthropic_client.messages.create(
-                    model="claude-3-sonnet-20240229",
-                    max_tokens=1000,
-                    messages=[{"role": "user", "content": message}]
-                )
-                response_text = response.content[0].text
-                model_used = "claude-3-sonnet"
-                self.usage['total'] += 0.01
-                self.save_usage()
-                logger.info("Used Claude API")
-            except Exception as e:
-                logger.error(f"Claude error: {e}")
+        # Add instruction for brevity to complex queries
+        if complexity == 'complex' and 'script' in message.lower():
+            message += "\n\nPlease provide a concise solution (max 20 lines of code)."
         
-        # Use Ollama for other queries
-        if model_used == "none" and self.ollama_available:
-            model_map = {
-                'simple': 'llama3.2:1b',
-                'medium': 'llama3.2:3b', 
-                'complex': 'llama3.2:3b'
-            }
+        try:
+            # Try Claude for complex queries if available
+            if complexity == 'complex' and self.anthropic_client and self.usage['total'] < self.daily_budget:
+                try:
+                    response = self.anthropic_client.messages.create(
+                        model="claude-3-sonnet-20240229",
+                        max_tokens=500,  # Limit tokens
+                        messages=[{"role": "user", "content": message}],
+                        timeout=15  # 15 second timeout
+                    )
+                    response_text = response.content[0].text
+                    model_used = "claude-3-sonnet"
+                    self.usage['total'] += 0.01
+                    self.save_usage()
+                except Exception as e:
+                    logger.error(f"Claude error: {e}")
             
-            selected_model = model_map.get(complexity, 'llama3.2:3b')
-            
-            try:
-                response = self.ollama_client.chat(
-                    model=selected_model,
-                    messages=[{'role': 'user', 'content': message}]
-                )
-                response_text = response['message']['content']
-                model_used = selected_model
-                logger.info(f"Used Ollama {selected_model}")
-            except Exception as e:
-                logger.error(f"Ollama error: {e}")
-                response_text = f"I understand: '{message}'. The AI is warming up, please try again."
-                model_used = "warming-up"
+            # Use Ollama for other queries
+            if model_used == "none" and self.ollama_available:
+                model_map = {
+                    'simple': 'llama3.2:1b',
+                    'medium': 'llama3.2:3b',
+                    'complex': 'llama3.2:3b'
+                }
+                
+                selected_model = model_map.get(complexity, 'llama3.2:3b')
+                
+                try:
+                    # Set options for faster responses
+                    options = {
+                        'temperature': 0.7,
+                        'top_p': 0.9,
+                        'max_tokens': 300 if complexity == 'simple' else 500
+                    }
+                    
+                    response = self.ollama_client.chat(
+                        model=selected_model,
+                        messages=[{'role': 'user', 'content': message}],
+                        options=options
+                    )
+                    response_text = response['message']['content']
+                    model_used = selected_model
+                    
+                except asyncio.TimeoutError:
+                    response_text = "Response took too long. Try a simpler query."
+                    model_used = "timeout"
+                except Exception as e:
+                    logger.error(f"Ollama error: {e}")
+                    response_text = f"AI is processing. Please try again."
+                    model_used = "error"
+        
+        except Exception as e:
+            logger.error(f"Response generation error: {e}")
         
         return {
             'response': response_text,
@@ -138,5 +163,4 @@ class MultiModelAI:
             }
         }
 
-# Initialize on import
 ai_client = MultiModelAI()
