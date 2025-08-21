@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException, Query
 from routers import developer
 from fastapi.middleware.cors import CORSMiddleware
