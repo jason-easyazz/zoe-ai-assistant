@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Journal</title>
+    <link rel="stylesheet" href="css/glass.css">
+    <style>
+        .journal-container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .journal-entry {
+            margin-bottom: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .journal-entry:hover {
+            transform: translateX(5px);
+        }
+        
+        .entry-date {
+            font-size: 12px;
+            color: #999;
+            margin-bottom: 8px;
+        }
+        
+        .entry-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .entry-preview {
+            color: #666;
+            line-height: 1.6;
+        }
+        
+        .entry-mood {
+            display: inline-block;
+            font-size: 24px;
+            margin-right: 8px;
+        }
+        
+        .new-entry-form {
+            display: none;
+        }
+        
+        .new-entry-form.active {
+            display: block;
+        }
+        
+        .mood-selector {
+            display: flex;
+            gap: 10px;
+            margin: 15px 0;
+        }
+        
+        .mood-option {
+            font-size: 32px;
+            cursor: pointer;
+            opacity: 0.5;
+            transition: all 0.3s ease;
+        }
+        
+        .mood-option:hover,
+        .mood-option.selected {
+            opacity: 1;
+            transform: scale(1.2);
+        }
+        
+        .journal-textarea {
+            width: 100%;
+            min-height: 300px;
+            padding: 15px;
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            background: var(--glass-bg);
+            font-family: inherit;
+            font-size: 16px;
+            line-height: 1.6;
+            resize: vertical;
+        }
+    </style>
+</head>
+<body>
+    <nav class="nav-bar">
+        <div class="nav-left">
+            <a href="index.html" class="nav-logo">
+                <span>🤖</span>
+                <span>Zoe</span>
+            </a>
+            <div class="nav-menu">
+                <a href="index.html">Chat</a>
+                <a href="dashboard.html">Dashboard</a>
+                <a href="calendar.html">Calendar</a>
+                <a href="lists.html">Lists</a>
+                <a href="memories.html">Memories</a>
+                <a href="workflows.html">Workflows</a>
+                <a href="journal.html" class="active">Journal</a>
+                <a href="settings.html">Settings</a>
+                <a href="javascript:void(0)" onclick="openMoreOverlay()">More...</a>
+            </div>
+        </div>
+        <div class="nav-right">
+            <button class="btn btn-primary" onclick="toggleNewEntry()">+ New Entry</button>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        <div class="journal-container">
+            <h1>📔 Personal Journal</h1>
+            <p>Your private space for thoughts and reflections</p>
+            
+            <!-- New Entry Form -->
+            <div class="glass-card new-entry-form" id="newEntryForm">
+                <h2>New Journal Entry</h2>
+                
+                <div class="form-group">
+                    <label class="form-label">How are you feeling?</label>
+                    <div class="mood-selector">
+                        <span class="mood-option" onclick="selectMood('😊', this)">😊</span>
+                        <span class="mood-option" onclick="selectMood('😔', this)">😔</span>
+                        <span class="mood-option" onclick="selectMood('😴', this)">😴</span>
+                        <span class="mood-option" onclick="selectMood('😤', this)">😤</span>
+                        <span class="mood-option" onclick="selectMood('🤔', this)">🤔</span>
+                        <span class="mood-option" onclick="selectMood('😍', this)">😍</span>
+                        <span class="mood-option" onclick="selectMood('😎', this)">😎</span>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Entry Title</label>
+                    <input type="text" class="form-input" id="entryTitle" 
+                           placeholder="Give your entry a title...">
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Your Thoughts</label>
+                    <textarea class="journal-textarea" id="entryContent" 
+                              placeholder="What's on your mind today?"></textarea>
+                </div>
+                
+                <div class="flex gap-2">
+                    <button class="btn btn-primary" onclick="saveEntry()">Save Entry</button>
+                    <button class="btn btn-secondary" onclick="toggleNewEntry()">Cancel</button>
+                </div>
+            </div>
+            
+            <!-- Journal Entries -->
+            <div class="journal-entries mt-3">
+                <div class="glass-card journal-entry" onclick="viewEntry(1)">
+                    <div class="entry-date">August 23, 2025 - 10:30 AM</div>
+                    <div class="entry-title">
+                        <span class="entry-mood">😊</span>
+                        Great Progress on Zoe
+                    </div>
+                    <div class="entry-preview">
+                        Today was amazing! We finally got the UI deployed and everything is looking 
+                        beautiful with the glass morphism design. The quick chat feature is working 
+                        perfectly and...
+                    </div>
+                </div>
+                
+                <div class="glass-card journal-entry" onclick="viewEntry(2)">
+                    <div class="entry-date">August 22, 2025 - 9:15 PM</div>
+                    <div class="entry-title">
+                        <span class="entry-mood">🤔</span>
+                        Thinking About Architecture
+                    </div>
+                    <div class="entry-preview">
+                        Been pondering the best way to structure the memory system. Should we use 
+                        embeddings for semantic search or keep it simple with keywords? The challenge is...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div id="moreOverlay" class="more-overlay" onclick="if(event.target.id==='moreOverlay') closeMoreOverlay()">
+        <div class="more-menu">
+            <h2>All Features</h2>
+            <div class="grid grid-3 mt-3">
+                <button class="glass-card" onclick="navigateToPage('home.html')">
+                    <span style="font-size: 32px;">🏠</span>
+                    <h3>Home Control</h3>
+                </button>
+                <button class="glass-card" onclick="navigateToPage('developer/index.html')">
+                    <span style="font-size: 32px;">👨‍💻</span>
+                    <h3>Developer</h3>
+                </button>
+            </div>
+            <button class="btn btn-secondary mt-3" onclick="closeMoreOverlay()">Close</button>
+        </div>
+    </div>
+
+    <button class="fab" onclick="openQuickChat()">💬</button>
+    
+    <script src="js/common.js"></script>
+    <script>
+        let selectedMood = '';
+        
+        function toggleNewEntry() {
+            const form = document.getElementById('newEntryForm');
+            form.classList.toggle('active');
+        }
+        
+        function selectMood(mood, element) {
+            selectedMood = mood;
+            document.querySelectorAll('.mood-option').forEach(option => {
+                option.classList.remove('selected');
+            });
+            element.classList.add('selected');
+        }
+        
+        async function saveEntry() {
+            const title = document.getElementById('entryTitle').value;
+            const content = document.getElementById('entryContent').value;
+            
+            if (!title || !content) {
+                showNotification('Please fill in all fields', 'error');
+                return;
+            }
+            
+            // Save to API
+            showNotification('Journal entry saved!', 'success');
+            toggleNewEntry();
+            
+            // Clear form
+            document.getElementById('entryTitle').value = '';
+            document.getElementById('entryContent').value = '';
+            selectedMood = '';
+        }
+        
+        function viewEntry(id) {
+            showNotification(`Opening entry ${id}...`, 'info');
+            // Implement view functionality
+        }
+    </script>
+</body>
+</html>

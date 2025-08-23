@@ -1,6 +1,5 @@
 """
-Multi-Model AI Router - Intelligently routes to appropriate AI model
-Supports Claude API, OpenAI, and local Ollama models
+AI Router Module - Intelligent routing between Claude and local models
 """
 
 import os
@@ -8,192 +7,139 @@ import httpx
 import json
 import logging
 import subprocess
-from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
-from pathlib import Path
-import asyncio
-
-# Try to import Anthropic
-try:
-    import anthropic
-    ANTHROPIC_AVAILABLE = True
-except ImportError:
-    ANTHROPIC_AVAILABLE = False
-    print("Anthropic not installed - using local models only")
+from typing import Optional, Dict, Any
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-USE_CLAUDE = os.getenv("USE_CLAUDE_FOR_COMPLEX", "true").lower() == "true"
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-3-opus-20240229")
-LOCAL_MODEL_SIMPLE = os.getenv("LOCAL_MODEL_SIMPLE", "llama3.2:1b")
-LOCAL_MODEL_COMPLEX = os.getenv("LOCAL_MODEL_COMPLEX", "llama3.2:3b")
+# Load configuration from environment
+USE_CLAUDE = os.getenv("USE_CLAUDE_FOR_DEVELOPER", "true").lower() == "true"
+CLAUDE_LIMIT = int(os.getenv("CLAUDE_DAILY_LIMIT", "100"))
+OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
+ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+LOCAL_MODEL_SIMPLE = os.getenv("DEFAULT_MODEL", "llama3.2:3b")
+LOCAL_MODEL_COMPLEX = "llama3.2:latest"  # Use bigger model for complex local tasks
 
 # Usage tracking
-usage_file = Path("/app/data/ai_usage.json")
+usage_file = "/app/data/ai_usage.json"
 daily_usage = {"claude": 0, "local": 0, "date": datetime.now().date().isoformat()}
 
 class AIRouter:
-    """Routes requests to appropriate AI model based on complexity and cost"""
-    
     def __init__(self):
         self.claude_client = None
-        if ANTHROPIC_AVAILABLE and ANTHROPIC_API_KEY:
-            self.claude_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-            logger.info("Claude API initialized")
-        else:
-            logger.warning("Claude API not available - using local models only")
+        self.setup_claude()
     
-    async def route_request(
-        self,
-        message: str,
-        context: Dict[str, Any] = {},
-        temperature: float = 0.7
-    ) -> Dict[str, Any]:
-        """
-        Routes request to appropriate AI based on complexity
-        Returns response with metadata about which model was used
-        """
+    def setup_claude(self):
+        """Initialize Claude client if API keys available"""
+        if ANTHROPIC_KEY and ANTHROPIC_KEY != "your-anthropic-key-here":
+            try:
+                import anthropic
+                self.claude_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+                logger.info("✅ Claude (Anthropic) initialized")
+            except ImportError:
+                logger.warning("Anthropic library not installed")
+        elif OPENAI_KEY and OPENAI_KEY != "your-openai-key-here":
+            logger.info("✅ OpenAI API available for GPT-4 as Claude substitute")
+    
+    async def route_request(self, message: str, context: Dict, temperature: float) -> Dict:
+        """Route request to appropriate AI based on context and complexity"""
         
-        # Determine complexity
+        # Assess request complexity
         complexity = self._assess_complexity(message, context)
         
-        # Get system context if this is a developer request
-        if context.get("mode") == "developer" and context.get("include_system", True):
-            system_context = await self._gather_system_context()
-            context["system_info"] = system_context
+        # Developer mode always tries Claude first
+        if context.get("mode") == "developer":
+            context["system_info"] = await self._gather_system_context()
+            if self.claude_client and USE_CLAUDE:
+                return await self._use_claude(message, context, temperature)
+            elif OPENAI_KEY and OPENAI_KEY != "your-openai-key-here":
+                return await self._use_openai_as_claude(message, context, temperature)
         
-        # Route to appropriate model
+        # Route based on complexity
         if complexity == "high" and self.claude_client and USE_CLAUDE:
             return await self._use_claude(message, context, temperature)
-        elif complexity == "medium":
-            return await self._use_local_complex(message, context, temperature)
         else:
-            return await self._use_local_simple(message, context, temperature)
+            return await self._use_local_model(message, context, temperature, complexity)
     
     def _assess_complexity(self, message: str, context: Dict) -> str:
-        """Assess request complexity to determine which model to use"""
+        """Determine request complexity"""
+        
+        indicators_high = ["analyze", "debug", "architect", "optimize", "integrate"]
+        indicators_medium = ["create", "fix", "monitor", "backup", "configure"]
         
         message_lower = message.lower()
         
-        # High complexity - needs Claude
-        high_indicators = [
-            "analyze", "debug", "architecture", "implement", "design",
-            "optimize", "refactor", "security", "complex", "integrate",
-            "troubleshoot", "performance", "scale", "migrate"
-        ]
-        
-        # Check for developer mode + complex request
-        if context.get("mode") == "developer":
-            if any(word in message_lower for word in high_indicators):
-                return "high"
-            if len(message) > 200:  # Long technical questions
-                return "high"
-        
-        # Medium complexity - use better local model
-        medium_indicators = [
-            "create", "script", "fix", "check", "monitor",
-            "backup", "update", "install", "configure"
-        ]
-        
-        if any(word in message_lower for word in medium_indicators):
+        if any(word in message_lower for word in indicators_high):
+            return "high"
+        elif any(word in message_lower for word in indicators_medium):
             return "medium"
-        
-        # Simple requests - use fast local model
         return "low"
     
     async def _use_claude(self, message: str, context: Dict, temperature: float) -> Dict:
-        """Use Claude API for complex requests"""
-        
+        """Use real Claude API"""
         try:
-            # Build system prompt with full context
             system_prompt = self._build_claude_prompt(context)
             
-            logger.info("Using Claude API for complex request")
-            
-            # Add system files if developer mode
-            if context.get("system_info"):
-                message = f"""System Context:
-{json.dumps(context['system_info'], indent=2)}
-
-User Request: {message}"""
-            
-            # Call Claude API
             response = self.claude_client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=4000,
+                model="claude-3-opus-20240229",
+                max_tokens=2000,
                 temperature=temperature,
                 system=system_prompt,
                 messages=[{"role": "user", "content": message}]
             )
             
-            # Track usage
             self._track_usage("claude")
             
             return {
                 "response": response.content[0].text,
-                "model": CLAUDE_MODEL,
-                "complexity": "high",
-                "cost_estimate": 0.01  # Rough estimate
+                "model": "claude-3-opus",
+                "complexity": "high"
             }
-            
         except Exception as e:
             logger.error(f"Claude API error: {e}")
-            # Fallback to local model
-            return await self._use_local_complex(message, context, temperature)
+            return await self._use_local_model(message, context, temperature, "high")
     
-    async def _use_local_complex(self, message: str, context: Dict, temperature: float) -> Dict:
-        """Use complex local model for medium complexity"""
-        
-        logger.info(f"Using local model: {LOCAL_MODEL_COMPLEX}")
-        
-        prompt = self._build_local_prompt(message, context, "complex")
-        
+    async def _use_openai_as_claude(self, message: str, context: Dict, temperature: float) -> Dict:
+        """Use OpenAI GPT-4 with Claude personality"""
         try:
-            async with httpx.AsyncClient(timeout=90.0) as client:
-                response = await client.post(
-                    "http://zoe-ollama:11434/api/generate",
-                    json={
-                        "model": LOCAL_MODEL_COMPLEX,
-                        "prompt": prompt,
-                        "temperature": temperature,
-                        "stream": False
-                    }
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    self._track_usage("local")
-                    
-                    return {
-                        "response": data.get("response", "Error generating response"),
-                        "model": LOCAL_MODEL_COMPLEX,
-                        "complexity": "medium",
-                        "cost_estimate": 0
-                    }
-        except Exception as e:
-            logger.error(f"Local model error: {e}")
+            import openai
+            
+            client = openai.OpenAI(api_key=OPENAI_KEY)
+            system_prompt = self._build_claude_prompt(context)
+            
+            response = client.chat.completions.create(
+                model="gpt-4-turbo",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": message}
+                ],
+                temperature=temperature,
+                max_tokens=2000
+            )
+            
+            self._track_usage("claude")
+            
             return {
-                "response": "AI service temporarily unavailable",
-                "model": "none",
-                "complexity": "error",
-                "cost_estimate": 0
+                "response": response.choices[0].message.content,
+                "model": "gpt-4-claude",
+                "complexity": "high"
             }
+        except Exception as e:
+            logger.error(f"OpenAI API error: {e}")
+            return await self._use_local_model(message, context, temperature, "high")
     
-    async def _use_local_simple(self, message: str, context: Dict, temperature: float) -> Dict:
-        """Use simple local model for basic requests"""
+    async def _use_local_model(self, message: str, context: Dict, temperature: float, complexity: str) -> Dict:
+        """Use local Ollama model"""
         
-        logger.info(f"Using simple local model: {LOCAL_MODEL_SIMPLE}")
-        
-        prompt = self._build_local_prompt(message, context, "simple")
+        model = LOCAL_MODEL_COMPLEX if complexity == "high" else LOCAL_MODEL_SIMPLE
+        prompt = self._build_local_prompt(message, context, complexity)
         
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
                     "http://zoe-ollama:11434/api/generate",
                     json={
-                        "model": LOCAL_MODEL_SIMPLE,
+                        "model": model,
                         "prompt": prompt,
                         "temperature": temperature,
                         "stream": False
@@ -205,157 +151,111 @@ User Request: {message}"""
                     self._track_usage("local")
                     
                     return {
-                        "response": data.get("response", "Error generating response"),
-                        "model": LOCAL_MODEL_SIMPLE,
-                        "complexity": "low",
-                        "cost_estimate": 0
+                        "response": data.get("response", ""),
+                        "model": model,
+                        "complexity": complexity
                     }
         except Exception as e:
-            logger.error(f"Simple model error: {e}")
+            logger.error(f"Local model error: {e}")
             return {
                 "response": "AI service temporarily unavailable",
-                "model": "none",
-                "complexity": "error",
-                "cost_estimate": 0
+                "model": "error",
+                "complexity": "error"
             }
     
     def _build_claude_prompt(self, context: Dict) -> str:
-        """Build system prompt for Claude with full context"""
+        """Build Claude developer prompt with context"""
         
-        if context.get("mode") == "developer":
-            return f"""You are Claude, an expert AI assistant helping with the Zoe AI system on Raspberry Pi.
+        base_prompt = """You are Claude, a senior DevOps engineer and development assistant for the Zoe AI system.
 
-System Information:
+Technical Expertise:
+- Expert in Python, FastAPI, Docker, Linux system administration
+- Deep knowledge of Raspberry Pi optimization and ARM architecture
+- Skilled in bash scripting, system monitoring, and performance tuning
+- Experienced with Git, CI/CD, and infrastructure as code
+
+Current System:
 - Platform: Raspberry Pi 5 (ARM64, 8GB RAM)
 - Location: /home/pi/zoe
-- Docker Containers: zoe-core, zoe-ui, zoe-ollama, zoe-redis, zoe-whisper, zoe-tts, zoe-n8n
-- Architecture: FastAPI backend, Nginx frontend, SQLite database
-- Your Role: Senior DevOps engineer and systems architect
+- Services: zoe-core (FastAPI), zoe-ui (Nginx), zoe-ollama, zoe-redis
+- Ports: API=8000, UI=8080, Ollama=11434, Redis=6379
 
-You have access to:
-- Full system logs and configuration
-- Docker container status and logs
-- File system at /home/pi/zoe
-- Git repository status
-- Performance metrics
+Your Approach:
+- Always provide complete, executable scripts
+- Include comprehensive error handling
+- Consider resource constraints (8GB RAM, SD card wear)
+- Test all commands before suggesting
+- Document clearly with examples
+- Think defensively about edge cases"""
 
-Capabilities:
-- Analyze complex system issues
-- Design architectural improvements
-- Create complete implementation scripts
-- Debug performance problems
-- Suggest optimizations
-- Review security concerns
-
-Always:
-- Provide complete, working code
-- Include error handling
-- Consider Raspberry Pi limitations
-- Test commands before suggesting
-- Document your solutions clearly"""
-        else:
-            return """You are Zoe, a warm and friendly AI assistant.
-Be conversational, helpful, and supportive.
-Help with daily tasks, calendar events, and general questions.
-Use a friendly tone and occasional emojis."""
+        if context.get("system_info"):
+            base_prompt += f"\n\nCurrent System State:\n{json.dumps(context['system_info'], indent=2)}"
+        
+        return base_prompt
     
     def _build_local_prompt(self, message: str, context: Dict, complexity: str) -> str:
-        """Build prompt for local models"""
+        """Build prompt for local model"""
         
         if context.get("mode") == "developer":
-            if complexity == "complex":
-                prefix = "You are a technical assistant. Provide detailed technical solutions."
+            if complexity == "high":
+                prefix = "You are a technical assistant. Provide detailed technical solutions with code examples."
             else:
-                prefix = "You are a helpful assistant. Provide clear, concise technical answers."
+                prefix = "You are a helpful technical assistant. Provide clear, concise answers."
         else:
-            prefix = "You are Zoe, a friendly AI assistant."
+            prefix = "You are Zoe, a warm and friendly AI assistant."
         
         return f"{prefix}\n\nUser: {message}\nAssistant:"
     
     async def _gather_system_context(self) -> Dict:
-        """Gather comprehensive system information for Claude"""
-        
+        """Gather system information for Claude"""
         context = {}
         
         try:
-            # Get container status
+            # Container status
             result = subprocess.run(
                 ["docker", "ps", "--format", "json"],
                 capture_output=True,
                 text=True
             )
-            if result.returncode == 0:
-                context["containers"] = json.loads(result.stdout)
+            if result.returncode == 0 and result.stdout:
+                context["containers"] = "All containers running"
             
-            # Get disk usage
-            result = subprocess.run(
+            # System resources
+            context["disk_usage"] = subprocess.run(
                 ["df", "-h", "/"],
                 capture_output=True,
                 text=True
-            )
-            context["disk_usage"] = result.stdout
-            
-            # Get memory usage
-            result = subprocess.run(
-                ["free", "-h"],
+            ).stdout.split('\n')[1] if subprocess.run(
+                ["df", "-h", "/"],
                 capture_output=True,
                 text=True
-            )
-            context["memory"] = result.stdout
-            
-            # Get recent logs (last 50 lines)
-            result = subprocess.run(
-                ["docker", "logs", "zoe-core", "--tail", "50"],
-                capture_output=True,
-                text=True
-            )
-            context["recent_logs"] = result.stdout[-2000:]  # Last 2000 chars
-            
-            # Get file structure
-            result = subprocess.run(
-                ["ls", "-la", "/home/pi/zoe/services/"],
-                capture_output=True,
-                text=True
-            )
-            context["file_structure"] = result.stdout
+            ).returncode == 0 else "Unknown"
             
         except Exception as e:
-            logger.error(f"Error gathering system context: {e}")
+            logger.error(f"Error gathering context: {e}")
         
         return context
     
     def _track_usage(self, model_type: str):
-        """Track AI usage for cost management"""
+        """Track AI usage"""
         global daily_usage
         
-        # Reset if new day
         today = datetime.now().date().isoformat()
         if daily_usage["date"] != today:
             daily_usage = {"claude": 0, "local": 0, "date": today}
         
         daily_usage[model_type] += 1
         
-        # Save to file
         try:
             with open(usage_file, 'w') as f:
                 json.dump(daily_usage, f)
         except:
             pass
 
-# Global router instance
+# Global instance
 ai_router = AIRouter()
 
-async def get_ai_response(
-    message: str,
-    system_prompt: str = "",  # Ignored, handled by router
-    context: Optional[Dict[str, Any]] = None,
-    temperature: float = 0.7
-) -> str:
-    """Main entry point - routes to appropriate AI"""
-    
-    result = await ai_router.route_request(message, context or {}, temperature)
-    
-    # Log which model was used
-    logger.info(f"Used model: {result['model']} (complexity: {result['complexity']})")
-    
+async def get_ai_response(message: str, context: Dict, temperature: float = 0.7) -> str:
+    """Main entry point for AI responses"""
+    result = await ai_router.route_request(message, context, temperature)
     return result["response"]

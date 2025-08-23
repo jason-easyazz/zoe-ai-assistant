@@ -1,0 +1,52 @@
+{
+  "providers": {
+    "openai": {
+      "enabled": false,
+      "models": [],
+      "default": null,
+      "api_key_var": "OPENAI_API_KEY"
+    },
+    "anthropic": {
+      "enabled": false,
+      "models": [],
+      "default": null,
+      "api_key_var": "ANTHROPIC_API_KEY"
+    },
+    "google": {
+      "enabled": false,
+      "models": [],
+      "default": null,
+      "api_key_var": "GOOGLE_API_KEY"
+    },
+    "mistral": {
+      "enabled": false,
+      "models": [],
+      "default": null,
+      "api_key_var": "MISTRAL_API_KEY"
+    },
+    "cohere": {
+      "enabled": false,
+      "models": [],
+      "default": null,
+      "api_key_var": "COHERE_API_KEY"
+    },
+    "groq": {
+      "enabled": false,
+      "models": [],
+      "default": null,
+      "api_key_var": "GROQ_API_KEY"
+    },
+    "ollama": {
+      "enabled": true,
+      "models": [
+        "llama3.2:1b",
+        "llama3.2:3b"
+      ],
+      "default": "llama3.2:1b",
+      "api_key_var": null,
+      "base_url": "http://zoe-ollama:11434"
+    }
+  },
+  "default_provider": "ollama",
+  "last_updated": "2025-08-23T08:44:50.558632"
+}

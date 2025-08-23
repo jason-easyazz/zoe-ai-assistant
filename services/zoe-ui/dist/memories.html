@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Memories</title>
+    <link rel="stylesheet" href="css/glass.css">
+    <style>
+        .memory-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid var(--glass-border);
+            padding-bottom: 10px;
+        }
+        
+        .memory-tab {
+            padding: 8px 16px;
+            background: transparent;
+            border: none;
+            color: #666;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            font-size: 16px;
+        }
+        
+        .memory-tab.active {
+            background: var(--primary-gradient);
+            color: white;
+        }
+        
+        .memory-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+        }
+        
+        .memory-card {
+            cursor: pointer;
+            position: relative;
+            min-height: 150px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        
+        .memory-card:hover {
+            transform: translateY(-3px);
+        }
+        
+        .person-avatar {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: var(--primary-gradient);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            margin-bottom: 12px;
+        }
+        
+        .memory-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        
+        .memory-details {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .memory-notes {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid var(--glass-border);
+            font-size: 13px;
+            color: #777;
+        }
+    </style>
+</head>
+<body>
+    <nav class="nav-bar">
+        <div class="nav-left">
+            <a href="index.html" class="nav-logo">
+                <span>🤖</span>
+                <span>Zoe</span>
+            </a>
+            <div class="nav-menu">
+                <a href="index.html">Chat</a>
+                <a href="dashboard.html">Dashboard</a>
+                <a href="calendar.html">Calendar</a>
+                <a href="lists.html">Lists</a>
+                <a href="memories.html" class="active">Memories</a>
+                <a href="workflows.html">Workflows</a>
+                <a href="settings.html">Settings</a>
+                <a href="javascript:void(0)" onclick="openMoreOverlay()">More...</a>
+            </div>
+        </div>
+        <div class="nav-right">
+            <button class="btn btn-primary" onclick="addMemory()">+ Add Memory</button>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        <h1>💭 Memories</h1>
+        <p>Keep track of important people, projects, and contexts</p>
+        
+        <div class="memory-tabs">
+            <button class="memory-tab active" onclick="switchTab('people')">👥 People</button>
+            <button class="memory-tab" onclick="switchTab('projects')">📁 Projects</button>
+            <button class="memory-tab" onclick="switchTab('contexts')">🏷️ Contexts</button>
+            <button class="memory-tab" onclick="switchTab('notes')">📝 Notes</button>
+        </div>
+        
+        <div id="peopleTab" class="memory-content">
+            <div class="memory-grid">
+                <div class="glass-card memory-card" onclick="editPerson(1)">
+                    <div>
+                        <div class="person-avatar">👨</div>
+                        <div class="memory-title">John Smith</div>
+                        <div class="memory-details">Friend from work</div>
+                    </div>
+                    <div class="memory-notes">
+                        Likes: Coffee, hiking<br>
+                        Birthday: March 15
+                    </div>
+                </div>
+                
+                <div class="glass-card memory-card" onclick="editPerson(2)">
+                    <div>
+                        <div class="person-avatar">👩</div>
+                        <div class="memory-title">Sarah Johnson</div>
+                        <div class="memory-details">Project manager</div>
+                    </div>
+                    <div class="memory-notes">
+                        Email: sarah@company.com<br>
+                        Prefers morning meetings
+                    </div>
+                </div>
+                
+                <div class="glass-card memory-card" onclick="addPerson()">
+                    <div class="flex-center" style="height: 100%; color: #999;">
+                        <div style="text-align: center;">
+                            <div style="font-size: 48px;">+</div>
+                            <div>Add Person</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div id="projectsTab" class="memory-content hidden">
+            <div class="memory-grid">
+                <div class="glass-card memory-card">
+                    <div>
+                        <div class="memory-title">🚀 Zoe Development</div>
+                        <div class="memory-details">AI Assistant Project</div>
+                    </div>
+                    <div class="memory-notes">
+                        Status: In Progress<br>
+                        Next: UI improvements
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div id="moreOverlay" class="more-overlay" onclick="if(event.target.id==='moreOverlay') closeMoreOverlay()">
+        <div class="more-menu">
+            <h2>All Features</h2>
+            <div class="grid grid-3 mt-3">
+                <button class="glass-card" onclick="navigateToPage('journal.html')">
+                    <span style="font-size: 32px;">📔</span>
+                    <h3>Journal</h3>
+                </button>
+                <button class="glass-card" onclick="navigateToPage('home.html')">
+                    <span style="font-size: 32px;">🏠</span>
+                    <h3>Home Control</h3>
+                </button>
+                <button class="glass-card" onclick="navigateToPage('developer/index.html')">
+                    <span style="font-size: 32px;">👨‍💻</span>
+                    <h3>Developer</h3>
+                </button>
+            </div>
+            <button class="btn btn-secondary mt-3" onclick="closeMoreOverlay()">Close</button>
+        </div>
+    </div>
+
+    <button class="fab" onclick="openQuickChat()">💬</button>
+    
+    <script src="js/common.js"></script>
+    <script>
+        let currentTab = 'people';
+        
+        function switchTab(tab) {
+            // Hide all tabs
+            document.querySelectorAll('.memory-content').forEach(content => {
+                content.classList.add('hidden');
+            });
+            
+            // Remove active from all tabs
+            document.querySelectorAll('.memory-tab').forEach(tabBtn => {
+                tabBtn.classList.remove('active');
+            });
+            
+            // Show selected tab
+            const tabContent = document.getElementById(tab + 'Tab');
+            if (tabContent) {
+                tabContent.classList.remove('hidden');
+            }
+            
+            // Mark tab as active
+            event.target.classList.add('active');
+            currentTab = tab;
+        }
+        
+        async function addMemory() {
+            const type = prompt(`Add new ${currentTab.slice(0, -1)}:`);
+            if (type) {
+                showNotification(`${currentTab.slice(0, -1)} added!`, 'success');
+                // Add API call here
+            }
+        }
+        
+        function editPerson(id) {
+            showNotification('Opening person details...', 'info');
+            // Implement edit functionality
+        }
+        
+        function addPerson() {
+            addMemory();
+        }
+    </script>
+</body>
+</html>
