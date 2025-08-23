@@ -53,3 +53,8 @@ Thumbs.db
 !README.md
 SMART_CONTINUATION_PROMPT.txt
 smart_continuation.sh
+data/api_keys.enc
+backups/
+*.backup
+test_*.html
+tts_test.html

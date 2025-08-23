@@ -15,7 +15,7 @@ import sys
 sys.path.append('/app')
 
 # Import all routers
-from routers import developer, lists, templates
+from routers import developer, settings, lists, templates, tts_local
 
 # Import integrations with error handling
 try:
@@ -54,8 +54,13 @@ app.add_middleware(
 
 # Include routers
 app.include_router(developer.router)
+app.include_router(tts_local.router)
+app.include_router(settings.router)
+app.include_router(tts_local.router)
 app.include_router(lists.router)
+app.include_router(tts_local.router)
 app.include_router(templates.router)
+app.include_router(tts_local.router)
 
 # Health endpoints
 @app.get("/")
