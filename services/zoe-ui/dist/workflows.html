@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Workflows</title>
+    <link rel="stylesheet" href="css/glass.css">
+    <style>
+        .workflow-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .workflow-card {
+            position: relative;
+            cursor: pointer;
+            min-height: 200px;
+        }
+        
+        .workflow-card:hover {
+            transform: translateY(-3px);
+        }
+        
+        .workflow-status {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .status-active {
+            background: rgba(34, 197, 94, 0.1);
+            color: #22c55e;
+        }
+        
+        .status-inactive {
+            background: rgba(239, 68, 68, 0.1);
+            color: #ef4444;
+        }
+        
+        .workflow-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+        }
+        
+        .workflow-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        
+        .workflow-description {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 12px;
+        }
+        
+        .workflow-trigger {
+            font-size: 13px;
+            color: #999;
+            padding-top: 10px;
+            border-top: 1px solid var(--glass-border);
+        }
+        
+        .n8n-iframe {
+            width: 100%;
+            height: 600px;
+            border: none;
+            border-radius: 12px;
+            background: white;
+        }
+    </style>
+</head>
+<body>
+    <nav class="nav-bar">
+        <div class="nav-left">
+            <a href="index.html" class="nav-logo">
+                <span>🤖</span>
+                <span>Zoe</span>
+            </a>
+            <div class="nav-menu">
+                <a href="index.html">Chat</a>
+                <a href="dashboard.html">Dashboard</a>
+                <a href="calendar.html">Calendar</a>
+                <a href="lists.html">Lists</a>
+                <a href="memories.html">Memories</a>
+                <a href="workflows.html" class="active">Workflows</a>
+                <a href="settings.html">Settings</a>
+                <a href="javascript:void(0)" onclick="openMoreOverlay()">More...</a>
+            </div>
+        </div>
+        <div class="nav-right">
+            <button class="btn btn-primary" onclick="openN8N()">Open N8N →</button>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        <h1>⚡ Automation Workflows</h1>
+        <p>Automate your daily tasks and routines with N8N</p>
+        
+        <div class="workflow-grid">
+            <div class="glass-card workflow-card" onclick="toggleWorkflow(1)">
+                <div class="workflow-status status-active">Active</div>
+                <div class="workflow-icon">🌅</div>
+                <div class="workflow-title">Morning Routine</div>
+                <div class="workflow-description">
+                    Start your day right with automated morning tasks
+                </div>
+                <div class="workflow-trigger">
+                    Trigger: Daily at 7:00 AM
+                </div>
+            </div>
+            
+            <div class="glass-card workflow-card" onclick="toggleWorkflow(2)">
+                <div class="workflow-status status-active">Active</div>
+                <div class="workflow-icon">📧</div>
+                <div class="workflow-title">Email Digest</div>
+                <div class="workflow-description">
+                    Summarize important emails and send daily digest
+                </div>
+                <div class="workflow-trigger">
+                    Trigger: Daily at 9:00 AM
+                </div>
+            </div>
+            
+            <div class="glass-card workflow-card" onclick="toggleWorkflow(3)">
+                <div class="workflow-status status-inactive">Inactive</div>
+                <div class="workflow-icon">🏠</div>
+                <div class="workflow-title">Home Automation</div>
+                <div class="workflow-description">
+                    Control smart home devices based on your location
+                </div>
+                <div class="workflow-trigger">
+                    Trigger: Location-based
+                </div>
+            </div>
+            
+            <div class="glass-card workflow-card" onclick="toggleWorkflow(4)">
+                <div class="workflow-status status-active">Active</div>
+                <div class="workflow-icon">📅</div>
+                <div class="workflow-title">Calendar Sync</div>
+                <div class="workflow-description">
+                    Sync events across all your calendars
+                </div>
+                <div class="workflow-trigger">
+                    Trigger: On event creation
+                </div>
+            </div>
+            
+            <div class="glass-card workflow-card" onclick="createWorkflow()">
+                <div class="flex-center" style="height: 100%; color: #999;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 48px;">+</div>
+                        <div>Create Workflow</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="glass-card mt-3">
+            <h2>N8N Dashboard</h2>
+            <p>Access the full N8N interface to create and manage complex workflows</p>
+            <iframe id="n8nFrame" class="n8n-iframe mt-2" src="http://localhost:5678"></iframe>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div id="moreOverlay" class="more-overlay" onclick="if(event.target.id==='moreOverlay') closeMoreOverlay()">
+        <div class="more-menu">
+            <h2>All Features</h2>
+            <div class="grid grid-3 mt-3">
+                <button class="glass-card" onclick="navigateToPage('journal.html')">
+                    <span style="font-size: 32px;">📔</span>
+                    <h3>Journal</h3>
+                </button>
+                <button class="glass-card" onclick="navigateToPage('home.html')">
+                    <span style="font-size: 32px;">🏠</span>
+                    <h3>Home Control</h3>
+                </button>
+                <button class="glass-card" onclick="navigateToPage('developer/index.html')">
+                    <span style="font-size: 32px;">👨‍💻</span>
+                    <h3>Developer</h3>
+                </button>
+            </div>
+            <button class="btn btn-secondary mt-3" onclick="closeMoreOverlay()">Close</button>
+        </div>
+    </div>
+
+    <button class="fab" onclick="openQuickChat()">💬</button>
+    
+    <script src="js/common.js"></script>
+    <script>
+        function toggleWorkflow(id) {
+            showNotification(`Toggling workflow ${id}...`, 'info');
+            // Implement workflow toggle
+        }
+        
+        function createWorkflow() {
+            openN8N();
+        }
+        
+        function openN8N() {
+            window.open('http://localhost:5678', '_blank');
+        }
+    </script>
+</body>
+</html>

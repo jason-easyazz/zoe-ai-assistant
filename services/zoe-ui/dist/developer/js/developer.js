@@ -1,101 +1,85 @@
-// Developer Dashboard JavaScript
-const API_BASE = window.location.hostname === 'localhost' 
-    ? 'http://localhost:8000' 
-    : `http://${window.location.hostname}:8000`;
-
-let aiConnected = false;
+// Zoe Developer Dashboard JavaScript
+const API_BASE = '/api';
+let chatHistory = [];
+let systemStatus = {};
 let isProcessing = false;
 
-// Initialize
-document.addEventListener('DOMContentLoaded', function() {
+// Initialize on load
+document.addEventListener('DOMContentLoaded', () => {
     console.log('🚀 Developer Dashboard Initializing...');
-    updateTime();
-    setInterval(updateTime, 60000);
-    checkAIStatus();
-    loadSystemStatus();
-    document.getElementById('messageInput').focus();
+    initializeDashboard();
+    setInterval(updateTime, 1000);
+    setInterval(checkSystemStatus, 30000);
 });
 
-// Time updates
-function updateTime() {
-    const now = new Date();
-    document.getElementById('currentTime').textContent = now.toLocaleTimeString([], { 
-        hour: 'numeric', minute: '2-digit', hour12: true 
-    });
+async function initializeDashboard() {
+    updateTime();
+    await checkClaudeStatus();
+    await checkSystemStatus();
+    await loadRecentTasks();
+    
+    // Focus on input
+    document.getElementById('messageInput').focus();
 }
 
-// Check AI status
-async function checkAIStatus() {
+function updateTime() {
+    const now = new Date();
+    document.getElementById('currentTime').textContent = 
+        now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+async function checkClaudeStatus() {
     try {
-        const response = await fetch(`${API_BASE}/api/developer/status`);
-        const statusEl = document.getElementById('aiStatus');
+        const response = await fetch(`${API_BASE}/developer/status`);
+        const statusEl = document.getElementById('claudeStatus');
         
         if (response.ok) {
-            const data = await response.json();
-            aiConnected = true;
             statusEl.className = 'status-indicator';
-            statusEl.innerHTML = '<div class="status-dot"></div><span>AI Online</span>';
-            
-            // Check for Claude
-            if (data.ai_models && data.ai_models.claude) {
-                statusEl.innerHTML = '<div class="status-dot"></div><span>Claude Ready</span>';
-            } else if (data.ai_models && (data.ai_models['llama3.2:3b'] || data.ai_models['llama3.2:1b'])) {
-                statusEl.innerHTML = '<div class="status-dot"></div><span>Local AI</span>';
-            }
+            statusEl.innerHTML = '<div class="status-dot"></div><span>Claude Online</span>';
+        } else {
+            throw new Error('Claude offline');
         }
     } catch (error) {
-        aiConnected = false;
-        const statusEl = document.getElementById('aiStatus');
+        const statusEl = document.getElementById('claudeStatus');
         statusEl.className = 'status-indicator offline';
-        statusEl.innerHTML = '<div class="status-dot"></div><span>AI Offline</span>';
+        statusEl.innerHTML = '<div class="status-dot"></div><span>Claude Offline</span>';
     }
 }
 
-// Load system status
-async function loadSystemStatus() {
+async function checkSystemStatus() {
     try {
-        const response = await fetch(`${API_BASE}/api/developer/system/status`);
+        const response = await fetch(`${API_BASE}/developer/system/status`);
         if (response.ok) {
             const data = await response.json();
             updateSystemStatusDisplay(data);
         }
     } catch (error) {
-        console.error('Failed to load system status:', error);
+        console.error('Failed to check system status:', error);
     }
 }
 
-function updateSystemStatusDisplay(data) {
-    const statusGrid = document.getElementById('systemStatus');
-    const services = data.services || {};
+function updateSystemStatusDisplay(status) {
+    const container = document.getElementById('systemStatus');
+    const services = [
+        { name: 'CORE', key: 'core', icon: '✅' },
+        { name: 'UI', key: 'ui', icon: '✅' },
+        { name: 'AI', key: 'ollama', icon: '✅' },
+        { name: 'CACHE', key: 'redis', icon: '✅' },
+        { name: 'STT', key: 'whisper', icon: '⚠️' },
+        { name: 'TTS', key: 'tts', icon: '⚠️' }
+    ];
     
-    statusGrid.innerHTML = `
-        <div class="status-item">
-            <div class="status-icon status-${services.api === 'running' ? 'healthy' : 'error'}">
-                ${services.api === 'running' ? '✅' : '❌'}
+    container.innerHTML = services.map(service => {
+        const state = status[service.key] || 'unknown';
+        const icon = state === 'healthy' ? '✅' : state === 'warning' ? '⚠️' : '❌';
+        
+        return `
+            <div class="status-item" onclick="checkService('${service.key}')">
+                <div class="status-icon">${icon}</div>
+                <div>${service.name}</div>
             </div>
-            <div class="status-label">API</div>
-        </div>
-        <div class="status-item">
-            <div class="status-icon status-${services.ai === 'connected' ? 'healthy' : 'error'}">
-                ${services.ai === 'connected' ? '✅' : '❌'}
-            </div>
-            <div class="status-label">AI</div>
-        </div>
-        <div class="status-item">
-            <div class="status-icon status-${data.memory ? 'warning' : 'healthy'}">
-                ${data.memory ? '⚠️' : '✅'}
-            </div>
-            <div class="status-label">Memory</div>
-        </div>
-    `;
-}
-
-// Chat functionality
-function handleInputKeyDown(event) {
-    if (event.key === 'Enter' && !event.shiftKey) {
-        event.preventDefault();
-        sendMessage();
-    }
+        `;
+    }).join('');
 }
 
 async function sendMessage() {
@@ -107,68 +91,89 @@ async function sendMessage() {
     // Add user message
     addMessage(message, 'user');
     input.value = '';
-    
-    // Show processing
     isProcessing = true;
-    updateAIActivity('thinking', 'Processing...');
     
     try {
-        const response = await fetch(`${API_BASE}/api/developer/chat`, {
+        // Send to developer chat endpoint
+        const response = await fetch(`${API_BASE}/developer/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message })
+            body: JSON.stringify({ message: message })
         });
         
         if (response.ok) {
-            const result = await response.json();
-            addMessage(result.response, 'ai', result.model_used);
+            const data = await response.json();
+            addMessage(data.response || "I'm processing that request...", 'claude');
         } else {
-            throw new Error('API error');
+            throw new Error('Chat request failed');
         }
     } catch (error) {
         console.error('Chat error:', error);
-        addMessage('Sorry, I encountered an error. Please check the service status.', 'ai');
+        addMessage('Error: Could not connect to backend. Check if zoe-core is running.', 'claude');
     } finally {
         isProcessing = false;
-        updateAIActivity('idle', 'Ready to help');
     }
 }
 
-function addMessage(content, sender, model) {
-    const messagesContainer = document.getElementById('chatMessages');
+function addMessage(content, sender) {
+    const container = document.getElementById('chatMessages');
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${sender}`;
     
-    const icon = sender === 'ai' ? '🤖' : '👤';
-    const modelInfo = model ? ` (${model})` : '';
+    const icon = sender === 'claude' ? '🧠' : '👤';
     
-    messageDiv.innerHTML = `<span class="message-icon">${icon}</span>${content}${modelInfo}`;
-    
-    messagesContainer.appendChild(messageDiv);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-}
-
-function updateAIActivity(status, message) {
-    const activityEl = document.getElementById('aiActivity');
-    const icon = status === 'thinking' ? '🤔' : '💤';
-    
-    activityEl.innerHTML = `
-        <div class="activity-item">
-            <div class="activity-icon">${icon}</div>
-            <div>${message}</div>
-        </div>
+    // Allow HTML in Claude's responses for formatting
+    messageDiv.innerHTML = `
+        <span class="message-icon">${icon}</span>
+        <div class="message-content">${content}</div>
     `;
+    
+    container.appendChild(messageDiv);
+    container.scrollTop = container.scrollHeight;
+    
+    // Store in history
+    chatHistory.push({ sender, content, timestamp: new Date() });
+    if (chatHistory.length > 50) chatHistory.shift();
 }
 
-function quickAction(action) {
+function handleInputKeyDown(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendMessage();
+    }
+}
+
+async function quickAction(action) {
     const actions = {
-        'check': "Check system status",
-        'test': "Test AI models"
+        systemCheck: "Run system health check",
+        fixIssues: "Fix any system issues",
+        backup: "Create a backup"
     };
     
     const message = actions[action];
     if (message) {
         document.getElementById('messageInput').value = message;
         sendMessage();
+    }
+}
+
+async function checkService(service) {
+    const message = `Check ${service} service status`;
+    document.getElementById('messageInput').value = message;
+    sendMessage();
+}
+
+async function loadRecentTasks() {
+    const container = document.getElementById('recentTasks');
+    try {
+        const response = await fetch(`${API_BASE}/developer/tasks/recent`);
+        if (response.ok) {
+            const tasks = await response.json();
+            container.innerHTML = tasks.slice(0, 5).map(task => 
+                `<div>✅ ${task.title}</div>`
+            ).join('');
+        }
+    } catch (error) {
+        console.log('Could not load tasks');
     }
 }

@@ -19,7 +19,7 @@ class ClaudeIntegration:
         
         # Model configuration
         self.models = {
-            "claude": "claude-3-sonnet-20240229",
+            "claude": "claude-3-5-sonnet-20241022",
             "ollama_3b": "llama3.2:3b",
             "ollama_1b": "llama3.2:1b"
         }

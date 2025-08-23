@@ -473,7 +473,7 @@
     </div>
 
     <script>
-        const API_BASE = 'http://localhost:8000/api';
+        const API_BASE = '';
         let selectedTemplate = null;
         let templates = [];
 
@@ -485,7 +485,7 @@
 
         async function loadTemplates() {
             try {
-                const response = await fetch(`${API_BASE}/templates/`);
+                const response = await fetch(`/api/templates/`);
                 const data = await response.json();
                 templates = data.templates;
                 
@@ -543,7 +543,7 @@
             
             // Load full template content
             try {
-                const response = await fetch(`${API_BASE}/templates/${template.name}`);
+                const response = await fetch(`/api/templates/${template.name}`);
                 const fullTemplate = await response.json();
                 
                 // Display code
@@ -616,7 +616,7 @@
             formData.append('description', description);
             
             try {
-                const response = await fetch(`${API_BASE}/templates/upload`, {
+                const response = await fetch(`/api/templates/upload`, {
                     method: 'POST',
                     body: formData
                 });
@@ -657,7 +657,7 @@
             });
             
             try {
-                const response = await fetch(`${API_BASE}/templates/generate`, {
+                const response = await fetch(`/api/templates/generate`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -696,7 +696,7 @@
             }
             
             try {
-                const response = await fetch(`${API_BASE}/templates/${selectedTemplate.name}`, {
+                const response = await fetch(`/api/templates/${selectedTemplate.name}`, {
                     method: 'DELETE'
                 });
                 
@@ -719,7 +719,7 @@
 
         async function loadHistory() {
             try {
-                const response = await fetch(`${API_BASE}/templates/history/generated`);
+                const response = await fetch(`/api/templates/history/generated`);
                 const data = await response.json();
                 
                 const container = document.getElementById('generationHistory');
@@ -787,12 +787,12 @@
             // This function can be called by Claude/AI to generate pages
             try {
                 // First, analyze the request
-                const analysis = await fetch(`${API_BASE}/templates/ai/analyze/${encodeURIComponent(request)}`);
+                const analysis = await fetch(`/api/templates/ai/analyze/${encodeURIComponent(request)}`);
                 const suggestion = await analysis.json();
                 
                 if (suggestion.confidence > 0.5) {
                     // Generate the page using the suggestion
-                    const response = await fetch(`${API_BASE}/templates/generate`, {
+                    const response = await fetch(`/api/templates/generate`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({

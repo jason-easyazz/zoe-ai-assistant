@@ -7,8 +7,8 @@ You are continuing development of Zoe AI Assistant on Raspberry Pi 5.
 ## CURRENT STATUS:
 - **Location**: /home/pi/zoe
 - **GitHub**: https://github.com/jason-easyazz/zoe-ai-assistant
-- **Web UI**: http://192.168.1.60:8080 (working)
-- **API**: http://192.168.1.60:8000 (working)
+- **Web UI**: http://localhost:8080 (working)
+- **API**: http://localhost:8000 (working)
 
 ## WHAT'S WORKING:
 ✅ All Docker services running (zoe-core, zoe-ui, zoe-ollama, zoe-redis)

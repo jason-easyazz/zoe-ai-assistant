@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Lists</title>
+    <link rel="stylesheet" href="css/glass.css">
+</head>
+<body>
+    <nav class="nav-bar">
+        <div class="nav-left">
+            <a href="index.html" class="nav-logo"><span>🤖</span><span>Zoe</span></a>
+            <div class="nav-menu">
+                <a href="index.html">Chat</a>
+                <a href="dashboard.html">Dashboard</a>
+                <a href="calendar.html">Calendar</a>
+                <a href="lists.html" class="active">Lists</a>
+                <a href="memories.html">Memories</a>
+                <a href="workflows.html">Workflows</a>
+                <a href="settings.html">Settings</a>
+                <a href="javascript:void(0)" onclick="openMoreOverlay()">More...</a>
+            </div>
+        </div>
+    </nav>
+    
+    <div class="main-container">
+        <h1>📝 Lists</h1>
+        <div class="grid grid-2">
+            <div class="glass-card">
+                <h2>🛒 Shopping List</h2>
+                <div id="shoppingList"></div>
+            </div>
+            <div class="glass-card">
+                <h2>✅ Tasks</h2>
+                <div id="tasksList"></div>
+            </div>
+        </div>
+    </div>
+    
+    <button class="fab" onclick="openQuickChat()">💬</button>
+    <script src="js/common.js"></script>
+</body>
+</html>
