@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Zoe Developer - Template Manager</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+        
+        /* Header */
+        .dev-header {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        
+        .logo-icon {
+            width: 35px;
+            height: 35px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .tab-nav {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .tab {
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            color: white;
+            text-decoration: none;
+            transition: all 0.3s;
+        }
+        
+        .tab:hover, .tab.active {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+        
+        /* Main Layout */
+        .template-manager {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            height: calc(100vh - 60px);
+        }
+        
+        /* Sidebar */
+        .sidebar {
+            background: rgba(255, 255, 255, 0.05);
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        .upload-section {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .upload-title {
+            font-size: 16px;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+        
+        .upload-form {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .form-label {
+            font-size: 12px;
+            opacity: 0.8;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .form-input, .form-select {
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            color: white;
+            font-size: 14px;
+        }
+        
+        .form-input::placeholder {
+            color: rgba(255, 255, 255, 0.5);
+        }
+        
+        .upload-btn {
+            padding: 12px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .upload-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(123, 97, 255, 0.4);
+        }
+        
+        .template-list {
+            margin-top: 20px;
+        }
+        
+        .list-title {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            opacity: 0.8;
+        }
+        
+        .template-item {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .template-item:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateX(5px);
+        }
+        
+        .template-item.selected {
+            background: rgba(123, 97, 255, 0.3);
+            border: 1px solid rgba(123, 97, 255, 0.5);
+        }
+        
+        .template-name {
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .template-category {
+            font-size: 11px;
+            opacity: 0.7;
+            text-transform: uppercase;
+        }
+        
+        .template-usage {
+            font-size: 12px;
+            opacity: 0.8;
+        }
+        
+        /* Main Content */
+        .main-content {
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            overflow: hidden;
+        }
+        
+        .content-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .content-title {
+            font-size: 24px;
+            font-weight: 600;
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .action-btn {
+            padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .action-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .template-editor {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+        }
+        
+        .editor-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .editor-tab {
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .editor-tab.active {
+            background: rgba(123, 97, 255, 0.3);
+        }
+        
+        .editor-content {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 15px;
+            overflow-y: auto;
+        }
+        
+        #templateCode {
+            width: 100%;
+            height: 100%;
+            background: transparent;
+            border: none;
+            color: #00ff00;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 14px;
+            resize: none;
+        }
+        
+        .placeholder-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .placeholder-tag {
+            padding: 6px 12px;
+            background: rgba(123, 97, 255, 0.3);
+            border-radius: 15px;
+            font-size: 12px;
+            font-family: monospace;
+        }
+        
+        .generation-form {
+            display: grid;
+            gap: 15px;
+        }
+        
+        .replacement-inputs {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .replacement-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .replacement-label {
+            min-width: 150px;
+            font-family: monospace;
+            font-size: 12px;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 8px;
+            border-radius: 4px;
+        }
+        
+        .replacement-input {
+            flex: 1;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            color: white;
+        }
+        
+        /* Status Messages */
+        .status-message {
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 10px;
+            text-align: center;
+            animation: fadeIn 0.3s;
+        }
+        
+        .status-success {
+            background: rgba(34, 197, 94, 0.2);
+            border: 1px solid rgba(34, 197, 94, 0.5);
+        }
+        
+        .status-error {
+            background: rgba(239, 68, 68, 0.2);
+            border: 1px solid rgba(239, 68, 68, 0.5);
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="dev-header">
+        <div class="header-left">
+            <div class="logo" onclick="window.location.href='../index.html'">
+                <div class="logo-icon">Z</div>
+                <span>Developer</span>
+            </div>
+            <div class="tab-nav">
+                <a href="index.html" class="tab">Chat</a>
+                <a href="templates.html" class="tab active">Templates</a>
+                <a href="monitor.html" class="tab">Monitor</a>
+                <a href="tasks.html" class="tab">Tasks</a>
+            </div>
+        </div>
+        <div class="header-right">
+            <div id="templateCount">0 templates</div>
+        </div>
+    </div>
+
+    <!-- Main Template Manager -->
+    <div class="template-manager">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <!-- Upload Section -->
+            <div class="upload-section">
+                <h3 class="upload-title">📤 Upload Template</h3>
+                <div class="upload-form">
+                    <div class="form-group">
+                        <label class="form-label">Template File</label>
+                        <input type="file" id="templateFile" accept=".html,.template" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Category</label>
+                        <select id="templateCategory" class="form-select">
+                            <option value="main-ui">Main UI</option>
+                            <option value="developer-ui">Developer UI</option>
+                            <option value="components">Components</option>
+                            <option value="layouts">Layouts</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Description</label>
+                        <input type="text" id="templateDescription" placeholder="Brief description..." class="form-input">
+                    </div>
+                    <button onclick="uploadTemplate()" class="upload-btn">Upload Template</button>
+                </div>
+            </div>
+
+            <!-- Template List -->
+            <div class="template-list">
+                <h4 class="list-title">📁 Templates</h4>
+                <div id="templateList">
+                    <!-- Templates will be loaded here -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <div class="content-header">
+                <h2 class="content-title" id="selectedTemplateName">Select a template</h2>
+                <div class="action-buttons">
+                    <button class="action-btn" onclick="generatePage()">🚀 Generate Page</button>
+                    <button class="action-btn" onclick="deleteTemplate()">🗑️ Delete</button>
+                    <button class="action-btn" onclick="refreshTemplates()">🔄 Refresh</button>
+                </div>
+            </div>
+
+            <div class="template-editor">
+                <div class="editor-tabs">
+                    <div class="editor-tab active" onclick="switchTab('code')">📝 Code</div>
+                    <div class="editor-tab" onclick="switchTab('placeholders')">🔖 Placeholders</div>
+                    <div class="editor-tab" onclick="switchTab('generate')">⚡ Generate</div>
+                    <div class="editor-tab" onclick="switchTab('history')">📜 History</div>
+                </div>
+
+                <div class="editor-content">
+                    <!-- Code Tab -->
+                    <div id="codeTab" class="tab-content">
+                        <textarea id="templateCode" placeholder="Template code will appear here..."></textarea>
+                    </div>
+
+                    <!-- Placeholders Tab -->
+                    <div id="placeholdersTab" class="tab-content" style="display: none;">
+                        <h3 style="margin-bottom: 15px;">Template Placeholders</h3>
+                        <div class="placeholder-list" id="placeholderList">
+                            <!-- Placeholders will be shown here -->
+                        </div>
+                    </div>
+
+                    <!-- Generate Tab -->
+                    <div id="generateTab" class="tab-content" style="display: none;">
+                        <div class="generation-form">
+                            <div class="form-group">
+                                <label class="form-label">Page Name</label>
+                                <input type="text" id="pageName" placeholder="e.g., journal" class="form-input">
+                            </div>
+                            <div class="replacement-inputs" id="replacementInputs">
+                                <!-- Replacement inputs will be generated here -->
+                            </div>
+                            <button onclick="executeGeneration()" class="upload-btn">Generate Page</button>
+                        </div>
+                    </div>
+
+                    <!-- History Tab -->
+                    <div id="historyTab" class="tab-content" style="display: none;">
+                        <h3 style="margin-bottom: 15px;">Generation History</h3>
+                        <div id="generationHistory">
+                            <!-- History will be loaded here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="statusMessage"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000/api';
+        let selectedTemplate = null;
+        let templates = [];
+
+        // Load templates on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadTemplates();
+            loadHistory();
+        });
+
+        async function loadTemplates() {
+            try {
+                const response = await fetch(`${API_BASE}/templates/`);
+                const data = await response.json();
+                templates = data.templates;
+                
+                displayTemplates(templates);
+                document.getElementById('templateCount').textContent = `${data.count} templates`;
+            } catch (error) {
+                console.error('Failed to load templates:', error);
+                showStatus('Failed to load templates', 'error');
+            }
+        }
+
+        function displayTemplates(templates) {
+            const listContainer = document.getElementById('templateList');
+            listContainer.innerHTML = '';
+            
+            // Group by category
+            const grouped = templates.reduce((acc, template) => {
+                if (!acc[template.category]) acc[template.category] = [];
+                acc[template.category].push(template);
+                return acc;
+            }, {});
+            
+            Object.keys(grouped).forEach(category => {
+                const categoryDiv = document.createElement('div');
+                categoryDiv.innerHTML = `<div style="font-size: 12px; opacity: 0.6; margin: 10px 0;">${category.toUpperCase()}</div>`;
+                listContainer.appendChild(categoryDiv);
+                
+                grouped[category].forEach(template => {
+                    const item = document.createElement('div');
+                    item.className = 'template-item';
+                    item.onclick = () => selectTemplate(template);
+                    item.innerHTML = `
+                        <div>
+                            <div class="template-name">${template.name}</div>
+                            <div class="template-category">${template.category}</div>
+                        </div>
+                        <div class="template-usage">${template.usage_count} uses</div>
+                    `;
+                    listContainer.appendChild(item);
+                });
+            });
+        }
+
+        async function selectTemplate(template) {
+            selectedTemplate = template;
+            
+            // Update UI
+            document.getElementById('selectedTemplateName').textContent = template.name;
+            
+            // Highlight selected
+            document.querySelectorAll('.template-item').forEach(item => {
+                item.classList.remove('selected');
+            });
+            event.currentTarget.classList.add('selected');
+            
+            // Load full template content
+            try {
+                const response = await fetch(`${API_BASE}/templates/${template.name}`);
+                const fullTemplate = await response.json();
+                
+                // Display code
+                document.getElementById('templateCode').value = fullTemplate.content;
+                
+                // Display placeholders
+                displayPlaceholders(fullTemplate.placeholders);
+                
+                // Setup generation form
+                setupGenerationForm(fullTemplate.placeholders);
+                
+            } catch (error) {
+                console.error('Failed to load template:', error);
+                showStatus('Failed to load template details', 'error');
+            }
+        }
+
+        function displayPlaceholders(placeholders) {
+            const container = document.getElementById('placeholderList');
+            container.innerHTML = '';
+            
+            if (placeholders.length === 0) {
+                container.innerHTML = '<p style="opacity: 0.6;">No placeholders in this template</p>';
+                return;
+            }
+            
+            placeholders.forEach(placeholder => {
+                const tag = document.createElement('div');
+                tag.className = 'placeholder-tag';
+                tag.textContent = `{{${placeholder}}}`;
+                container.appendChild(tag);
+            });
+        }
+
+        function setupGenerationForm(placeholders) {
+            const container = document.getElementById('replacementInputs');
+            container.innerHTML = '';
+            
+            if (placeholders.length === 0) {
+                container.innerHTML = '<p style="opacity: 0.6;">No replacements needed</p>';
+                return;
+            }
+            
+            placeholders.forEach(placeholder => {
+                const group = document.createElement('div');
+                group.className = 'replacement-group';
+                group.innerHTML = `
+                    <div class="replacement-label">{{${placeholder}}}</div>
+                    <input type="text" class="replacement-input" 
+                           data-placeholder="${placeholder}" 
+                           placeholder="Enter value...">
+                `;
+                container.appendChild(group);
+            });
+        }
+
+        async function uploadTemplate() {
+            const fileInput = document.getElementById('templateFile');
+            const category = document.getElementById('templateCategory').value;
+            const description = document.getElementById('templateDescription').value;
+            
+            if (!fileInput.files.length) {
+                showStatus('Please select a template file', 'error');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('category', category);
+            formData.append('description', description);
+            
+            try {
+                const response = await fetch(`${API_BASE}/templates/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                showStatus(`Template "${result.name}" uploaded successfully!`, 'success');
+                
+                // Clear form
+                fileInput.value = '';
+                document.getElementById('templateDescription').value = '';
+                
+                // Reload templates
+                loadTemplates();
+                
+            } catch (error) {
+                console.error('Upload failed:', error);
+                showStatus('Failed to upload template', 'error');
+            }
+        }
+
+        async function executeGeneration() {
+            if (!selectedTemplate) {
+                showStatus('Please select a template first', 'error');
+                return;
+            }
+            
+            const pageName = document.getElementById('pageName').value;
+            if (!pageName) {
+                showStatus('Please enter a page name', 'error');
+                return;
+            }
+            
+            // Collect replacements
+            const replacements = {};
+            document.querySelectorAll('.replacement-input').forEach(input => {
+                const placeholder = input.dataset.placeholder;
+                replacements[placeholder] = input.value || '';
+            });
+            
+            try {
+                const response = await fetch(`${API_BASE}/templates/generate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        template_name: selectedTemplate.name,
+                        page_name: pageName,
+                        replacements: replacements
+                    })
+                });
+                
+                const result = await response.json();
+                showStatus(`Page "${pageName}.html" generated successfully!`, 'success');
+                
+                // Clear form
+                document.getElementById('pageName').value = '';
+                document.querySelectorAll('.replacement-input').forEach(input => {
+                    input.value = '';
+                });
+                
+                // Reload history
+                loadHistory();
+                
+            } catch (error) {
+                console.error('Generation failed:', error);
+                showStatus('Failed to generate page', 'error');
+            }
+        }
+
+        async function deleteTemplate() {
+            if (!selectedTemplate) {
+                showStatus('Please select a template first', 'error');
+                return;
+            }
+            
+            if (!confirm(`Delete template "${selectedTemplate.name}"?`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/templates/${selectedTemplate.name}`, {
+                    method: 'DELETE'
+                });
+                
+                const result = await response.json();
+                showStatus(`Template "${selectedTemplate.name}" deleted`, 'success');
+                
+                // Clear selection
+                selectedTemplate = null;
+                document.getElementById('selectedTemplateName').textContent = 'Select a template';
+                document.getElementById('templateCode').value = '';
+                
+                // Reload templates
+                loadTemplates();
+                
+            } catch (error) {
+                console.error('Delete failed:', error);
+                showStatus('Failed to delete template', 'error');
+            }
+        }
+
+        async function loadHistory() {
+            try {
+                const response = await fetch(`${API_BASE}/templates/history/generated`);
+                const data = await response.json();
+                
+                const container = document.getElementById('generationHistory');
+                container.innerHTML = '';
+                
+                if (data.history.length === 0) {
+                    container.innerHTML = '<p style="opacity: 0.6;">No pages generated yet</p>';
+                    return;
+                }
+                
+                data.history.forEach(item => {
+                    const historyItem = document.createElement('div');
+                    historyItem.className = 'template-item';
+                    historyItem.innerHTML = `
+                        <div>
+                            <div class="template-name">${item.page_name}</div>
+                            <div class="template-category">From: ${item.template_used}</div>
+                        </div>
+                        <div class="template-usage">${new Date(item.generated_at).toLocaleDateString()}</div>
+                    `;
+                    container.appendChild(historyItem);
+                });
+                
+            } catch (error) {
+                console.error('Failed to load history:', error);
+            }
+        }
+
+        function switchTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.style.display = 'none';
+            });
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.editor-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab
+            document.getElementById(`${tabName}Tab`).style.display = 'block';
+            
+            // Add active class to clicked tab
+            event.currentTarget.classList.add('active');
+        }
+
+        function refreshTemplates() {
+            loadTemplates();
+            showStatus('Templates refreshed', 'success');
+        }
+
+        function showStatus(message, type = 'success') {
+            const statusDiv = document.getElementById('statusMessage');
+            statusDiv.className = `status-message status-${type}`;
+            statusDiv.textContent = message;
+            
+            setTimeout(() => {
+                statusDiv.className = '';
+                statusDiv.textContent = '';
+            }, 3000);
+        }
+
+        // AI Integration Helper
+        async function generateFromAI(request) {
+            // This function can be called by Claude/AI to generate pages
+            try {
+                // First, analyze the request
+                const analysis = await fetch(`${API_BASE}/templates/ai/analyze/${encodeURIComponent(request)}`);
+                const suggestion = await analysis.json();
+                
+                if (suggestion.confidence > 0.5) {
+                    // Generate the page using the suggestion
+                    const response = await fetch(`${API_BASE}/templates/generate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            template_name: suggestion.suggested_template,
+                            page_name: request.replace(/[^a-z0-9]/gi, '_').toLowerCase(),
+                            replacements: suggestion.suggested_replacements
+                        })
+                    });
+                    
+                    return await response.json();
+                }
+                
+                return { error: 'Could not determine appropriate template' };
+                
+            } catch (error) {
+                return { error: error.message };
+            }
+        }
+
+        // Make function available globally for AI integration
+        window.templateManager = {
+            generateFromAI,
+            loadTemplates,
+            templates
+        };
+    </script>
+</body>
+</html>

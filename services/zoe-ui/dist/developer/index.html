@@ -3,8 +3,326 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <title>Zoe AI Developer Dashboard</title>
-    <link rel="stylesheet" href="css/developer.css">
+    <title>Zoe AI Developer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            width: 100vw; height: 100vh; overflow: hidden;
+            font-size: clamp(14px, 1.6vw, 16px); color: #333;
+        }
+
+        /* Header */
+        .header {
+            height: 60px;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 16px; position: relative; z-index: 100;
+        }
+
+        .header-left {
+            display: flex; align-items: center; gap: 20px;
+        }
+
+        .logo {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 16px; font-weight: 600; color: #333;
+            cursor: pointer; transition: all 0.3s ease;
+        }
+
+        .logo:hover { transform: scale(1.05); }
+
+        .logo-icon {
+            width: 28px; height: 28px; border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px; color: white;
+            animation: zoeBreathing 3s ease-in-out infinite;
+        }
+
+        @keyframes zoeBreathing {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.9; }
+        }
+
+        .tab-nav {
+            display: flex; gap: 4px;
+        }
+
+        .tab {
+            width: 44px; height: 44px; border-radius: 12px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.3s ease; font-size: 18px;
+            background: rgba(255, 255, 255, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            position: relative; min-width: 44px; min-height: 44px;
+            text-decoration: none; color: #666;
+        }
+
+        .tab.active {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: scale(1.05);
+        }
+
+        .tab:hover:not(.active) { 
+            background: rgba(123, 97, 255, 0.1); 
+            transform: translateY(-2px);
+        }
+
+        .tab-tooltip {
+            position: absolute; bottom: -35px; left: 50%;
+            transform: translateX(-50%); background: rgba(0, 0, 0, 0.8);
+            color: white; padding: 4px 8px; border-radius: 6px;
+            font-size: 12px; white-space: nowrap; opacity: 0;
+            pointer-events: none; transition: opacity 0.3s ease;
+        }
+
+        .tab:hover .tab-tooltip { opacity: 1; }
+
+        .header-right {
+            display: flex; align-items: center; gap: 12px;
+            font-size: 14px; color: #666;
+        }
+
+        .status-indicator {
+            display: flex; align-items: center; gap: 6px;
+            padding: 6px 12px; border-radius: 20px;
+            background: rgba(34, 197, 94, 0.1); color: #22c55e;
+            font-weight: 500; font-size: 12px;
+        }
+
+        .status-indicator.offline {
+            background: rgba(239, 68, 68, 0.1); color: #ef4444;
+        }
+
+        .status-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: currentColor; animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.1); }
+        }
+
+        .current-time {
+            font-size: 14px; font-weight: 500; color: #333;
+        }
+
+        /* Main Content */
+        .main-content {
+            display: flex; height: calc(100vh - 60px);
+        }
+
+        /* Chat Area */
+        .chat-area {
+            flex: 1; 
+            min-width: 400px; 
+            display: flex; flex-direction: column;
+            background: rgba(255, 255, 255, 0.4); backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .chat-messages {
+            flex: 1; padding: 20px; overflow-y: auto;
+            display: flex; flex-direction: column; gap: 16px;
+            scrollbar-width: thin; scrollbar-color: rgba(123, 97, 255, 0.3) transparent;
+        }
+
+        .chat-messages::-webkit-scrollbar { width: 6px; }
+        .chat-messages::-webkit-scrollbar-track { background: transparent; }
+        .chat-messages::-webkit-scrollbar-thumb {
+            background: rgba(123, 97, 255, 0.3);
+            border-radius: 3px;
+        }
+
+        .message {
+            max-width: 85%; padding: 12px 16px; border-radius: 16px;
+            font-size: 14px; line-height: 1.4; position: relative;
+            animation: messageSlide 0.3s ease-out;
+        }
+
+        @keyframes messageSlide {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.ai {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; align-self: flex-start;
+        }
+
+        .message.user {
+            background: rgba(255, 255, 255, 0.8); color: #333;
+            align-self: flex-end; border: 1px solid rgba(255, 255, 255, 0.4);
+        }
+
+        .message-icon {
+            font-size: 16px; margin-right: 8px;
+        }
+
+        .code-block {
+            margin: 8px 0; padding: 12px; border-radius: 8px;
+            background: rgba(0, 0, 0, 0.1); font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 12px; overflow-x: auto; border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .message-actions {
+            display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;
+        }
+
+        .action-btn {
+            padding: 6px 12px; border: none; border-radius: 8px;
+            font-size: 12px; font-weight: 500; cursor: pointer;
+            transition: all 0.3s ease; min-height: 28px;
+        }
+
+        .action-btn.primary {
+            background: rgba(255, 255, 255, 0.2); color: white;
+        }
+
+        .action-btn.primary:hover {
+            background: rgba(255, 255, 255, 0.3); transform: translateY(-1px);
+        }
+
+        .chat-input {
+            height: 60px; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-top: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 12px 20px; display: flex; align-items: center; gap: 12px;
+        }
+
+        .input-field {
+            flex: 1; border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 20px; padding: 10px 16px;
+            background: rgba(255, 255, 255, 0.9); font-size: 14px;
+            outline: none; transition: all 0.3s ease; min-height: 36px;
+        }
+
+        .input-field:focus {
+            border-color: #7B61FF; box-shadow: 0 0 0 2px rgba(123, 97, 255, 0.1);
+        }
+
+        .input-btn {
+            width: 36px; height: 36px; border: none; border-radius: 50%;
+            background: rgba(123, 97, 255, 0.1); color: #7B61FF;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            font-size: 16px; transition: all 0.3s ease; min-width: 36px; min-height: 36px;
+        }
+
+        .input-btn:hover {
+            background: rgba(123, 97, 255, 0.2); transform: scale(1.1);
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 280px; background: rgba(255, 255, 255, 0.6);
+            backdrop-filter: blur(40px); padding: 20px;
+            display: flex; flex-direction: column; gap: 16px;
+            overflow-y: auto;
+        }
+
+        .sidebar-card {
+            background: rgba(255, 255, 255, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 12px; padding: 16px; transition: all 0.3s ease;
+        }
+
+        .sidebar-card:hover {
+            background: rgba(255, 255, 255, 0.9);
+            transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+        }
+
+        .card-title {
+            font-size: 14px; font-weight: 600; color: #333;
+            margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
+        }
+
+        .status-grid {
+            display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;
+        }
+
+        .status-item {
+            display: flex; flex-direction: column; align-items: center; gap: 4px;
+            padding: 8px; border-radius: 8px; transition: all 0.3s ease;
+            cursor: pointer; min-height: 44px; justify-content: center;
+        }
+
+        .status-item:hover {
+            background: rgba(255, 255, 255, 0.5); transform: scale(1.05);
+        }
+
+        .status-icon {
+            width: 24px; height: 24px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 12px; font-weight: bold;
+        }
+
+        .status-healthy { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+        .status-warning { background: rgba(251, 146, 60, 0.2); color: #f59e0b; }
+        .status-error { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+
+        .status-label {
+            font-size: 10px; color: #666; text-align: center;
+            font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;
+        }
+
+        .activity-item, .task-item {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 12px; color: #666; margin-bottom: 8px;
+            padding: 6px; border-radius: 6px; transition: all 0.3s ease;
+        }
+
+        .activity-item:hover, .task-item:hover {
+            background: rgba(255, 255, 255, 0.5);
+        }
+
+        .activity-icon, .task-icon {
+            width: 16px; height: 16px; border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 8px; color: white; flex-shrink: 0;
+        }
+
+        .task-icon.success { background: #22c55e; }
+        .task-icon.warning { background: #f59e0b; }
+        .task-icon.error { background: #ef4444; }
+
+        .quick-actions {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+        }
+
+        .quick-btn {
+            height: 44px; border: none; border-radius: 12px;
+            background: rgba(255, 255, 255, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            cursor: pointer; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 2px;
+            transition: all 0.3s ease; min-height: 44px;
+        }
+
+        .quick-btn:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+
+        .quick-btn-icon { font-size: 14px; }
+        .quick-btn-label { font-size: 10px; font-weight: 500; }
+
+        /* Responsive Design */
+        @media (max-width: 800px) {
+            .main-content { flex-direction: column; }
+            .chat-area { min-width: 100%; height: 60vh; }
+            .sidebar { 
+                width: 100%; height: 40vh; flex-direction: row; 
+                overflow-x: auto; overflow-y: hidden;
+            }
+            .sidebar-card { min-width: 250px; flex-shrink: 0; }
+        }
+    </style>
 </head>
 <body>
     <!-- Header -->
@@ -15,18 +333,18 @@
                 <span>Developer</span>
             </div>
             <div class="tab-nav">
-                <a href="index.html" class="tab active" data-tab="chat">💬 <span class="tab-label">Chat</span></a>
-                <a href="#" class="tab" data-tab="monitor">📊 <span class="tab-label">Monitor</span></a>
-                <a href="#" class="tab" data-tab="tools">🔧 <span class="tab-label">Tools</span></a>
-                <a href="#" class="tab" data-tab="logs">📜 <span class="tab-label">Logs</span></a>
+                <a href="index.html" class="tab active">
+                    💬
+                    <div class="tab-tooltip">Chat</div>
+                </a>
             </div>
         </div>
         <div class="header-right">
-            <div class="status-indicator" id="claudeStatus">
+            <div class="status-indicator" id="aiStatus">
                 <div class="status-dot"></div>
-                <span>Initializing...</span>
+                <span>Checking...</span>
             </div>
-            <div class="current-time" id="currentTime"></div>
+            <div class="current-time" id="currentTime">Loading...</div>
         </div>
     </div>
 
@@ -35,30 +353,17 @@
         <!-- Chat Area -->
         <div class="chat-area">
             <div class="chat-messages" id="chatMessages">
-                <div class="message claude">
-                    <span class="message-icon">🧠</span>
-                    <div class="message-content">
-                        Hi! I'm Claude, your development assistant. I can help you:
-                        <ul>
-                            <li>🔧 Fix system issues and debug problems</li>
-                            <li>📝 Generate terminal scripts and commands</li>
-                            <li>🚀 Deploy new features and updates</li>
-                            <li>📊 Monitor system performance</li>
-                            <li>💾 Manage backups and recovery</li>
-                        </ul>
-                        What would you like to work on today?
-                    </div>
+                <div class="message ai">
+                    <span class="message-icon">🤖</span>
+                    Hi! I'm your development assistant. I can help you with your Zoe system. What would you like to work on today?
                 </div>
             </div>
             
             <div class="chat-input">
                 <input type="text" class="input-field" id="messageInput" 
-                       placeholder="Ask Claude anything about your Zoe system..." 
+                       placeholder="Ask anything..." 
                        onkeydown="handleInputKeyDown(event)">
-                <button class="input-btn" onclick="toggleVoiceInput()" title="Voice Input">🎤</button>
-                <button class="input-btn" onclick="triggerFileInput()" title="Attach Files">📎</button>
-                <button class="input-btn primary" onclick="sendMessage()" title="Send">➤</button>
-                <input type="file" id="fileInput" style="display: none;" multiple onchange="handleFileUpload(event)">
+                <button class="input-btn" onclick="sendMessage()" title="Send">📤</button>
             </div>
         </div>
 
@@ -66,43 +371,42 @@
         <div class="sidebar">
             <!-- System Status -->
             <div class="sidebar-card">
-                <div class="card-title">📊 System Status</div>
-                <div class="status-grid" id="systemStatus"></div>
+                <div class="card-title">
+                    <span>📊</span> System Status
+                </div>
+                <div class="status-grid" id="systemStatus">
+                    <!-- Status items will be populated here -->
+                </div>
+            </div>
+
+            <!-- AI Activity -->
+            <div class="sidebar-card">
+                <div class="card-title">
+                    <span>🤖</span> AI Activity
+                </div>
+                <div id="aiActivity">
+                    <div class="activity-item">
+                        <div class="activity-icon">💤</div>
+                        <div>Idle - Ready to help</div>
+                    </div>
+                </div>
             </div>
 
             <!-- Quick Actions -->
             <div class="sidebar-card">
-                <div class="card-title">⚡ Quick Actions</div>
+                <div class="card-title">
+                    <span>⚡</span> Quick Actions
+                </div>
                 <div class="quick-actions">
-                    <button class="quick-btn" onclick="quickAction('systemCheck')">
-                        <div class="quick-btn-icon">🚀</div>
-                        <div class="quick-btn-label">Full Check</div>
+                    <button class="quick-btn" onclick="quickAction('check')">
+                        <div class="quick-btn-icon">🔍</div>
+                        <div class="quick-btn-label">Check System</div>
                     </button>
-                    <button class="quick-btn" onclick="quickAction('fixIssues')">
-                        <div class="quick-btn-icon">🔧</div>
-                        <div class="quick-btn-label">Auto Fix</div>
-                    </button>
-                    <button class="quick-btn" onclick="quickAction('backup')">
-                        <div class="quick-btn-icon">💾</div>
-                        <div class="quick-btn-label">Backup</div>
-                    </button>
-                    <button class="quick-btn" onclick="quickAction('githubSync')">
-                        <div class="quick-btn-icon">🔄</div>
-                        <div class="quick-btn-label">GitHub</div>
+                    <button class="quick-btn" onclick="quickAction('test')">
+                        <div class="quick-btn-icon">🧪</div>
+                        <div class="quick-btn-label">Test AI</div>
                     </button>
                 </div>
-            </div>
-
-            <!-- Recent Tasks -->
-            <div class="sidebar-card">
-                <div class="card-title">📋 Recent Tasks</div>
-                <div id="recentTasks"></div>
-            </div>
-
-            <!-- Performance Metrics -->
-            <div class="sidebar-card">
-                <div class="card-title">🎯 Performance</div>
-                <div id="performanceMetrics"></div>
             </div>
         </div>
     </div>

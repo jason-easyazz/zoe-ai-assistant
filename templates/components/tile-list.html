@@ -1,0 +1,120 @@
+<div class="tile-container">
+    <div class="tile-header">
+        <h2>{{TILE_TITLE}}</h2>
+        <button class="category-switch" onclick="{{SWITCH_ACTION}}">
+            {{CURRENT_CATEGORY}}
+        </button>
+    </div>
+    
+    <div class="tile-grid" id="{{GRID_ID}}">
+        <!-- Tiles will be loaded here -->
+    </div>
+    
+    <button class="add-tile-btn" onclick="{{ADD_ACTION}}">
+        + Add {{ITEM_TYPE}}
+    </button>
+</div>
+
+<style>
+.tile-container {
+    background: rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(20px);
+    border-radius: 20px;
+    padding: 20px;
+    margin: 20px 0;
+}
+
+.tile-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.category-switch {
+    padding: 8px 16px;
+    background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+    color: white;
+    border: none;
+    border-radius: 20px;
+    cursor: pointer;
+}
+
+.tile-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 15px;
+    margin: 20px 0;
+    min-height: 200px;
+}
+
+.tile-item {
+    background: rgba(255, 255, 255, 0.8);
+    border-radius: 15px;
+    padding: 20px;
+    cursor: pointer;
+    transition: all 0.3s;
+    min-height: 100px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+
+.tile-item:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 20px rgba(123, 97, 255, 0.2);
+}
+
+.add-tile-btn {
+    width: 100%;
+    padding: 15px;
+    background: rgba(123, 97, 255, 0.1);
+    border: 2px dashed rgba(123, 97, 255, 0.3);
+    border-radius: 15px;
+    color: #7B61FF;
+    font-size: 16px;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.add-tile-btn:hover {
+    background: rgba(123, 97, 255, 0.2);
+}
+
+/* Touch-friendly for 7" screen */
+@media (max-width: 800px) {
+    .tile-grid {
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    }
+    
+    .tile-item {
+        min-height: 120px;
+    }
+}
+</style>
+
+<script>
+async function load{{GRID_ID}}() {
+    const response = await fetch(`${API_BASE}/lists/{{LIST_TYPE}}?category={{CATEGORY}}`);
+    const data = await response.json();
+    
+    const grid = document.getElementById('{{GRID_ID}}');
+    grid.innerHTML = data.lists.map(list => `
+        <div class="tile-item" onclick="openList(${list.id})">
+            <div class="tile-icon">{{ICON}}</div>
+            <div class="tile-name">${list.name}</div>
+            <div class="tile-count">${list.items.length} items</div>
+        </div>
+    `).join('');
+}
+
+function openList(id) {
+    // Implementation for opening list
+    console.log('Opening list:', id);
+}
+
+// Load on init
+load{{GRID_ID}}();
+</script>
