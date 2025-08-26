@@ -128,7 +128,7 @@
             to { opacity: 1; transform: translateY(0); }
         }
 
-        .message.claude {
+        .message.zack {
             align-self: flex-start;
         }
 
@@ -148,7 +148,7 @@
             flex-shrink: 0;
         }
 
-        .message.claude .message-icon {
+        .message.zack .message-icon {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
         }
@@ -166,7 +166,7 @@
             word-wrap: break-word;
         }
 
-        .message.claude .message-content {
+        .message.zack .message-content {
             background: white;
             color: #2d3748;
             border: 1px solid #e2e8f0;
@@ -439,7 +439,7 @@
             </div>
         </div>
         <div class="header-right">
-            <div class="status-indicator" id="claudeStatus">
+            <div class="status-indicator" id="zackStatus">
                 <div class="status-dot"></div>
                 <span>Online</span>
             </div>
@@ -452,11 +452,11 @@
         <!-- Chat Area -->
         <div class="chat-area">
             <div class="chat-messages" id="chatMessages">
-                <div class="message claude">
+                <div class="message zack">
                     <div class="message-icon">🧠</div>
                     <div class="message-content">
                         <h4>Welcome to the Developer Dashboard!</h4>
-                        <p>I'm Claude, your development assistant. I can help you:</p>
+                        <p>I'm Zack, your development assistant. I can help you:</p>
                         <ul>
                             <li>Debug and fix issues in your Zoe system</li>
                             <li>Create and modify features</li>
@@ -471,7 +471,7 @@
             
             <div class="chat-input">
                 <input type="text" class="input-field" id="messageInput" 
-                       placeholder="Ask Claude anything about your Zoe system..." 
+                       placeholder="Ask Zack anything about your Zoe system..." 
                        onkeydown="handleKeyDown(event)">
                 <button class="send-btn" onclick="sendMessage()" id="sendBtn">Send</button>
             </div>
@@ -606,14 +606,14 @@
                 
                 if (response.ok) {
                     const data = await response.json();
-                    addMessage(data.response || data.message, 'claude');
+                    addMessage(data.response || data.message, 'zack');
                 } else {
                     // Fallback response
-                    addMessage("I'm having trouble connecting to the backend. Please check that the zoe-core container is running.", 'claude');
+                    addMessage("I'm having trouble connecting to the backend. Please check that the zoe-core container is running.", 'zack');
                 }
             } catch (error) {
                 console.error('Chat error:', error);
-                addMessage("Connection error. Please ensure the API is running on port 8000.", 'claude');
+                addMessage("Connection error. Please ensure the API is running on port 8000.", 'zack');
             } finally {
                 sendBtn.disabled = false;
                 input.focus();
@@ -640,7 +640,7 @@
             messageDiv.appendChild(contentDiv);
             
             // Add action buttons for code blocks
-            if (sender === 'claude' && content.includes('```')) {
+            if (sender === 'zack' && content.includes('```')) {
                 const actionsDiv = document.createElement('div');
                 actionsDiv.className = 'message-actions';
                 actionsDiv.innerHTML = `

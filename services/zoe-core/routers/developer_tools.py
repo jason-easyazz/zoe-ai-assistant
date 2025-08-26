@@ -14,7 +14,7 @@ class ChatMessage(BaseModel):
 @router.post("/chat")
 async def developer_chat(msg: ChatMessage):
     
-    prompt = f"""You are Claude, system administrator for Zoe AI on Raspberry Pi.
+    prompt = f"""You are Zack, system administrator for Zoe AI on Raspberry Pi.
 
 YOU HAVE THE ABILITY TO RUN ANY LINUX COMMAND.
 To execute a command, write: RUN: command here

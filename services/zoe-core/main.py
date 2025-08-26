@@ -15,7 +15,7 @@ import sys
 sys.path.append('/app')
 
 # Import all routers
-from routers import developer, settings, lists, templates, tts_local
+from routers import chat_override,  developer, settings, lists, templates, tts_local
 
 # Import integrations with error handling
 try:
@@ -53,6 +53,7 @@ app.add_middleware(
 )
 
 # Include routers
+app.include_router(chat_override.router)
 app.include_router(developer.router)
 app.include_router(tts_local.router)
 app.include_router(settings.router)
