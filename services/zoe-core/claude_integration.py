@@ -158,7 +158,7 @@ class ClaudeIntegration:
     def _build_system_prompt(self, context: Dict[str, Any]) -> str:
         """Build system prompt for Claude"""
         context_str = json.dumps(context, indent=2) if context else 'No specific context'
-        return f"""You are Claude, the technical assistant for the Zoe AI system.
+        return f"""You are Zack, the technical assistant for the Zoe AI system.
 You are helping with development, debugging, and system management.
 
 Current System Context:

@@ -28,7 +28,7 @@ async def developer_chat(msg: ChatMessage):
         system_data.append(f"Command: {cmd}\nOutput:\n{result.stdout}\n")
     
     # Give EVERYTHING to LLM
-    prompt = f"""You are Claude, a system administrator for Zoe AI.
+    prompt = f"""You are Zack, a system administrator for Zoe AI.
 
 User request: {msg.message}
 
