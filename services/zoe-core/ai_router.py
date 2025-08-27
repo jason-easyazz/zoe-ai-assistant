@@ -9,6 +9,8 @@ import logging
 import subprocess
 from typing import Optional, Dict, Any
 from datetime import datetime
+from api_key_loader import loaded_keys
+
 
 logger = logging.getLogger(__name__)
 

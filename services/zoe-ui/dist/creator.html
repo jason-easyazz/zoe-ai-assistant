@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Creator</title>
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            font-family: Arial;
+            padding: 40px;
+        }
+        .box {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            max-width: 600px;
+            margin: 0 auto;
+            color: white;
+        }
+        input, button {
+            width: 100%;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 10px;
+            border: none;
+            font-size: 16px;
+        }
+        button {
+            background: linear-gradient(135deg, #764ba2, #667eea);
+            color: white;
+            cursor: pointer;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 20px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="box">
+        <h1>🤖 AI Page Creator</h1>
+        <input type="text" id="request" placeholder="What page do you want to create?">
+        <button onclick="createPage()">Create Page</button>
+        <div id="result"></div>
+    </div>
+    <script>
+        async function createPage() {
+            const request = document.getElementById('request').value;
+            const resultDiv = document.getElementById('result');
+            
+            if (!request) {
+                alert('Please enter what you want to create');
+                return;
+            }
+            
+            resultDiv.innerHTML = 'Creating...';
+            
+            try {
+                const response = await fetch('http://192.168.1.60:8000/api/creator/create', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({request: request})
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    resultDiv.innerHTML = `
+                        <h3>✅ Success!</h3>
+                        <p>Created: ${data.message}</p>
+                        <p>File: ${data.filepath}</p>
+                    `;
+                } else {
+                    resultDiv.innerHTML = '❌ Error: ' + (data.message || 'Unknown error');
+                }
+            } catch (error) {
+                resultDiv.innerHTML = '❌ Error: ' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>
