@@ -1,3 +1,38 @@
+#!/bin/bash
+# FIX_FRONTEND_EXECUTION.sh
+# Purpose: Fix the frontend to properly trigger auto-execution
+# Location: scripts/maintenance/fix_frontend_execution.sh
+
+set -e
+
+echo "🔧 FIXING FRONTEND AUTO-EXECUTION"
+echo "================================="
+echo ""
+
+cd /home/pi/zoe
+
+# Step 1: Check what the frontend is actually sending
+echo "📊 Testing current behavior..."
+echo ""
+echo "Testing exact phrases that should work:"
+
+# Test 1: Exact phrase
+echo "1. Testing 'system health'..."
+curl -s -X POST http://localhost:8000/api/developer/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "system health"}' | jq -r '.response' | head -5
+
+echo ""
+echo "2. Testing 'docker containers'..."
+curl -s -X POST http://localhost:8000/api/developer/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "docker containers"}' | jq -r '.response' | head -5
+
+# Step 2: Fix the backend to be less strict about matching
+echo ""
+echo "🔧 Making backend matching more flexible..."
+
+cat > services/zoe-core/routers/developer.py << 'EOF'
 """Developer Router - Fixed Pattern Matching"""
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -163,3 +198,128 @@ Or click these to test:
 @router.get("/status")
 async def status():
     return {"api": "online", "auto_execute": "enabled"}
+EOF
+
+# Step 3: Update frontend JavaScript to ensure proper sending
+echo ""
+echo "🌐 Updating frontend JavaScript..."
+
+cat > services/zoe-ui/dist/developer/js/developer_fix.js << 'EOF'
+// Fixed developer dashboard JavaScript
+const API_BASE = 'http://localhost:8000/api';
+
+// Test function to send specific messages
+function sendTestMessage(text) {
+    document.getElementById('messageInput').value = text;
+    sendMessage();
+}
+
+async function sendMessage() {
+    const input = document.getElementById('messageInput');
+    const message = input.value.trim();
+    
+    if (!message) return;
+    
+    // Add user message to chat
+    addMessage(message, 'user');
+    input.value = '';
+    
+    try {
+        console.log('Sending message:', message);
+        
+        const response = await fetch(`${API_BASE}/developer/chat`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ message: message })
+        });
+        
+        const data = await response.json();
+        console.log('Response:', data);
+        
+        // Add response to chat
+        addMessage(data.response, 'assistant');
+        
+        // Show debug info if available
+        if (data.debug) {
+            console.log('Debug:', data.debug);
+        }
+        
+    } catch (error) {
+        console.error('Error:', error);
+        addMessage('Error: ' + error.message, 'error');
+    }
+}
+
+function addMessage(content, sender) {
+    const messages = document.getElementById('messages') || document.querySelector('.messages');
+    if (!messages) {
+        console.error('Messages container not found');
+        return;
+    }
+    
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${sender}`;
+    
+    // Handle HTML content properly
+    if (content.includes('**') || content.includes('```')) {
+        // Convert markdown-style to HTML
+        content = content
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/```(.*?)```/gs, '<pre>$1</pre>')
+            .replace(/\n/g, '<br>');
+    }
+    
+    messageDiv.innerHTML = content;
+    messages.appendChild(messageDiv);
+    messages.scrollTop = messages.scrollHeight;
+}
+
+// Add enter key support
+document.addEventListener('DOMContentLoaded', function() {
+    const input = document.getElementById('messageInput');
+    if (input) {
+        input.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+    }
+});
+EOF
+
+# Copy the fixed JS to the developer folder
+cp services/zoe-ui/dist/developer/js/developer_fix.js services/zoe-ui/dist/developer/js/developer.js
+
+# Step 4: Restart services
+echo ""
+echo "🔄 Restarting services..."
+docker restart zoe-core
+docker restart zoe-ui
+sleep 10
+
+# Step 5: Final test
+echo ""
+echo "🧪 Final test..."
+echo ""
+echo "Testing 'system health' command:"
+curl -s -X POST http://localhost:8000/api/developer/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "system health"}' | jq -r '.response' | head -10
+
+echo ""
+echo "✅ FRONTEND FIX COMPLETE!"
+echo ""
+echo "🌐 Now refresh the developer dashboard and try:"
+echo ""
+echo "Type EXACTLY these phrases:"
+echo '  • "system health"'
+echo '  • "docker containers"'
+echo '  • "memory usage"'
+echo '  • "cpu temperature"'
+echo ""
+echo "The commands should now execute properly!"
+echo ""
+echo "Check browser console (F12) for debug messages if still having issues."

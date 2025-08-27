@@ -2,10 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-app = FastAPI(title="Zoe AI Core", version="6.3")
+app = FastAPI(title="Zoe AI", version="6.2")
 
 app.add_middleware(
     CORSMiddleware,
@@ -15,42 +12,40 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Import working routers
+# Import routers one by one
 try:
     from routers import developer
     app.include_router(developer.router)
-    logger.info("✅ Developer router loaded")
+    print("✅ Developer loaded")
 except Exception as e:
-    logger.error(f"Developer router failed: {e}")
+    print(f"❌ Developer failed: {e}")
 
 try:
-    from routers import simple_creator
-    app.include_router(simple_creator.router)
-    logger.info("✅ Creator router loaded")
+    from routers import creator_working
+    app.include_router(creator_working.router)
+    print("✅ Creator loaded")
 except Exception as e:
-    logger.error(f"Creator router failed: {e}")
+    print(f"❌ Creator failed: {e}")
 
 try:
     from routers import chat
     app.include_router(chat.router)
-    logger.info("✅ Chat router loaded")
 except:
     pass
 
 try:
     from routers import settings
     app.include_router(settings.router)
-    logger.info("✅ Settings router loaded")
 except:
     pass
 
 @app.get("/")
 async def root():
-    return {"service": "Zoe AI Core", "version": "6.3", "creator": "enabled"}
+    return {"service": "Zoe AI", "version": "6.2"}
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "creator": "active"}
+    return {"status": "healthy"}
 
 if __name__ == "__main__":
     import uvicorn
