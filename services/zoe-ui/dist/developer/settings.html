@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Settings - Zoe AI Developer</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            width: 100vw; height: 100vh; overflow: hidden;
+            font-size: clamp(14px, 1.6vw, 16px); color: #333;
+        }
+
+        /* Header - PRESERVED FROM ORIGINAL */
+        .header {
+            height: 60px;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 16px; position: relative; z-index: 100;
+        }
+
+        .header-left {
+            display: flex; align-items: center; gap: 20px;
+        }
+
+        .logo {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 16px; font-weight: 600; color: #333;
+            cursor: pointer; transition: all 0.3s ease;
+        }
+
+        .logo:hover { transform: scale(1.05); }
+
+        .logo-icon {
+            width: 28px; height: 28px; border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px; color: white;
+            animation: zoeBreathing 3s ease-in-out infinite;
+        }
+
+        @keyframes zoeBreathing {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.9; }
+        }
+
+        .tab-nav {
+            display: flex; gap: 4px;
+        }
+
+        .tab {
+            width: 44px; height: 44px; border-radius: 12px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.3s ease; font-size: 18px;
+            background: rgba(255, 255, 255, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            position: relative; min-width: 44px; min-height: 44px;
+            text-decoration: none; color: #666;
+        }
+
+        .tab.active {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: scale(1.05);
+        }
+
+        .tab:hover:not(.active) { 
+            background: rgba(123, 97, 255, 0.1); 
+            transform: translateY(-2px);
+        }
+
+        .header-right {
+            display: flex; align-items: center; gap: 12px;
+            font-size: 14px; color: #666;
+        }
+
+        /* Settings Tabs */
+        .settings-tabs {
+            display: flex;
+            gap: 8px;
+            padding: 20px 20px 0;
+            max-width: 1200px;
+            margin: 0 auto;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .settings-tab {
+            padding: 12px 20px;
+            background: rgba(255, 255, 255, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 12px 12px 0 0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+            font-size: 14px;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .settings-tab.active {
+            background: rgba(255, 255, 255, 0.95);
+            border-bottom: none;
+            transform: translateY(2px);
+            color: #7B61FF;
+        }
+
+        /* Main Content */
+        .main-content {
+            height: calc(100vh - 60px);
+            overflow-y: auto;
+            background: rgba(255, 255, 255, 0.4);
+            backdrop-filter: blur(20px);
+        }
+
+        .settings-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px 20px;
+        }
+
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .settings-section {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .section-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            color: white;
+        }
+
+        .models-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+
+        .model-card {
+            background: rgba(255, 255, 255, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 12px;
+            padding: 16px;
+            transition: all 0.3s ease;
+        }
+
+        .provider-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .provider-name {
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .provider-status {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #22c55e;
+        }
+
+        .provider-status.disabled {
+            background: #ef4444;
+        }
+
+        .provider-status.unconfigured {
+            background: #94a3b8;
+        }
+
+        /* Form Elements */
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .form-sublabel {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+        }
+
+        .form-input,
+        .form-select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.9);
+            font-size: 14px;
+            transition: all 0.3s ease;
+            min-height: 44px;
+        }
+
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .slider {
+            flex: 1;
+            -webkit-appearance: none;
+            height: 6px;
+            border-radius: 3px;
+            background: linear-gradient(to right, #7B61FF 0%, #5AE0E0 100%);
+            outline: none;
+        }
+
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: white;
+            border: 2px solid #7B61FF;
+            cursor: pointer;
+        }
+
+        .slider-value {
+            min-width: 50px;
+            text-align: right;
+            font-weight: 600;
+            color: #7B61FF;
+        }
+
+        .personality-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .personality-card {
+            background: rgba(255, 255, 255, 0.5);
+            border-radius: 12px;
+            padding: 20px;
+            border: 2px solid transparent;
+            transition: all 0.3s ease;
+        }
+
+        .personality-card.zoe {
+            border-color: #ec4899;
+        }
+
+        .personality-card.zack {
+            border-color: #10b981;
+        }
+
+        .personality-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .personality-avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+
+        .personality-avatar.zoe {
+            background: linear-gradient(135deg, #ec4899, #f472b6);
+        }
+
+        .personality-avatar.zack {
+            background: linear-gradient(135deg, #10b981, #34d399);
+        }
+
+        .personality-name {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-height: 44px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4);
+        }
+
+        .button-group {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, rgba(123, 97, 255, 0.1), rgba(90, 224, 224, 0.1));
+            padding: 16px;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #7B61FF;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="header-left">
+            <div class="logo" onclick="window.location.href='../index.html'">
+                <div class="logo-icon">Z</div>
+                <span>Developer</span>
+            </div>
+            <div class="tab-nav">
+                <a href="index.html" class="tab">💬</a>
+                <a href="tools.html" class="tab">🔧</a>
+                <a href="monitor.html" class="tab">📊</a>
+                <a href="backups.html" class="tab">💾</a>
+                <a href="settings.html" class="tab active">⚙️</a>
+            </div>
+        </div>
+        <div class="header-right">
+            <div id="currentTime">12:00 PM</div>
+        </div>
+    </div>
+
+    <!-- Settings Tabs -->
+    <div class="settings-tabs">
+        <div class="settings-tab active" onclick="switchTab('personalities')">
+            🤖 AI Personalities
+        </div>
+        <div class="settings-tab" onclick="switchTab('routellm')">
+            🚀 RouteLLM
+        </div>
+        <div class="settings-tab" onclick="switchTab('api-keys')">
+            🔑 API Keys
+        </div>
+        <div class="settings-tab" onclick="switchTab('system')">
+            🖥️ System
+        </div>
+        <div class="settings-tab" onclick="switchTab('automation')">
+            ⚡ Automation
+        </div>
+        <div class="settings-tab" onclick="switchTab('security')">
+            🔒 Security
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="settings-container">
+            
+            <!-- AI Personalities Tab -->
+            <div id="personalities-tab" class="tab-content active">
+                <div class="settings-section">
+                    <div class="section-title">
+                        <div class="section-icon">🤖</div>
+                        AI Personality Configuration
+                    </div>
+                    
+                    <div class="personality-grid">
+                        <!-- Zoe Settings -->
+                        <div class="personality-card zoe">
+                            <div class="personality-header">
+                                <div class="personality-avatar zoe">🌟</div>
+                                <div>
+                                    <div class="personality-name">Zoe</div>
+                                    <div class="form-sublabel">User Assistant</div>
+                                </div>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label class="form-label">Temperature</label>
+                                <div class="slider-container">
+                                    <input type="range" class="slider" id="zoe-temp" min="0" max="1" step="0.1" value="0.7">
+                                    <div class="slider-value">0.7</div>
+                                </div>
+                                <div class="form-sublabel">Creative ← → Deterministic</div>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label class="form-label">Response Length</label>
+                                <select class="form-select">
+                                    <option>Concise (50 words)</option>
+                                    <option>Short (100 words)</option>
+                                    <option selected>Balanced (200 words)</option>
+                                    <option>Detailed (500 words)</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label class="form-label">Friendliness</label>
+                                <div class="slider-container">
+                                    <input type="range" class="slider" min="0" max="10" value="8">
+                                    <div class="slider-value">8</div>
+                                </div>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label class="form-label">Emoji Usage</label>
+                                <select class="form-select">
+                                    <option>None</option>
+                                    <option>Minimal</option>
+                                    <option selected>Moderate</option>
+                                    <option>Frequent</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <!-- Zack Settings -->
+                        <div class="personality-card zack">
+                            <div class="personality-header">
+                                <div class="personality-avatar zack">🔧</div>
+                                <div>
+                                    <div class="personality-name">Zack</div>
+                                    <div class="form-sublabel">Developer Assistant</div>
+                                </div>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label class="form-label">Temperature</label>
+                                <div class="slider-container">
+                                    <input type="range" class="slider" id="zack-temp" min="0" max="1" step="0.1" value="0.3">
+                                    <div class="slider-value">0.3</div>
+                                </div>
+                                <div class="form-sublabel">Precise ← → Creative</div>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label class="form-label">Response Length</label>
+                                <select class="form-select">
+                                    <option>Concise (50 words)</option>
+                                    <option>Short (100 words)</option>
+                                    <option>Balanced (200 words)</option>
+                                    <option selected>Detailed (500+ words)</option>
+                                </select>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label class="form-label">Technical Depth</label>
+                                <div class="slider-container">
+                                    <input type="range" class="slider" min="0" max="10" value="9">
+                                    <div class="slider-value">9</div>
+                                </div>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label class="form-label">Code Examples</label>
+                                <select class="form-select">
+                                    <option>Never</option>
+                                    <option>When Asked</option>
+                                    <option selected>When Helpful</option>
+                                    <option>Always</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="button-group" style="margin-top: 20px;">
+                        <button class="btn btn-primary" onclick="savePersonalities()">💾 Save Personalities</button>
+                        <button class="btn btn-primary" onclick="testPersonalities()">🧪 Test Responses</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RouteLLM Tab -->
+            <div id="routellm-tab" class="tab-content">
+                <div class="settings-section">
+                    <div class="section-title">
+                        <div class="section-icon">📊</div>
+                        RouteLLM Overview
+                    </div>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-value" id="total-models">0</div>
+                            <div class="stat-label">Total Models</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="active-providers">0</div>
+                            <div class="stat-label">Active Providers</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="requests-today">0</div>
+                            <div class="stat-label">Requests Today</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="cost-today">$0.00</div>
+                            <div class="stat-label">Cost Today</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <div class="section-title">
+                        <div class="section-icon">🤖</div>
+                        Available Models
+                    </div>
+                    <div class="models-grid" id="models-grid">
+                        <!-- Models will be loaded dynamically -->
+                    </div>
+                    <div class="button-group" style="margin-top: 16px;">
+                        <button class="btn btn-primary" onclick="discoverModels()">🔍 Discover Models</button>
+                        <button class="btn btn-primary" onclick="refreshModels()">🔄 Refresh</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- API Keys Tab -->
+            <div id="api-keys-tab" class="tab-content">
+                <div class="settings-section">
+                    <div class="section-title">
+                        <div class="section-icon">🔑</div>
+                        API Key Management
+                    </div>
+                    
+                    <!-- All API Providers -->
+                    <div class="form-group">
+                        <label class="form-label">OpenAI API Key</label>
+                        <input type="password" class="form-input" id="openai-key" placeholder="sk-...">
+                        <div class="form-sublabel">GPT-4, GPT-3.5, DALL-E</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Anthropic API Key</label>
+                        <input type="password" class="form-input" id="anthropic-key" placeholder="sk-ant-...">
+                        <div class="form-sublabel">Claude 3 Opus, Sonnet, Haiku</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Google AI API Key</label>
+                        <input type="password" class="form-input" id="google-key" placeholder="...">
+                        <div class="form-sublabel">Gemini Pro, Gemini Ultra</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Mistral API Key</label>
+                        <input type="password" class="form-input" id="mistral-key" placeholder="...">
+                        <div class="form-sublabel">Mistral Large, Medium, Small</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Cohere API Key</label>
+                        <input type="password" class="form-input" id="cohere-key" placeholder="...">
+                        <div class="form-sublabel">Command, Command-R, Command-Light</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Groq API Key</label>
+                        <input type="password" class="form-input" id="groq-key" placeholder="...">
+                        <div class="form-sublabel">LLaMA 3, Mixtral, Gemma</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Together API Key</label>
+                        <input type="password" class="form-input" id="together-key" placeholder="...">
+                        <div class="form-sublabel">Open source models</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Perplexity API Key</label>
+                        <input type="password" class="form-input" id="perplexity-key" placeholder="...">
+                        <div class="form-sublabel">Online LLMs with search</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Replicate API Key</label>
+                        <input type="password" class="form-input" id="replicate-key" placeholder="...">
+                        <div class="form-sublabel">Open source model hosting</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">HuggingFace API Key</label>
+                        <input type="password" class="form-input" id="huggingface-key" placeholder="...">
+                        <div class="form-sublabel">Inference API</div>
+                    </div>
+                    
+                    <div class="button-group">
+                        <button class="btn btn-primary" onclick="saveApiKeys()">💾 Save All Keys</button>
+                        <button class="btn btn-primary" onclick="testApiKeys()">🧪 Test All Keys</button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // Initialize on load
+        document.addEventListener('DOMContentLoaded', function() {
+            updateTime();
+            setInterval(updateTime, 60000);
+            loadCurrentSettings();
+            attachSliderListeners();
+        });
+
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('currentTime').textContent = 
+                now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+        }
+
+        function switchTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Remove active from all tab buttons
+            document.querySelectorAll('.settings-tab').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            // Show selected tab
+            document.getElementById(tabName + '-tab').classList.add('active');
+            
+            // Mark tab button as active
+            event.target.classList.add('active');
+            
+            // Load data for specific tabs
+            if (tabName === 'routellm') {
+                loadRouteLLMStatus();
+            }
+        }
+
+        function attachSliderListeners() {
+            // Attach listeners to all sliders to update values
+            document.querySelectorAll('.slider').forEach(slider => {
+                const valueDisplay = slider.parentElement.querySelector('.slider-value');
+                if (valueDisplay) {
+                    slider.addEventListener('input', function() {
+                        valueDisplay.textContent = this.value;
+                    });
+                }
+            });
+        }
+
+        async function loadCurrentSettings() {
+            try {
+                // Load personality settings
+                const response = await fetch('/api/settings-ui/personalities');
+                if (response.ok) {
+                    const data = await response.json();
+                    // Apply loaded settings to UI
+                    console.log('Loaded personality settings:', data);
+                }
+            } catch (error) {
+                console.error('Error loading settings:', error);
+            }
+        }
+
+        async function savePersonalities() {
+            const settings = {
+                zoe: {
+                    temperature: document.getElementById('zoe-temp').value,
+                    // ... collect other Zoe settings
+                },
+                zack: {
+                    temperature: document.getElementById('zack-temp').value,
+                    // ... collect other Zack settings
+                }
+            };
+            
+            try {
+                const response = await fetch('/api/settings-ui/personalities', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+                
+                if (response.ok) {
+                    alert('✅ Personalities saved successfully!');
+                }
+            } catch (error) {
+                alert('❌ Error saving personalities: ' + error.message);
+            }
+        }
+
+        async function testPersonalities() {
+            const testMessage = "Explain how neural networks work";
+            
+            // Test Zoe
+            const zoeResponse = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: testMessage })
+            });
+            
+            // Test Zack
+            const zackResponse = await fetch('/api/developer/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: testMessage })
+            });
+            
+            if (zoeResponse.ok && zackResponse.ok) {
+                alert('✅ Both personalities are responding correctly!');
+            }
+        }
+
+        async function loadRouteLLMStatus() {
+            try {
+                const response = await fetch('/api/routellm/status');
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    // Update stats
+                    document.getElementById('total-models').textContent = data.total_models || 0;
+                    document.getElementById('active-providers').textContent = data.active_providers || 0;
+                    document.getElementById('requests-today').textContent = data.requests_today || 0;
+                    document.getElementById('cost-today').textContent = '$' + (data.cost_today || 0).toFixed(2);
+                    
+                    // Update models grid
+                    updateModelsGrid(data.providers || {});
+                }
+            } catch (error) {
+                console.error('Error loading RouteLLM status:', error);
+            }
+        }
+
+        function updateModelsGrid(providers) {
+            const grid = document.getElementById('models-grid');
+            grid.innerHTML = '';
+            
+            for (const [provider, info] of Object.entries(providers)) {
+                const card = document.createElement('div');
+                card.className = 'model-card';
+                
+                const statusClass = info.enabled ? '' : (info.configured ? 'disabled' : 'unconfigured');
+                
+                card.innerHTML = `
+                    <div class="provider-header">
+                        <span class="provider-name">${provider}</span>
+                        <div class="provider-status ${statusClass}"></div>
+                    </div>
+                    <div class="model-list">
+                        ${(info.models || []).map(m => `<div class="model-item">${m}</div>`).join('')}
+                    </div>
+                `;
+                
+                grid.appendChild(card);
+            }
+        }
+
+        async function discoverModels() {
+            try {
+                const response = await fetch('/api/routellm/discover', { method: 'POST' });
+                if (response.ok) {
+                    alert('✅ Model discovery started!');
+                    setTimeout(() => loadRouteLLMStatus(), 3000);
+                }
+            } catch (error) {
+                alert('❌ Error discovering models: ' + error.message);
+            }
+        }
+
+        async function saveApiKeys() {
+            const keys = {
+                openai: document.getElementById('openai-key').value,
+                anthropic: document.getElementById('anthropic-key').value,
+                google: document.getElementById('google-key').value,
+                mistral: document.getElementById('mistral-key').value,
+                cohere: document.getElementById('cohere-key').value,
+                groq: document.getElementById('groq-key').value,
+                together: document.getElementById('together-key').value,
+                perplexity: document.getElementById('perplexity-key').value,
+                replicate: document.getElementById('replicate-key').value,
+                huggingface: document.getElementById('huggingface-key').value
+            };
+            
+            // Only send non-empty keys
+            const keysToSave = {};
+            for (const [provider, key] of Object.entries(keys)) {
+                if (key && key.trim()) {
+                    keysToSave[provider] = key;
+                }
+            }
+            
+            if (Object.keys(keysToSave).length === 0) {
+                alert('⚠️ No keys to save');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/settings-ui/apikeys', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(keysToSave)
+                });
+                
+                if (response.ok) {
+                    alert('✅ API keys saved securely!');
+                    // Clear input fields for security
+                    document.querySelectorAll('input[type="password"]').forEach(input => {
+                        input.value = '';
+                    });
+                }
+            } catch (error) {
+                alert('❌ Error saving API keys: ' + error.message);
+            }
+        }
+
+        async function testApiKeys() {
+            try {
+                const response = await fetch('/api/settings-ui/apikeys/test', { method: 'POST' });
+                if (response.ok) {
+                    const results = await response.json();
+                    let message = 'API Key Test Results:\n\n';
+                    for (const [provider, result] of Object.entries(results)) {
+                        message += `${provider}: ${result.status}\n`;
+                    }
+                    alert(message);
+                }
+            } catch (error) {
+                alert('❌ Error testing API keys: ' + error.message);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,52 +1,60 @@
 {
   "providers": {
     "openai": {
-      "enabled": false,
-      "models": [],
-      "default": null,
+      "enabled": true,
+      "models": [
+        "gpt-5",
+        "gpt-4-turbo",
+        "gpt-4",
+        "gpt-3.5-turbo"
+      ],
+      "default": "gpt-5",
       "api_key_var": "OPENAI_API_KEY"
     },
     "anthropic": {
-      "enabled": false,
-      "models": [],
-      "default": null,
+      "enabled": true,
+      "models": [
+        "claude-3-opus-20240229",
+        "claude-3-sonnet-20240229",
+        "claude-3-haiku-20240307"
+      ],
+      "default": "claude-3-opus-20240229",
       "api_key_var": "ANTHROPIC_API_KEY"
-    },
-    "google": {
-      "enabled": false,
-      "models": [],
-      "default": null,
-      "api_key_var": "GOOGLE_API_KEY"
-    },
-    "mistral": {
-      "enabled": false,
-      "models": [],
-      "default": null,
-      "api_key_var": "MISTRAL_API_KEY"
-    },
-    "cohere": {
-      "enabled": false,
-      "models": [],
-      "default": null,
-      "api_key_var": "COHERE_API_KEY"
-    },
-    "groq": {
-      "enabled": false,
-      "models": [],
-      "default": null,
-      "api_key_var": "GROQ_API_KEY"
     },
     "ollama": {
       "enabled": true,
       "models": [
+        "qwen2.5:3b",
+        "codellama:7b",
+        "gemma:2b",
+        "phi3:mini",
+        "mistral:latest",
         "llama3.2:1b",
         "llama3.2:3b"
       ],
-      "default": "llama3.2:1b",
-      "api_key_var": null,
-      "base_url": "http://zoe-ollama:11434"
+      "default": "llama3.2:3b",
+      "api_key_var": null
+    },
+    "google": {
+      "enabled": false,
+      "models": [],
+      "default": null
+    },
+    "mistral": {
+      "enabled": false,
+      "models": [],
+      "default": null
+    },
+    "cohere": {
+      "enabled": false,
+      "models": [],
+      "default": null
+    },
+    "groq": {
+      "enabled": false,
+      "models": [],
+      "default": null
     }
   },
-  "default_provider": "ollama",
-  "last_updated": "2025-08-23T08:44:50.558632"
+  "default_provider": "openai"
 }

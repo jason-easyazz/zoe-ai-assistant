@@ -38,8 +38,10 @@ except:
     pass
 
 try:
-    from routers import settings
+    from routers import settings, settings_ui
     app.include_router(settings.router)
+    app.include_router(settings_ui.router)
+    logger.info("✅ Settings UI router loaded")
     logger.info("✅ Settings router loaded")
 except:
     pass
