@@ -10,7 +10,7 @@ class LLMModelManager:
         """Route to the RIGHT model"""
         # Developer/high complexity -> Anthropic Claude Opus
         if complexity == "high" and os.getenv("ANTHROPIC_API_KEY"):
-            return "anthropic", "claude-3-haiku-20240307"
+            return "anthropic", "claude-3-opus-20240229"
         
         # Medium -> Try OpenAI but with REAL model
         if os.getenv("OPENAI_API_KEY"):
