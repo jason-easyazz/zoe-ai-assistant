@@ -1,3 +1,13 @@
+#!/bin/bash
+# FIX_DEVELOPER_FINAL.sh - Replace corrupted developer.py with working version
+
+echo "🔧 FIXING DEVELOPER.PY COMPLETELY"
+echo "================================="
+
+cd /home/pi/zoe
+
+# Create the fixed file
+cat > /tmp/developer_fixed.py << 'PYEOF'
 """Developer Router with REAL AI code generation"""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -314,3 +324,20 @@ async def list_system_backups():
     
     backups.sort(key=lambda x: x["created"], reverse=True)
     return {"backups": backups, "count": len(backups)}
+PYEOF
+
+echo "✅ Created fixed developer.py"
+
+# Copy to container
+docker cp /tmp/developer_fixed.py zoe-core:/app/routers/developer.py
+
+# Restart
+echo "🔄 Restarting service..."
+docker compose restart zoe-core
+sleep 8
+
+# Test
+echo -e "\n🧪 Testing fixed developer endpoint..."
+curl -s http://localhost:8000/api/developer/status | jq '.'
+
+echo -e "\n✅ Developer.py fixed and deployed!"
