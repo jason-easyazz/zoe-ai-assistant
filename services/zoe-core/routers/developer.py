@@ -90,3 +90,34 @@ async def test_ai():
         return {"ai_status": "working", "response": response[:100] if response else None}
     except Exception as e:
         return {"ai_status": "error", "error": str(e)}
+
+@router.get("/metrics")
+async def get_system_metrics():
+    """Get system resource metrics"""
+    import psutil
+    
+    # CPU
+    cpu_percent = psutil.cpu_percent(interval=1)
+    
+    # Memory
+    mem = psutil.virtual_memory()
+    memory_data = {
+        "percent": round(mem.percent, 1),
+        "used": round(mem.used / (1024**3), 1),
+        "total": round(mem.total / (1024**3), 1)
+    }
+    
+    # Disk
+    disk = psutil.disk_usage("/")
+    disk_data = {
+        "percent": round(disk.percent, 1),
+        "used": round(disk.used / (1024**3), 1),
+        "total": round(disk.total / (1024**3), 1)
+    }
+    
+    return {
+        "cpu": cpu_percent,
+        "memory": memory_data,
+        "disk": disk_data,
+        "timestamp": datetime.now().isoformat()
+    }

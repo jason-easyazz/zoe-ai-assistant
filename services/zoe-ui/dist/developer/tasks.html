@@ -2,284 +2,330 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zoe Developer - Task Management</title>
-    <link rel="stylesheet" href="../css/glass.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Development Tasks</title>
     <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            height: 100vh;
+            overflow: hidden;
+            color: #333;
         }
-        
-        .nav-header {
-            background: rgba(255, 255, 255, 0.1);
+
+        /* Header - same as others */
+        .header {
+            height: 56px;
+            background: rgba(255, 255, 255, 0.9);
             backdrop-filter: blur(10px);
-            padding: 15px 20px;
-            margin-bottom: 20px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
         }
-        
+
+        .nav {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            color: #333;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
         .nav-links {
             display: flex;
-            gap: 20px;
-            align-items: center;
+            gap: 4px;
         }
-        
+
         .nav-link {
-            color: white;
-            text-decoration: none;
             padding: 8px 16px;
             border-radius: 8px;
-            transition: background 0.3s;
+            text-decoration: none;
+            color: #666;
+            transition: all 0.2s;
+            font-size: 14px;
         }
-        
-        .nav-link:hover {
-            background: rgba(255, 255, 255, 0.2);
-        }
-        
+
         .nav-link.active {
-            background: rgba(255, 255, 255, 0.3);
+            background: rgba(123, 97, 255, 0.1);
+            color: #7B61FF;
         }
-        
-        .task-grid {
-            display: grid;
-            grid-template-columns: 350px 1fr;
-            gap: 20px;
-            height: calc(100vh - 100px);
-            padding: 0 20px 20px 20px;
-        }
-        
-        .task-sidebar {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            border-radius: 16px;
-            padding: 20px;
+
+        /* Content */
+        .content {
+            height: calc(100vh - 56px);
+            padding: 24px;
             overflow-y: auto;
         }
-        
-        .filter-tabs {
+
+        /* Task Board */
+        .board-header {
             display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
         }
-        
-        .filter-tab {
-            padding: 8px 12px;
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            border-radius: 8px;
+
+        .board-title {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .new-task-btn {
+            padding: 10px 20px;
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
             color: white;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .filter-tab.active {
-            background: rgba(255, 255, 255, 0.3);
-        }
-        
-        .task-list {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-        
-        .task-item {
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
-            padding: 15px;
-            cursor: pointer;
-            transition: all 0.3s;
-            border-left: 4px solid transparent;
-        }
-        
-        .task-item:hover {
-            background: rgba(255, 255, 255, 0.15);
-            transform: translateX(5px);
-        }
-        
-        .task-item.active {
-            background: rgba(100, 200, 255, 0.2);
-            border: 1px solid rgba(100, 200, 255, 0.5);
-        }
-        
-        .priority-critical { border-left-color: #ff4444; }
-        .priority-high { border-left-color: #ff8844; }
-        .priority-medium { border-left-color: #ffcc44; }
-        .priority-low { border-left-color: #44ff44; }
-        
-        .task-conversation {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            border-radius: 16px;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-        }
-        
-        .btn-primary {
-            padding: 12px 24px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             border: none;
             border-radius: 8px;
-            color: white;
             cursor: pointer;
+            font-weight: 500;
+        }
+
+        .task-columns {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .task-column {
+            background: rgba(255, 255, 255, 0.5);
+            border-radius: 12px;
+            padding: 16px;
+        }
+
+        .column-header {
+            font-weight: 600;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .task-card {
+            background: white;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 12px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .task-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.12);
+        }
+
+        .task-title {
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .task-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .task-priority {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+
+        .priority-critical { background: #fee; color: #c00; }
+        .priority-high { background: #fea; color: #a60; }
+        .priority-medium { background: #def; color: #06a; }
+        .priority-low { background: #dfd; color: #0a0; }
+
+        .task-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .task-btn {
+            padding: 4px 8px;
+            background: #f0f0f0;
+            border: none;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+        }
+
+        .task-btn:hover {
+            background: #e0e0e0;
         }
     </style>
 </head>
 <body>
-    <div class="nav-header">
-        <div class="nav-links">
-            <a href="index.html" class="nav-link">📊 Dashboard</a>
-            <a href="chat.html" class="nav-link">💬 Chat with Zack</a>
-            <a href="tasks.html" class="nav-link active">📋 Tasks</a>
-            <a href="../index.html" class="nav-link">🏠 Main App</a>
+    <div class="header">
+        <div class="nav">
+            <a href="index.html" class="logo">
+                <div class="logo-icon">D</div>
+                <span>Developer</span>
+            </a>
+            <div class="nav-links">
+                <a href="index.html" class="nav-link">📊</a>
+                <a href="chat.html" class="nav-link">💬</a>
+                <a href="tasks.html" class="nav-link active">📋</a>
+                <a href="tools.html" class="nav-link">🔧</a>
+                <a href="monitor.html" class="nav-link">📈</a>
+                <a href="backups.html" class="nav-link">💾</a>
+                <a href="settings.html" class="nav-link">⚙️</a>
+            </div>
+        </div>
+        <div class="header-right">
+            <span id="currentTime"></span>
         </div>
     </div>
-    
-    <div class="task-grid">
-        <div class="task-sidebar">
-            <h2 style="color: white;">📋 Tasks</h2>
-            <button class="btn-primary" onclick="createTask()" style="width: 100%; margin: 20px 0;">
-                + Create New Task
-            </button>
-            
-            <div class="filter-tabs">
-                <div class="filter-tab active" onclick="filterTasks('all', this)">All</div>
-                <div class="filter-tab" onclick="filterTasks('pending', this)">Active</div>
-                <div class="filter-tab" onclick="filterTasks('completed', this)">Completed</div>
-            </div>
-            
-            <div class="task-list" id="taskList">
-                <!-- Tasks load here -->
-            </div>
+
+    <div class="content">
+        <div class="board-header">
+            <h1 class="board-title">Development Tasks</h1>
+            <button class="new-task-btn" onclick="createNewTask()">+ New Task</button>
         </div>
-        
-        <div class="task-conversation">
-            <div id="emptyState" style="text-align: center; padding: 40px; color: white;">
-                <h2>Select a Task</h2>
-                <p>Choose a task from the left to view details</p>
+
+        <div class="task-columns">
+            <div class="task-column">
+                <div class="column-header">📋 Pending</div>
+                <div id="pendingTasks"></div>
             </div>
             
-            <div id="taskContent" style="display: none;">
-                <div id="taskHeader" style="color: white; margin-bottom: 20px;"></div>
-                <div id="conversationMessages" style="flex: 1; overflow-y: auto; margin-bottom: 20px;"></div>
-                <div style="display: flex; gap: 10px;">
-                    <input type="text" id="messageInput" placeholder="Add a comment..." 
-                           style="flex: 1; padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.05); color: white;"
-                           onkeypress="if(event.key === 'Enter') sendMessage()">
-                    <button class="btn-primary" onclick="sendMessage()">Send</button>
-                </div>
+            <div class="task-column">
+                <div class="column-header">🔄 In Progress</div>
+                <div id="inProgressTasks"></div>
+            </div>
+            
+            <div class="task-column">
+                <div class="column-header">✅ Completed</div>
+                <div id="completedTasks"></div>
             </div>
         </div>
     </div>
-    
+
     <script>
-        const API_BASE = '/api';
-        let currentTaskId = null;
-        
+        const API_BASE = window.location.hostname === 'localhost' 
+            ? 'http://localhost:8000' 
+            : `http://${window.location.hostname}:8000`;
+
+        // Update time
+        function updateTime() {
+            document.getElementById('currentTime').textContent = 
+                new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+        updateTime();
+        setInterval(updateTime, 1000);
+
+        // Load tasks
         async function loadTasks() {
             try {
-                const response = await fetch(API_BASE + '/tasks');
-                const data = await response.json();
-                
-                const taskList = document.getElementById('taskList');
-                if (data.tasks && data.tasks.length > 0) {
-                    taskList.innerHTML = data.tasks.map(task => 
-                        '<div class="task-item priority-' + task.priority + '" onclick="loadTask(\'' + task.task_id + '\')">' +
-                        '<div style="font-weight: bold; color: white;">' + task.task_id + '</div>' +
-                        '<div style="color: rgba(255,255,255,0.9);">' + task.title + '</div>' +
-                        '<div style="font-size: 0.9em; color: rgba(255,255,255,0.6);">' + 
-                        task.task_type + ' • ' + task.status + '</div></div>'
-                    ).join('');
+                const response = await fetch(`${API_BASE}/api/tasks/`);
+                if (response.ok) {
+                    const data = await response.json();
+                    displayTasks(data.tasks || []);
                 } else {
-                    taskList.innerHTML = '<div style="color: rgba(255,255,255,0.5); text-align: center;">No tasks yet</div>';
+                    displaySampleTasks();
                 }
-            } catch (error) {
-                console.error('Failed to load tasks:', error);
+            } catch (e) {
+                displaySampleTasks();
             }
         }
-        
-        async function loadTask(taskId) {
-            currentTaskId = taskId;
-            document.getElementById('emptyState').style.display = 'none';
-            document.getElementById('taskContent').style.display = 'block';
-            
-            try {
-                const response = await fetch(API_BASE + '/tasks/' + taskId);
-                const data = await response.json();
-                
-                document.getElementById('taskHeader').innerHTML = 
-                    '<h2>' + data.task.task_id + ': ' + data.task.title + '</h2>' +
-                    '<p>' + (data.task.description || 'No description') + '</p>';
-                
-                const messagesEl = document.getElementById('conversationMessages');
-                messagesEl.innerHTML = data.conversation.map(msg => 
-                    '<div style="background: rgba(255,255,255,0.1); padding: 10px; margin: 10px 0; border-radius: 8px; color: white;">' +
-                    '<strong>' + msg.role + '</strong> - ' + new Date(msg.timestamp).toLocaleString() +
-                    '<div>' + msg.message + '</div></div>'
-                ).join('');
-                
-                loadTasks(); // Refresh list
-            } catch (error) {
-                console.error('Failed to load task:', error);
-            }
+
+        // Display tasks in columns
+        function displayTasks(tasks) {
+            const pending = tasks.filter(t => t.status === 'pending');
+            const inProgress = tasks.filter(t => t.status === 'in_progress');
+            const completed = tasks.filter(t => t.status === 'completed');
+
+            document.getElementById('pendingTasks').innerHTML = pending.map(t => createTaskCard(t)).join('');
+            document.getElementById('inProgressTasks').innerHTML = inProgress.map(t => createTaskCard(t)).join('');
+            document.getElementById('completedTasks').innerHTML = completed.map(t => createTaskCard(t)).join('');
         }
-        
-        async function createTask() {
-            const title = prompt('Task title:');
-            if (!title) return;
-            
-            try {
-                const response = await fetch(API_BASE + '/tasks', {
-                    method: 'POST',
+
+        // Create task card HTML
+        function createTaskCard(task) {
+            return `
+                <div class="task-card">
+                    <div class="task-title">${task.title}</div>
+                    <div class="task-meta">
+                        <span class="task-priority priority-${task.priority}">${task.priority}</span>
+                        <span>${task.task_id}</span>
+                    </div>
+                    <div class="task-actions">
+                        <button class="task-btn" onclick="editInChat('${task.task_id}')">💬 Edit in Chat</button>
+                        <button class="task-btn" onclick="updateStatus('${task.task_id}')">📝 Update</button>
+                        <button class="task-btn" onclick="deleteTask('${task.task_id}')">🗑️ Delete</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Display sample tasks if API fails
+        function displaySampleTasks() {
+            const sampleTasks = [
+                { task_id: 'TASK-001', title: 'Fix TTS audio quality', status: 'in_progress', priority: 'high' },
+                { task_id: 'TASK-002', title: 'Add backup automation', status: 'pending', priority: 'medium' },
+                { task_id: 'TASK-003', title: 'Update documentation', status: 'completed', priority: 'low' }
+            ];
+            displayTasks(sampleTasks);
+        }
+
+        // Task actions
+        function createNewTask() {
+            window.location.href = 'chat.html?message=Create a new development task';
+        }
+
+        function editInChat(taskId) {
+            window.location.href = `chat.html?message=Edit task ${taskId}`;
+        }
+
+        function updateStatus(taskId) {
+            const newStatus = prompt('New status (pending/in_progress/completed):');
+            if (newStatus) {
+                fetch(`${API_BASE}/api/tasks/${taskId}`, {
+                    method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        title: title,
-                        task_type: 'feature',
-                        priority: 'medium'
-                    })
-                });
-                
-                const data = await response.json();
-                loadTasks();
-                loadTask(data.task_id);
-            } catch (error) {
-                alert('Failed to create task');
+                    body: JSON.stringify({ status: newStatus })
+                })
+                .then(() => loadTasks())
+                .catch(() => alert('Failed to update'));
             }
         }
-        
-        async function sendMessage() {
-            const input = document.getElementById('messageInput');
-            const message = input.value.trim();
-            
-            if (!message || !currentTaskId) return;
-            
-            input.value = '';
-            
-            try {
-                await fetch(API_BASE + '/tasks/' + currentTaskId + '/conversation', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        task_id: currentTaskId,
-                        message: message,
-                        role: 'developer'
-                    })
-                });
-                
-                loadTask(currentTaskId);
-            } catch (error) {
-                console.error('Failed to send message');
+
+        function deleteTask(taskId) {
+            if (confirm('Delete this task?')) {
+                fetch(`${API_BASE}/api/tasks/${taskId}`, { method: 'DELETE' })
+                    .then(() => loadTasks())
+                    .catch(() => alert('Failed to delete'));
             }
         }
-        
-        function filterTasks(status, element) {
-            document.querySelectorAll('.filter-tab').forEach(tab => tab.classList.remove('active'));
-            element.classList.add('active');
-            // Would filter tasks by status here
-            loadTasks();
-        }
-        
-        window.onload = loadTasks;
+
+        // Initialize
+        loadTasks();
+        setInterval(loadTasks, 30000);
     </script>
 </body>
 </html>
