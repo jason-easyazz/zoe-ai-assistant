@@ -57,7 +57,7 @@ except Exception as e:
     logger.error(f"Failed to load user_backups: {e}")
 
 # Try optional routers
-optional = ["memory", "lists", "templates"]
+optional = ["memory", "lists", "templates", "tasks"]
 for name in optional:
     try:
         module = __import__(f"routers.{name}", fromlist=[name])
