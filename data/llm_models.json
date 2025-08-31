@@ -1,27 +1,45 @@
 {
   "providers": {
-    "openai": {
-      "enabled": true,
-      "models": [
-        "gpt-5",
-        "gpt-4-turbo",
-        "gpt-4",
-        "gpt-3.5-turbo"
-      ],
-      "default": "gpt-5",
-      "api_key_var": "OPENAI_API_KEY"
-    },
     "anthropic": {
+      "provider": "anthropic",
       "enabled": true,
       "models": [
-        "claude-3-opus-20240229",
-        "claude-3-sonnet-20240229",
         "claude-3-haiku-20240307"
       ],
-      "default": "claude-3-opus-20240229",
-      "api_key_var": "ANTHROPIC_API_KEY"
+      "default": "claude-3-haiku-20240307",
+      "api_key_var": "ANTHROPIC_API_KEY",
+      "cost_factors": {
+        "opus": 1.0,
+        "sonnet": 0.5,
+        "haiku": 0.1,
+        "instant": 0.05
+      }
+    },
+    "openai": {
+      "provider": "openai",
+      "enabled": true,
+      "models": [
+        "gpt-4o",
+        "gpt-4o-2024-05-13",
+        "gpt-4o-mini-2024-07-18",
+        "gpt-4o-mini",
+        "gpt-4o-2024-08-06",
+        "chatgpt-4o-latest",
+        "gpt-4o-realtime-preview-2024-10-01",
+        "gpt-4o-audio-preview-2024-10-01",
+        "gpt-4o-audio-preview",
+        "gpt-4o-realtime-preview"
+      ],
+      "default": "gpt-3.5-turbo",
+      "api_key_var": "OPENAI_API_KEY",
+      "cost_factors": {
+        "gpt-4o": 0.8,
+        "gpt-4": 1.0,
+        "gpt-3.5": 0.1
+      }
     },
     "ollama": {
+      "provider": "ollama",
       "enabled": true,
       "models": [
         "qwen2.5:3b",
@@ -33,28 +51,78 @@
         "llama3.2:3b"
       ],
       "default": "llama3.2:3b",
-      "api_key_var": null
-    },
-    "google": {
-      "enabled": false,
-      "models": [],
-      "default": null
-    },
-    "mistral": {
-      "enabled": false,
-      "models": [],
-      "default": null
-    },
-    "cohere": {
-      "enabled": false,
-      "models": [],
-      "default": null
-    },
-    "groq": {
-      "enabled": false,
-      "models": [],
-      "default": null
+      "api_key_var": null,
+      "cost_factors": {
+        "all": 0
+      }
     }
   },
-  "default_provider": "openai"
+  "discovered_at": "2025-08-31T10:23:26.485787",
+  "routing_rules": {
+    "complexity_analysis": {
+      "simple": {
+        "indicators": [
+          "hi",
+          "hello",
+          "thanks",
+          "yes",
+          "no",
+          "ok"
+        ],
+        "max_words": 5,
+        "preferred_providers": [
+          "ollama"
+        ]
+      },
+      "medium": {
+        "indicators": [
+          "explain",
+          "what is",
+          "how does",
+          "tell me about"
+        ],
+        "max_words": 30,
+        "preferred_providers": [
+          "ollama",
+          "openai",
+          "anthropic"
+        ]
+      },
+      "complex": {
+        "indicators": [
+          "implement",
+          "create",
+          "build",
+          "design",
+          "analyze",
+          "optimize"
+        ],
+        "min_words": 20,
+        "preferred_providers": [
+          "anthropic",
+          "openai",
+          "google"
+        ]
+      },
+      "expert": {
+        "indicators": [
+          "architecture",
+          "distributed",
+          "microservices",
+          "algorithm",
+          "proof"
+        ],
+        "min_words": 30,
+        "preferred_providers": [
+          "anthropic",
+          "openai"
+        ]
+      }
+    },
+    "cost_optimization": {
+      "max_cost_per_query": 0.1,
+      "daily_budget": 5.0,
+      "prefer_local_under_words": 10
+    }
+  }
 }

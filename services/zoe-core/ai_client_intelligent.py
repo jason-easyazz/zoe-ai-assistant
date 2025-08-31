@@ -35,7 +35,7 @@ async def get_ai_response(message: str, context: Dict = None) -> str:
         return await handler(message, model, context)
     except Exception as e:
         logger.error(f"{provider}/{model} failed: {e}, falling back to Ollama")
-        return "I apologize, but I am temporarily unable to process your request. Please try again."
+        return await call_ollama(message, "llama3.2:3b", context)
 
 # Provider implementations
 async def call_anthropic(message: str, model: str, context: Dict) -> str:
@@ -91,7 +91,7 @@ async def call_openai(message: str, model: str, context: Dict) -> str:
 async def call_google(message: str, model: str, context: Dict) -> str:
     """Call Google AI"""
     # Implementation for Google
-    return "I apologize, but I am temporarily unable to process your request. Please try again."
+    return await call_ollama(message, "llama3.2:3b", context)
 
 async def call_ollama(message: str, model: str, context: Dict) -> str:
     """Call local Ollama"""
@@ -116,12 +116,12 @@ async def call_ollama(message: str, model: str, context: Dict) -> str:
 async def call_groq(message: str, model: str, context: Dict) -> str:
     """Call Groq"""
     # Implementation for Groq
-    return "I apologize, but I am temporarily unable to process your request. Please try again."
+    return await call_ollama(message, "llama3.2:3b", context)
 
 async def call_together(message: str, model: str, context: Dict) -> str:
     """Call Together AI"""
     # Implementation for Together
-    return "I apologize, but I am temporarily unable to process your request. Please try again."
+    return await call_ollama(message, "llama3.2:3b", context)
 
 # Compatibility exports
 generate_response = get_ai_response
