@@ -1,3 +1,28 @@
+#!/bin/bash
+# FIX_ZACK_OPTIMIZATION.sh
+# Location: scripts/maintenance/fix_zack_optimization.sh
+# Purpose: Make Zack analyze REAL system data for optimization recommendations
+
+set -e
+
+echo "🧠 UPGRADING ZACK'S INTELLIGENCE"
+echo "================================="
+echo ""
+echo "Making Zack analyze REAL system data"
+echo "instead of giving generic responses"
+echo ""
+echo "Press Enter to upgrade Zack..."
+read
+
+cd /home/pi/zoe
+
+# Step 1: Backup current version
+echo "📦 Creating backup..."
+docker exec zoe-core cp /app/routers/developer.py /app/routers/developer_before_optimization.py
+
+# Step 2: Create enhanced developer.py with intelligent analysis
+echo "📝 Creating intelligent Zack..."
+cat > services/zoe-core/routers/developer.py << 'PYEOF'
 """
 Intelligent Developer Router - Analyzes real system data for optimization
 """
@@ -382,3 +407,40 @@ async def delete_task(task_id: str):
         raise HTTPException(status_code=404, detail="Task not found")
     del developer_tasks[task_id]
     return {"deleted": True, "task_id": task_id}
+PYEOF
+
+# Step 3: Deploy the enhanced version
+echo "📤 Deploying intelligent Zack..."
+docker cp services/zoe-core/routers/developer.py zoe-core:/app/routers/developer.py
+
+# Step 4: Restart
+echo "🔄 Restarting zoe-core..."
+docker compose restart zoe-core
+sleep 10
+
+# Step 5: Test the optimization analysis
+echo ""
+echo "✅ Testing Zack's new intelligence..."
+echo ""
+echo "Asking: 'optimize performance'"
+curl -s -X POST http://localhost:8000/api/developer/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "optimize performance"}' \
+  | jq -r '.response' | head -40
+
+echo ""
+echo "✨ ZACK INTELLIGENCE UPGRADE COMPLETE!"
+echo "======================================"
+echo ""
+echo "Zack can now:"
+echo "  🔍 Analyze REAL system metrics"
+echo "  📊 Identify actual performance issues"
+echo "  🎯 Provide specific recommendations"
+echo "  📝 Give executable commands to fix issues"
+echo ""
+echo "Try these commands in the developer chat:"
+echo '  • "optimize performance" - Full system analysis'
+echo '  • "why is the system slow?" - Performance diagnostics'
+echo '  • "improve system speed" - Optimization recommendations'
+echo ""
+echo "Zack will analyze your ACTUAL system instead of generic advice!"
