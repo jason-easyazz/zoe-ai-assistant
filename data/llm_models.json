@@ -57,7 +57,7 @@
       }
     }
   },
-  "discovered_at": "2025-08-31T10:23:26.485787",
+  "discovered_at": "2025-09-06T04:21:52.088323",
   "routing_rules": {
     "complexity_analysis": {
       "simple": {
@@ -123,6 +123,30 @@
       "max_cost_per_query": 0.1,
       "daily_budget": 5.0,
       "prefer_local_under_words": 10
+    },
+    "provider_priority": {
+      "complex_queries": [
+        "anthropic",
+        "openai",
+        "google",
+        "groq",
+        "ollama"
+      ],
+      "medium_queries": [
+        "openai",
+        "anthropic",
+        "ollama"
+      ],
+      "simple_queries": [
+        "ollama",
+        "groq",
+        "openai"
+      ]
+    },
+    "prefer_claude_for_developer": true,
+    "complexity_thresholds": {
+      "use_best_model_above_words": 20,
+      "use_claude_for_code": true
     }
   }
 }
