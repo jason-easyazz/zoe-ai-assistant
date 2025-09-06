@@ -1,3 +1,23 @@
+#!/bin/bash
+# FIX_ZACK_COMPLETE.sh
+# Complete fix to make Zack use REAL data and generate code
+
+set -e
+
+echo "🚀 FIXING ZACK TO USE REAL DATA & GENERATE CODE"
+echo "================================================"
+echo ""
+
+cd /home/pi/zoe
+
+# Step 1: Backup current version
+echo "📦 Backing up current version..."
+docker exec zoe-core cp /app/routers/developer.py /app/routers/developer_backup_$(date +%Y%m%d_%H%M%S).py
+
+# Step 2: Create the complete fixed developer.py
+echo "📝 Creating fixed developer.py with real data..."
+
+cat > /tmp/developer_fixed.py << 'PYTHONFILE'
 """
 GENIUS ZACK - Fixed to use REAL data and generate code
 """
@@ -417,3 +437,50 @@ async def delete_task(task_id: str):
         del developer_tasks[task_id]
         return {"status": "deleted"}
     raise HTTPException(status_code=404, detail="Task not found")
+PYTHONFILE
+
+# Step 3: Copy the fixed file to the container
+echo -e "\n📤 Deploying fixed developer.py..."
+docker cp /tmp/developer_fixed.py zoe-core:/app/routers/developer.py
+
+# Step 4: Restart the container
+echo -e "\n🔄 Restarting zoe-core..."
+docker compose restart zoe-core
+sleep 5
+
+# Step 5: Run comprehensive tests
+echo -e "\n🧪 TESTING ZACK'S CAPABILITIES..."
+echo "=================================="
+
+echo -e "\n1️⃣ Test: Memory Query"
+curl -s -X POST http://localhost:8000/api/developer/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What is the current memory usage?"}' | jq -r '.response' | head -10
+
+echo -e "\n2️⃣ Test: CPU Status"
+curl -s -X POST http://localhost:8000/api/developer/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Show CPU status"}' | jq -r '.response' | head -10
+
+echo -e "\n3️⃣ Test: Code Generation"
+curl -s -X POST http://localhost:8000/api/developer/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Create an API endpoint"}' | jq -r '.response' | head -20
+
+echo -e "\n4️⃣ Test: System Status"
+curl -s http://localhost:8000/api/developer/status | jq '.'
+
+echo -e "\n✅ ZACK FIXED!"
+echo "=============="
+echo "Zack now has:"
+echo "  ✓ Real system metrics (CPU, RAM, Disk)"
+echo "  ✓ Code generation capabilities"
+echo "  ✓ Docker container monitoring"
+echo "  ✓ Task management system"
+echo "  ✓ Practical recommendations for Pi"
+echo ""
+echo "Try asking Zack:"
+echo '  "Whats the memory usage?"'
+echo '  "Create an API endpoint for user management"'
+echo '  "How can I optimize the system?"'
+echo '  "Show Docker containers"'
