@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe AI - Aider Code Assistant</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'SF Pro Display', -apple-system, system-ui, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            color: white;
+        }
+        
+        /* Sidebar */
+        .sidebar {
+            width: 300px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        .sidebar h2 {
+            margin-bottom: 20px;
+            font-size: 1.2rem;
+        }
+        
+        /* Main Chat Area */
+        .main-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+        }
+        
+        .header {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .chat-container {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            border-radius: 16px;
+            padding: 20px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+        }
+        
+        .message {
+            margin-bottom: 20px;
+            padding: 15px;
+            border-radius: 12px;
+            animation: slideIn 0.3s ease;
+        }
+        
+        .user-message {
+            background: rgba(255, 255, 255, 0.2);
+            margin-left: 20%;
+        }
+        
+        .aider-message {
+            background: rgba(0, 0, 0, 0.2);
+            margin-right: 20%;
+        }
+        
+        .code-block {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 10px;
+            margin: 10px 0;
+            font-family: 'Monaco', monospace;
+            font-size: 0.9rem;
+            overflow-x: auto;
+        }
+        
+        .input-area {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            border-radius: 16px;
+            padding: 20px;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .message-input {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            padding: 12px;
+            color: white;
+            font-size: 1rem;
+        }
+        
+        .message-input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        .btn {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px;
+            padding: 12px 24px;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+        
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+        }
+        
+        /* Task List */
+        .task-item {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .task-item:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        /* File Context */
+        .file-list {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 8px;
+            padding: 10px;
+            margin-top: 10px;
+        }
+        
+        .file-item {
+            padding: 5px;
+            margin: 2px 0;
+            font-size: 0.9rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .remove-file {
+            cursor: pointer;
+            color: rgba(255, 100, 100, 0.8);
+        }
+        
+        /* Status Indicators */
+        .status {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            margin-left: 10px;
+        }
+        
+        .status-active {
+            background: rgba(0, 255, 0, 0.3);
+        }
+        
+        .status-thinking {
+            background: rgba(255, 255, 0, 0.3);
+            animation: pulse 1s infinite;
+        }
+        
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        /* Quick Actions */
+        .quick-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .quick-action {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .quick-action:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <h2>🤖 Aider Sessions</h2>
+        
+        <button class="btn btn-primary" onclick="createNewSession()" style="width: 100%; margin-bottom: 20px;">
+            + New Session
+        </button>
+        
+        <h3 style="margin-bottom: 10px;">Recent Sessions</h3>
+        <div id="sessionList">
+            <!-- Sessions will load here -->
+        </div>
+        
+        <h3 style="margin-top: 20px; margin-bottom: 10px;">Linked Tasks</h3>
+        <div id="taskList">
+            <!-- Tasks will load here -->
+        </div>
+        
+        <h3 style="margin-top: 20px; margin-bottom: 10px;">Files in Context</h3>
+        <div class="file-list" id="fileList">
+            <div class="file-item">No files selected</div>
+        </div>
+        
+        <button class="btn" onclick="addFiles()" style="width: 100%; margin-top: 10px;">
+            + Add Files
+        </button>
+    </div>
+    
+    <!-- Main Chat Area -->
+    <div class="main-container">
+        <!-- Header -->
+        <div class="header">
+            <div>
+                <h1>Aider Code Assistant</h1>
+                <span id="sessionInfo">No session active</span>
+                <span id="modelInfo" class="status status-active"></span>
+            </div>
+            <div>
+                <button class="btn" onclick="window.location.href='/developer/'">
+                    ← Back to Dashboard
+                </button>
+            </div>
+        </div>
+        
+        <!-- Quick Actions -->
+        <div class="quick-actions">
+            <div class="quick-action" onclick="sendQuickMessage('Show me the project structure')">
+                📁 Project Structure
+            </div>
+            <div class="quick-action" onclick="sendQuickMessage('What files have been modified recently?')">
+                🔍 Recent Changes
+            </div>
+            <div class="quick-action" onclick="sendQuickMessage('Run the tests')">
+                🧪 Run Tests
+            </div>
+            <div class="quick-action" onclick="sendQuickMessage('Create a new API endpoint')">
+                🔧 New Endpoint
+            </div>
+            <div class="quick-action" onclick="sendQuickMessage('Fix the last error')">
+                🐛 Fix Error
+            </div>
+            <div class="quick-action" onclick="sendQuickMessage('Refactor this code for better performance')">
+                ⚡ Refactor
+            </div>
+        </div>
+        
+        <!-- Chat Container -->
+        <div class="chat-container" id="chatContainer">
+            <div class="message aider-message">
+                👋 Hi! I'm Aider, your AI coding assistant. I can:
+                <ul style="margin-top: 10px; margin-left: 20px;">
+                    <li>Edit your code directly</li>
+                    <li>Create new features</li>
+                    <li>Fix bugs</li>
+                    <li>Refactor existing code</li>
+                    <li>Write tests</li>
+                    <li>Create documentation</li>
+                </ul>
+                <br>
+                Start by telling me what you'd like to work on, or add some files to the context!
+            </div>
+        </div>
+        
+        <!-- Input Area -->
+        <div class="input-area">
+            <input 
+                type="text" 
+                class="message-input" 
+                id="messageInput" 
+                placeholder="Ask Aider to write code, fix bugs, or create features..."
+                onkeypress="if(event.key === 'Enter') sendMessage()"
+            >
+            <label style="display: flex; align-items: center; gap: 5px;">
+                <input type="checkbox" id="autoExecute">
+                Auto-execute
+            </label>
+            <button class="btn btn-primary" onclick="sendMessage()">
+                Send
+            </button>
+        </div>
+    </div>
+    
+    <script>
+        let currentSession = null;
+        let currentFiles = [];
+        
+        async function createNewSession() {
+            const response = await fetch('/api/aider/session', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    files: currentFiles
+                })
+            });
+            
+            const data = await response.json();
+            currentSession = data.session_id;
+            
+            document.getElementById('sessionInfo').textContent = `Session: ${currentSession}`;
+            document.getElementById('modelInfo').textContent = `Model: ${data.model}`;
+            
+            loadSessions();
+            clearChat();
+        }
+        
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            if (!message) return;
+            
+            if (!currentSession) {
+                await createNewSession();
+            }
+            
+            // Add user message to chat
+            addMessage(message, 'user');
+            input.value = '';
+            
+            // Show thinking status
+            const thinkingMsg = addMessage('Thinking...', 'aider');
+            thinkingMsg.classList.add('status-thinking');
+            
+            // Send to Aider
+            const autoExecute = document.getElementById('autoExecute').checked;
+            
+            const response = await fetch('/api/aider/chat', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    session_id: currentSession,
+                    message: message,
+                    auto_execute: autoExecute
+                })
+            });
+            
+            const data = await response.json();
+            
+            // Remove thinking message
+            thinkingMsg.remove();
+            
+            // Add Aider response
+            addAiderResponse(data);
+        }
+        
+        function addMessage(text, sender) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-message`;
+            messageDiv.textContent = text;
+            document.getElementById('chatContainer').appendChild(messageDiv);
+            messageDiv.scrollIntoView({behavior: 'smooth'});
+            return messageDiv;
+        }
+        
+        function addAiderResponse(data) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message aider-message';
+            
+            // Add main content
+            const contentDiv = document.createElement('div');
+            contentDiv.textContent = data.content || 'Done!';
+            messageDiv.appendChild(contentDiv);
+            
+            // Add code changes if any
+            if (data.code_changes && data.code_changes.length > 0) {
+                data.code_changes.forEach(code => {
+                    const codeBlock = document.createElement('pre');
+                    codeBlock.className = 'code-block';
+                    codeBlock.textContent = code;
+                    messageDiv.appendChild(codeBlock);
+                });
+            }
+            
+            // Add modified files
+            if (data.files_modified && data.files_modified.length > 0) {
+                const filesDiv = document.createElement('div');
+                filesDiv.style.marginTop = '10px';
+                filesDiv.innerHTML = '<strong>Modified files:</strong> ' + 
+                    data.files_modified.join(', ');
+                messageDiv.appendChild(filesDiv);
+            }
+            
+            // Add git commit if any
+            if (data.git_commit) {
+                const commitDiv = document.createElement('div');
+                commitDiv.style.marginTop = '10px';
+                commitDiv.innerHTML = `<strong>Git commit:</strong> ${data.git_commit}`;
+                messageDiv.appendChild(commitDiv);
+            }
+            
+            document.getElementById('chatContainer').appendChild(messageDiv);
+            messageDiv.scrollIntoView({behavior: 'smooth'});
+        }
+        
+        function sendQuickMessage(message) {
+            document.getElementById('messageInput').value = message;
+            sendMessage();
+        }
+        
+        async function loadSessions() {
+            const response = await fetch('/api/aider/sessions');
+            const data = await response.json();
+            
+            const sessionList = document.getElementById('sessionList');
+            sessionList.innerHTML = '';
+            
+            data.sessions.forEach(session => {
+                const item = document.createElement('div');
+                item.className = 'task-item';
+                item.innerHTML = `
+                    <div>${session.session_id}</div>
+                    <div style="font-size: 0.8rem; opacity: 0.7;">
+                        ${new Date(session.last_active).toLocaleString()}
+                    </div>
+                `;
+                item.onclick = () => loadSession(session.session_id);
+                sessionList.appendChild(item);
+            });
+        }
+        
+        async function loadSession(sessionId) {
+            currentSession = sessionId;
+            document.getElementById('sessionInfo').textContent = `Session: ${sessionId}`;
+            
+            // Load history
+            const response = await fetch(`/api/aider/session/${sessionId}/history`);
+            const data = await response.json();
+            
+            // Clear chat and load history
+            clearChat();
+            data.messages.forEach(msg => {
+                if (msg.role === 'user') {
+                    addMessage(msg.content, 'user');
+                } else {
+                    addAiderResponse(msg);
+                }
+            });
+        }
+        
+        function clearChat() {
+            const container = document.getElementById('chatContainer');
+            container.innerHTML = '';
+        }
+        
+        function addFiles() {
+            const files = prompt('Enter file paths (comma-separated):\nExample: services/zoe-core/main.py, services/zoe-ui/dist/index.html');
+            if (files) {
+                currentFiles = files.split(',').map(f => f.trim());
+                updateFileList();
+            }
+        }
+        
+        function updateFileList() {
+            const fileList = document.getElementById('fileList');
+            if (currentFiles.length === 0) {
+                fileList.innerHTML = '<div class="file-item">No files selected</div>';
+            } else {
+                fileList.innerHTML = currentFiles.map((file, i) => `
+                    <div class="file-item">
+                        <span>${file}</span>
+                        <span class="remove-file" onclick="removeFile(${i})">×</span>
+                    </div>
+                `).join('');
+            }
+        }
+        
+        function removeFile(index) {
+            currentFiles.splice(index, 1);
+            updateFileList();
+        }
+        
+        // Load sessions on startup
+        loadSessions();
+    </script>
+</body>
+</html>
