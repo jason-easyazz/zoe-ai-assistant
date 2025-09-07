@@ -1,3 +1,18 @@
+#!/bin/bash
+# FIX_DOCKER_DISPLAY.sh - Make Docker commands actually show containers
+
+echo "🐳 FIXING DOCKER CONTAINER DISPLAY"
+echo "==================================="
+
+cd /home/pi/zoe
+
+# Backup current developer.py
+echo "📦 Backing up current developer.py..."
+cp services/zoe-core/routers/developer.py services/zoe-core/routers/developer.backup_$(date +%Y%m%d_%H%M%S)
+
+# Create a working version that shows Docker containers
+echo "🔧 Creating fixed developer.py..."
+cat > services/zoe-core/routers/developer_fixed.py << 'PYTHON_EOF'
 """Developer Router with Working Docker Display"""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -59,7 +74,7 @@ async def developer_chat(msg: ChatMessage):
     # Check for Docker/container queries
     if any(word in message_lower for word in ['docker', 'container', 'service', 'status']):
         # Get REAL Docker status
-        docker_result = execute_command("docker ps -a --format '{{.Names}}:{{.Status}}'")
+        docker_result = execute_command("docker ps -a --format 'table {{.Names}}\t{{.Status}}'")
         
         if docker_result["success"]:
             # Parse the Docker output
@@ -69,9 +84,9 @@ async def developer_chat(msg: ChatMessage):
             running = []
             stopped = []
             
-            for line in lines:
-                if line and ':' in line:
-                    name, status = line.split(':', 1)
+            for line in lines[1:]:  # Skip header
+                if line and '\t' in line:
+                    name, status = line.split('\t', 1)
                     if 'Up' in status:
                         running.append(f"• **{name}**: {status}")
                     else:
@@ -216,3 +231,40 @@ async def get_status():
             "auto_fix": True
         }
     }
+PYTHON_EOF
+
+# Replace the current developer.py with the fixed version
+echo "📝 Applying fix..."
+cp services/zoe-core/routers/developer_fixed.py services/zoe-core/routers/developer.py
+
+# Restart the service
+echo "🔄 Restarting zoe-core..."
+docker restart zoe-core
+
+echo "⏳ Waiting for service to start (10 seconds)..."
+sleep 10
+
+# Test the fix
+echo ""
+echo "🧪 TESTING DOCKER DISPLAY:"
+echo "=========================="
+curl -X POST http://localhost:8000/api/developer/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "show all docker containers"}' 2>/dev/null | jq -r '.response'
+
+echo ""
+echo "🧪 TESTING STATUS ENDPOINT:"
+echo "==========================="
+curl -s http://localhost:8000/api/developer/status | jq '.'
+
+echo ""
+echo "✅ FIX COMPLETE!"
+echo ""
+echo "The developer dashboard should now show:"
+echo "  • All Docker containers with their actual status"
+echo "  • Real container counts"
+echo "  • Accurate system metrics"
+echo ""
+echo "If any issues, restore with:"
+echo "  cp services/zoe-core/routers/developer.backup_* services/zoe-core/routers/developer.py"
+echo "  docker restart zoe-core"
