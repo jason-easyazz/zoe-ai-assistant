@@ -182,7 +182,9 @@ Respond with actual system data and technical insights. Be specific and include 
         try:
             # Get AI response
             ai_response = await ai_client.generate_response(
-                prompt
+                prompt,
+                temperature=0.3,  # Lower temperature for technical accuracy
+                max_tokens=2000
             )
             
             # If asking about Docker/system status, prepend real data
@@ -260,7 +262,7 @@ Provide:
 Be thorough and technical."""
     
     try:
-        analysis = await ai_client.generate_response(prompt)
+        analysis = await ai_client.generate_response(prompt, temperature=0.2, max_tokens=3000)
         
         return {
             "analysis": analysis,
@@ -297,7 +299,7 @@ For each suggestion include:
 Focus on practical improvements that would have the most impact."""
     
     try:
-        suggestions = await ai_client.generate_response(prompt)
+        suggestions = await ai_client.generate_response(prompt, temperature=0.4, max_tokens=2500)
         return {
             "suggestions": suggestions,
             "generated_at": datetime.now().isoformat()

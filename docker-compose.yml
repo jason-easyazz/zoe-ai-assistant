@@ -2,24 +2,33 @@ services:
   zoe-core:
     build: ./services/zoe-core
     container_name: zoe-core
+    restart: unless-stopped
     ports:
     - 8000:8000
     volumes:
     - ./services/zoe-core:/app
     - ./data:/app/data
     - /var/run/docker.sock:/var/run/docker.sock
+    - /home/pi/zoe:/home/pi/zoe:rw
+    - /usr/bin/docker:/usr/bin/docker:ro
+    - /proc:/host/proc:ro
+    - /sys:/host/sys:ro
     environment:
     - PYTHONUNBUFFERED=1
-    - OLLAMA_HOST=http://zoe-ollama:11434
-    - REDIS_HOST=zoe-redis
-    - WHISPER_HOST=http://zoe-whisper:9001
-    - TTS_HOST=http://zoe-tts:9002
-    depends_on:
-    - zoe-ollama
-    - zoe-redis
+    - DOCKER_HOST=unix:///var/run/docker.sock
+    - PROJECT_ROOT=/home/pi/zoe
+    - FULL_ACCESS=true
     networks:
     - zoe-network
-    restart: unless-stopped
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8000/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
     env_file:
     - .env
   zoe-ui:

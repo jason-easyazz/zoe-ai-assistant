@@ -30,8 +30,9 @@ except Exception as e:
     print(f"❌ Chat router failed: {e}")
 
 try:
-    from routers import developer, aider
+    from routers import developer, developer_tasks, aider
     app.include_router(developer.router)
+    app.include_router(developer_tasks.router)
     app.include_router(aider.router)
     print("✅ Developer router loaded")
 except Exception as e:
