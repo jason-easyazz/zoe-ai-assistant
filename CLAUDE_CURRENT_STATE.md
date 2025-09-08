@@ -197,3 +197,39 @@ Sun  7 Sep 15:51:49 AWST 2025: Zack fully operational with true intelligence
 ### ⚠️ Critical Note
 DO NOT modify developer.py without backing up first!
 Working version saved: developer.working_$(date +%Y%m%d).py
+
+## Zack AI System - WORKING CONFIGURATION - $(date)
+
+### ✅ CRITICAL: What's Working
+- **AI Integration**: Using generate_response(message, context) - NO extra parameters
+- **RouteLLM**: Routes by message complexity to appropriate provider/model
+- **API Keys**: Loaded via env_file in docker-compose.yml
+- **Docker Access**: Full visibility of all containers
+- **Async/Await**: All AI calls properly awaited
+
+### 🚨 DO NOT CHANGE
+- developer.py line ~184: `await ai_client.generate_response(prompt)`
+- docker-compose.yml: `env_file: ['.env']` under zoe-core
+- Method signatures in ai_client.py and llm_models.py
+
+### 📋 To Test
+```bash
+curl -X POST http://localhost:8000/api/developer/chat \
+  -d '{"message": "Analyze our system"}' | jq -r '.response'
+```
+
+### 💾 Backup Location
+Working version saved: backups/zack_ai_working_$(date +%Y%m%d)*
+
+## 2025-09-07: Dynamic Context-Aware Task System Implemented
+- Transformed task system from static to dynamic
+- Tasks now store requirements/objectives, not specific implementations
+- System re-analyzes at execution time to adapt to current state
+- Location: services/zoe-core/routers/developer_tasks.py
+- Database: data/developer_tasks.db (dynamic_tasks table)
+- Key insight: Tasks adapt to whatever exists when executed
+
+## Push to GitHub - 2025-09-08 14:54:52
+- Script: push_to_github.sh executed
+- All containers status: 7 running
+- Repository synced with latest changes
