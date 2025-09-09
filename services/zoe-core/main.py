@@ -1,13 +1,8 @@
-"""
-Fixed main.py with proper router inclusion
-"""
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import sys
 import os
-
-sys.path.append('/app')
+import sys
 
 # Create FastAPI app
 app = FastAPI(title="Zoe AI Core", version="1.0.0")
@@ -23,41 +18,61 @@ app.add_middleware(
 
 # Import routers
 try:
-    from routers import chat, aider
+    from routers import chat
     app.include_router(chat.router)
     print("✅ Chat router loaded")
 except Exception as e:
     print(f"❌ Chat router failed: {e}")
 
 try:
-    from routers import developer, developer_tasks, aider
+    from routers import developer, developer_tasks
     app.include_router(developer.router)
     app.include_router(developer_tasks.router)
-    app.include_router(aider.router)
-    print("✅ Developer router loaded")
+    print("✅ Developer routers loaded")
 except Exception as e:
-    print(f"❌ Developer router failed: {e}")
+    print(f"❌ Developer routers failed: {e}")
 
 try:
-    from routers import calendar, aider
+    from routers import developer_enhanced
+    app.include_router(developer_enhanced.router)
+    print("✅ Developer enhanced router loaded")
+except Exception as e:
+    print(f"❌ Developer enhanced failed: {e}")
+
+try:
+    from routers import calendar
     app.include_router(calendar.router)
     print("✅ Calendar router loaded")
-except:
-    pass
+except Exception as e:
+    print(f"❌ Calendar router failed: {e}")
 
 try:
-    from routers import lists, aider
+    from routers import lists
     app.include_router(lists.router)
     print("✅ Lists router loaded")
-except:
-    pass
+except Exception as e:
+    print(f"❌ Lists router failed: {e}")
 
 try:
-    from routers import memory, aider
+    from routers import memory
     app.include_router(memory.router)
     print("✅ Memory router loaded")
-except:
-    pass
+except Exception as e:
+    print(f"❌ Memory router failed: {e}")
+
+try:
+    from routers import settings
+    app.include_router(settings.router)
+    print("✅ Settings router loaded")
+except Exception as e:
+    print(f"❌ Settings router failed: {e}")
+
+try:
+    from routers import simple_ai
+    app.include_router(simple_ai.router)
+    print("✅ Simple AI router loaded")
+except Exception as e:
+    print(f"❌ Simple AI router failed: {e}")
 
 @app.get("/health")
 async def health():

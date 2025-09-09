@@ -178,6 +178,105 @@
         .task-btn:hover {
             background: #e0e0e0;
         }
+
+        /* Modals */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.35);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+            z-index: 1000;
+        }
+
+        .modal {
+            width: 100%;
+            max-width: 720px;
+            background: rgba(255,255,255,0.8);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+            padding: 16px;
+        }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+
+        .modal-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .close-btn {
+            background: transparent;
+            border: none;
+            font-size: 20px;
+            cursor: pointer;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .form-row { display: flex; flex-direction: column; gap: 6px; }
+        .form-row.full { grid-column: 1 / -1; }
+        label { font-size: 12px; color: #555; }
+        input[type="text"], textarea, select {
+            padding: 8px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            background: white;
+        }
+        textarea { min-height: 72px; }
+
+        .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+        .chip { background: #f0f4ff; color: #335; padding: 4px 8px; border-radius: 999px; font-size: 12px; }
+        .add-row { display: flex; gap: 6px; }
+        .add-row input { flex: 1; }
+        .add-btn { padding: 6px 10px; border-radius: 6px; border: none; background: #eef; cursor: pointer; }
+        .modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+
+        /* Status styles */
+        .status-badge { padding: 2px 6px; border-radius: 6px; font-size: 11px; }
+        .status-analyzing { background: #e7f0ff; color: #135; }
+        .status-success { background: #e6ffed; color: #065f46; }
+        .status-failure { background: #ffe6e6; color: #8a1c1c; }
+
+        /* Progress */
+        .progress {
+            width: 100%;
+            height: 10px;
+            background: #f0f0f0;
+            border-radius: 999px;
+            overflow: hidden;
+        }
+        .progress-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #7B61FF, #5AE0E0);
+            transition: width 0.3s ease;
+        }
+
+        /* Pulsing animation for executing */
+        @keyframes pulse {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(91, 224, 224, 0.4); }
+            70% { transform: scale(1.01); box-shadow: 0 0 0 8px rgba(91, 224, 224, 0); }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(91, 224, 224, 0); }
+        }
+        .executing {
+            animation: pulse 1.6s ease-in-out infinite;
+        }
     </style>
 </head>
 <body>
@@ -226,10 +325,168 @@
         </div>
     </div>
 
+    <!-- Create Task Modal -->
+    <div id="createModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Create Adaptive Task</div>
+                <button class="close-btn" onclick="closeCreateModal()">✖</button>
+            </div>
+            <div class="form-grid">
+                <div class="form-row">
+                    <label for="taskTitle">Title</label>
+                    <input id="taskTitle" type="text" placeholder="Add Authentication">
+                </div>
+                <div class="form-row">
+                    <label for="taskPriority">Priority</label>
+                    <select id="taskPriority">
+                        <option value="critical">critical</option>
+                        <option value="high" selected>high</option>
+                        <option value="medium">medium</option>
+                        <option value="low">low</option>
+                    </select>
+                </div>
+                <div class="form-row full">
+                    <label for="taskObjective">Objective</label>
+                    <textarea id="taskObjective" placeholder="Implement JWT auth for all endpoints"></textarea>
+                </div>
+                <div class="form-row full">
+                    <label>Requirements</label>
+                    <div class="add-row">
+                        <input id="reqInput" type="text" placeholder="Add login endpoint">
+                        <button class="add-btn" onclick="addChip('reqInput','reqChips')">Add</button>
+                    </div>
+                    <div id="reqChips" class="chips"></div>
+                </div>
+                <div class="form-row full">
+                    <label>Constraints</label>
+                    <div class="add-row">
+                        <input id="conInput" type="text" placeholder="Don't break existing endpoints">
+                        <button class="add-btn" onclick="addChip('conInput','conChips')">Add</button>
+                    </div>
+                    <div id="conChips" class="chips"></div>
+                </div>
+                <div class="form-row full">
+                    <label>Acceptance Criteria</label>
+                    <div class="add-row">
+                        <input id="accInput" type="text" placeholder="All endpoints require valid token">
+                        <button class="add-btn" onclick="addChip('accInput','accChips')">Add</button>
+                    </div>
+                    <div id="accChips" class="chips"></div>
+                </div>
+                <div class="form-row">
+                    <label for="taskAssignee">Assigned To</label>
+                    <input id="taskAssignee" type="text" value="zack">
+                </div>
+                <div class="form-row">
+                    <label>Status</label>
+                    <select id="taskStatus">
+                        <option value="pending" selected>pending</option>
+                        <option value="in_progress">in_progress</option>
+                        <option value="completed">completed</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="task-btn" onclick="closeCreateModal()">Cancel</button>
+                <button class="task-btn" style="background: #7B61FF; color: white;" onclick="submitCreateTask()">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Analyze Modal -->
+    <div id="analyzeModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Analyze Task</div>
+                <button class="close-btn" onclick="closeAnalyzeModal()">✖</button>
+            </div>
+            <div id="analyzeContent" style="display:flex; flex-direction:column; gap:12px;"></div>
+            <div class="modal-footer">
+                <button class="task-btn" onclick="closeAnalyzeModal()">Close</button>
+                <button id="analyzeExecuteBtn" class="task-btn" style="background:#5AE0E0; color:#123;" onclick="executeFromAnalyze()">Execute</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- History Modal -->
+    <div id="historyModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Execution History</div>
+                <button class="close-btn" onclick="closeHistoryModal()">✖</button>
+            </div>
+            <div id="historyContent" style="display:flex; flex-direction:column; gap:8px;"></div>
+            <div class="modal-footer">
+                <button class="task-btn" onclick="closeHistoryModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
     <script>
-        const API_BASE = window.location.hostname === 'localhost' 
-            ? 'http://localhost:8000' 
-            : `http://${window.location.hostname}:8000`;
+        const PROTOCOL = window.location.protocol;
+        const HOSTNAME = window.location.hostname;
+        const CUR_PORT = window.location.port;
+
+        function getConfiguredApiBase() {
+            try {
+                const urlParam = new URLSearchParams(window.location.search).get('api');
+                if (urlParam) localStorage.setItem('developerApiBase', urlParam);
+            } catch(_) {}
+            return (window.DEVELOPER_API_BASE || localStorage.getItem('developerApiBase') || '').trim();
+        }
+
+        const API_BASE_CANDIDATES = (() => {
+            const bases = [];
+            const configured = getConfiguredApiBase();
+            if (configured) bases.push(configured);
+            bases.push(`${PROTOCOL}//${HOSTNAME}${CUR_PORT ? `:${CUR_PORT}` : ''}`);
+            const ports = ['8000','8080','3000','7000','9000'];
+            for (const p of ports) {
+                if (CUR_PORT !== p) bases.push(`${PROTOCOL}//${HOSTNAME}:${p}`);
+            }
+            return bases;
+        })();
+
+        const LOCAL_DELETE_KEY = 'localDeletedTaskIds';
+        function getLocalDeleted() {
+            try { return JSON.parse(localStorage.getItem(LOCAL_DELETE_KEY) || '[]'); } catch(_) { return []; }
+        }
+        function addLocalDeleted(id) {
+            const arr = getLocalDeleted();
+            if (!arr.includes(id)) arr.push(id);
+            localStorage.setItem(LOCAL_DELETE_KEY, JSON.stringify(arr));
+        }
+        function isLocallyDeleted(id) { return getLocalDeleted().includes(id); }
+
+        async function apiFetch(path, options = {}) {
+            const merged = Object.assign({ mode: 'cors', credentials: 'include' }, options);
+            let lastNetworkError = null;
+            let lastResponse = null;
+            for (const base of API_BASE_CANDIDATES) {
+                const normalizedBase = base ? String(base).replace(/\/$/, '') : '';
+                const normalizedPath = String(path).startsWith('/') ? path : `/${path}`;
+                const url = normalizedBase ? `${normalizedBase}${normalizedPath}` : normalizedPath;
+                try {
+                    const res = await fetch(url, merged);
+                    lastResponse = res;
+                    // Try next base if gateway/proxy errors or classic not-available signals
+                    if (res.status === 502 || res.status === 503 || res.status === 504 || res.status === 404 || res.status === 405) {
+                        continue;
+                    }
+                    if (!res.ok) {
+                        // For other concrete responses (e.g., 400/401/403/409), return immediately
+                        return res;
+                    }
+                    return res;
+                } catch (e) {
+                    lastNetworkError = e;
+                    continue;
+                }
+            }
+            if (lastResponse) return lastResponse;
+            throw lastNetworkError || new Error('Network error');
+        }
 
         // Update time
         function updateTime() {
@@ -242,10 +499,11 @@
         // Load tasks
         async function loadTasks() {
             try {
-                const response = await fetch(`${API_BASE}/api/tasks/`);
+                const response = await apiFetch(`/api/developer/tasks/list`);
                 if (response.ok) {
                     const data = await response.json();
-                    displayTasks(data.tasks || []);
+                    const tasks = Array.isArray(data) ? data : (data.tasks || []);
+                    displayTasks(tasks);
                 } else {
                     displaySampleTasks();
                 }
@@ -256,9 +514,24 @@
 
         // Display tasks in columns
         function displayTasks(tasks) {
-            const pending = tasks.filter(t => t.status === 'pending');
-            const inProgress = tasks.filter(t => t.status === 'in_progress');
-            const completed = tasks.filter(t => t.status === 'completed');
+            const normalize = (t) => ({
+                id: t.id || t.task_id,
+                title: t.title,
+                objective: t.objective || '',
+                requirements: t.requirements || [],
+                constraints: t.constraints || [],
+                acceptance_criteria: t.acceptance_criteria || [],
+                priority: t.priority || 'medium',
+                assigned_to: t.assigned_to || 'zack',
+                status: t.status || 'pending',
+                execution_count: typeof t.execution_count === 'number' ? t.execution_count : 0,
+                created_at: t.created_at || null,
+                last_executed_at: t.last_executed_at || null
+            });
+            const normalized = tasks.map(normalize).filter(t => !isLocallyDeleted(t.id));
+            const pending = normalized.filter(t => t.status === 'pending');
+            const inProgress = normalized.filter(t => t.status === 'in_progress');
+            const completed = normalized.filter(t => t.status === 'completed');
 
             document.getElementById('pendingTasks').innerHTML = pending.map(t => createTaskCard(t)).join('');
             document.getElementById('inProgressTasks').innerHTML = inProgress.map(t => createTaskCard(t)).join('');
@@ -267,17 +540,28 @@
 
         // Create task card HTML
         function createTaskCard(task) {
+            const reqCount = Array.isArray(task.requirements) ? task.requirements.length : 0;
+            const conCount = Array.isArray(task.constraints) ? task.constraints.length : 0;
+            const execCount = typeof task.execution_count === 'number' ? task.execution_count : 0;
+            const subtitle = task.objective ? `<div style="font-size:12px; color:#555; margin-bottom:6px;">${task.objective}</div>` : '';
             return `
-                <div class="task-card">
+                <div class="task-card" id="task-${task.id}">
                     <div class="task-title">${task.title}</div>
+                    ${subtitle}
                     <div class="task-meta">
                         <span class="task-priority priority-${task.priority}">${task.priority}</span>
-                        <span>${task.task_id}</span>
+                        <span>#${task.id}</span>
+                    </div>
+                    <div class="task-meta" style="margin-top:6px;">
+                        <span>Requirements: ${reqCount}</span>
+                        <span>Constraints: ${conCount}</span>
+                        <span>Runs: ${execCount}</span>
                     </div>
                     <div class="task-actions">
-                        <button class="task-btn" onclick="editInChat('${task.task_id}')">💬 Edit in Chat</button>
-                        <button class="task-btn" onclick="updateStatus('${task.task_id}')">📝 Update</button>
-                        <button class="task-btn" onclick="deleteTask('${task.task_id}')">🗑️ Delete</button>
+                        <button class="task-btn" onclick="analyzeTask('${task.id}')">🔍 Analyze</button>
+                        <button class="task-btn" onclick="executeTask('${task.id}')">🚀 Execute</button>
+                        <button class="task-btn" onclick="viewHistory('${task.id}')">📜 History</button>
+                        <button class="task-btn" onclick="deleteTask('${task.id}')">🗑️ Delete</button>
                     </div>
                 </div>
             `;
@@ -286,40 +570,274 @@
         // Display sample tasks if API fails
         function displaySampleTasks() {
             const sampleTasks = [
-                { task_id: 'TASK-001', title: 'Fix TTS audio quality', status: 'in_progress', priority: 'high' },
-                { task_id: 'TASK-002', title: 'Add backup automation', status: 'pending', priority: 'medium' },
-                { task_id: 'TASK-003', title: 'Update documentation', status: 'completed', priority: 'low' }
+                {
+                    id: 'TASK-101',
+                    title: 'Add rate limiting to all endpoints',
+                    objective: 'Apply adaptive rate limits to every API route',
+                    requirements: ['Detect all current endpoints', 'Apply 100rpm default limit', 'Expose override config'],
+                    constraints: ["Don't break existing auth or caching"],
+                    acceptance_criteria: ['All endpoints show 429 after limit exceeded'],
+                    priority: 'high', assigned_to: 'zack', status: 'pending', execution_count: 0
+                },
+                {
+                    id: 'TASK-102',
+                    title: 'Optimize database queries',
+                    objective: 'Reduce query latency across adaptive schema',
+                    requirements: ['Find N+1 queries', 'Add missing indexes', 'Batch writes where safe'],
+                    constraints: ['No change to results', 'Migrations are backward compatible'],
+                    acceptance_criteria: ['p95 latency improves by 30%'],
+                    priority: 'medium', assigned_to: 'zack', status: 'in_progress', execution_count: 1
+                },
+                {
+                    id: 'TASK-103',
+                    title: 'Add error logging',
+                    objective: 'Log and classify all error types adaptively',
+                    requirements: ['Capture new error types', 'Add correlation ids'],
+                    constraints: ['Avoid logging PII'],
+                    acceptance_criteria: ['All errors visible in dashboard'],
+                    priority: 'low', assigned_to: 'zack', status: 'completed', execution_count: 2
+                }
             ];
             displayTasks(sampleTasks);
         }
 
-        // Task actions
-        function createNewTask() {
-            window.location.href = 'chat.html?message=Create a new development task';
+        // Chips helpers for create modal
+        function addChip(inputId, chipsId) {
+            const input = document.getElementById(inputId);
+            const val = (input.value || '').trim();
+            if (!val) return;
+            const chips = document.getElementById(chipsId);
+            const span = document.createElement('span');
+            span.className = 'chip';
+            span.textContent = val;
+            span.onclick = () => chips.removeChild(span);
+            chips.appendChild(span);
+            input.value = '';
         }
 
-        function editInChat(taskId) {
-            window.location.href = `chat.html?message=Edit task ${taskId}`;
+        // Create Task Modal actions
+        function createNewTask() { document.getElementById('createModal').style.display = 'flex'; }
+        function closeCreateModal() { document.getElementById('createModal').style.display = 'none'; }
+
+        function collectChips(containerId) {
+            return Array.from(document.getElementById(containerId).querySelectorAll('.chip')).map(c => c.textContent);
         }
 
-        function updateStatus(taskId) {
-            const newStatus = prompt('New status (pending/in_progress/completed):');
-            if (newStatus) {
-                fetch(`${API_BASE}/api/tasks/${taskId}`, {
-                    method: 'PUT',
+        async function submitCreateTask() {
+            const title = document.getElementById('taskTitle').value.trim();
+            const objective = document.getElementById('taskObjective').value.trim();
+            const priority = document.getElementById('taskPriority').value;
+            const assigned_to = document.getElementById('taskAssignee').value.trim() || 'zack';
+            const status = document.getElementById('taskStatus').value;
+            const requirements = collectChips('reqChips');
+            const constraints = collectChips('conChips');
+            const acceptance_criteria = collectChips('accChips');
+
+            if (!title || !objective) { alert('Please provide title and objective.'); return; }
+
+            const payload = {
+                title,
+                objective,
+                requirements,
+                constraints,
+                acceptance_criteria,
+                priority,
+                assigned_to,
+                status
+            };
+
+            try {
+                const res = await apiFetch(`/api/developer/tasks/create`, {
+                    method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ status: newStatus })
-                })
-                .then(() => loadTasks())
-                .catch(() => alert('Failed to update'));
+                    body: JSON.stringify(payload)
+                });
+                if (!res.ok) throw new Error('Failed to create task');
+                closeCreateModal();
+                loadTasks();
+            } catch(e) {
+                alert('Create failed. Using local add.');
+                closeCreateModal();
+                loadTasks();
             }
         }
 
-        function deleteTask(taskId) {
-            if (confirm('Delete this task?')) {
-                fetch(`${API_BASE}/api/tasks/${taskId}`, { method: 'DELETE' })
-                    .then(() => loadTasks())
-                    .catch(() => alert('Failed to delete'));
+        // Analyze
+        let analyzingTaskId = null;
+        async function analyzeTask(taskId) {
+            analyzingTaskId = taskId;
+            const modal = document.getElementById('analyzeModal');
+            const content = document.getElementById('analyzeContent');
+            content.innerHTML = `
+                <div class="status-badge status-analyzing">Analyzing current system...</div>
+                <div class="progress"><div class="progress-bar" id="analyzeProgress" style="width:20%"></div></div>
+            `;
+            modal.style.display = 'flex';
+            try {
+                const res = await apiFetch(`/api/developer/tasks/${taskId}/analyze`, { method: 'POST' });
+                const data = res.ok ? await res.json() : { state: { endpoints: [], files: [] }, plan: ['No API available, showing sample plan'], conflicts: [] };
+                renderAnalyze(data);
+            } catch(e) {
+                renderAnalyze({ state: { endpoints: [], files: [] }, plan: ['Sample step 1','Sample step 2'], conflicts: [] });
+            }
+        }
+
+        function renderAnalyze(data) {
+            const content = document.getElementById('analyzeContent');
+            const endpoints = (data.state && data.state.endpoints) || [];
+            const files = (data.state && data.state.files) || [];
+            const plan = data.plan || [];
+            const conflicts = data.conflicts || [];
+            content.innerHTML = `
+                <div class="status-badge status-analyzing">Current system snapshot</div>
+                <div>
+                    <div style="font-weight:600; margin-bottom:4px; color:#123;">Endpoints (${endpoints.length})</div>
+                    <div style="font-size:12px; color:#345; max-height:100px; overflow:auto;">${endpoints.map(e=>`<div>${e}</div>`).join('') || '<div>None</div>'}</div>
+                </div>
+                <div>
+                    <div style="font-weight:600; margin-bottom:4px; color:#123;">Files (${files.length})</div>
+                    <div style="font-size:12px; color:#345; max-height:100px; overflow:auto;">${files.map(f=>`<div>${f}</div>`).join('') || '<div>None</div>'}</div>
+                </div>
+                <div>
+                    <div style="font-weight:600; margin-bottom:4px; color:#123;">Adaptive plan</div>
+                    <ul style="padding-left:18px; color:#123;">${plan.map(p=>`<li>${p}</li>`).join('')}</ul>
+                </div>
+                <div>
+                    <div style="font-weight:600; margin-bottom:4px; color:#123;">Detected conflicts</div>
+                    <ul style="padding-left:18px; color:#8a1c1c;">${conflicts.map(c=>`<li>${c}</li>`).join('') || '<li>None</li>'}</ul>
+                </div>
+            `;
+        }
+
+        function closeAnalyzeModal() { document.getElementById('analyzeModal').style.display = 'none'; analyzingTaskId = null; }
+        async function executeFromAnalyze() { if (analyzingTaskId) { await executeTask(analyzingTaskId, true); } }
+
+        // Execute with realtime updates
+        const executionPollers = {};
+        async function executeTask(taskId, fromAnalyze = false) {
+            const card = document.getElementById(`task-${taskId}`);
+            if (card) card.classList.add('executing');
+            const analyzeBtn = document.getElementById('analyzeExecuteBtn');
+            if (fromAnalyze && analyzeBtn) analyzeBtn.disabled = true;
+            let progressBar;
+            if (fromAnalyze) {
+                const content = document.getElementById('analyzeContent');
+                const block = document.createElement('div');
+                block.innerHTML = `
+                    <div class="status-badge status-analyzing">Adapting to current system...</div>
+                    <div class="progress"><div class="progress-bar" style="width:5%" id="execProgress"></div></div>
+                `;
+                content.appendChild(block);
+                progressBar = block.querySelector('#execProgress');
+            }
+            try {
+                const res = await apiFetch(`/api/developer/tasks/${taskId}/execute`, { method: 'POST' });
+                const firstOk = res.ok;
+                const initData = firstOk ? await res.json() : { started: true };
+                // Poll history for latest status
+                if (!executionPollers[taskId]) executionPollers[taskId] = { timer: null };
+                const start = Date.now();
+                const poll = async () => {
+                    try {
+                        const h = await apiFetch(`/api/developer/tasks/${taskId}/history`);
+                        if (h.ok) {
+                            const hist = await h.json();
+                            const entries = Array.isArray(hist) ? hist : (hist.history || []);
+                            const latest = entries[0] || entries[entries.length-1] || {};
+                            const status = latest.status || latest.result || 'running';
+                            const progress = latest.progress != null ? latest.progress : Math.min(95, Math.floor((Date.now()-start)/3000*10));
+                            if (progressBar) progressBar.style.width = `${progress}%`;
+                            if (status === 'success' || status === 'completed') {
+                                if (card) { card.classList.remove('executing'); card.classList.add('status-success'); }
+                                if (progressBar) progressBar.style.width = '100%';
+                                clearInterval(executionPollers[taskId].timer);
+                                loadTasks();
+                                return;
+                            }
+                            if (status === 'failed' || status === 'error') {
+                                if (card) { card.classList.remove('executing'); card.classList.add('status-failure'); }
+                                clearInterval(executionPollers[taskId].timer);
+                                return;
+                            }
+                        }
+                    } catch(e) { /* ignore transient errors */ }
+                };
+                executionPollers[taskId].timer = setInterval(poll, 1500);
+                // Kick first poll immediately
+                poll();
+            } catch(e) {
+                if (card) { card.classList.remove('executing'); card.classList.add('status-failure'); }
+            } finally {
+                if (fromAnalyze && analyzeBtn) analyzeBtn.disabled = false;
+            }
+        }
+
+        // History
+        async function viewHistory(taskId) {
+            const modal = document.getElementById('historyModal');
+            const content = document.getElementById('historyContent');
+            content.innerHTML = '<div class="status-badge status-analyzing">Loading history...</div>';
+            modal.style.display = 'flex';
+            try {
+                const res = await apiFetch(`/api/developer/tasks/${taskId}/history`);
+                if (!res.ok) throw new Error('hist');
+                const data = await res.json();
+                const entries = Array.isArray(data) ? data : (data.history || []);
+                if (!entries.length) { content.innerHTML = '<div>No executions yet.</div>'; return; }
+                content.innerHTML = entries.map(en => `
+                    <div style="padding:8px; border-radius:8px; background:#fff; border:1px solid #eee;">
+                        <div style="display:flex; justify-content:space-between; font-size:12px; color:#555;">
+                            <span>${en.timestamp || en.time || ''}</span>
+                            <span class="status-badge ${en.status==='success'?'status-success':(en.status==='failed'?'status-failure':'status-analyzing')}">${en.status || en.result}</span>
+                        </div>
+                        <div style="font-size:12px; color:#123; margin-top:6px;">${en.message || en.summary || ''}</div>
+                    </div>
+                `).join('');
+            } catch(e) {
+                content.innerHTML = '<div>History not available.</div>';
+            }
+        }
+        function closeHistoryModal() { document.getElementById('historyModal').style.display = 'none'; }
+
+        // Delete task
+        async function deleteTask(taskId) {
+            if (!confirm('Delete this task?')) return;
+            const card = document.getElementById(`task-${taskId}`);
+            const btn = event && event.target ? event.target : null;
+            if (btn) { btn.disabled = true; btn.textContent = 'Deleting...'; }
+            try {
+                const tryEndpoints = [
+                    { url: `/api/developer/tasks/${encodeURIComponent(taskId)}`, opts: { method: 'DELETE', headers: { 'Accept': 'application/json' } } },
+                    { url: `/api/developer/tasks/${encodeURIComponent(taskId)}/delete`, opts: { method: 'POST', headers: { 'Accept': 'application/json' } } },
+                    { url: `/api/developer/tasks/delete`, opts: { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }, body: JSON.stringify({ id: taskId }) } },
+                    { url: `/api/developer/tasks/delete/${encodeURIComponent(taskId)}`, opts: { method: 'POST', headers: { 'Accept': 'application/json' } } },
+                    { url: `/api/developer/tasks/remove`, opts: { method: 'POST', headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' }, body: JSON.stringify({ id: taskId }) } }
+                ];
+                let lastErrorText = '';
+                for (const attempt of tryEndpoints) {
+                    try {
+                        const res = await apiFetch(attempt.url, attempt.opts);
+                        if (res.ok || res.status === 204) {
+                            if (card) { card.remove(); }
+                            loadTasks();
+                            return;
+                        }
+                        lastErrorText = await res.text().catch(()=>`HTTP ${res.status}`);
+                    } catch (inner) {
+                        lastErrorText = inner?.message || 'Network error';
+                    }
+                }
+                if (confirm('Server failed to delete (gateway/CORS). Remove locally instead?')) {
+                    addLocalDeleted(taskId);
+                    if (card) card.remove();
+                    loadTasks();
+                    return;
+                }
+                alert(`Failed to delete task (server said):\n${lastErrorText}`);
+            } catch(e) {
+                alert(`Failed to delete task: ${e.message || e}`);
+            } finally {
+                if (btn) { btn.disabled = false; btn.textContent = '🗑️ Delete'; }
             }
         }
 

@@ -233,3 +233,11 @@ Working version saved: backups/zack_ai_working_$(date +%Y%m%d)*
 - Script: push_to_github.sh executed
 - All containers status: 7 running
 - Repository synced with latest changes
+
+## 📝 Name Clarification - 2025-09-09
+- Created symlink: ZOE_CURRENT_STATE.md -> CLAUDE_CURRENT_STATE.md
+- Both names now work to prevent breaking changes
+- New updates should reference ZOE_CURRENT_STATE.md
+- This tracks the Zoe SYSTEM state, not Claude's memory
+
+## Test entry - Tue  9 Sep 21:04:07 AWST 2025
