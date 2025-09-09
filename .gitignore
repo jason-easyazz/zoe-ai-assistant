@@ -6,3 +6,5 @@ data/backups/
 __pycache__/
 .DS_Store
 *.log
+
+.ssh_backup_zoe/
