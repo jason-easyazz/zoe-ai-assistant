@@ -1,0 +1,8 @@
+.env
+*.db
+data/api_keys.json
+data/backups/
+*.pyc
+__pycache__/
+.DS_Store
+*.log
