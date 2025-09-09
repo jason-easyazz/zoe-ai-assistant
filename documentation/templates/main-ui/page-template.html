@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Zoe AI - {{PAGE_TITLE}}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh; color: #333;
+        }
+        
+        /* Glass-morphic navigation */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100;
+            display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease;
+        }
+        
+        .nav-menu { display: flex; gap: 20px; }
+        
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px;
+            font-weight: 400; transition: all 0.3s ease;
+            padding: 8px 12px; border-radius: 6px;
+        }
+        
+        .nav-item:hover, .nav-item.active { 
+            color: #7B61FF; background: rgba(123, 97, 255, 0.1); 
+        }
+        
+        .main-container {
+            padding: 80px 20px 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        {{PAGE_STYLES}}
+    </style>
+</head>
+<body>
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
+            <div class="nav-menu">
+                <a href="dashboard.html" class="nav-item {{DASHBOARD_ACTIVE}}">Dashboard</a>
+                <a href="calendar.html" class="nav-item {{CALENDAR_ACTIVE}}">Calendar</a>
+                <a href="lists.html" class="nav-item {{LISTS_ACTIVE}}">Lists</a>
+                <a href="memories.html" class="nav-item {{MEMORIES_ACTIVE}}">Memories</a>
+                <a href="workflows.html" class="nav-item {{WORKFLOWS_ACTIVE}}">Workflows</a>
+                <a href="settings.html" class="nav-item {{SETTINGS_ACTIVE}}">Settings</a>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator" id="apiStatus">🔄 Connecting</div>
+        </div>
+    </div>
+
+    <div class="main-container">
+        {{PAGE_CONTENT}}
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000/api';
+        
+        {{PAGE_SCRIPTS}}
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            checkApiStatus();
+            {{PAGE_INIT}}
+        });
+        
+        async function checkApiStatus() {
+            try {
+                const response = await fetch('http://localhost:8000/health');
+                if (response.ok) {
+                    document.getElementById('apiStatus').textContent = '✅ Connected';
+                }
+            } catch {
+                document.getElementById('apiStatus').textContent = '❌ Offline';
+            }
+        }
+    </script>
+</body>
+</html>
