@@ -116,6 +116,41 @@
             color: #333;
         }
 
+        .message.zack .response-meta {
+            font-size: 11px;
+            color: #666;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #ddd;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .confidence-indicator {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .confidence-bar {
+            width: 60px;
+            height: 4px;
+            background: #e0e0e0;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ff4444, #ffaa00, #44ff44);
+            transition: width 0.3s ease;
+        }
+
+        .thinking-time {
+            color: #888;
+        }
+
         .chat-input-area {
             padding: 16px;
             background: #fafafa;
@@ -360,8 +395,13 @@
                     const data = await response.json();
                     const reply = data.response || data.message || 'Response received';
                     
-                    // Add Zack's response
-                    addMessage(reply, 'zack');
+                    // Add Zack's response with metadata
+                    addMessage(reply, 'zack', data);
+                    
+                    // Handle task suggestion if present
+                    if (data.suggested_task) {
+                        addTaskCreationButton(data.suggested_task);
+                    }
                     
                     // Extract and display code in artifact panel
                     const codeMatch = reply.match(/```[\s\S]*?```/g);
@@ -378,13 +418,111 @@
         }
 
         // Add message to chat
-        function addMessage(text, sender) {
+        function addMessage(text, sender, metadata = null) {
             const messagesDiv = document.getElementById('chatMessages');
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${sender}`;
-            messageDiv.textContent = text;
+            
+            // Create content div
+            const contentDiv = document.createElement('div');
+            contentDiv.textContent = text;
+            messageDiv.appendChild(contentDiv);
+            
+            // Add metadata for Zack's responses
+            if (sender === 'zack' && metadata && (metadata.confidence || metadata.thinking_time)) {
+                const metaDiv = document.createElement('div');
+                metaDiv.className = 'response-meta';
+                
+                // Confidence indicator
+                if (metadata.confidence) {
+                    const confidenceDiv = document.createElement('div');
+                    confidenceDiv.className = 'confidence-indicator';
+                    confidenceDiv.innerHTML = `
+                        <span>Confidence:</span>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" style="width: ${Math.round(metadata.confidence * 100)}%"></div>
+                        </div>
+                        <span>${Math.round(metadata.confidence * 100)}%</span>
+                    `;
+                    metaDiv.appendChild(confidenceDiv);
+                }
+                
+                // Thinking time
+                if (metadata.thinking_time) {
+                    const timeDiv = document.createElement('div');
+                    timeDiv.className = 'thinking-time';
+                    timeDiv.textContent = `Thinking: ${metadata.thinking_time.toFixed(1)}s`;
+                    metaDiv.appendChild(timeDiv);
+                }
+                
+                messageDiv.appendChild(metaDiv);
+            }
+            
             messagesDiv.appendChild(messageDiv);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Add task creation button after Zack's message
+        function addTaskCreationButton(taskData) {
+            const messagesDiv = document.getElementById('chatMessages');
+            const buttonDiv = document.createElement('div');
+            buttonDiv.className = 'task-suggestion';
+            buttonDiv.style.cssText = 'margin: 8px 0; text-align: center;';
+            
+            const button = document.createElement('button');
+            button.className = 'task-create-btn';
+            button.textContent = '✅ Create Task';
+            button.style.cssText = `
+                background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-weight: 500;
+                margin: 4px;
+            `;
+            button.onclick = () => createTaskFromChat(taskData);
+            
+            const cancelButton = document.createElement('button');
+            cancelButton.textContent = '❌ Cancel';
+            cancelButton.style.cssText = `
+                background: #666;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-weight: 500;
+                margin: 4px;
+            `;
+            cancelButton.onclick = () => buttonDiv.remove();
+            
+            buttonDiv.appendChild(button);
+            buttonDiv.appendChild(cancelButton);
+            messagesDiv.appendChild(buttonDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Create task from chat suggestion
+        async function createTaskFromChat(taskData) {
+            try {
+                const response = await fetch(`${API_BASE}/api/developer/chat/confirm-task`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(taskData)
+                });
+                
+                const result = await response.json();
+                addMessage(result.response, 'zack');
+                
+                // Remove the task creation buttons
+                const taskSuggestions = document.querySelectorAll('.task-suggestion');
+                taskSuggestions.forEach(el => el.remove());
+                
+            } catch (error) {
+                addMessage('Failed to create task. Please try again.', 'zack');
+            }
         }
 
         // Display code in artifact panel

@@ -1530,7 +1530,7 @@ test_url "$API_BASE/developer/status" "Developer Status"
 
 # Step 8: Update state file
 echo -e "\n📝 Step 8: Updating state file..."
-cat >> CLAUDE_CURRENT_STATE.md << EOF
+cat >> ZOE_CURRENT_STATE.md << EOF
 
 ## $(date '+%Y-%m-%d %H:%M:%S') - UI Deployment Complete
 

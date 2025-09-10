@@ -2,42 +2,710 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Zoe - Lists</title>
-    <link rel="stylesheet" href="css/glass.css">
+    <style>
+        * { 
+            margin: 0; padding: 0; box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh; color: #333;
+            font-size: clamp(14px, 1.6vw, 16px);
+        }
+        
+        /* Navigation */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        .settings-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold;
+        }
+        .settings-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+
+        /* Main Layout */
+        .main-container { padding: 70px 20px 20px; }
+        .top-info-bar { 
+            display: flex; justify-content: space-between; align-items: center; 
+            margin-bottom: 20px; padding: 0 10px;
+        }
+        .time-display { display: flex; flex-direction: column; }
+        .current-time { font-size: 18px; font-weight: 300; color: #333; }
+        .current-date { font-size: 11px; color: #666; margin-top: 2px; }
+        .weather-widget { display: flex; align-items: center; gap: 6px; }
+
+        /* Lists Layout */
+        .lists-layout {
+            display: grid; grid-template-columns: 300px 1fr; gap: 20px;
+            max-width: 1400px; margin: 0 auto; height: calc(100vh - 150px);
+        }
+
+        /* Sidebar */
+        .lists-sidebar {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 16px;
+            padding: 20px; overflow-y: auto;
+        }
+        .sidebar-header {
+            margin-bottom: 20px; padding-bottom: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        .sidebar-title {
+            font-size: 18px; font-weight: 500; color: #333;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        
+        .list-category {
+            margin-bottom: 20px;
+        }
+        .category-title {
+            font-size: 12px; color: #666; text-transform: uppercase;
+            letter-spacing: 0.5px; margin-bottom: 10px; font-weight: 600;
+        }
+        .list-item {
+            display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+            margin-bottom: 8px; border-radius: 12px; cursor: pointer;
+            transition: all 0.3s ease; background: rgba(255, 255, 255, 0.3);
+            min-height: 48px;
+        }
+        .list-item:hover {
+            background: rgba(123, 97, 255, 0.1); transform: translateX(4px);
+        }
+        .list-item.active {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+        }
+        .list-icon { font-size: 20px; }
+        .list-name { font-size: 14px; font-weight: 500; flex: 1; }
+        .list-count {
+            font-size: 12px; background: rgba(255, 255, 255, 0.3);
+            padding: 4px 8px; border-radius: 10px;
+        }
+        .list-item.active .list-count {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .add-list-btn {
+            width: 100%; padding: 16px; border: 2px dashed rgba(123, 97, 255, 0.3);
+            border-radius: 12px; background: rgba(123, 97, 255, 0.05);
+            color: #7B61FF; font-size: 14px; font-weight: 500;
+            cursor: pointer; transition: all 0.3s ease; margin-top: 10px;
+            min-height: 48px;
+        }
+        .add-list-btn:hover {
+            background: rgba(123, 97, 255, 0.1);
+            border-color: rgba(123, 97, 255, 0.5);
+        }
+
+        /* Main Content */
+        .list-content {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 16px;
+            padding: 20px; display: flex; flex-direction: column;
+        }
+        .content-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 20px; padding-bottom: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        .content-title {
+            font-size: 20px; font-weight: 300; color: #333;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .content-actions {
+            display: flex; gap: 10px;
+        }
+        .action-btn {
+            padding: 8px 16px; border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 8px; background: rgba(255, 255, 255, 0.8);
+            color: #666; font-size: 12px; cursor: pointer;
+            transition: all 0.3s ease; min-height: 36px;
+        }
+        .action-btn:hover {
+            background: rgba(123, 97, 255, 0.1); color: #7B61FF;
+        }
+        .action-btn.primary {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; border-color: transparent;
+        }
+
+        /* Items List */
+        .items-list {
+            flex: 1; overflow-y: auto; margin-bottom: 20px;
+        }
+        .item {
+            display: flex; align-items: center; gap: 12px; padding: 16px;
+            margin-bottom: 8px; background: rgba(255, 255, 255, 0.4);
+            border-radius: 12px; transition: all 0.3s ease; min-height: 60px;
+        }
+        .item:hover {
+            background: rgba(255, 255, 255, 0.6); transform: translateX(4px);
+        }
+        .item.completed {
+            opacity: 0.6; text-decoration: line-through;
+        }
+        .item-checkbox {
+            width: 20px; height: 20px; border-radius: 4px;
+            border: 2px solid #7B61FF; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: all 0.3s ease;
+        }
+        .item-checkbox.checked {
+            background: #7B61FF; color: white;
+        }
+        .item-content {
+            flex: 1; font-size: 14px; color: #333;
+        }
+        .item-priority {
+            font-size: 12px; padding: 4px 8px; border-radius: 10px;
+            font-weight: 500;
+        }
+        .priority-high { background: rgba(239, 68, 68, 0.2); color: #dc2626; }
+        .priority-medium { background: rgba(251, 146, 60, 0.2); color: #ea580c; }
+        .priority-low { background: rgba(34, 197, 94, 0.2); color: #16a34a; }
+        .item-actions {
+            display: flex; gap: 8px; opacity: 0; transition: opacity 0.3s ease;
+        }
+        .item:hover .item-actions { opacity: 1; }
+        .item-action {
+            width: 32px; height: 32px; border-radius: 6px;
+            border: none; cursor: pointer; display: flex;
+            align-items: center; justify-content: center; font-size: 14px;
+            transition: all 0.3s ease;
+        }
+        .edit-action { background: rgba(59, 130, 246, 0.1); color: #2563eb; }
+        .delete-action { background: rgba(239, 68, 68, 0.1); color: #dc2626; }
+
+        /* Add Item Form */
+        .add-item-form {
+            display: none; padding: 20px; background: rgba(255, 255, 255, 0.8);
+            border-radius: 12px; margin-top: 20px;
+        }
+        .add-item-form.active { display: block; }
+        .form-group {
+            margin-bottom: 16px;
+        }
+        .form-label {
+            display: block; font-size: 12px; font-weight: 500; color: #666;
+            margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .form-input, .form-select {
+            width: 100%; padding: 12px 16px; border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 8px; background: rgba(255, 255, 255, 0.9);
+            font-size: 14px; outline: none; transition: all 0.3s ease;
+            min-height: 48px;
+        }
+        .form-input:focus, .form-select:focus {
+            border-color: #7B61FF; box-shadow: 0 0 0 2px rgba(123, 97, 255, 0.1);
+        }
+        .form-actions {
+            display: flex; gap: 12px; justify-content: flex-end;
+        }
+        .form-btn {
+            padding: 12px 20px; border: none; border-radius: 8px;
+            font-size: 14px; font-weight: 500; cursor: pointer;
+            transition: all 0.3s ease; min-height: 44px;
+        }
+        .form-btn.primary {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+        }
+        .form-btn.secondary {
+            background: rgba(255, 255, 255, 0.8); color: #666;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center; padding: 60px 20px; color: #666;
+        }
+        .empty-icon { font-size: 48px; margin-bottom: 16px; }
+        .empty-title { font-size: 18px; font-weight: 500; margin-bottom: 8px; }
+        .empty-subtitle { font-size: 14px; }
+
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+
+        /* Mobile Responsive */
+        @media (max-width: 900px) {
+            .nav-menu { display: none; }
+            .lists-layout { grid-template-columns: 1fr; gap: 15px; }
+            .lists-sidebar { order: 2; }
+            .list-content { order: 1; }
+            .more-grid { grid-template-columns: 1fr; }
+        }
+    </style>
 </head>
 <body>
-    <nav class="nav-bar">
+    <!-- Navigation -->
+    <div class="nav-bar">
         <div class="nav-left">
-            <a href="index.html" class="nav-logo"><span>🤖</span><span>Zoe</span></a>
+            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
             <div class="nav-menu">
-                <a href="index.html">Chat</a>
-                <a href="dashboard.html">Dashboard</a>
-                <a href="calendar.html">Calendar</a>
-                <a href="lists.html" class="active">Lists</a>
-                <a href="memories.html">Memories</a>
-                <a href="workflows.html">Workflows</a>
-                <a href="settings.html">Settings</a>
-                <a href="javascript:void(0)" onclick="openMoreOverlay()">More...</a>
+                <a href="index.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="lists.html" class="nav-item active">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
             </div>
         </div>
-    </nav>
-    
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">🔄 Connecting</div>
+            <button class="settings-btn" onclick="window.location.href='settings.html'" title="Settings">⚙️</button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
     <div class="main-container">
-        <h1>📝 Lists</h1>
-        <div class="grid grid-2">
-            <div class="glass-card">
-                <h2>🛒 Shopping List</h2>
-                <div id="shoppingList"></div>
+        <!-- Top Info Bar -->
+        <div class="top-info-bar">
+            <div class="time-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
             </div>
-            <div class="glass-card">
-                <h2>✅ Tasks</h2>
-                <div id="tasksList"></div>
+            <div class="weather-widget">
+                <div>☀️</div>
+                <div>23°</div>
+            </div>
+        </div>
+
+        <!-- Lists Layout -->
+        <div class="lists-layout">
+            <!-- Sidebar -->
+            <div class="lists-sidebar">
+                <div class="sidebar-header">
+                    <h2 class="sidebar-title">My Lists</h2>
+                </div>
+                
+                <!-- Default Lists -->
+                <div class="list-category">
+                    <div class="category-title">Default Lists</div>
+                    <div class="list-item active" onclick="loadList('shopping', 'default')">
+                        <span class="list-icon">🛒</span>
+                        <span class="list-name">Shopping</span>
+                        <span class="list-count" id="shopping-count">0</span>
+                    </div>
+                    <div class="list-item" onclick="loadList('bucket', 'default')">
+                        <span class="list-icon">🪣</span>
+                        <span class="list-name">Bucket</span>
+                        <span class="list-count" id="bucket-count">0</span>
+                    </div>
+                    <div class="list-item" onclick="loadList('tasks', 'default')">
+                        <span class="list-icon">✅</span>
+                        <span class="list-name">Tasks</span>
+                        <span class="list-count" id="tasks-count">0</span>
+                    </div>
+                </div>
+                
+                <!-- Custom Lists -->
+                <div class="list-category">
+                    <div class="category-title">Custom Lists</div>
+                    <div id="customLists">
+                        <!-- Populated via API -->
+                    </div>
+                </div>
+                
+                <button class="add-list-btn" onclick="createNewList()">
+                    + New List
+                </button>
+            </div>
+
+            <!-- Main Content -->
+            <div class="list-content">
+                <div class="content-header">
+                    <h2 class="content-title" id="currentListTitle">Shopping List</h2>
+                    <div class="content-actions">
+                        <button class="action-btn" onclick="toggleAddForm()">+ Add Item</button>
+                        <button class="action-btn" onclick="clearCompleted()">Clear Done</button>
+                    </div>
+                </div>
+
+                <div class="items-list" id="itemsList">
+                    <!-- Items will be populated here -->
+                </div>
+
+                <div class="add-item-form" id="addItemForm">
+                    <div class="form-group">
+                        <label class="form-label">Item Description</label>
+                        <input type="text" class="form-input" id="itemText" placeholder="Enter item description">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Priority</label>
+                        <select class="form-select" id="itemPriority">
+                            <option value="low">Low</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="high">High</option>
+                        </select>
+                    </div>
+                    <div class="form-actions">
+                        <button class="form-btn secondary" onclick="toggleAddForm()">Cancel</button>
+                        <button class="form-btn primary" onclick="addItem()">Add Item</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
-    
-    <button class="fab" onclick="openQuickChat()">💬</button>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="alert('Coming soon!')">
+                    <div class="more-item-icon">📊</div>
+                    <div class="more-item-label">Analytics</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="js/common.js"></script>
+    <script>
+        let currentListType = 'shopping';
+        let currentListId = 'default';
+        let allItems = [];
+        let customLists = [];
+
+        // Load all user's lists on page load
+        async function loadUserLists() {
+            try {
+                const response = await apiRequest('/lists/all');
+                customLists = response.customLists || [];
+                updateCustomListsUI();
+                updateListCounts(response.counts || {});
+            } catch (error) {
+                console.error('Failed to load lists:', error);
+                // Continue with default lists
+            }
+        }
+
+        function updateCustomListsUI() {
+            const container = document.getElementById('customLists');
+            container.innerHTML = customLists.map(list => `
+                <div class="list-item" onclick="loadList('custom', '${list.id}')">
+                    <span class="list-icon">${list.icon}</span>
+                    <span class="list-name">${list.name}</span>
+                    <span class="list-count">${list.count || 0}</span>
+                </div>
+            `).join('');
+        }
+
+        function updateListCounts(counts) {
+            Object.keys(counts).forEach(listType => {
+                const countElement = document.getElementById(`${listType}-count`);
+                if (countElement) {
+                    countElement.textContent = counts[listType] || 0;
+                }
+            });
+        }
+
+        // Load specific list
+        async function loadList(type, id) {
+            currentListType = type;
+            currentListId = id;
+            
+            // Update active state
+            document.querySelectorAll('.list-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            event.target.closest('.list-item').classList.add('active');
+            
+            // Update title
+            const listName = event.target.closest('.list-item').querySelector('.list-name').textContent;
+            document.getElementById('currentListTitle').textContent = listName;
+            
+            try {
+                const response = await apiRequest(`/lists/${type}/${id}`);
+                allItems = response.items || [];
+                displayItems();
+            } catch (error) {
+                console.error('Failed to load list items:', error);
+                allItems = [];
+                displayItems();
+            }
+        }
+
+        function displayItems() {
+            const container = document.getElementById('itemsList');
+            
+            if (allItems.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">📝</div>
+                        <div class="empty-title">No items yet</div>
+                        <div class="empty-subtitle">Add your first item to get started</div>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = allItems.map(item => `
+                <div class="item ${item.completed ? 'completed' : ''}" data-id="${item.id}">
+                    <div class="item-checkbox ${item.completed ? 'checked' : ''}" 
+                         onclick="toggleItem(${item.id})">
+                        ${item.completed ? '✓' : ''}
+                    </div>
+                    <div class="item-content">${item.text}</div>
+                    <div class="item-priority priority-${item.priority || 'medium'}">
+                        ${(item.priority || 'medium').toUpperCase()}
+                    </div>
+                    <div class="item-actions">
+                        <button class="item-action edit-action" onclick="editItem(${item.id})" title="Edit">✏️</button>
+                        <button class="item-action delete-action" onclick="deleteItem(${item.id})" title="Delete">×</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function toggleItem(itemId) {
+            const item = allItems.find(i => i.id === itemId);
+            if (!item) return;
+            
+            item.completed = !item.completed;
+            
+            try {
+                await apiRequest(`/lists/${currentListType}/${currentListId}/items/${itemId}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ completed: item.completed })
+                });
+                displayItems();
+                updateListCounts();
+            } catch (error) {
+                console.error('Failed to update item:', error);
+                // Revert change
+                item.completed = !item.completed;
+                displayItems();
+            }
+        }
+
+        async function addItem() {
+            const text = document.getElementById('itemText').value.trim();
+            const priority = document.getElementById('itemPriority').value;
+            
+            if (!text) {
+                showNotification('Please enter item description', 'error');
+                return;
+            }
+            
+            const newItem = {
+                text: text,
+                priority: priority,
+                completed: false
+            };
+            
+            try {
+                const response = await apiRequest(`/lists/${currentListType}/${currentListId}/items`, {
+                    method: 'POST',
+                    body: JSON.stringify(newItem)
+                });
+                
+                allItems.push(response.item);
+                displayItems();
+                toggleAddForm();
+                document.getElementById('itemText').value = '';
+                showNotification('Item added!', 'success');
+            } catch (error) {
+                console.error('Failed to add item:', error);
+                showNotification('Failed to add item', 'error');
+            }
+        }
+
+        async function deleteItem(itemId) {
+            if (!confirm('Delete this item?')) return;
+            
+            try {
+                await apiRequest(`/lists/${currentListType}/${currentListId}/items/${itemId}`, {
+                    method: 'DELETE'
+                });
+                
+                allItems = allItems.filter(item => item.id !== itemId);
+                displayItems();
+                showNotification('Item deleted', 'success');
+            } catch (error) {
+                console.error('Failed to delete item:', error);
+                showNotification('Failed to delete item', 'error');
+            }
+        }
+
+        function editItem(itemId) {
+            const item = allItems.find(i => i.id === itemId);
+            if (!item) return;
+            
+            const newText = prompt('Edit item:', item.text);
+            if (newText === null || newText.trim() === '') return;
+            
+            item.text = newText.trim();
+            
+            apiRequest(`/lists/${currentListType}/${currentListId}/items/${itemId}`, {
+                method: 'PUT',
+                body: JSON.stringify({ text: item.text })
+            }).then(() => {
+                displayItems();
+                showNotification('Item updated', 'success');
+            }).catch(error => {
+                console.error('Failed to update item:', error);
+                showNotification('Failed to update item', 'error');
+            });
+        }
+
+        async function clearCompleted() {
+            const completedItems = allItems.filter(item => item.completed);
+            if (completedItems.length === 0) {
+                showNotification('No completed items to clear', 'info');
+                return;
+            }
+            
+            if (!confirm(`Clear ${completedItems.length} completed items?`)) return;
+            
+            try {
+                await Promise.all(completedItems.map(item => 
+                    apiRequest(`/lists/${currentListType}/${currentListId}/items/${item.id}`, {
+                        method: 'DELETE'
+                    })
+                ));
+                
+                allItems = allItems.filter(item => !item.completed);
+                displayItems();
+                showNotification('Completed items cleared', 'success');
+            } catch (error) {
+                console.error('Failed to clear completed items:', error);
+                showNotification('Failed to clear completed items', 'error');
+            }
+        }
+
+        function toggleAddForm() {
+            const form = document.getElementById('addItemForm');
+            form.classList.toggle('active');
+            if (form.classList.contains('active')) {
+                document.getElementById('itemText').focus();
+            }
+        }
+
+        async function createNewList() {
+            const name = prompt('List name:');
+            if (!name || name.trim() === '') return;
+            
+            const icon = prompt('Choose emoji (optional):') || '📝';
+            
+            try {
+                const response = await apiRequest('/lists/custom', {
+                    method: 'POST',
+                    body: JSON.stringify({ name: name.trim(), icon: icon })
+                });
+                
+                customLists.push(response.list);
+                updateCustomListsUI();
+                showNotification('List created!', 'success');
+            } catch (error) {
+                console.error('Failed to create list:', error);
+                showNotification('Failed to create list', 'error');
+            }
+        }
+
+        function navigateToPage(page) {
+            window.location.href = page;
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            loadUserLists();
+            // Load default shopping list
+            loadList('shopping', 'default');
+        });
+    </script>
 </body>
 </html>

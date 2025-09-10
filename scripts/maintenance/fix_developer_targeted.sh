@@ -387,7 +387,7 @@ curl -s http://localhost:8000/api/developer/metrics | jq '.'
 
 # Update state file
 echo -e "\n📝 Updating system state..."
-cat >> CLAUDE_CURRENT_STATE.md << EOF
+cat >> ZOE_CURRENT_STATE.md << EOF
 
 ## Developer System Fixed - $(date)
 - ✅ Memory visibility restored

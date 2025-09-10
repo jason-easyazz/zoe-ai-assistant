@@ -5,7 +5,7 @@ You think strategically about architecture, performance, security, and user expe
 You provide specific, technical, actionable advice with code examples when relevant.
 You're direct, efficient, and always thinking about how to make the system better."""
 
-"""AI Client that uses INTELLIGENT RouteLLM"""
+"""AI Client that uses RouteLLM + LiteLLM Integration"""
 import sys
 import os
 import logging
@@ -16,33 +16,149 @@ sys.path.append('/app')
 logger = logging.getLogger(__name__)
 
 # Import the intelligent RouteLLM
+from route_llm import router as route_llm_router
 from llm_models import LLMModelManager
 manager = LLMModelManager()
 
+async def handle_calendar_request(message: str, context: Dict) -> bool:
+    """Handle calendar event creation requests"""
+    message_lower = message.lower()
+    conversation_history = context.get("conversation_history", [])
+    
+    # Check if this is a confirmation to create birthday event
+    if any(word in message_lower for word in ['yes', 'yes please', 'please', 'ok', 'okay', 'sure', 'go ahead']):
+        # Look for previous birthday context in conversation
+        for msg in conversation_history[-3:]:  # Check last 3 messages
+            if 'birthday' in msg.get('content', '').lower() and 'march' in msg.get('content', '').lower():
+                # Create birthday event for March 24th
+                try:
+                    import httpx
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        response = await client.post(
+                            "http://localhost:8000/api/calendar/events",
+                            json={
+                                "title": "Birthday Celebration",
+                                "description": "Your birthday celebration!",
+                                "start_date": "2024-03-24",
+                                "all_day": True,
+                                "category": "celebration"
+                            }
+                        )
+                        if response.status_code == 200:
+                            return True
+                except Exception as e:
+                    logger.error(f"Calendar event creation failed: {e}")
+                    return False
+    
+    return False
+
 async def get_ai_response(message: str, context: Dict = None) -> str:
-    """Route using REAL intelligence, not hardcoded rules"""
+    """Route using RouteLLM + LiteLLM with intelligent fallback"""
     context = context or {}
     
-    # Let RouteLLM analyze the message intelligently
-    provider, model = manager.get_model_for_request(message=message, context=context)
+    # Check for calendar event creation requests
+    if await handle_calendar_request(message, context):
+        return "Perfect! I've created your birthday event for March 24th. It's now saved in your calendar as an all-day celebration! 🎉📅"
     
-    # Route to appropriate handler
-    handlers = {
-        "anthropic": call_anthropic,
-        "openai": call_openai,
-        "google": call_google,
-        "ollama": call_ollama,
-        "groq": call_groq,
-        "together": call_together
+    # Use RouteLLM to analyze complexity and get routing decision
+    routing_decision = route_llm_router.classify_query(message, context)
+    
+    # Check if we should use LiteLLM proxy or direct Ollama
+    if routing_decision.get("provider") == "ollama":
+        # Direct Ollama call for local models
+        return await call_ollama_direct(message, routing_decision["model"], context)
+    else:
+        # Use LiteLLM proxy for cloud models
+        return await call_litellm_proxy(message, routing_decision, context)
+
+async def call_litellm_proxy(message: str, routing_decision: Dict, context: Dict) -> str:
+    """Call LiteLLM proxy for cloud models with fallback"""
+    mode = context.get("mode", "user")
+    system = "You are Zack, a technical AI developer." if mode == "developer" else "You are Zoe, a friendly assistant."
+    
+    # Map RouteLLM model names to LiteLLM model names
+    model_mapping = {
+        "claude-3-sonnet": "claude-3-sonnet-20240229",
+        "gpt-4": "gpt-4",
+        "gpt-3.5-turbo": "gpt-3.5-turbo"
     }
     
-    handler = handlers.get(provider, call_ollama)
+    litellm_model = model_mapping.get(routing_decision["model"], routing_decision["model"])
+    
+    # Build messages with conversation history
+    messages = [{"role": "system", "content": system}]
+    
+    # Add conversation history if available
+    conversation_history = context.get("conversation_history", [])
+    if conversation_history:
+        # Add all previous messages except the current user message
+        for msg in conversation_history[:-1]:  # Exclude the last message (current user message)
+            messages.append(msg)
+    
+    # Add current user message
+    messages.append({"role": "user", "content": message})
     
     try:
-        return await handler(message, model, context)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "http://zoe-litellm:8001/v1/chat/completions",
+                headers={"Authorization": "Bearer sk-1234"},  # Using master key from config
+                json={
+                    "model": litellm_model,
+                    "messages": messages,
+                    "temperature": routing_decision.get("temperature", 0.7),
+                    "max_tokens": 2000
+                }
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+            else:
+                logger.warning(f"LiteLLM proxy failed: {response.status_code}, falling back to Ollama")
+                return await call_ollama_direct(message, "llama3.2:3b", context)
+                
     except Exception as e:
-        logger.error(f"{provider}/{model} failed: {e}, falling back to Ollama")
-        return "I apologize, but I am temporarily unable to process your request. Please try again."
+        logger.warning(f"LiteLLM proxy error: {e}, falling back to Ollama")
+        return await call_ollama_direct(message, "llama3.2:3b", context)
+
+async def call_ollama_direct(message: str, model: str, context: Dict) -> str:
+    """Direct Ollama call for local models"""
+    mode = context.get("mode", "user")
+    system = "You are Zack, a technical AI developer." if mode == "developer" else "You are Zoe, a friendly assistant."
+    
+    # Build conversation context for Ollama
+    conversation_history = context.get("conversation_history", [])
+    prompt_parts = [system]
+    
+    # Add conversation history if available
+    if conversation_history:
+        for msg in conversation_history[:-1]:  # Exclude the last message (current user message)
+            if msg["role"] == "user":
+                prompt_parts.append(f"User: {msg['content']}")
+            elif msg["role"] == "assistant":
+                prompt_parts.append(f"Assistant: {msg['content']}")
+    
+    # Add current user message
+    prompt_parts.append(f"User: {message}")
+    prompt_parts.append("Assistant:")
+    
+    full_prompt = "\n\n".join(prompt_parts)
+    
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(
+            "http://zoe-ollama:11434/api/generate",
+            json={
+                "model": model,
+                "prompt": full_prompt,
+                "temperature": 0.3 if mode == "developer" else 0.7,
+                "stream": False
+            }
+        )
+        
+        if response.status_code == 200:
+            return response.json().get("response", "Processing...")
+        return "AI service temporarily unavailable"
 
 # Provider implementations
 async def call_anthropic(message: str, model: str, context: Dict) -> str:

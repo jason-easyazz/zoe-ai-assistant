@@ -964,7 +964,7 @@ curl -s -X POST http://localhost:8000/api/developer/chat \
   -d '{"message": "analyze the docker container status and memory usage"}' | jq '.'
 
 # Update state file
-cat >> CLAUDE_CURRENT_STATE.md << EOF
+cat >> ZOE_CURRENT_STATE.md << EOF
 
 ## RouteLLM Integration Complete - $(date)
 - Intelligent query routing active

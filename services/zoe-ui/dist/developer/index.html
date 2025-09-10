@@ -344,34 +344,45 @@
         // Load container status
         async function loadContainerStatus() {
             const containers = [
-                { name: 'zoe-core', display: 'Core API', port: 8000 },
-                { name: 'zoe-ui', display: 'UI Server', port: 8080 },
-                { name: 'zoe-ollama', display: 'Ollama AI', port: 11434 },
-                { name: 'zoe-redis', display: 'Redis Cache', port: 6379 },
-                { name: 'zoe-whisper', display: 'Whisper STT', port: 9001 },
-                { name: 'zoe-tts', display: 'TTS Engine', port: 9002 },
-                { name: 'zoe-n8n', display: 'N8N Workflows', port: 5678 }
+                { name: 'zoe-core', display: 'Core API', port: 8000, endpoint: '/health' },
+                { name: 'zoe-ui', display: 'UI Server', port: 8080, endpoint: null },
+                { name: 'zoe-ollama', display: 'Ollama AI', port: 11434, endpoint: null },
+                { name: 'zoe-redis', display: 'Redis Cache', port: 6379, endpoint: null },
+                { name: 'zoe-whisper', display: 'Whisper STT', port: 9001, endpoint: null },
+                { name: 'zoe-tts', display: 'TTS Engine', port: 9002, endpoint: null },
+                { name: 'zoe-n8n', display: 'N8N Workflows', port: 5678, endpoint: null }
             ];
 
             const grid = document.getElementById('containerGrid');
+            grid.innerHTML = ''; // Clear existing content
             
             for (const container of containers) {
-                // Try to check if service is responding
                 let status = 'stopped';
+                let statusText = 'Stopped';
+                
                 try {
-                    if (container.name === 'zoe-core') {
-                        const response = await fetch(`${API_BASE}/health`, { 
+                    if (container.endpoint) {
+                        // Check specific endpoint
+                        const response = await fetch(`${API_BASE}${container.endpoint}`, { 
                             method: 'GET',
                             mode: 'cors',
-                            timeout: 2000 
+                            signal: AbortSignal.timeout(3000)
                         });
                         status = response.ok ? 'running' : 'stopped';
+                        statusText = response.ok ? 'Running' : 'Stopped';
                     } else {
-                        // For now, assume running if core is up
+                        // For other services, try to ping the port
+                        const response = await fetch(`http://${window.location.hostname}:${container.port}`, {
+                            method: 'GET',
+                            mode: 'no-cors',
+                            signal: AbortSignal.timeout(2000)
+                        });
                         status = 'running';
+                        statusText = 'Running';
                     }
                 } catch (e) {
                     status = 'stopped';
+                    statusText = 'Stopped';
                 }
 
                 const card = document.createElement('div');
@@ -388,7 +399,7 @@
                         </div>
                         <div class="stat-row">
                             <span>Status:</span>
-                            <span class="stat-value">${status}</span>
+                            <span class="stat-value">${statusText}</span>
                         </div>
                     </div>
                 `;
@@ -403,39 +414,58 @@
                 if (response.ok) {
                     const data = await response.json();
                     
-                    // Update CPU
-                    if (data.cpu) {
-                        document.getElementById('cpuUsage').textContent = `${data.cpu}%`;
-                        document.getElementById('cpuBar').style.width = `${data.cpu}%`;
+                    // Update CPU - try both formats
+                    const cpuValue = data.cpu || data.cpu_percent || 0;
+                    if (cpuValue > 0) {
+                        document.getElementById('cpuUsage').textContent = `${cpuValue}%`;
+                        document.getElementById('cpuBar').style.width = `${cpuValue}%`;
                     }
                     
-                    // Update Memory
-                    if (data.memory) {
-                        document.getElementById('memUsage').textContent = `${data.memory.percent}%`;
-                        document.getElementById('memBar').style.width = `${data.memory.percent}%`;
-                        document.getElementById('memDetails').textContent = 
-                            `${data.memory.used}GB / ${data.memory.total}GB`;
+                    // Update Memory - try both formats
+                    const memPercent = data.memory?.percent || data.memory_percent || 0;
+                    const memUsed = data.memory?.used || 0;
+                    const memTotal = data.memory?.total || 0;
+                    if (memPercent > 0) {
+                        document.getElementById('memUsage').textContent = `${memPercent}%`;
+                        document.getElementById('memBar').style.width = `${memPercent}%`;
+                        if (memUsed > 0 && memTotal > 0) {
+                            document.getElementById('memDetails').textContent = 
+                                `${memUsed}GB / ${memTotal}GB`;
+                        }
                     }
                     
-                    // Update Disk
-                    if (data.disk) {
-                        document.getElementById('diskUsage').textContent = `${data.disk.percent}%`;
-                        document.getElementById('diskBar').style.width = `${data.disk.percent}%`;
-                        document.getElementById('diskDetails').textContent = 
-                            `${data.disk.used}GB / ${data.disk.total}GB`;
+                    // Update Disk - try both formats
+                    const diskPercent = data.disk?.percent || data.disk_percent || 0;
+                    const diskUsed = data.disk?.used || 0;
+                    const diskTotal = data.disk?.total || 0;
+                    if (diskPercent > 0) {
+                        document.getElementById('diskUsage').textContent = `${diskPercent}%`;
+                        document.getElementById('diskBar').style.width = `${diskPercent}%`;
+                        if (diskUsed > 0 && diskTotal > 0) {
+                            document.getElementById('diskDetails').textContent = 
+                                `${diskUsed}GB / ${diskTotal}GB`;
+                        }
                     }
+                } else {
+                    console.error('Metrics API returned error:', response.status);
+                    loadFallbackMetrics();
                 }
             } catch (e) {
-                // Use placeholder data if API fails
-                document.getElementById('cpuUsage').textContent = '32%';
-                document.getElementById('cpuBar').style.width = '32%';
-                document.getElementById('memUsage').textContent = '45%';
-                document.getElementById('memBar').style.width = '45%';
-                document.getElementById('memDetails').textContent = '3.6GB / 8GB';
-                document.getElementById('diskUsage').textContent = '67%';
-                document.getElementById('diskBar').style.width = '67%';
-                document.getElementById('diskDetails').textContent = '85GB / 128GB';
+                console.error('Failed to load metrics:', e);
+                loadFallbackMetrics();
             }
+        }
+
+        // Fallback metrics when API fails
+        function loadFallbackMetrics() {
+            document.getElementById('cpuUsage').textContent = '--';
+            document.getElementById('cpuBar').style.width = '0%';
+            document.getElementById('memUsage').textContent = '--';
+            document.getElementById('memBar').style.width = '0%';
+            document.getElementById('memDetails').textContent = 'API unavailable';
+            document.getElementById('diskUsage').textContent = '--';
+            document.getElementById('diskBar').style.width = '0%';
+            document.getElementById('diskDetails').textContent = 'API unavailable';
         }
 
         // Load activity log
@@ -457,11 +487,24 @@
         }
 
         // Action functions
-        function restartAll() {
+        async function restartAll() {
             if (confirm('Restart all containers?')) {
-                fetch(`${API_BASE}/api/developer/restart-all`, { method: 'POST' })
-                    .then(() => alert('Restart initiated'))
-                    .catch(() => alert('Run: docker compose restart'));
+                try {
+                    const response = await fetch(`${API_BASE}/api/developer/restart-all`, { 
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    const data = await response.json();
+                    if (data.status === 'success') {
+                        alert('All containers restarted successfully');
+                        // Refresh the page to show updated status
+                        setTimeout(() => location.reload(), 2000);
+                    } else {
+                        alert(`Error: ${data.message}`);
+                    }
+                } catch (error) {
+                    alert(`Failed to restart containers: ${error.message}`);
+                }
             }
         }
 
@@ -473,11 +516,22 @@
             window.location.href = 'monitor.html';
         }
 
-        function clearCache() {
+        async function clearCache() {
             if (confirm('Clear Redis cache?')) {
-                fetch(`${API_BASE}/api/developer/clear-cache`, { method: 'POST' })
-                    .then(() => alert('Cache cleared'))
-                    .catch(() => alert('Run: docker exec zoe-redis redis-cli FLUSHALL'));
+                try {
+                    const response = await fetch(`${API_BASE}/api/developer/clear-cache`, { 
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    const data = await response.json();
+                    if (data.status === 'success') {
+                        alert('Redis cache cleared successfully');
+                    } else {
+                        alert(`Error: ${data.message}`);
+                    }
+                } catch (error) {
+                    alert(`Failed to clear cache: ${error.message}`);
+                }
             }
         }
 

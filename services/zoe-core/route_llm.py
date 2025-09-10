@@ -100,7 +100,7 @@ class ZoeRouteLLM:
         
         return {
             "model": "claude-3-sonnet" if use_cloud else config["model"],
-            "provider": "anthropic" if use_cloud else "ollama",
+            "provider": "litellm" if use_cloud else "ollama",
             "temperature": 0.3 if level == "system" else 0.7,
             "confidence": config["confidence"],
             "complexity": level,
@@ -116,7 +116,7 @@ class ZoeRouteLLM:
         if self.has_claude and self.usage["claude"] < self.daily_budget["claude"]:
             return {
                 "model": "claude-3-sonnet",
-                "provider": "anthropic",
+                "provider": "litellm",
                 "temperature": 0.3,
                 "confidence": 0.85,
                 "complexity": "developer",

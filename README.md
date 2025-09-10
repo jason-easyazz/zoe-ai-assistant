@@ -29,11 +29,11 @@ See scripts/permanent/deployment/ for installation scripts
 ### Quick Start for Developers:
 ```bash
 # Check current state
-cat CLAUDE_CURRENT_STATE.md
+cat ZOE_CURRENT_STATE.md
 
 # Run enhancement menu
 bash scripts/permanent/deployment/master_enhancements.sh
 
-# Continue with Claude
-cat GENERIC_CONTINUATION.txt
+# Continue with AI
+cat ZOE_ZOE_CONTINUATION_PROMPT.md
 ```

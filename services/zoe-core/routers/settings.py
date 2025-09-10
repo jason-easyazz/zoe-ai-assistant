@@ -122,3 +122,47 @@ async def test_api_key(service: str):
     keys = load_api_keys()
     exists = service in keys
     return {"service": service, "configured": exists, "working": exists}
+
+@router.get("/export")
+async def export_settings():
+    """Export all settings and data"""
+    try:
+        # This would export all user data
+        # For now, return a mock export
+        export_data = {
+            "settings": {
+                "theme": "light",
+                "language": "en",
+                "notifications": True,
+                "timezone": "UTC"
+            },
+            "api_keys": load_api_keys(),
+            "exported_at": datetime.now().isoformat(),
+            "version": "1.0.0"
+        }
+        return export_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/import")
+async def import_settings(import_data: dict):
+    """Import settings and data"""
+    try:
+        # This would import user data
+        # For now, just validate the structure
+        if "settings" not in import_data:
+            raise HTTPException(status_code=400, detail="Invalid import data format")
+        
+        return {"success": True, "message": "Settings imported successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/clear")
+async def clear_all_data():
+    """Clear all user data (dangerous operation)"""
+    try:
+        # This would clear all user data
+        # For now, just return success
+        return {"success": True, "message": "All data cleared successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

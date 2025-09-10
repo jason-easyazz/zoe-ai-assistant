@@ -1,136 +1,72 @@
-# Cursor IDE Rules for Zoe AI Assistant
-# Location: /home/pi/zoe/.cursorrules
-
-## Project Context
-You are working on Zoe, a privacy-first AI assistant running on Raspberry Pi 5 (ARM64, 8GB RAM).
-Location: /home/pi/zoe
-GitHub: https://github.com/jason-easyazz/zoe-ai-assistant
-
-## Architecture Rules
-
-### Docker Services
-- ALWAYS use 'zoe-' prefix for container names
-- NEVER rebuild zoe-ollama container (contains model, takes hours)
-- Single docker-compose.yml file only
-- Test changes with: docker compose up -d --build zoe-core
-- Check health with: docker ps | grep zoe-
-
-### File Organization
-- Backend code: services/zoe-core/
-- Frontend code: services/zoe-ui/dist/
-- Scripts: organized in scripts/[deployment|maintenance|development|testing]/
-- Data: data/ directory (SQLite databases, JSON configs)
-- NEVER commit .env file
-
-### Code Standards
-- Python 3.11+ with type hints
-- FastAPI for all APIs
-- Async/await for all I/O operations
-- Pydantic for validation
-- SQLite for persistence (no PostgreSQL on Pi)
-
-## Development Patterns
-
-### Adding API Endpoints
-```python
-# 1. Create router in services/zoe-core/routers/[feature].py
-from fastapi import APIRouter
-router = APIRouter(prefix="/api/[feature]", tags=["[feature]"])
-
-# 2. Register in main.py
-from routers import [feature]
-app.include_router([feature].router)
-```
-
-### Database Operations
-- Use SQLite, not PostgreSQL
-- Always use parameterized queries
-- Create indexes for user_id fields (multi-user prep)
-- Backup before schema changes
-
-### AI Integration
-- Two personalities: Zoe (friendly, temp=0.7) and Zack (technical, temp=0.3)
-- Use existing ai_client.generate_response()
-- Route by complexity when RouteLLM is ready
-- Always handle failures with local fallback
-
-## Testing Requirements
-- Test every change locally first
-- Run: ./scripts/testing/test_all.sh
-- Check logs: docker logs zoe-core --tail 50
-- Verify with curl before committing
+# Zoe AI Assistant Development Rules
+# These rules ensure safe, maintainable, and efficient code
 
 ## Security Rules
-- No API keys in code (use .env)
-- No telemetry or external tracking
-- All data stays local
-- Encrypt sensitive data at rest
-- No cloud dependencies
+- Never hardcode API keys, passwords, or secrets
+- Always use environment variables for sensitive data
+- Validate all user inputs before processing
+- Use parameterized queries for database operations
+- Never execute user input directly as code
 
-## Resource Constraints (Raspberry Pi)
-- Optimize for <3GB RAM usage
-- Use generators for large datasets
-- Implement caching strategically
-- Monitor with: docker stats
-- Add swap if needed (2GB recommended)
+## File System Safety
+- Don't use os.remove() without confirmation
+- Don't use shutil.rmtree() without backup verification
+- Always check file existence before operations
+- Use safe file paths (no ../ or absolute paths from user input)
+- Don't overwrite critical system files
 
-## Git Workflow
-- Create feature branches: feature/TASK-XXX
-- Commit format: "✅ TASK-XXX: Description"
-- Always run: git status (check for .env)
-- Update ZOE_CURRENT_STATE.md
-- Small, focused commits
+## Docker & Container Safety
+- Don't run `docker rm -f` without explicit confirmation
+- Don't run `docker system prune` or `docker prune -f`
+- Always backup before destructive operations
+- Don't modify running containers without stopping them first
+- Don't delete volumes without backup
 
-## Common Pitfalls to Avoid
-- Don't use heavy frameworks (no Django)
-- Don't add unnecessary dependencies
-- Don't create synchronous blocking code
-- Don't skip error handling
-- Don't ignore ARM64 compatibility
+## Database Safety
+- Don't use DROP TABLE without confirmation
+- Don't use DELETE without WHERE clause
+- Always backup before schema changes
+- Use transactions for multi-step operations
+- Don't truncate tables without backup
 
-## Task System Integration
-- Check for tasks: GET /api/developer/tasks/next
-- Claim before starting work
-- Mark complete when done
-- Document in task notes
-- Learn from failures
+## Code Quality
+- Add error handling for all risky operations
+- Use type hints for function parameters
+- Add docstrings to functions and classes
+- Keep functions under 50 lines when possible
+- Use meaningful variable names
 
-## Quick Commands
-```bash
-# Health check
-curl http://localhost:8000/health
+## Performance
+- Don't run blocking operations in main thread
+- Use async/await for I/O operations
+- Don't load large files into memory at once
+- Use generators for large data processing
+- Cache expensive operations
 
-# View logs
-docker logs zoe-core -f
+## Testing
+- Test all new functionality
+- Add unit tests for critical functions
+- Test error conditions and edge cases
+- Verify rollback procedures work
+- Test with different user permissions
 
-# Restart service
-docker compose restart zoe-core
+## Documentation
+- Update README for new features
+- Document API changes
+- Add inline comments for complex logic
+- Keep architecture diagrams current
+- Document configuration options
 
-# Enter container
-docker exec -it zoe-core bash
+## Error Handling
+- Always handle exceptions gracefully
+- Log errors with sufficient context
+- Provide helpful error messages to users
+- Don't expose internal system details
+- Implement proper rollback mechanisms
 
-# Run tests
-./scripts/testing/test_all.sh
-
-# Create backup
-./scripts/maintenance/backup.sh
-```
-
-## When Stuck
-1. Check existing patterns in codebase
-2. Ask Zack via developer chat
-3. Review documentation/cursor_context.md
-4. Check task description for requirements
-5. Test minimal version first
-
-## Performance Targets
-- API response: <200ms
-- UI load: <1 second  
-- Memory per container: <1GB
-- CPU usage: <50% average
-
-## Remember
-- This runs on a Raspberry Pi, not a server
-- Privacy and offline-first are core values
-- The system should be self-improving
-- Document everything for the next developer (probably an AI)
+## Memory Management
+- Don't create memory leaks
+- Clean up resources properly
+- Use context managers for file operations
+- Don't store large objects in global scope
+- Monitor memory usage in long-running processes

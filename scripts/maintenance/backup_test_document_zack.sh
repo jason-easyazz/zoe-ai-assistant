@@ -278,8 +278,8 @@ echo "✅ Documentation created: ZACK_AI_SYSTEM_DOCUMENTATION.md"
 echo -e "\n📝 SECTION 4: Updating Core Instructions"
 echo "========================================"
 
-# Update CLAUDE_CURRENT_STATE.md
-cat >> CLAUDE_CURRENT_STATE.md << 'STATE_EOF'
+# Update ZOE_CURRENT_STATE.md
+cat >> ZOE_CURRENT_STATE.md << 'STATE_EOF'
 
 ## Zack AI System - WORKING CONFIGURATION - $(date)
 
@@ -305,7 +305,7 @@ curl -X POST http://localhost:8000/api/developer/chat \
 Working version saved: backups/zack_ai_working_$(date +%Y%m%d)*
 STATE_EOF
 
-echo "✅ Updated CLAUDE_CURRENT_STATE.md"
+echo "✅ Updated ZOE_CURRENT_STATE.md"
 
 # ============================================================================
 # SECTION 5: CREATE NEW CHAT PROMPT
@@ -381,7 +381,7 @@ grep "✅\|❌\|⚠️" $TEST_RESULTS | head -10
 echo ""
 echo "📚 Documentation Created:"
 echo "   - ZACK_AI_SYSTEM_DOCUMENTATION.md (complete reference)"
-echo "   - CLAUDE_CURRENT_STATE.md (updated)"
+echo "   - ZOE_CURRENT_STATE.md (updated)"
 echo "   - NEW_CHAT_PROMPT.md (for future chats)"
 echo ""
 echo "🔒 Protected Files:"

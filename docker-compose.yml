@@ -108,6 +108,19 @@ services:
     networks:
     - zoe-network
     restart: unless-stopped
+  zoe-litellm:
+    build: ./services/zoe-litellm
+    container_name: zoe-litellm
+    ports:
+    - 8001:8001
+    environment:
+    - OPENAI_API_KEY=${OPENAI_API_KEY}
+    - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    networks:
+    - zoe-network
+    restart: unless-stopped
+    depends_on:
+    - zoe-ollama
 networks:
   zoe-network:
     driver: bridge

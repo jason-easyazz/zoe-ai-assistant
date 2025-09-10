@@ -40,6 +40,27 @@ except Exception as e:
     print(f"❌ Developer enhanced failed: {e}")
 
 try:
+    from routers import tasks
+    app.include_router(tasks.router)
+    print("✅ Tasks router loaded")
+except Exception as e:
+    print(f"❌ Tasks router failed: {e}")
+
+try:
+    from routers import auth
+    app.include_router(auth.router)
+    print("✅ Auth router loaded")
+except Exception as e:
+    print(f"❌ Auth router failed: {e}")
+
+try:
+    from routers import setup_multiuser
+    app.include_router(setup_multiuser.router)
+    print("✅ Setup multiuser router loaded")
+except Exception as e:
+    print(f"❌ Setup multiuser router failed: {e}")
+
+try:
     from routers import calendar
     app.include_router(calendar.router)
     print("✅ Calendar router loaded")
@@ -61,6 +82,48 @@ except Exception as e:
     print(f"❌ Memory router failed: {e}")
 
 try:
+    from routers import memories
+    app.include_router(memories.router)
+    print("✅ Memories router loaded")
+except Exception as e:
+    print(f"❌ Memories router failed: {e}")
+
+try:
+    from routers import journal
+    app.include_router(journal.router)
+    print("✅ Journal router loaded")
+except Exception as e:
+    print(f"❌ Journal router failed: {e}")
+
+try:
+    from routers import workflows
+    app.include_router(workflows.router)
+    print("✅ Workflows router loaded")
+except Exception as e:
+    print(f"❌ Workflows router failed: {e}")
+
+try:
+    from routers import homeassistant
+    app.include_router(homeassistant.router)
+    print("✅ Home Assistant router loaded")
+except Exception as e:
+    print(f"❌ Home Assistant router failed: {e}")
+
+try:
+    from routers import weather
+    app.include_router(weather.router)
+    print("✅ Weather router loaded")
+except Exception as e:
+    print(f"❌ Weather router failed: {e}")
+
+try:
+    from routers import system
+    app.include_router(system.router)
+    print("✅ System router loaded")
+except Exception as e:
+    print(f"❌ System router failed: {e}")
+
+try:
     from routers import settings
     app.include_router(settings.router)
     print("✅ Settings router loaded")
@@ -74,8 +137,19 @@ try:
 except Exception as e:
     print(f"❌ Simple AI router failed: {e}")
 
+try:
+    from routers import backup
+    app.include_router(backup.router)
+    print("✅ Backup router loaded")
+except Exception as e:
+    print(f"❌ Backup router failed: {e}")
+
 @app.get("/health")
 async def health():
+    return {"status": "healthy"}
+
+@app.get("/api/health")
+async def api_health():
     return {"status": "healthy"}
 
 @app.get("/")

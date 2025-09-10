@@ -162,9 +162,9 @@ git pull origin main 2>/dev/null || echo -e "${YELLOW}Note: No remote branch yet
 echo -e "\n${YELLOW}📝 Step 3: Updating state documentation...${NC}"
 echo "----------------------------------------"
 
-# Update CLAUDE_CURRENT_STATE.md
+# Update ZOE_CURRENT_STATE.md
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
-cat >> CLAUDE_CURRENT_STATE.md << EOF
+cat >> ZOE_CURRENT_STATE.md << EOF
 
 ## Push to GitHub - $TIMESTAMP
 - Script: push_to_github.sh executed
