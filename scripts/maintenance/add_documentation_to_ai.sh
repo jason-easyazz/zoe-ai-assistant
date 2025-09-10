@@ -549,7 +549,7 @@ curl -s -X POST http://localhost:8000/api/developer/chat \
 
 # Step 12: Update state file
 echo -e "\n📝 Updating system state..."
-cat >> CLAUDE_CURRENT_STATE.md << EOF
+cat >> ZOE_CURRENT_STATE.md << EOF
 
 ### $(date '+%Y-%m-%d %H:%M:%S') - Documentation System Integrated
 - ✅ Zack (Developer AI) personality created

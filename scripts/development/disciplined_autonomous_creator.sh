@@ -112,8 +112,8 @@ def test_creation(file_path: str, file_type: str) -> Dict:
     return test_results
 
 def update_documentation(action: str, details: Dict):
-    """Update CLAUDE_CURRENT_STATE.md"""
-    state_file = "/app/CLAUDE_CURRENT_STATE.md"
+    """Update ZOE_CURRENT_STATE.md"""
+    state_file = "/app/ZOE_CURRENT_STATE.md"
     
     entry = f"""
 ## Autonomous Creation - {datetime.now().isoformat()}
@@ -310,7 +310,7 @@ Output ONLY the complete code, no explanations."""
         if request.commit_to_git and results["tests_passed"]:
             committed = commit_to_github(
                 f"Created {file_name}",
-                [file_path, "/app/CLAUDE_CURRENT_STATE.md"]
+                [file_path, "/app/ZOE_CURRENT_STATE.md"]
             )
             results["committed"] = committed
         
@@ -366,7 +366,7 @@ async def get_creation_rules():
         "rules": [
             "Always create backups before changes",
             "Test everything immediately after creation",
-            "Document all changes in CLAUDE_CURRENT_STATE.md",
+            "Document all changes in ZOE_CURRENT_STATE.md",
             "Organize scripts in proper folders",
             "Generate complete, executable code",
             "Include comprehensive error handling",
@@ -508,7 +508,7 @@ echo "This AI will:"
 echo "  ✅ Follow ALL your established rules"
 echo "  ✅ Create backups before changes"
 echo "  ✅ Test everything immediately"
-echo "  ✅ Document in CLAUDE_CURRENT_STATE.md"
+echo "  ✅ Document in ZOE_CURRENT_STATE.md"
 echo "  ✅ Organize scripts properly"
 echo "  ✅ Commit to GitHub after success"
 echo "  ✅ Rollback if tests fail"

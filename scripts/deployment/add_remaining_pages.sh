@@ -1099,7 +1099,7 @@ fi
 
 # Update state file
 echo -e "\n📝 Updating state file..."
-cat >> CLAUDE_CURRENT_STATE.md << EOF
+cat >> ZOE_CURRENT_STATE.md << EOF
 
 ## $(date '+%Y-%m-%d %H:%M:%S') - Remaining Pages Added
 

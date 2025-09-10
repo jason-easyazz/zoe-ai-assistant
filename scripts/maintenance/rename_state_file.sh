@@ -4,7 +4,7 @@
 echo "🔄 Renaming CLAUDE_CURRENT_STATE to ZOE_CURRENT_STATE..."
 
 # 1. Rename the file
-mv CLAUDE_CURRENT_STATE.md ZOE_CURRENT_STATE.md
+mv ZOE_CURRENT_STATE.md ZOE_CURRENT_STATE.md
 
 # 2. Update .cursorrules
 sed -i 's/CLAUDE_CURRENT_STATE/ZOE_CURRENT_STATE/g' .cursorrules
@@ -13,6 +13,6 @@ sed -i 's/CLAUDE_CURRENT_STATE/ZOE_CURRENT_STATE/g' .cursorrules
 find . -name "*.sh" -type f -exec sed -i 's/CLAUDE_CURRENT_STATE/ZOE_CURRENT_STATE/g' {} \;
 
 # 4. Create a compatibility symlink just in case
-ln -s ZOE_CURRENT_STATE.md CLAUDE_CURRENT_STATE.md
+ln -s ZOE_CURRENT_STATE.md ZOE_CURRENT_STATE.md
 
 echo "✅ Renamed! Both names will work via symlink"

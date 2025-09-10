@@ -336,7 +336,7 @@ fi
 
 # Step 4: Update state file
 echo -e "\n📝 Updating state file..."
-cat >> CLAUDE_CURRENT_STATE.md << EOF
+cat >> ZOE_CURRENT_STATE.md << EOF
 
 ## Developer Auto-Execute Fixed - $(date)
 - Real command execution enabled

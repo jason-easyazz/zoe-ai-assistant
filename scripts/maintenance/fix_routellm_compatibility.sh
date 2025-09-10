@@ -233,7 +233,7 @@ docker logs zoe-core --tail 5 2>&1 | grep -v "Traceback" || true
 
 # Update state
 echo -e "\n📝 Updating state file..."
-cat >> CLAUDE_CURRENT_STATE.md << EOF
+cat >> ZOE_CURRENT_STATE.md << EOF
 
 ## Fix Applied - $(date)
 - Import compatibility fixed

@@ -5,7 +5,7 @@ Dynamic Context-Aware Task Management System
 Tasks store intent/requirements and re-analyze at execution time
 """
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from typing import List, Dict, Optional, Any
 from datetime import datetime
@@ -17,12 +17,39 @@ import subprocess
 import os
 from pathlib import Path
 
+DB_PATH = "/app/data/developer_tasks.db"
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/developer/tasks", tags=["developer-tasks"])
 
 # In-memory task cache
 tasks_cache = {}
+
+# Simple WebSocket connection manager for task updates
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        to_remove = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                to_remove.append(connection)
+        for conn in to_remove:
+            self.disconnect(conn)
+
+manager = ConnectionManager()
 
 class TaskRequirements(BaseModel):
     """What the task needs to achieve (not HOW)"""
@@ -183,7 +210,11 @@ async def get_task_system_info():
             "list": "GET /api/developer/tasks/list",
             "analyze": "POST /api/developer/tasks/{task_id}/analyze",
             "execute": "POST /api/developer/tasks/{task_id}/execute",
-            "history": "GET /api/developer/tasks/{task_id}/history"
+            "complete": "POST /api/developer/tasks/{task_id}/complete",
+            "next": "GET /api/developer/tasks/next",
+            "claim": "POST /api/developer/tasks/{task_id}/claim",
+            "history": "GET /api/developer/tasks/{task_id}/history",
+            "ws": "WS /api/developer/tasks/ws/tasks"
         }
     }
 
@@ -365,6 +396,39 @@ async def execute_dynamic_task(task_id: str, background_tasks: BackgroundTasks):
         "conflicts_handled": len(analysis.get("conflicts", []))
     }
 
+@router.post("/{task_id}/complete")
+async def complete_task(task_id: str):
+    """Mark a task as completed and set completed_at timestamp"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM dynamic_tasks WHERE id = ?", (task_id,))
+    task = cursor.fetchone()
+    if not task:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    cursor.execute(
+        """
+        UPDATE dynamic_tasks
+        SET status = 'completed', completed_at = ?, last_executed_at = ?
+        WHERE id = ?
+        """,
+        (datetime.now().isoformat(), datetime.now().isoformat(), task_id),
+    )
+    conn.commit()
+    cursor.execute("SELECT * FROM dynamic_tasks WHERE id = ?", (task_id,))
+    updated = dict(cursor.fetchone())
+    conn.close()
+
+    # Notify websocket listeners
+    try:
+        await manager.broadcast({"event": "task_completed", "task": updated})
+    except Exception:
+        pass
+
+    return {"message": f"Task {task_id} marked completed", "task": updated}
+
 async def execute_task_async(task_id: str, execution_id: int, plan: dict):
     """Background task execution with adaptation"""
     from .task_executor import TaskExecutor
@@ -511,3 +575,73 @@ async def get_task_execution_history(task_id: str):
 async def legacy_system_info():
     """Legacy endpoint for compatibility"""
     return await get_task_system_info()
+@router.get("/next")
+async def get_next_task(assignee: Optional[str] = None):
+    """Get next unclaimed high-priority task"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    query = """
+        SELECT * FROM dynamic_tasks 
+        WHERE status = 'pending'
+        ORDER BY 
+            CASE priority 
+                WHEN 'high' THEN 1 
+                WHEN 'medium' THEN 2 
+                WHEN 'low' THEN 3 
+                ELSE 4 
+            END,
+            created_at ASC
+        LIMIT 1
+    """
+    
+    cursor.execute(query)
+    task = cursor.fetchone()
+    conn.close()
+    
+    if task:
+        # Notify listeners a task was fetched as next (read-only event)
+        try:
+            await manager.broadcast({"event": "task_next", "task": dict(task)})
+        except Exception:
+            pass
+        return dict(task)
+    return {"message": "No pending tasks available"}
+
+@router.post("/{task_id}/claim")
+async def claim_task(task_id: str):
+    """Claim a task for execution"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        UPDATE dynamic_tasks 
+        SET status = 'analyzing',
+            last_executed_at = ?
+        WHERE id = ? AND status = 'pending'
+    """, (datetime.now().isoformat(), task_id))
+    
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Task not found or already claimed")
+    
+    conn.commit()
+    conn.close()
+    
+    return {"message": f"Task {task_id} claimed", "status": "analyzing"}
+
+@router.websocket("/ws/tasks")
+async def tasks_websocket(websocket: WebSocket):
+    """WebSocket for real-time task updates"""
+    await manager.connect(websocket)
+    try:
+        await websocket.send_json({"event": "connected", "message": "Subscribed to task updates"})
+        while True:
+            # Keep the connection alive; optional ping-pong
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception:
+        manager.disconnect(websocket)
+

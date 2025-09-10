@@ -209,10 +209,10 @@ cp services/zoe-core/routers/developer.py services/zoe-core/routers/developer.wo
 # ============================================================================
 # SECTION 3: UPDATE CLAUDE_CURRENT_STATE
 # ============================================================================
-echo -e "\n📝 SECTION 3: Updating CLAUDE_CURRENT_STATE.md"
+echo -e "\n📝 SECTION 3: Updating ZOE_CURRENT_STATE.md"
 echo "=============================================="
 
-cat >> CLAUDE_CURRENT_STATE.md << 'STATE_EOF'
+cat >> ZOE_CURRENT_STATE.md << 'STATE_EOF'
 
 ## Zack Developer System - FULLY OPERATIONAL - $(date)
 
@@ -257,7 +257,7 @@ git add services/zoe-core/routers/developer.py
 git add services/zoe-core/routers/developer.working_*.py
 git add scripts/maintenance/*.sh
 git add ZACK_WORKING_STATE.md
-git add CLAUDE_CURRENT_STATE.md
+git add ZOE_CURRENT_STATE.md
 git add $TEST_RESULTS
 
 # Create detailed commit message
@@ -284,7 +284,7 @@ TEST RESULTS:
 
 DOCUMENTATION:
 - Created ZACK_WORKING_STATE.md
-- Updated CLAUDE_CURRENT_STATE.md
+- Updated ZOE_CURRENT_STATE.md
 - Saved test results
 - Created working backups with timestamps"
 
@@ -312,7 +312,7 @@ echo ""
 echo "📚 Documentation Created:"
 echo "  • ZACK_WORKING_STATE.md - Complete reference"
 echo "  • Test results saved to: $TEST_RESULTS"
-echo "  • CLAUDE_CURRENT_STATE.md updated"
+echo "  • ZOE_CURRENT_STATE.md updated"
 echo ""
 echo "💾 Backups Created:"
 echo "  • developer.working_$(date +%Y%m%d).py - Permanent backup"

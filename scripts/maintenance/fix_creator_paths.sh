@@ -221,7 +221,7 @@ Output complete HTML only.'''
 - File: {file_path}
 - Tests: {results['tests_passed']}
 '''
-                with open('/app/CLAUDE_CURRENT_STATE.md', 'a') as f:
+                with open('/app/ZOE_CURRENT_STATE.md', 'a') as f:
                     f.write(doc_entry)
                 results['documented'] = True
             except:

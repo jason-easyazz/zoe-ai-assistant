@@ -88,6 +88,30 @@
             margin-bottom: 24px;
         }
 
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+            align-items: center;
+        }
+        .tab {
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.6);
+            border: 1px solid rgba(0,0,0,0.08);
+            cursor: pointer;
+            font-size: 13px;
+            color: #345;
+        }
+        .tab.active { background: rgba(123, 97, 255, 0.12); color: #5533cc; border-color: rgba(123,97,255,0.25); }
+
+        /* Compact mode */
+        .compact .task-card { padding: 8px; }
+        .compact .task-title { margin-bottom: 4px; font-size: 14px; }
+        .compact .task-meta { font-size: 11px; }
+        .compact .task-btn { padding: 3px 6px; font-size: 10px; }
+
         .board-title {
             font-size: 24px;
             font-weight: 600;
@@ -125,7 +149,7 @@
         .task-card {
             background: white;
             border-radius: 8px;
-            padding: 12px;
+            padding: 10px;
             margin-bottom: 12px;
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
             cursor: pointer;
@@ -139,13 +163,14 @@
 
         .task-title {
             font-weight: 500;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
+            font-size: 14px;
         }
 
         .task-meta {
             display: flex;
             justify-content: space-between;
-            font-size: 12px;
+            font-size: 11px;
             color: #666;
         }
 
@@ -160,24 +185,48 @@
         .priority-medium { background: #def; color: #06a; }
         .priority-low { background: #dfd; color: #0a0; }
 
-        .task-actions {
-            display: flex;
-            gap: 8px;
-            margin-top: 8px;
+        .task-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.12);
         }
 
-        .task-btn {
-            padding: 4px 8px;
-            background: #f0f0f0;
-            border: none;
-            border-radius: 4px;
-            font-size: 11px;
+        /* Context menu */
+        .context-menu {
+            position: fixed;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            padding: 8px 0;
+            z-index: 1001;
+            min-width: 160px;
+            display: none;
+        }
+
+        .context-menu-item {
+            padding: 8px 16px;
             cursor: pointer;
+            font-size: 13px;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
 
-        .task-btn:hover {
-            background: #e0e0e0;
+        .context-menu-item:hover {
+            background: #f5f5f5;
         }
+
+        .context-menu-item.danger {
+            color: #d32f2f;
+        }
+
+        /* Responsive grid for task list */
+        .task-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 12px;
+        }
+        .task-grid .task-card { margin-bottom: 0; }
 
         /* Modals */
         .modal-overlay {
@@ -307,22 +356,25 @@
             <button class="new-task-btn" onclick="createNewTask()">+ New Task</button>
         </div>
 
-        <div class="task-columns">
-            <div class="task-column">
-                <div class="column-header">📋 Pending</div>
-                <div id="pendingTasks"></div>
-            </div>
-            
-            <div class="task-column">
-                <div class="column-header">🔄 In Progress</div>
-                <div id="inProgressTasks"></div>
-            </div>
-            
-            <div class="task-column">
-                <div class="column-header">✅ Completed</div>
-                <div id="completedTasks"></div>
-            </div>
+        <div class="tabs">
+            <button id="tab-all" class="tab" onclick="setTab('all')">All (<span id="count-all">0</span>)</button>
+            <button id="tab-pending" class="tab" onclick="setTab('pending')">Pending (<span id="count-pending">0</span>)</button>
+            <button id="tab-in_progress" class="tab" onclick="setTab('in_progress')">In Progress (<span id="count-in_progress">0</span>)</button>
+            <button id="tab-completed" class="tab" onclick="setTab('completed')">Completed (<span id="count-completed">0</span>)</button>
+            <div style="flex:1"></div>
+            <button id="compactToggle" class="tab" onclick="toggleCompact()">Compact</button>
         </div>
+        <div class="task-column" style="padding: 0; background: transparent;">
+            <div id="taskList" class="task-grid"></div>
+        </div>
+    </div>
+
+    <!-- Context Menu -->
+    <div id="contextMenu" class="context-menu">
+        <div class="context-menu-item" onclick="contextAnalyze()">🔍 Analyze</div>
+        <div class="context-menu-item" onclick="contextExecute()">🚀 Execute</div>
+        <div class="context-menu-item" onclick="contextHistory()">📜 History</div>
+        <div class="context-menu-item danger" onclick="contextDelete()">🗑️ Delete</div>
     </div>
 
     <!-- Create Task Modal -->
@@ -496,23 +548,48 @@
         updateTime();
         setInterval(updateTime, 1000);
 
-        // Load tasks
+        // Load tasks with endpoint fallbacks
         async function loadTasks() {
-            try {
-                const response = await apiFetch(`/api/developer/tasks/list`);
-                if (response.ok) {
-                    const data = await response.json();
-                    const tasks = Array.isArray(data) ? data : (data.tasks || []);
+            const candidates = [
+                { url: `/api/developer/tasks/list`, method: 'GET' },
+                { url: `/api/developer/tasks`, method: 'GET' }
+            ];
+            for (const c of candidates) {
+                try {
+                    const res = await apiFetch(c.url, { method: c.method });
+                    if (!res.ok) continue;
+                    const data = await res.json().catch(()=>null);
+                    if (data == null) continue;
+                    const tasks = Array.isArray(data)
+                        ? data
+                        : (data.tasks || data.items || data.data || []);
                     displayTasks(tasks);
-                } else {
-                    displaySampleTasks();
-                }
-            } catch (e) {
-                displaySampleTasks();
+                    return;
+                } catch(_) { /* try next */ }
             }
+            displaySampleTasks();
         }
 
-        // Display tasks in columns
+        // Tab/filter state
+        let currentTab = localStorage.getItem('devTasksTab') || 'all';
+        function setTab(tab) {
+            currentTab = tab;
+            localStorage.setItem('devTasksTab', tab);
+            updateTabsActive();
+            // Re-render using last loaded list
+            renderList(window.__lastTasks || []);
+        }
+        function toggleCompact() {
+            document.querySelector('.content').classList.toggle('compact');
+        }
+        function updateTabsActive() {
+            ['all','pending','in_progress','completed'].forEach(t => {
+                const el = document.getElementById(`tab-${t}`);
+                if (el) el.classList.toggle('active', currentTab === t);
+            });
+        }
+
+        // Display tasks in single list with tabs
         function displayTasks(tasks) {
             const normalize = (t) => ({
                 id: t.id || t.task_id,
@@ -529,13 +606,27 @@
                 last_executed_at: t.last_executed_at || null
             });
             const normalized = tasks.map(normalize).filter(t => !isLocallyDeleted(t.id));
-            const pending = normalized.filter(t => t.status === 'pending');
-            const inProgress = normalized.filter(t => t.status === 'in_progress');
-            const completed = normalized.filter(t => t.status === 'completed');
+            window.__lastTasks = normalized;
+            // counts
+            const counts = {
+                all: normalized.length,
+                pending: normalized.filter(t => t.status === 'pending').length,
+                in_progress: normalized.filter(t => t.status === 'in_progress').length,
+                completed: normalized.filter(t => t.status === 'completed').length
+            };
+            Object.entries(counts).forEach(([k,v]) => {
+                const el = document.getElementById(`count-${k}`);
+                if (el) el.textContent = v;
+            });
+            updateTabsActive();
+            renderList(normalized);
+        }
 
-            document.getElementById('pendingTasks').innerHTML = pending.map(t => createTaskCard(t)).join('');
-            document.getElementById('inProgressTasks').innerHTML = inProgress.map(t => createTaskCard(t)).join('');
-            document.getElementById('completedTasks').innerHTML = completed.map(t => createTaskCard(t)).join('');
+        function renderList(tasks) {
+            let filtered = tasks;
+            if (currentTab !== 'all') filtered = tasks.filter(t => t.status === currentTab);
+            const list = document.getElementById('taskList');
+            if (list) list.innerHTML = filtered.map(t => createTaskCard(t)).join('');
         }
 
         // Create task card HTML
@@ -545,7 +636,7 @@
             const execCount = typeof task.execution_count === 'number' ? task.execution_count : 0;
             const subtitle = task.objective ? `<div style="font-size:12px; color:#555; margin-bottom:6px;">${task.objective}</div>` : '';
             return `
-                <div class="task-card" id="task-${task.id}">
+                <div class="task-card" id="task-${task.id}" onclick="showContextMenu(event, '${task.id}')">
                     <div class="task-title">${task.title}</div>
                     ${subtitle}
                     <div class="task-meta">
@@ -556,12 +647,6 @@
                         <span>Requirements: ${reqCount}</span>
                         <span>Constraints: ${conCount}</span>
                         <span>Runs: ${execCount}</span>
-                    </div>
-                    <div class="task-actions">
-                        <button class="task-btn" onclick="analyzeTask('${task.id}')">🔍 Analyze</button>
-                        <button class="task-btn" onclick="executeTask('${task.id}')">🚀 Execute</button>
-                        <button class="task-btn" onclick="viewHistory('${task.id}')">📜 History</button>
-                        <button class="task-btn" onclick="deleteTask('${task.id}')">🗑️ Delete</button>
                     </div>
                 </div>
             `;
@@ -647,12 +732,22 @@
             };
 
             try {
-                const res = await apiFetch(`/api/developer/tasks/create`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                if (!res.ok) throw new Error('Failed to create task');
+                const createCandidates = [
+                    { url: `/api/developer/tasks/create`, method: 'POST' },
+                    { url: `/api/developer/tasks`, method: 'POST' }
+                ];
+                let created = false;
+                for (const c of createCandidates) {
+                    try {
+                        const res = await apiFetch(c.url, {
+                            method: c.method,
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        if (res.ok || res.status === 201) { created = true; break; }
+                    } catch(_) { /* try next */ }
+                }
+                if (!created) throw new Error('Failed to create task');
                 closeCreateModal();
                 loadTasks();
             } catch(e) {
@@ -739,7 +834,9 @@
                 const start = Date.now();
                 const poll = async () => {
                     try {
-                        const h = await apiFetch(`/api/developer/tasks/${taskId}/history`);
+                        // Try both history endpoints variants
+                        let h = await apiFetch(`/api/developer/tasks/${taskId}/history`);
+                        if (!h.ok) h = await apiFetch(`/api/developer/tasks/history/${taskId}`);
                         if (h.ok) {
                             const hist = await h.json();
                             const entries = Array.isArray(hist) ? hist : (hist.history || []);
@@ -779,7 +876,8 @@
             content.innerHTML = '<div class="status-badge status-analyzing">Loading history...</div>';
             modal.style.display = 'flex';
             try {
-                const res = await apiFetch(`/api/developer/tasks/${taskId}/history`);
+                let res = await apiFetch(`/api/developer/tasks/${taskId}/history`);
+                if (!res.ok) res = await apiFetch(`/api/developer/tasks/history/${taskId}`);
                 if (!res.ok) throw new Error('hist');
                 const data = await res.json();
                 const entries = Array.isArray(data) ? data : (data.history || []);
@@ -840,6 +938,48 @@
                 if (btn) { btn.disabled = false; btn.textContent = '🗑️ Delete'; }
             }
         }
+
+        // Context menu
+        let currentContextTaskId = null;
+        
+        function showContextMenu(event, taskId) {
+            event.preventDefault();
+            event.stopPropagation();
+            currentContextTaskId = taskId;
+            const menu = document.getElementById('contextMenu');
+            menu.style.display = 'block';
+            menu.style.left = event.pageX + 'px';
+            menu.style.top = event.pageY + 'px';
+        }
+        
+        function hideContextMenu() {
+            document.getElementById('contextMenu').style.display = 'none';
+            currentContextTaskId = null;
+        }
+        
+        function contextAnalyze() {
+            if (currentContextTaskId) analyzeTask(currentContextTaskId);
+            hideContextMenu();
+        }
+        
+        function contextExecute() {
+            if (currentContextTaskId) executeTask(currentContextTaskId);
+            hideContextMenu();
+        }
+        
+        function contextHistory() {
+            if (currentContextTaskId) viewHistory(currentContextTaskId);
+            hideContextMenu();
+        }
+        
+        function contextDelete() {
+            if (currentContextTaskId) deleteTask(currentContextTaskId);
+            hideContextMenu();
+        }
+        
+        // Close context menu on click outside
+        document.addEventListener('click', hideContextMenu);
+        document.addEventListener('contextmenu', hideContextMenu);
 
         // Initialize
         loadTasks();

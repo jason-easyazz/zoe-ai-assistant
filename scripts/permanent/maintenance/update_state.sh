@@ -5,7 +5,7 @@ cd /home/pi/zoe
 echo "📊 Updating state for Claude..."
 
 # Update state file
-cat > CLAUDE_CURRENT_STATE.md << 'STATE'
+cat > ZOE_CURRENT_STATE.md << 'STATE'
 # Zoe AI Assistant - Current State
 Updated: $(date)
 
@@ -41,7 +41,7 @@ Total events: $(sqlite3 data/zoe.db "SELECT COUNT(*) FROM events;" 2>/dev/null |
 STATE
 
 # Push to GitHub
-git add CLAUDE_CURRENT_STATE.md
+git add ZOE_CURRENT_STATE.md
 git commit -m "📊 Auto state update - $(date +%Y%m%d_%H%M%S)" || true
 git push || true
 
