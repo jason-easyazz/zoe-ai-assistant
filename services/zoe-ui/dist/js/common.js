@@ -6,14 +6,14 @@ async function checkAPI() {
         const response = await fetch(`${API_BASE}/health`);
         const indicator = document.getElementById('apiStatus');
         if (response.ok) {
-            indicator.textContent = '✅';
+            indicator.textContent = 'Online';
             indicator.className = 'api-indicator online';
         } else {
-            indicator.textContent = '⚠️';
+            indicator.textContent = 'Warning';
             indicator.className = 'api-indicator warning';
         }
     } catch (error) {
-        document.getElementById('apiStatus').textContent = '❌';
+        document.getElementById('apiStatus').textContent = 'Offline';
         document.getElementById('apiStatus').className = 'api-indicator offline';
     }
 }

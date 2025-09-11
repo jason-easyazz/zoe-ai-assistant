@@ -57,10 +57,14 @@
         }
         .settings-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
         
-        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; }
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
         .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
         .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
         .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.warning::before { background: #ea580c; }
 
         /* Main Layout */
         .main-container { padding: 70px 20px 20px; }
@@ -296,14 +300,14 @@
             <div class="nav-menu">
                 <a href="index.html" class="nav-item">Chat</a>
                 <a href="dashboard.html" class="nav-item">Dashboard</a>
-                <a href="calendar.html" class="nav-item active">Calendar</a>
                 <a href="lists.html" class="nav-item">Lists</a>
+                <a href="calendar.html" class="nav-item active">Calendar</a>
                 <a href="journal.html" class="nav-item">Journal</a>
                 <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
             </div>
         </div>
         <div class="nav-right">
-            <div class="api-indicator connecting" id="apiStatus">🔄 Connecting</div>
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
             <button class="settings-btn" onclick="window.location.href='settings.html'" title="Settings">⚙️</button>
         </div>
     </div>
@@ -646,8 +650,14 @@
                 if (selectedDate) {
                     updateDayView(selectedDate);
                 }
+                // Update API status to online
+                document.getElementById('apiStatus').textContent = 'Online';
+                document.getElementById('apiStatus').className = 'api-indicator online';
             } catch (error) {
                 console.error('Failed to load events:', error);
+                // Update API status to offline
+                document.getElementById('apiStatus').textContent = 'Offline';
+                document.getElementById('apiStatus').className = 'api-indicator offline';
                 // Keep demo data if API fails
                 allEvents = [
                     {
@@ -724,7 +734,26 @@
             selectedDate = formatDate(new Date());
             loadEvents();
             selectDate(selectedDate);
+            updateAPIStatus();
         });
+
+        // Update API status
+        async function updateAPIStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const indicator = document.getElementById('apiStatus');
+                if (response.ok) {
+                    indicator.textContent = 'Online';
+                    indicator.className = 'api-indicator online';
+                } else {
+                    indicator.textContent = 'Warning';
+                    indicator.className = 'api-indicator warning';
+                }
+            } catch (error) {
+                document.getElementById('apiStatus').textContent = 'Offline';
+                document.getElementById('apiStatus').className = 'api-indicator offline';
+            }
+        }
     </script>
 </body>
 </html>

@@ -8,6 +8,7 @@ import sys
 from typing import Optional, Dict, List
 import re
 from datetime import datetime
+from pathlib import Path
 
 # Add AI client to path
 sys.path.append('/app')
@@ -37,6 +38,103 @@ try:
 except:
     HAS_BACKUP = False
     print("Warning: Backup system not available")
+
+# Import API documentation generator
+try:
+    from api_doc_generator import api_doc_generator
+    HAS_API_DOCS = True
+except:
+    HAS_API_DOCS = False
+    print("Warning: API documentation generator not available")
+
+# Import self-test suite
+try:
+    from self_test_suite import self_test_suite
+    HAS_SELF_TEST = True
+except:
+    HAS_SELF_TEST = False
+    print("Warning: Self-test suite not available")
+
+# Import learning system
+try:
+    from learning_system import learning_system
+    HAS_LEARNING = True
+except:
+    HAS_LEARNING = False
+    print("Warning: Learning system not available")
+
+# Import Aider integration
+try:
+    from aider_integration import aider_integration
+    from aider_task_integration import aider_task_integration
+    HAS_AIDER = True
+except:
+    HAS_AIDER = False
+    print("Warning: Aider integration not available")
+
+# Import resource monitor
+try:
+    from resource_monitor import resource_monitor
+    HAS_RESOURCE_MONITOR = True
+except:
+    HAS_RESOURCE_MONITOR = False
+    print("Warning: Resource monitor not available")
+
+# Import wake word detector
+try:
+    from wake_word_detector import wake_word_manager
+    HAS_WAKE_WORD = True
+except:
+    HAS_WAKE_WORD = False
+    print("Warning: Wake word detector not available")
+
+# Import N8N integration
+try:
+    from n8n_integration import n8n_integration
+    HAS_N8N = True
+except:
+    HAS_N8N = False
+    print("Warning: N8N integration not available")
+
+# Import Feature Request Pipeline
+try:
+    from feature_request_pipeline import feature_request_pipeline
+    HAS_FEATURE_PIPELINE = True
+except:
+    HAS_FEATURE_PIPELINE = False
+    print("Warning: Feature Request Pipeline not available")
+
+# Import Guardrails Validation
+try:
+    from guardrails_validation import guardrails_validator
+    HAS_GUARDRAILS = True
+except:
+    HAS_GUARDRAILS = False
+    print("Warning: Guardrails Validation not available")
+
+# Import Development Metrics
+try:
+    from development_metrics import development_metrics
+    HAS_DEVELOPMENT_METRICS = True
+except:
+    HAS_DEVELOPMENT_METRICS = False
+    print("Warning: Development Metrics not available")
+
+# Import Task Scheduler
+try:
+    from task_scheduler import task_scheduler
+    HAS_TASK_SCHEDULER = True
+except:
+    HAS_TASK_SCHEDULER = False
+    print("Warning: Task Scheduler not available")
+
+# Import User Context
+try:
+    from user_context import user_context
+    HAS_USER_CONTEXT = True
+except:
+    HAS_USER_CONTEXT = False
+    print("Warning: User Context not available")
 
 class ChatMessage(BaseModel):
     message: str
@@ -873,3 +971,1155 @@ async def cleanup_backups(keep_count: int = 10):
         return result
     except Exception as e:
         return {"error": f"Cleanup failed: {str(e)}"}
+
+@router.post("/docs/generate")
+async def generate_api_docs():
+    """Generate API documentation"""
+    
+    if not HAS_API_DOCS:
+        return {"error": "API documentation generator not available"}
+    
+    try:
+        result = api_doc_generator.generate_documentation()
+        return result
+    except Exception as e:
+        return {"error": f"Documentation generation failed: {str(e)}"}
+
+@router.get("/docs/status")
+async def get_docs_status():
+    """Get documentation generation status"""
+    
+    if not HAS_API_DOCS:
+        return {"error": "API documentation generator not available"}
+    
+    try:
+        status = api_doc_generator.get_documentation_status()
+        return status
+    except Exception as e:
+        return {"error": f"Failed to get documentation status: {str(e)}"}
+
+@router.get("/docs/openapi")
+async def get_openapi_spec():
+    """Get OpenAPI specification"""
+    
+    if not HAS_API_DOCS:
+        return {"error": "API documentation generator not available"}
+    
+    try:
+        openapi_path = Path("/app/docs/openapi.json")
+        if not openapi_path.exists():
+            return {"error": "OpenAPI spec not found. Generate documentation first."}
+        
+        with open(openapi_path, 'r', encoding='utf-8') as f:
+            spec = json.load(f)
+        
+        return spec
+    except Exception as e:
+        return {"error": f"Failed to load OpenAPI spec: {str(e)}"}
+
+@router.get("/docs/markdown")
+async def get_markdown_docs():
+    """Get markdown documentation"""
+    
+    if not HAS_API_DOCS:
+        return {"error": "API documentation generator not available"}
+    
+    try:
+        markdown_path = Path("/app/docs/api_docs.md")
+        if not markdown_path.exists():
+            return {"error": "Markdown docs not found. Generate documentation first."}
+        
+        with open(markdown_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        return {"content": content}
+    except Exception as e:
+        return {"error": f"Failed to load markdown docs: {str(e)}"}
+
+@router.post("/self-test")
+async def run_self_test():
+    """Run comprehensive self-test suite with auto-rollback"""
+    
+    if not HAS_SELF_TEST:
+        return {"error": "Self-test suite not available"}
+    
+    try:
+        result = await self_test_suite.run_full_test_suite()
+        return result
+    except Exception as e:
+        return {"error": f"Self-test execution failed: {str(e)}"}
+
+@router.get("/learning/insights")
+async def get_learning_insights():
+    """Get learning system insights"""
+    
+    if not HAS_LEARNING:
+        return {"error": "Learning system not available"}
+    
+    try:
+        insights = learning_system.get_learning_insights()
+        return insights
+    except Exception as e:
+        return {"error": f"Failed to get learning insights: {str(e)}"}
+
+@router.get("/learning/recommendations")
+async def get_learning_recommendations():
+    """Get system improvement recommendations"""
+    
+    if not HAS_LEARNING:
+        return {"error": "Learning system not available"}
+    
+    try:
+        recommendations = learning_system.get_recommendations()
+        return {"recommendations": recommendations}
+    except Exception as e:
+        return {"error": f"Failed to get recommendations: {str(e)}"}
+
+@router.post("/learning/apply-improvement/{improvement_id}")
+async def apply_improvement(improvement_id: int):
+    """Apply a system improvement"""
+    
+    if not HAS_LEARNING:
+        return {"error": "Learning system not available"}
+    
+    try:
+        success = learning_system.apply_improvement(improvement_id)
+        if success:
+            return {"success": True, "message": "Improvement applied successfully"}
+        else:
+            return {"success": False, "message": "Improvement not found or failed to apply"}
+    except Exception as e:
+        return {"error": f"Failed to apply improvement: {str(e)}"}
+
+class TaskExecutionRecord(BaseModel):
+    task_id: str
+    task_title: str
+    success: bool
+    execution_duration: Optional[float] = None
+    error_message: Optional[str] = None
+
+@router.post("/learning/record-execution")
+async def record_task_execution(record: TaskExecutionRecord):
+    """Record task execution for learning"""
+    
+    if not HAS_LEARNING:
+        return {"error": "Learning system not available"}
+    
+    try:
+        success = learning_system.record_task_execution(
+            record.task_id, record.task_title, record.success, 
+            record.execution_duration, record.error_message
+        )
+        if success:
+            return {"success": True, "message": "Execution recorded successfully"}
+        else:
+            return {"success": False, "message": "Failed to record execution"}
+    except Exception as e:
+        return {"error": f"Failed to record execution: {str(e)}"}
+
+class AiderCodeRequest(BaseModel):
+    request: str
+    context_files: Optional[List[str]] = None
+    model: str = "ollama/llama3.2"
+
+class AiderImprovementRequest(BaseModel):
+    file_path: str
+    issue_description: str
+
+class AiderRefactorRequest(BaseModel):
+    file_path: str
+    refactor_description: str
+
+class AiderTestRequest(BaseModel):
+    file_path: str
+    test_framework: str = "pytest"
+
+@router.post("/aider/generate-code")
+async def generate_code_with_aider(request: AiderCodeRequest):
+    """Generate code using Aider AI pair programming"""
+    
+    if not HAS_AIDER:
+        return {"error": "Aider integration not available"}
+    
+    try:
+        result = aider_integration.generate_code(
+            request=request.request,
+            context_files=request.context_files,
+            model=request.model
+        )
+        return result
+    except Exception as e:
+        return {"error": f"Code generation failed: {str(e)}"}
+
+@router.post("/aider/suggest-improvements")
+async def suggest_code_improvements(request: AiderImprovementRequest):
+    """Suggest code improvements using Aider"""
+    
+    if not HAS_AIDER:
+        return {"error": "Aider integration not available"}
+    
+    try:
+        result = aider_integration.suggest_improvements(
+            file_path=request.file_path,
+            issue_description=request.issue_description
+        )
+        return result
+    except Exception as e:
+        return {"error": f"Improvement suggestion failed: {str(e)}"}
+
+@router.post("/aider/refactor-code")
+async def refactor_code_with_aider(request: AiderRefactorRequest):
+    """Refactor code using Aider"""
+    
+    if not HAS_AIDER:
+        return {"error": "Aider integration not available"}
+    
+    try:
+        result = aider_integration.refactor_code(
+            file_path=request.file_path,
+            refactor_description=request.refactor_description
+        )
+        return result
+    except Exception as e:
+        return {"error": f"Code refactoring failed: {str(e)}"}
+
+@router.post("/aider/generate-tests")
+async def generate_tests_with_aider(request: AiderTestRequest):
+    """Generate tests using Aider"""
+    
+    if not HAS_AIDER:
+        return {"error": "Aider integration not available"}
+    
+    try:
+        result = aider_integration.generate_tests(
+            file_path=request.file_path,
+            test_framework=request.test_framework
+        )
+        return result
+    except Exception as e:
+        return {"error": f"Test generation failed: {str(e)}"}
+
+@router.get("/aider/models")
+async def get_aider_models():
+    """Get available models for Aider"""
+    
+    if not HAS_AIDER:
+        return {"error": "Aider integration not available"}
+    
+    try:
+        models = aider_integration.get_available_models()
+        return {"models": models}
+    except Exception as e:
+        return {"error": f"Failed to get models: {str(e)}"}
+
+@router.get("/aider/health")
+async def get_aider_health():
+    """Check Aider integration health"""
+    
+    if not HAS_AIDER:
+        return {"error": "Aider integration not available"}
+    
+    try:
+        health = aider_integration.check_health()
+        return health
+    except Exception as e:
+        return {"error": f"Health check failed: {str(e)}"}
+
+@router.get("/aider/tasks/context/{task_id}")
+async def get_task_context_for_aider(task_id: str):
+    """Get task context for Aider to work with"""
+    
+    if not HAS_AIDER:
+        return {"error": "Aider integration not available"}
+    
+    try:
+        context = aider_task_integration.get_task_context(task_id)
+        return context
+    except Exception as e:
+        return {"error": f"Failed to get task context: {str(e)}"}
+
+@router.get("/aider/tasks/next")
+async def get_next_task_for_aider():
+    """Get the next high-priority task for Aider to work on"""
+    
+    if not HAS_AIDER:
+        return {"error": "Aider integration not available"}
+    
+    try:
+        task = aider_task_integration.get_next_task_for_aider()
+        if task:
+            return task
+        else:
+            return {"message": "No pending tasks available"}
+    except Exception as e:
+        return {"error": f"Failed to get next task: {str(e)}"}
+
+@router.post("/aider/tasks/execute/{task_id}")
+async def execute_task_with_aider(task_id: str, model: str = "ollama/llama3.2"):
+    """Execute a specific task using Aider"""
+    
+    if not HAS_AIDER:
+        return {"error": "Aider integration not available"}
+    
+    try:
+        result = aider_task_integration.execute_task_with_aider(task_id, model)
+        return result
+    except Exception as e:
+        return {"error": f"Failed to execute task: {str(e)}"}
+
+@router.post("/aider/tasks/update-status/{task_id}")
+async def update_task_status_after_aider(task_id: str, status: str, notes: str = None):
+    """Update task status after Aider execution"""
+    
+    if not HAS_AIDER:
+        return {"error": "Aider integration not available"}
+    
+    try:
+        success = aider_task_integration.update_task_status(task_id, status, notes)
+        if success:
+            return {"success": True, "message": f"Task {task_id} status updated to {status}"}
+        else:
+            return {"success": False, "message": "Failed to update task status"}
+    except Exception as e:
+        return {"error": f"Failed to update task status: {str(e)}"}
+
+@router.get("/aider/tasks/work-summary")
+async def get_aider_work_summary():
+    """Get summary of Aider's work on tasks"""
+    
+    if not HAS_AIDER:
+        return {"error": "Aider integration not available"}
+    
+    try:
+        summary = aider_task_integration.get_aider_work_summary()
+        return summary
+    except Exception as e:
+        return {"error": f"Failed to get work summary: {str(e)}"}
+
+@router.get("/resources/status")
+async def get_resource_status():
+    """Get current resource status"""
+    
+    if not HAS_RESOURCE_MONITOR:
+        return {"error": "Resource monitor not available"}
+    
+    try:
+        metrics = resource_monitor.get_current_metrics()
+        if not metrics:
+            return {"error": "No metrics available"}
+        
+        return {
+            "timestamp": metrics.timestamp.isoformat(),
+            "cpu_percent": metrics.cpu_percent,
+            "memory_percent": metrics.memory_percent,
+            "memory_used_mb": round(metrics.memory_used_mb, 1),
+            "memory_available_mb": round(metrics.memory_available_mb, 1),
+            "disk_percent": metrics.disk_percent,
+            "disk_used_gb": round(metrics.disk_used_gb, 1),
+            "disk_free_gb": round(metrics.disk_free_gb, 1),
+            "temperature": metrics.temperature,
+            "load_average": metrics.load_average,
+            "resource_level": resource_monitor.current_level.value
+        }
+    except Exception as e:
+        return {"error": f"Failed to get resource status: {str(e)}"}
+
+@router.get("/resources/summary")
+async def get_resource_summary(hours: int = 1):
+    """Get resource usage summary"""
+    
+    if not HAS_RESOURCE_MONITOR:
+        return {"error": "Resource monitor not available"}
+    
+    try:
+        summary = resource_monitor.get_metrics_summary(hours)
+        return summary
+    except Exception as e:
+        return {"error": f"Failed to get resource summary: {str(e)}"}
+
+@router.get("/resources/system-info")
+async def get_system_info():
+    """Get system information"""
+    
+    if not HAS_RESOURCE_MONITOR:
+        return {"error": "Resource monitor not available"}
+    
+    try:
+        info = resource_monitor.get_system_info()
+        return info
+    except Exception as e:
+        return {"error": f"Failed to get system info: {str(e)}"}
+
+@router.post("/resources/start-monitoring")
+async def start_resource_monitoring(interval: float = 5.0):
+    """Start resource monitoring"""
+    
+    if not HAS_RESOURCE_MONITOR:
+        return {"error": "Resource monitor not available"}
+    
+    try:
+        resource_monitor.start_monitoring(interval)
+        return {"success": True, "message": f"Resource monitoring started with {interval}s interval"}
+    except Exception as e:
+        return {"error": f"Failed to start monitoring: {str(e)}"}
+
+@router.post("/resources/stop-monitoring")
+async def stop_resource_monitoring():
+    """Stop resource monitoring"""
+    
+    if not HAS_RESOURCE_MONITOR:
+        return {"error": "Resource monitor not available"}
+    
+    try:
+        resource_monitor.stop_monitoring()
+        return {"success": True, "message": "Resource monitoring stopped"}
+    except Exception as e:
+        return {"error": f"Failed to stop monitoring: {str(e)}"}
+
+@router.post("/resources/check-throttle")
+async def check_task_throttle(task_id: str, estimated_memory_mb: float = 100):
+    """Check if task should be throttled"""
+    
+    if not HAS_RESOURCE_MONITOR:
+        return {"error": "Resource monitor not available"}
+    
+    try:
+        should_throttle = resource_monitor.should_throttle_task(task_id, estimated_memory_mb)
+        throttle_factor = resource_monitor.get_throttle_factor(task_id)
+        
+        return {
+            "task_id": task_id,
+            "should_throttle": should_throttle,
+            "throttle_factor": throttle_factor,
+            "resource_level": resource_monitor.current_level.value
+        }
+    except Exception as e:
+        return {"error": f"Failed to check throttle: {str(e)}"}
+
+@router.post("/resources/cleanup")
+async def cleanup_old_metrics(days: int = 7):
+    """Clean up old metrics data"""
+    
+    if not HAS_RESOURCE_MONITOR:
+        return {"error": "Resource monitor not available"}
+    
+    try:
+        resource_monitor.cleanup_old_metrics(days)
+        return {"success": True, "message": f"Cleaned up metrics older than {days} days"}
+    except Exception as e:
+        return {"error": f"Failed to cleanup metrics: {str(e)}"}
+
+@router.get("/wake-word/status")
+async def get_wake_word_status():
+    """Get wake word detection status"""
+    
+    if not HAS_WAKE_WORD:
+        return {"error": "Wake word detector not available"}
+    
+    try:
+        status = wake_word_manager.get_status()
+        return status
+    except Exception as e:
+        return {"error": f"Failed to get wake word status: {str(e)}"}
+
+@router.post("/wake-word/start")
+async def start_wake_word_detection():
+    """Start wake word detection"""
+    
+    if not HAS_WAKE_WORD:
+        return {"error": "Wake word detector not available"}
+    
+    try:
+        success = wake_word_manager.start()
+        if success:
+            return {"success": True, "message": "Wake word detection started"}
+        else:
+            return {"success": False, "message": "Failed to start wake word detection"}
+    except Exception as e:
+        return {"error": f"Failed to start wake word detection: {str(e)}"}
+
+@router.post("/wake-word/stop")
+async def stop_wake_word_detection():
+    """Stop wake word detection"""
+    
+    if not HAS_WAKE_WORD:
+        return {"error": "Wake word detector not available"}
+    
+    try:
+        wake_word_manager.stop()
+        return {"success": True, "message": "Wake word detection stopped"}
+    except Exception as e:
+        return {"error": f"Failed to stop wake word detection: {str(e)}"}
+
+@router.post("/wake-word/reset-stats")
+async def reset_wake_word_stats():
+    """Reset wake word detection statistics"""
+    
+    if not HAS_WAKE_WORD:
+        return {"error": "Wake word detector not available"}
+    
+    try:
+        wake_word_manager.detector.reset_statistics()
+        return {"success": True, "message": "Wake word statistics reset"}
+    except Exception as e:
+        return {"error": f"Failed to reset statistics: {str(e)}"}
+
+@router.post("/wake-word/update-config")
+async def update_wake_word_config(config: Dict[str, Any]):
+    """Update wake word detection configuration"""
+    
+    if not HAS_WAKE_WORD:
+        return {"error": "Wake word detector not available"}
+    
+    try:
+        success = wake_word_manager.update_config(config)
+        if success:
+            return {"success": True, "message": "Configuration updated"}
+        else:
+            return {"success": False, "message": "Failed to update configuration"}
+    except Exception as e:
+        return {"error": f"Failed to update configuration: {str(e)}"}
+
+# N8N Integration endpoints
+@router.post("/n8n/trigger/{workflow_id}")
+async def trigger_n8n_workflow(workflow_id: str, data: Dict[str, Any] = None):
+    """Trigger an N8N workflow"""
+    
+    if not HAS_N8N:
+        return {"error": "N8N integration not available"}
+    
+    try:
+        result = n8n_integration.trigger_workflow(workflow_id, data)
+        return result
+    except Exception as e:
+        return {"error": f"Failed to trigger workflow: {str(e)}"}
+
+@router.get("/n8n/workflows")
+async def list_n8n_workflows():
+    """List available N8N workflows"""
+    
+    if not HAS_N8N:
+        return {"error": "N8N integration not available"}
+    
+    try:
+        workflows = n8n_integration.list_workflows()
+        return {"workflows": workflows}
+    except Exception as e:
+        return {"error": f"Failed to list workflows: {str(e)}"}
+
+@router.get("/n8n/workflow/{workflow_id}/status")
+async def get_n8n_workflow_status(workflow_id: str):
+    """Get status of a specific N8N workflow"""
+    
+    if not HAS_N8N:
+        return {"error": "N8N integration not available"}
+    
+    try:
+        status = n8n_integration.get_workflow_status(workflow_id)
+        return status
+    except Exception as e:
+        return {"error": f"Failed to get workflow status: {str(e)}"}
+
+@router.put("/n8n/workflow/{workflow_id}")
+async def update_n8n_workflow(workflow_id: str, workflow_data: Dict[str, Any]):
+    """Update an N8N workflow"""
+    
+    if not HAS_N8N:
+        return {"error": "N8N integration not available"}
+    
+    try:
+        result = n8n_integration.update_workflow(workflow_id, workflow_data)
+        return result
+    except Exception as e:
+        return {"error": f"Failed to update workflow: {str(e)}"}
+
+# Feature Request Pipeline endpoints
+@router.post("/feature-request/create")
+async def create_task_from_request(request: str, user_id: str = "system"):
+    """Convert natural language request to structured task"""
+    
+    if not HAS_FEATURE_PIPELINE:
+        return {"error": "Feature Request Pipeline not available"}
+    
+    try:
+        result = feature_request_pipeline.create_task_from_request(request, user_id)
+        return result
+    except Exception as e:
+        return {"error": f"Failed to create task from request: {str(e)}"}
+
+@router.get("/feature-request/stats")
+async def get_feature_pipeline_stats():
+    """Get statistics about the feature request pipeline"""
+    
+    if not HAS_FEATURE_PIPELINE:
+        return {"error": "Feature Request Pipeline not available"}
+    
+    try:
+        stats = feature_request_pipeline.get_pipeline_stats()
+        return stats
+    except Exception as e:
+        return {"error": f"Failed to get pipeline stats: {str(e)}"}
+
+@router.post("/feature-request/parse")
+async def parse_request(request: str):
+    """Parse natural language request without creating task"""
+    
+    if not HAS_FEATURE_PIPELINE:
+        return {"error": "Feature Request Pipeline not available"}
+    
+    try:
+        parsed = feature_request_pipeline.parse_natural_language_request(request)
+        return parsed
+    except Exception as e:
+        return {"error": f"Failed to parse request: {str(e)}"}
+
+# Guardrails Validation endpoints
+@router.post("/guardrails/validate-content")
+async def validate_content(content: str, content_type: str = "text"):
+    """Validate content for safety and PII"""
+    
+    if not HAS_GUARDRAILS:
+        return {"error": "Guardrails Validation not available"}
+    
+    try:
+        result = guardrails_validator.validate_content(content, content_type)
+        return result
+    except Exception as e:
+        return {"error": f"Failed to validate content: {str(e)}"}
+
+@router.post("/guardrails/validate-code")
+async def validate_code_execution(code: str, context: Dict[str, Any] = None):
+    """Validate code before execution"""
+    
+    if not HAS_GUARDRAILS:
+        return {"error": "Guardrails Validation not available"}
+    
+    try:
+        result = guardrails_validator.validate_code_execution(code, context)
+        return result
+    except Exception as e:
+        return {"error": f"Failed to validate code: {str(e)}"}
+
+@router.post("/guardrails/generate-safe-prompt")
+async def generate_safe_prompt(original_prompt: str):
+    """Generate a safer version of a prompt"""
+    
+    if not HAS_GUARDRAILS:
+        return {"error": "Guardrails Validation not available"}
+    
+    try:
+        # First validate the original prompt
+        validation_result = guardrails_validator.validate_content(original_prompt, "text")
+        
+        # Generate safe prompt
+        safe_prompt = guardrails_validator.generate_safe_prompt(original_prompt, validation_result)
+        
+        return {
+            "original_prompt": original_prompt,
+            "safe_prompt": safe_prompt,
+            "validation_result": validation_result,
+            "was_modified": original_prompt != safe_prompt
+        }
+    except Exception as e:
+        return {"error": f"Failed to generate safe prompt: {str(e)}"}
+
+@router.get("/guardrails/stats")
+async def get_guardrails_stats():
+    """Get guardrails validation statistics"""
+    
+    if not HAS_GUARDRAILS:
+        return {"error": "Guardrails Validation not available"}
+    
+    try:
+        stats = guardrails_validator.get_validation_stats()
+        return stats
+    except Exception as e:
+        return {"error": f"Failed to get stats: {str(e)}"}
+
+@router.post("/guardrails/clear-cache")
+async def clear_guardrails_cache():
+    """Clear guardrails validation cache"""
+    
+    if not HAS_GUARDRAILS:
+        return {"error": "Guardrails Validation not available"}
+    
+    try:
+        success = guardrails_validator.clear_cache()
+        if success:
+            return {"success": True, "message": "Cache cleared successfully"}
+        else:
+            return {"success": False, "message": "Failed to clear cache"}
+    except Exception as e:
+        return {"error": f"Failed to clear cache: {str(e)}"}
+
+@router.put("/guardrails/update-patterns")
+async def update_guardrails_patterns(pattern_type: str, patterns: Dict[str, Any]):
+    """Update guardrails validation patterns"""
+    
+    if not HAS_GUARDRAILS:
+        return {"error": "Guardrails Validation not available"}
+    
+    try:
+        success = guardrails_validator.update_patterns(pattern_type, patterns)
+        if success:
+            return {"success": True, "message": f"Patterns updated for {pattern_type}"}
+        else:
+            return {"success": False, "message": "Failed to update patterns"}
+    except Exception as e:
+        return {"error": f"Failed to update patterns: {str(e)}"}
+
+# Development Metrics endpoints
+@router.get("/metrics/dashboard")
+async def get_dashboard_summary():
+    """Get comprehensive development metrics dashboard"""
+    
+    if not HAS_DEVELOPMENT_METRICS:
+        return {"error": "Development Metrics not available"}
+    
+    try:
+        summary = development_metrics.get_dashboard_summary()
+        return summary
+    except Exception as e:
+        return {"error": f"Failed to get dashboard summary: {str(e)}"}
+
+@router.get("/metrics/task-completion")
+async def get_task_completion_metrics(days: int = 30):
+    """Get task completion metrics"""
+    
+    if not HAS_DEVELOPMENT_METRICS:
+        return {"error": "Development Metrics not available"}
+    
+    try:
+        metrics = development_metrics.get_task_completion_metrics(days)
+        return metrics
+    except Exception as e:
+        return {"error": f"Failed to get task completion metrics: {str(e)}"}
+
+@router.get("/metrics/code-quality")
+async def get_code_quality_metrics():
+    """Get code quality metrics"""
+    
+    if not HAS_DEVELOPMENT_METRICS:
+        return {"error": "Development Metrics not available"}
+    
+    try:
+        metrics = development_metrics.get_code_quality_metrics()
+        return metrics
+    except Exception as e:
+        return {"error": f"Failed to get code quality metrics: {str(e)}"}
+
+@router.get("/metrics/system-improvements")
+async def get_system_improvement_metrics():
+    """Get system improvement metrics"""
+    
+    if not HAS_DEVELOPMENT_METRICS:
+        return {"error": "Development Metrics not available"}
+    
+    try:
+        metrics = development_metrics.get_system_improvement_metrics()
+        return metrics
+    except Exception as e:
+        return {"error": f"Failed to get system improvement metrics: {str(e)}"}
+
+@router.get("/metrics/weekly-report")
+async def get_weekly_report():
+    """Get weekly development report"""
+    
+    if not HAS_DEVELOPMENT_METRICS:
+        return {"error": "Development Metrics not available"}
+    
+    try:
+        report = development_metrics.get_weekly_report()
+        return report
+    except Exception as e:
+        return {"error": f"Failed to get weekly report: {str(e)}"}
+
+@router.get("/metrics/velocity-trends")
+async def get_velocity_trends(weeks: int = 8):
+    """Get velocity trends over multiple weeks"""
+    
+    if not HAS_DEVELOPMENT_METRICS:
+        return {"error": "Development Metrics not available"}
+    
+    try:
+        trends = development_metrics.get_velocity_trends(weeks)
+        return trends
+    except Exception as e:
+        return {"error": f"Failed to get velocity trends: {str(e)}"}
+
+@router.get("/metrics/productivity")
+async def get_team_productivity_metrics():
+    """Get team productivity metrics"""
+    
+    if not HAS_DEVELOPMENT_METRICS:
+        return {"error": "Development Metrics not available"}
+    
+    try:
+        metrics = development_metrics.get_team_productivity_metrics()
+        return metrics
+    except Exception as e:
+        return {"error": f"Failed to get productivity metrics: {str(e)}"}
+
+# Task Scheduler endpoints
+@router.get("/scheduler/optimized-tasks")
+async def get_optimized_task_list(limit: int = 10):
+    """Get optimized list of tasks for execution"""
+    
+    if not HAS_TASK_SCHEDULER:
+        return {"error": "Task Scheduler not available"}
+    
+    try:
+        tasks = task_scheduler.get_optimized_task_list(limit)
+        return {"optimized_tasks": tasks}
+    except Exception as e:
+        return {"error": f"Failed to get optimized tasks: {str(e)}"}
+
+@router.get("/scheduler/schedule-report")
+async def get_schedule_report():
+    """Get comprehensive task schedule report"""
+    
+    if not HAS_TASK_SCHEDULER:
+        return {"error": "Task Scheduler not available"}
+    
+    try:
+        # Get all pending tasks
+        conn = sqlite3.connect("/app/data/developer_tasks.db")
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT id, title, objective, requirements, constraints, 
+                   acceptance_criteria, priority, status, assigned_to,
+                   created_at, last_executed_at, execution_count
+            FROM dynamic_tasks 
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+        ''')
+        
+        tasks = []
+        for row in cursor.fetchall():
+            tasks.append({
+                "id": row[0],
+                "title": row[1],
+                "objective": row[2],
+                "requirements": row[3],
+                "constraints": row[4],
+                "acceptance_criteria": row[5],
+                "priority": row[6],
+                "status": row[7],
+                "assigned_to": row[8],
+                "created_at": row[9],
+                "last_executed_at": row[10],
+                "execution_count": row[11]
+            })
+        
+        conn.close()
+        
+        # Create scheduled tasks
+        scheduled_tasks = task_scheduler.create_scheduled_tasks(tasks)
+        
+        # Optimize schedule
+        optimized_tasks = task_scheduler.optimize_schedule(scheduled_tasks)
+        
+        # Generate report
+        report = task_scheduler.generate_schedule_report(optimized_tasks)
+        
+        return report
+    except Exception as e:
+        return {"error": f"Failed to get schedule report: {str(e)}"}
+
+@router.post("/scheduler/analyze-dependencies")
+async def analyze_task_dependencies():
+    """Analyze dependencies between all pending tasks"""
+    
+    if not HAS_TASK_SCHEDULER:
+        return {"error": "Task Scheduler not available"}
+    
+    try:
+        # Get all pending tasks
+        conn = sqlite3.connect("/app/data/developer_tasks.db")
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT id, title, objective, requirements, constraints, 
+                   acceptance_criteria, priority, status, assigned_to,
+                   created_at, last_executed_at, execution_count
+            FROM dynamic_tasks 
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+        ''')
+        
+        tasks = []
+        for row in cursor.fetchall():
+            tasks.append({
+                "id": row[0],
+                "title": row[1],
+                "objective": row[2],
+                "requirements": row[3],
+                "constraints": row[4],
+                "acceptance_criteria": row[5],
+                "priority": row[6],
+                "status": row[7],
+                "assigned_to": row[8],
+                "created_at": row[9],
+                "last_executed_at": row[10],
+                "execution_count": row[11]
+            })
+        
+        conn.close()
+        
+        # Analyze dependencies
+        dependencies = task_scheduler.analyze_dependencies(tasks)
+        
+        # Group by task
+        dependency_map = {}
+        for dep in dependencies:
+            if dep.task_id not in dependency_map:
+                dependency_map[dep.task_id] = []
+            dependency_map[dep.task_id].append({
+                "depends_on": dep.depends_on,
+                "type": dep.dependency_type,
+                "weight": dep.weight
+            })
+        
+        return {
+            "total_dependencies": len(dependencies),
+            "tasks_with_dependencies": len(dependency_map),
+            "dependency_map": dependency_map
+        }
+    except Exception as e:
+        return {"error": f"Failed to analyze dependencies: {str(e)}"}
+
+@router.get("/scheduler/resource-analysis")
+async def get_resource_analysis():
+    """Get resource analysis for pending tasks"""
+    
+    if not HAS_TASK_SCHEDULER:
+        return {"error": "Task Scheduler not available"}
+    
+    try:
+        # Get all pending tasks
+        conn = sqlite3.connect("/app/data/developer_tasks.db")
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT id, title, objective, requirements, constraints, 
+                   acceptance_criteria, priority, status, assigned_to,
+                   created_at, last_executed_at, execution_count
+            FROM dynamic_tasks 
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+        ''')
+        
+        tasks = []
+        for row in cursor.fetchall():
+            tasks.append({
+                "id": row[0],
+                "title": row[1],
+                "objective": row[2],
+                "requirements": row[3],
+                "constraints": row[4],
+                "acceptance_criteria": row[5],
+                "priority": row[6],
+                "status": row[7],
+                "assigned_to": row[8],
+                "created_at": row[9],
+                "last_executed_at": row[10],
+                "execution_count": row[11]
+            })
+        
+        conn.close()
+        
+        # Analyze resources
+        resource_analysis = []
+        for task in tasks:
+            resources = task_scheduler.analyze_resource_requirements(task)
+            resource_analysis.append({
+                "task_id": task["id"],
+                "title": task["title"],
+                "resources": {
+                    "cpu_intensive": resources.cpu_intensive,
+                    "memory_intensive": resources.memory_intensive,
+                    "io_intensive": resources.io_intensive,
+                    "network_intensive": resources.network_intensive,
+                    "estimated_duration": resources.estimated_duration,
+                    "max_parallel": resources.max_parallel
+                }
+            })
+        
+        # Calculate totals
+        totals = {
+            "cpu_intensive": len([r for r in resource_analysis if r["resources"]["cpu_intensive"]]),
+            "memory_intensive": len([r for r in resource_analysis if r["resources"]["memory_intensive"]]),
+            "io_intensive": len([r for r in resource_analysis if r["resources"]["io_intensive"]]),
+            "network_intensive": len([r for r in resource_analysis if r["resources"]["network_intensive"]]),
+            "total_estimated_time": sum(r["resources"]["estimated_duration"] for r in resource_analysis)
+        }
+        
+        return {
+            "resource_analysis": resource_analysis,
+            "totals": totals,
+            "resource_limits": task_scheduler.resource_limits
+        }
+    except Exception as e:
+        return {"error": f"Failed to get resource analysis: {str(e)}"}
+
+# User Context endpoints
+@router.post("/users/create")
+async def create_user(username: str, email: str = None, display_name: str = None, 
+                     role: str = "user", preferences: Dict[str, Any] = None):
+    """Create a new user"""
+    
+    if not HAS_USER_CONTEXT:
+        return {"error": "User Context not available"}
+    
+    try:
+        result = user_context.create_user(username, email, display_name, role, preferences)
+        return result
+    except Exception as e:
+        return {"error": f"Failed to create user: {str(e)}"}
+
+@router.get("/users/{user_id}")
+async def get_user(user_id: str):
+    """Get user by ID"""
+    
+    if not HAS_USER_CONTEXT:
+        return {"error": "User Context not available"}
+    
+    try:
+        user = user_context.get_user(user_id)
+        if user:
+            return user
+        else:
+            return {"error": "User not found"}
+    except Exception as e:
+        return {"error": f"Failed to get user: {str(e)}"}
+
+@router.get("/users/username/{username}")
+async def get_user_by_username(username: str):
+    """Get user by username"""
+    
+    if not HAS_USER_CONTEXT:
+        return {"error": "User Context not available"}
+    
+    try:
+        user = user_context.get_user_by_username(username)
+        if user:
+            return user
+        else:
+            return {"error": "User not found"}
+    except Exception as e:
+        return {"error": f"Failed to get user: {str(e)}"}
+
+@router.put("/users/{user_id}")
+async def update_user(user_id: str, updates: Dict[str, Any]):
+    """Update user information"""
+    
+    if not HAS_USER_CONTEXT:
+        return {"error": "User Context not available"}
+    
+    try:
+        success = user_context.update_user(user_id, updates)
+        if success:
+            return {"success": True, "message": "User updated successfully"}
+        else:
+            return {"success": False, "message": "Failed to update user"}
+    except Exception as e:
+        return {"error": f"Failed to update user: {str(e)}"}
+
+@router.post("/users/{user_id}/sessions")
+async def create_user_session(user_id: str, session_data: Dict[str, Any] = None, 
+                             expires_hours: int = 24):
+    """Create a new user session"""
+    
+    if not HAS_USER_CONTEXT:
+        return {"error": "User Context not available"}
+    
+    try:
+        session_id = user_context.create_session(user_id, session_data, expires_hours)
+        if session_id:
+            return {"success": True, "session_id": session_id}
+        else:
+            return {"success": False, "message": "Failed to create session"}
+    except Exception as e:
+        return {"error": f"Failed to create session: {str(e)}"}
+
+@router.get("/sessions/{session_id}")
+async def get_session(session_id: str):
+    """Get session by ID"""
+    
+    if not HAS_USER_CONTEXT:
+        return {"error": "User Context not available"}
+    
+    try:
+        session = user_context.get_session(session_id)
+        if session:
+            return session
+        else:
+            return {"error": "Session not found or expired"}
+    except Exception as e:
+        return {"error": f"Failed to get session: {str(e)}"}
+
+@router.get("/users/{user_id}/tasks")
+async def get_user_tasks(user_id: str, status: str = None):
+    """Get tasks for a specific user"""
+    
+    if not HAS_USER_CONTEXT:
+        return {"error": "User Context not available"}
+    
+    try:
+        tasks = user_context.get_user_tasks(user_id, status)
+        return {"tasks": tasks}
+    except Exception as e:
+        return {"error": f"Failed to get user tasks: {str(e)}"}
+
+@router.get("/users/{user_id}/context")
+async def get_user_context(user_id: str):
+    """Get comprehensive user context"""
+    
+    if not HAS_USER_CONTEXT:
+        return {"error": "User Context not available"}
+    
+    try:
+        context = user_context.get_user_context(user_id)
+        return context
+    except Exception as e:
+        return {"error": f"Failed to get user context: {str(e)}"}
+
+@router.get("/users")
+async def get_all_users():
+    """Get all users"""
+    
+    if not HAS_USER_CONTEXT:
+        return {"error": "User Context not available"}
+    
+    try:
+        users = user_context.get_all_users()
+        return {"users": users}
+    except Exception as e:
+        return {"error": f"Failed to get users: {str(e)}"}
+
+@router.post("/users/migrate-data")
+async def migrate_existing_data():
+    """Migrate existing data to use user context"""
+    
+    if not HAS_USER_CONTEXT:
+        return {"error": "User Context not available"}
+    
+    try:
+        result = user_context.migrate_existing_data()
+        return result
+    except Exception as e:
+        return {"error": f"Failed to migrate data: {str(e)}"}
+
+@router.post("/users/cleanup-sessions")
+async def cleanup_expired_sessions():
+    """Clean up expired sessions"""
+    
+    if not HAS_USER_CONTEXT:
+        return {"error": "User Context not available"}
+    
+    try:
+        cleaned = user_context.cleanup_expired_sessions()
+        return {"success": True, "cleaned_sessions": cleaned}
+    except Exception as e:
+        return {"error": f"Failed to cleanup sessions: {str(e)}"}
