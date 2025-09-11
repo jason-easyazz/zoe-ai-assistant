@@ -890,7 +890,7 @@ SAFE_COMMANDS = [
     "systemctl status",
     "curl http://localhost:8000/health",
     "ls -la",
-    "cat CLAUDE_CURRENT_STATE.md"
+    "cat ZOE_CURRENT_STATE.md"
 ]
 
 class DeveloperChatRequest(BaseModel):
@@ -1449,7 +1449,7 @@ fi
 echo -e "\n${BLUE}═══ STEP 10: Updating Documentation ═══${NC}"
 
 # Update state file
-cat > CLAUDE_CURRENT_STATE.md << 'EOF'
+cat > ZOE_CURRENT_STATE.md << 'EOF'
 # Zoe AI System - Current State
 ## Last Updated: TIMESTAMP_PLACEHOLDER
 
@@ -1521,7 +1521,7 @@ docker logs zoe-core --tail 50
 EOF
 
 # Replace timestamp
-sed -i "s/TIMESTAMP_PLACEHOLDER/$(date '+%Y-%m-%d %H:%M:%S')/g" CLAUDE_CURRENT_STATE.md
+sed -i "s/TIMESTAMP_PLACEHOLDER/$(date '+%Y-%m-%d %H:%M:%S')/g" ZOE_CURRENT_STATE.md
 
 echo "✅ Documentation updated"
 

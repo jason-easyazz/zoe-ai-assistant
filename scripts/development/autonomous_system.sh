@@ -1811,7 +1811,7 @@ echo -e "${YELLOW}📤 Pushing to GitHub...${NC}"
 git push || echo "Push failed - check connection"
 
 # Update state file
-cat >> CLAUDE_CURRENT_STATE.md << EOF
+cat >> ZOE_CURRENT_STATE.md << EOF
 
 ## Autonomous Developer System - $(date)
 - ✅ Complete system visibility implemented
@@ -1840,7 +1840,7 @@ cat >> CLAUDE_CURRENT_STATE.md << EOF
 4. Watch Claude autonomously improve Zoe!
 EOF
 
-git add CLAUDE_CURRENT_STATE.md
+git add ZOE_CURRENT_STATE.md
 git commit -m "📊 State update: Autonomous system complete"
 git push
 

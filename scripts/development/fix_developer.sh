@@ -436,7 +436,7 @@ docker ps --format "table {{.Names}}\t{{.Status}}" | grep zoe-
 # Update state file
 echo ""
 echo "📝 Updating state file..."
-cat > CLAUDE_CURRENT_STATE.md << EOF
+cat > ZOE_CURRENT_STATE.md << EOF
 # Zoe AI System - Current State
 ## Last Updated: $(date '+%Y-%m-%d %H:%M:%S')
 

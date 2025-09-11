@@ -141,7 +141,7 @@ curl -s http://localhost:8000/api/developer/system/status | jq '.' || echo "Syst
 
 # Step 15: Update state file
 echo -e "\n${BLUE}Updating state file...${NC}"
-cat > CLAUDE_CURRENT_STATE.md << EOF
+cat > ZOE_CURRENT_STATE.md << EOF
 # Zoe AI System - Current State
 ## Last Updated: $(date '+%Y-%m-%d %H:%M:%S')
 

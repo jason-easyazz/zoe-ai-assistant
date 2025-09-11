@@ -22,7 +22,7 @@ cd /home/pi/zoe
 
 echo -e "\n${GREEN}📊 Creating Status Report...${NC}"
 
-cat > CLAUDE_CURRENT_STATE.md << 'EOF'
+cat > ZOE_CURRENT_STATE.md << 'EOF'
 # Zoe AI Assistant - Current State
 ## Last Updated: August 20, 2025 @ 11:05 PM
 
@@ -158,7 +158,7 @@ echo -e "${GREEN}✅ GitHub backup complete!${NC}"
 
 echo -e "\n${GREEN}📝 Creating continuation prompt...${NC}"
 
-cat > CONTINUATION_PROMPT_V5.md << 'EOF'
+cat > ZOE_CONTINUATION_PROMPT.md << 'EOF'
 # Zoe AI Assistant v5.0 - Developer UI & Claude Integration Focus
 
 ## 🎯 MANDATORY STARTUP SEQUENCE
@@ -167,7 +167,7 @@ cat > CONTINUATION_PROMPT_V5.md << 'EOF'
 # 1. Check GitHub for latest state
 cd /home/pi/zoe
 git pull
-cat CLAUDE_CURRENT_STATE.md
+cat ZOE_CURRENT_STATE.md
 
 # 2. Verify all services running
 docker ps --format "table {{.Names}}\t{{.Status}}" | grep zoe-
@@ -369,12 +369,12 @@ echo -e "${GREEN}✅ BACKUP COMPLETE & READY FOR NEXT SESSION!${NC}"
 echo -e "${GREEN}════════════════════════════════════════════════════════════════${NC}"
 
 echo -e "\n📋 ${YELLOW}Files Created:${NC}"
-echo "1. CLAUDE_CURRENT_STATE.md - Complete system status"
-echo "2. CONTINUATION_PROMPT_V5.md - For next chat session"
+echo "1. ZOE_CURRENT_STATE.md - Complete system status"
+echo "2. ZOE_CONTINUATION_PROMPT.md - For next chat session"
 echo "3. GitHub backup with detailed commit"
 
 echo -e "\n🚀 ${YELLOW}Next Steps:${NC}"
-echo "1. Copy CONTINUATION_PROMPT_V5.md content"
+echo "1. Copy ZOE_CONTINUATION_PROMPT.md content"
 echo "2. Start new chat with that prompt"
 echo "3. Focus on Developer Dashboard Claude integration"
 
