@@ -57,10 +57,14 @@
         }
         .settings-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
         
-        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; }
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
         .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
         .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
         .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.warning::before { background: #ea580c; }
 
         /* Main Layout */
         .main-container { padding: 70px 20px 20px; }
@@ -266,7 +270,7 @@
             </div>
         </div>
         <div class="nav-right">
-            <div class="api-indicator connecting" id="apiStatus">🔄 Connecting</div>
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
             <button class="settings-btn" onclick="window.location.href='settings.html'" title="Settings">⚙️</button>
         </div>
     </div>
@@ -465,7 +469,7 @@
                 
                 if (apiConnected) {
                     document.getElementById('apiStatus').className = 'api-indicator online';
-                    document.getElementById('apiStatus').textContent = '✅ Connected';
+                    document.getElementById('apiStatus').textContent = 'Online';
                     
                     // Load real data
                     await Promise.all([
@@ -479,7 +483,7 @@
             } catch (error) {
                 console.error('API connection failed:', error);
                 document.getElementById('apiStatus').className = 'api-indicator offline';
-                document.getElementById('apiStatus').textContent = '❌ Offline';
+                document.getElementById('apiStatus').textContent = 'Offline';
                 
                 // Keep demo data
                 document.getElementById('eventCount').textContent = '3 events today';
