@@ -225,7 +225,7 @@ docker logs zoe-core --tail 50
 - ✅ Create timestamped backups before changes
 - ✅ Test in development first
 - ✅ Use zoe- prefix for all containers
-- ✅ Document changes in CLAUDE_CURRENT_STATE.md
+- ✅ Document changes in ZOE_CURRENT_STATE.md
 - ✅ Run `git status` before commits
 - ✅ Use organized script folders
 

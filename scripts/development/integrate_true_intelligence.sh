@@ -29,7 +29,7 @@ mkdir -p "$BACKUP_DIR"
 # Backup everything important
 cp -r services/zoe-core/routers "$BACKUP_DIR/"
 cp services/zoe-core/*.py "$BACKUP_DIR/" 2>/dev/null || true
-cp CLAUDE_CURRENT_STATE.md "$BACKUP_DIR/" 2>/dev/null || true
+cp ZOE_CURRENT_STATE.md "$BACKUP_DIR/" 2>/dev/null || true
 
 echo "✅ Backup created in $BACKUP_DIR"
 
@@ -362,7 +362,7 @@ chmod +x scripts/utilities/protect_true_intelligence.sh
 # Step 6: Update documentation
 echo -e "\n📝 Step 6: Updating documentation..."
 
-cat >> CLAUDE_CURRENT_STATE.md << 'DOC_UPDATE'
+cat >> ZOE_CURRENT_STATE.md << 'DOC_UPDATE'
 
 ## True Intelligence Integration - $(date +"%Y-%m-%d %H:%M")
 ### ✅ Successfully Integrated:

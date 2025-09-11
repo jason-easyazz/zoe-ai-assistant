@@ -44,7 +44,7 @@ class AutonomousZack:
         docs = [
             "Zoe_System_Architecture.md",
             "Zoe_Development_Guide.md", 
-            "CLAUDE_CURRENT_STATE.md"
+            "ZOE_CURRENT_STATE.md"
         ]
         for doc in docs:
             path = self.project_root / doc

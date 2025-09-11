@@ -105,7 +105,7 @@ echo "✅ Version check script created"
 
 # Step 6: Document the protection
 echo -e "\n📋 Step 6: Documenting protection..."
-cat >> CLAUDE_CURRENT_STATE.md << EOF
+cat >> ZOE_CURRENT_STATE.md << EOF
 
 ## 🔒 PROTECTED VERSION - $(date)
 - Working Zack v5 backed up to multiple locations

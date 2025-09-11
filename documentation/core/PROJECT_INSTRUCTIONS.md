@@ -4,7 +4,7 @@
 ## 🔴 FOR HUMANS: Starting Any Work Session
 
 ### With Claude:
-1. Paste this: `cat /home/pi/zoe/GENERIC_CONTINUATION.txt`
+1. Paste this: `cat /home/pi/zoe/ZOE_CONTINUATION_PROMPT.md`
 2. Claude will check GitHub and continue from last state
 3. Choose what to work on from the menu
 
@@ -17,7 +17,7 @@
 
 ### BEFORE ANY WORK:
 1. Check GitHub: https://github.com/jason-easyazz/zoe-ai-assistant
-2. Read CLAUDE_CURRENT_STATE.md
+2. Read ZOE_CURRENT_STATE.md
 3. Run: `cd /home/pi/zoe && git pull && docker ps | grep zoe-`
 
 ### AFTER EACH STEP:
@@ -64,7 +64,7 @@ bash scripts/permanent/maintenance/quick_sync.sh
 bash scripts/permanent/deployment/master_enhancements.sh
 
 # Start new Claude chat
-cat GENERIC_CONTINUATION.txt
+cat ZOE_CONTINUATION_PROMPT.md
 ```
 
 ## 🟣 PROJECT STRUCTURE
@@ -83,21 +83,21 @@ cat GENERIC_CONTINUATION.txt
 ├── documentation/
 │   ├── core/ (THIS FILE)
 │   └── dynamic/ (auto-updated)
-└── CLAUDE_CURRENT_STATE.md (auto-updated)
+└── ZOE_CURRENT_STATE.md (auto-updated)
 ```
 
 ## 🔄 CONTINUITY SYSTEM
 
-### For New Claude Chat:
-1. Human: `cat GENERIC_CONTINUATION.txt`
-2. Paste to Claude
-3. Claude reads GitHub state
+### For New AI Chat:
+1. Human: `cat ZOE_CONTINUATION_PROMPT.md`
+2. Paste to AI
+3. AI reads GitHub state
 4. Continue from exact point
 
 ### Auto-Updates:
 - State file updates after changes
 - GitHub syncs automatically
-- Claude always has current context
+- AI always has current context
 
 ## 📊 CHECKING SYSTEM STATE
 
@@ -130,4 +130,4 @@ sqlite3 data/zoe.db "SELECT COUNT(*) FROM conversations;"
 
 ---
 *This document is permanent. Claude checks this on GitHub before starting work.*
-*Last system update: Check CLAUDE_CURRENT_STATE.md for timestamp*
+*Last system update: Check ZOE_CURRENT_STATE.md for timestamp*

@@ -16,7 +16,7 @@ git add services/zoe-core/routers/*.py
 git add services/zoe-core/*.py
 git add services/zoe-ui/dist/*.html
 git add scripts/
-git add CLAUDE_CURRENT_STATE.md
+git add ZOE_CURRENT_STATE.md
 git add docker-compose.yml
 git add .gitignore
 

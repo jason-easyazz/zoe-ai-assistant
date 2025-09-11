@@ -561,7 +561,7 @@ echo -e "\n🧪 Running tests..."
 # PHASE 8: UPDATE STATE FILE
 # ============================================================================
 echo -e "\n📝 Updating state file..."
-cat >> CLAUDE_CURRENT_STATE.md << EOF
+cat >> ZOE_CURRENT_STATE.md << EOF
 
 ## Complete Restoration - $(date)
 - ✅ Genius developer restored with full system access

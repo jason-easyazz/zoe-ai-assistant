@@ -1297,7 +1297,7 @@ chmod +x scripts/permanent/deployment/master_enhancements.sh
 log "📤 PHASE 7: Syncing to GitHub"
 
 # Update state file
-cat > CLAUDE_CURRENT_STATE.md << 'STATE_EOF'
+cat > ZOE_CURRENT_STATE.md << 'STATE_EOF'
 # Zoe AI Assistant - Current State
 ## Last Updated: $(date)
 

@@ -60,7 +60,7 @@ class AutonomousSystem:
             "Zoe_System_Architecture.md",
             "Zoe_Complete_Vision.md",
             "Zoe_Development_Guide.md",
-            "CLAUDE_CURRENT_STATE.md"
+            "ZOE_CURRENT_STATE.md"
         ]
         for doc in doc_files:
             path = self.root / doc
