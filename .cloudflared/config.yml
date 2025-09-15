@@ -1,0 +1,9 @@
+tunnel: zoe-tunnel
+credentials-file: /root/.cloudflared/9343ddcf-c140-4919-9922-abff8bc02856.json
+
+ingress:
+  - hostname: zoe.the411.life
+    service: http://zoe-ui:80
+  - hostname: ssh.the411.life
+    service: ssh://host.docker.internal:22
+  - service: http_status:404
