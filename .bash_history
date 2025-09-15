@@ -1,499 +1,3 @@
-        }
-        
-        /* Navigation */
-        .nav-bar {
-            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
-            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
-            align-items: center; height: 60px;
-        }
-        .nav-left { display: flex; align-items: center; gap: 15px; }
-        .mini-orb { 
-            width: 32px; height: 32px; border-radius: 50%; 
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
-            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
-        }
-        .mini-orb:hover { transform: scale(1.1); }
-        .nav-menu { display: flex; gap: 20px; }
-        .nav-item { 
-            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
-            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
-            min-height: 44px; display: flex; align-items: center;
-        }
-        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
-        .nav-right { display: flex; align-items: center; gap: 10px; }
-        
-        .more-nav-btn { 
-            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
-            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
-            min-height: 44px; display: flex; align-items: center; cursor: pointer;
-            background: none; border: none;
-        }
-        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
-        
-        .settings-btn { 
-            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
-            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
-            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
-            font-size: 16px; font-weight: bold;
-        }
-        .settings-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
-        
-        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; }
-        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
-        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
-        .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
-
-        /* Main Layout */
-        .main-container { padding: 70px 20px 20px; }
-        .top-info-bar { 
-            display: flex; justify-content: space-between; align-items: center; 
-            margin-bottom: 20px; padding: 0 10px;
-        }
-        .time-display { display: flex; flex-direction: column; }
-        .current-time { font-size: 18px; font-weight: 300; color: #333; }
-        .current-date { font-size: 11px; color: #666; margin-top: 2px; }
-        .weather-widget { display: flex; align-items: center; gap: 6px; }
-
-        /* Calendar Header */
-        .calendar-header { 
-            display: flex; justify-content: space-between; align-items: center; 
-            margin-bottom: 20px; padding: 0 10px;
-        }
-        .month-title { 
-            font-size: clamp(20px, 3vw, 24px); font-weight: 300; color: #333;
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        }
-        .nav-button { 
-            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
-            border-radius: 8px; width: 40px; height: 40px; display: flex; align-items: center; 
-            justify-content: center; cursor: pointer; transition: all 0.3s ease; 
-            color: #666; font-size: 16px; font-weight: bold;
-        }
-
-        /* Calendar Layout */
-        .calendar-layout { 
-            display: grid; grid-template-columns: 2fr 1fr; gap: 20px; 
-            max-width: 1200px; margin: 0 auto; align-items: start;
-        }
-
-        /* Calendar Grid */
-        .calendar-grid { 
-            display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; 
-            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px); 
-            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 16px; padding: 20px;
-            height: fit-content;
-        }
-        .day-header { 
-            text-align: center; padding: 12px 8px; font-size: 12px; font-weight: 600; 
-            color: #666; text-transform: uppercase;
-        }
-        .calendar-day { 
-            aspect-ratio: 1; display: flex; align-items: center; justify-content: center; 
-            border-radius: 8px; font-size: 14px; cursor: pointer; transition: all 0.3s ease; 
-            position: relative; font-weight: 500; min-height: 40px;
-        }
-        .calendar-day:hover { background: rgba(123, 97, 255, 0.1); transform: scale(1.05); }
-        .calendar-day.today { 
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
-            color: white; font-weight: 600;
-        }
-        .calendar-day.selected { 
-            background: rgba(123, 97, 255, 0.3); color: #7B61FF; font-weight: 600; 
-            border: 2px solid #7B61FF;
-        }
-        .calendar-day.has-event { background: rgba(123, 97, 255, 0.2); color: #7B61FF; }
-        .calendar-day.has-event::after { 
-            content: ''; position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%); 
-            width: 4px; height: 4px; background: #7B61FF; border-radius: 50%;
-        }
-        .calendar-day.other-month { color: #ccc; opacity: 0.5; }
-
-        /* Right Panel */
-        .right-panel { 
-            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px); 
-            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 16px; 
-            padding: 20px; display: flex; flex-direction: column; 
-            height: 100%; position: relative; align-self: stretch;
-        }
-        
-        .panel-header { 
-            margin-bottom: 20px; text-align: center; 
-            padding-bottom: 15px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-            flex-shrink: 0;
-        }
-        .selected-date { 
-            font-size: clamp(18px, 2.5vw, 20px); font-weight: 300; color: #333; margin-bottom: 2px;
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        }
-        .selected-weekday { 
-            font-size: clamp(11px, 1.4vw, 12px); color: #666; font-weight: 400; 
-            text-transform: uppercase; letter-spacing: 0.5px;
-        }
-
-        .panel-content { 
-            flex: 1; overflow-y: auto; padding-bottom: 100px;
-            min-height: 300px; max-height: calc(100% - 160px);
-        }
-        .events-list { margin-bottom: 15px; }
-        
-        .event-item { 
-            padding: 16px; border-bottom: 1px solid rgba(255, 255, 255, 0.3); 
-            cursor: pointer; transition: all 0.3s ease; border-radius: 12px; margin-bottom: 8px;
-            background: rgba(255, 255, 255, 0.3); position: relative;
-            min-height: 80px;
-        }
-        .event-item:hover { 
-            transform: translateX(4px); background: rgba(255, 255, 255, 0.5); 
-        }
-        .event-time { 
-            font-size: 11px; color: #7B61FF; font-weight: 600; margin-bottom: 4px; 
-            text-transform: uppercase;
-        }
-        .event-title { 
-            font-size: 14px; color: #333; font-weight: 500; margin-bottom: 4px;
-            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        }
-        .event-category { 
-            display: inline-block; padding: 4px 8px; border-radius: 10px; 
-            font-size: 10px; font-weight: 500; margin-top: 4px;
-        }
-        .category-personal { background: rgba(34, 197, 94, 0.2); color: #16a34a; }
-        .category-work { background: rgba(59, 130, 246, 0.2); color: #2563eb; }
-        .category-health { background: rgba(239, 68, 68, 0.2); color: #dc2626; }
-        .category-social { background: rgba(147, 51, 234, 0.2); color: #9333ea; }
-        .category-family { background: rgba(251, 146, 60, 0.2); color: #ea580c; }
-
-        .event-actions {
-            position: absolute; top: 12px; right: 12px; display: flex; gap: 8px;
-            opacity: 1;
-        }
-        .action-btn {
-            background: rgba(255, 255, 255, 0.9); border: none; border-radius: 8px; 
-            width: 36px; height: 36px; font-size: 14px; cursor: pointer;
-            display: flex; align-items: center; justify-content: center;
-            transition: all 0.3s ease; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .edit-btn { color: #7B61FF; }
-        .edit-btn:hover { background: rgba(123, 97, 255, 0.2); transform: scale(1.1); }
-        .delete-btn { color: #dc2626; }
-        .delete-btn:hover { background: rgba(239, 68, 68, 0.2); transform: scale(1.1); }
-
-        .events-summary {
-            padding: 12px; margin-bottom: 12px; background: rgba(255, 255, 255, 0.4);
-            border-radius: 10px; font-size: 12px; color: #666;
-        }
-
-        .no-events { text-align: center; color: #666; font-style: italic; padding: 40px; }
-
-        .panel-footer {
-            position: absolute; bottom: 0; left: 0; right: 0;
-            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
-            border-top: 1px solid rgba(255, 255, 255, 0.3);
-            padding: 18px 20px; border-radius: 0 0 16px 16px;
-            flex-shrink: 0;
-        }
-        .day-summary { 
-            display: flex; justify-content: space-around;
-        }
-        .summary-stat { text-align: center; }
-        .stat-number-small { 
-            display: block; font-size: clamp(18px, 2.5vw, 20px); font-weight: 600; 
-            color: #7B61FF; margin-bottom: 4px;
-        }
-        .stat-label-small { 
-            font-size: clamp(10px, 1.3vw, 11px); color: #666; text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .floating-add-btn { 
-            position: fixed; bottom: 30px; right: 30px; width: 64px; height: 64px; 
-            border-radius: 50%; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
-            border: none; color: white; cursor: pointer; display: flex; align-items: center; 
-            justify-content: center; font-size: 28px; transition: all 0.3s ease; 
-            z-index: 1000; box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
-        }
-        .floating-add-btn:hover { transform: scale(1.1); box-shadow: 0 6px 16px rgba(123, 97, 255, 0.4); }
-
-        /* More Overlay */
-        .more-overlay {
-            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
-            display: none; align-items: center; justify-content: center; z-index: 3000;
-            opacity: 0; transition: all 0.3s ease;
-        }
-        .more-overlay.active { display: flex; opacity: 1; }
-        .more-content {
-            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
-            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
-            padding: 40px; max-width: 500px; width: 90%; position: relative;
-            transform: scale(0.8); transition: transform 0.3s ease;
-        }
-        .more-overlay.active .more-content { transform: scale(1); }
-        .more-header { text-align: center; margin-bottom: 30px; }
-        .more-title {
-            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        }
-        .more-close {
-            position: absolute; top: 15px; right: 15px; 
-            background: rgba(255, 255, 255, 0.6); border: none;
-            border-radius: 50%; width: 36px; height: 36px;
-            font-size: 18px; cursor: pointer; color: #666;
-        }
-        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
-        .more-item {
-            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
-            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
-            transition: all 0.3s ease; min-height: 120px; display: flex;
-            flex-direction: column; align-items: center; justify-content: center;
-        }
-        .more-item:hover {
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            color: white; transform: translateY(-4px);
-        }
-        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
-        .more-item-label { font-size: 15px; font-weight: 500; }
-
-        @media (max-width: 900px) {
-            .calendar-layout { grid-template-columns: 1fr; }
-            .nav-menu { display: none; }
-        }
-        
-        @media (max-width: 420px) {
-            .main-container { padding: 70px 10px 20px; }
-            .floating-add-btn { bottom: 20px; right: 20px; width: 56px; height: 56px; font-size: 24px; }
-            .action-btn { width: 32px; height: 32px; font-size: 12px; }
-        }
-    </style>
-</head>
-<body>
-    <!-- Navigation -->
-    <div class="nav-bar">
-        <div class="nav-left">
-            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
-            <div class="nav-menu">
-                <a href="index.html" class="nav-item">Chat</a>
-                <a href="dashboard.html" class="nav-item">Dashboard</a>
-                <a href="calendar.html" class="nav-item active">Calendar</a>
-                <a href="lists.html" class="nav-item">Lists</a>
-                <a href="journal.html" class="nav-item">Journal</a>
-                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
-            </div>
-        </div>
-        <div class="nav-right">
-            <div class="api-indicator connecting" id="apiStatus">🔄 Connecting</div>
-            <button class="settings-btn" onclick="window.location.href='settings.html'" title="Settings">⚙️</button>
-        </div>
-    </div>
-
-    <!-- Main Content -->
-    <div class="main-container">
-        <!-- Top Info Bar -->
-        <div class="top-info-bar">
-            <div class="time-display">
-                <div class="current-time" id="currentTime">Loading...</div>
-                <div class="current-date" id="currentDate">Loading...</div>
-            </div>
-            <div class="weather-widget">
-                <div>☀️</div>
-                <div>23°</div>
-            </div>
-        </div>
-
-        <!-- Calendar Header -->
-        <div class="calendar-header">
-            <button class="nav-button" onclick="previousMonth()">‹</button>
-            <h1 class="month-title" id="currentMonth">Loading...</h1>
-            <button class="nav-button" onclick="nextMonth()">›</button>
-        </div>
-
-        <!-- Calendar Layout -->
-        <div class="calendar-layout">
-            <div class="calendar-grid" id="calendarGrid">
-                <div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #666;">
-                    Loading calendar...
-                </div>
-            </div>
-
-            <div class="right-panel">
-                <div class="panel-header">
-                    <h2 class="selected-date" id="selectedDate">Select a date</h2>
-                    <p class="selected-weekday" id="selectedWeekday">Click on a date to view events</p>
-                </div>
-
-                <div class="panel-content" id="panelContent">
-                    <div class="events-list" id="eventsList">
-                        <div class="no-events">Select a date to view events</div>
-                    </div>
-                </div>
-
-                <div class="panel-footer" id="panelFooter" style="display: none;">
-                    <div class="day-summary">
-                        <div class="summary-stat">
-                            <span class="stat-number-small" id="eventCount">0</span>
-                            <span class="stat-label-small">events</span>
-                        </div>
-                        <div class="summary-stat">
-                            <span class="stat-number-small" id="freeHours">8</span>
-                            <span class="stat-label-small">free hours</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- More Overlay -->
-    <div class="more-overlay" id="moreOverlay">
-        <div class="more-content">
-            <button class="more-close" onclick="closeMoreOverlay()">×</button>
-            <div class="more-header">
-                <h2 class="more-title">More Options</h2>
-            </div>
-            <div class="more-grid">
-                <div class="more-item" onclick="navigateToPage('memories.html')">
-                    <div class="more-item-icon">🧠</div>
-                    <div class="more-item-label">Memories</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('workflows.html')">
-                    <div class="more-item-icon">⚡</div>
-                    <div class="more-item-label">Workflows</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('settings.html')">
-                    <div class="more-item-icon">⚙️</div>
-                    <div class="more-item-label">Settings</div>
-                </div>
-                <div class="more-item" onclick="alert('Coming soon!')">
-                    <div class="more-item-icon">📊</div>
-                    <div class="more-item-label">Analytics</div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Floating Add Button -->
-    <button class="floating-add-btn" onclick="addEvent()" title="Add Event">+</button>
-
-    <script src="js/common.js"></script>
-    <script>
-        let currentDate = new Date();
-        let selectedDate = null;
-        let allEvents = [];
-
-        function formatDate(date) {
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`;
-        }
-
-        function formatTime(timeStr) {
-            if (!timeStr) return '';
-            const [hours, minutes] = timeStr.split(':');
-            const hour12 = hours % 12 || 12;
-            const ampm = hours >= 12 ? 'PM' : 'AM';
-            return `${hour12}:${minutes} ${ampm}`;
-        }
-
-        function updateCalendar() {
-            updateCalendarHeader();
-            generateCalendarGrid();
-        }
-
-        function updateCalendarHeader() {
-            const monthNames = [
-                'January', 'February', 'March', 'April', 'May', 'June',
-                'July', 'August', 'September', 'October', 'November', 'December'
-            ];
-            document.getElementById('currentMonth').textContent = 
-                `${monthNames[currentDate.getMonth()]} ${currentDate.getFullYear()}`;
-        }
-
-        function generateCalendarGrid() {
-            const grid = document.getElementById('calendarGrid');
-            grid.innerHTML = '';
-            
-            const dayHeaders = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-            dayHeaders.forEach(day => {
-                const headerDiv = document.createElement('div');
-                headerDiv.className = 'day-header';
-                headerDiv.textContent = day;
-                grid.appendChild(headerDiv);
-            });
-            
-            const firstDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
-            const startDate = new Date(firstDay);
-            startDate.setDate(startDate.getDate() - firstDay.getDay());
-            
-            const today = formatDate(new Date());
-            
-            for (let i = 0; i < 42; i++) {
-                const cellDate = new Date(startDate);
-                cellDate.setDate(startDate.getDate() + i);
-                
-                const cellDateStr = formatDate(cellDate);
-                const isCurrentMonth = cellDate.getMonth() === currentDate.getMonth();
-                const isToday = cellDateStr === today;
-                
-                const hasEvents = allEvents.some(event => 
-                    (event.start_date === cellDateStr) || (event.date === cellDateStr)
-                );
-                
-                const dayDiv = document.createElement('div');
-                dayDiv.className = 'calendar-day';
-                if (isToday) dayDiv.classList.add('today');
-                if (hasEvents) dayDiv.classList.add('has-event');
-                if (!isCurrentMonth) dayDiv.classList.add('other-month');
-                if (selectedDate === cellDateStr) dayDiv.classList.add('selected');
-                
-                dayDiv.setAttribute('data-date', cellDateStr);
-                dayDiv.textContent = cellDate.getDate();
-                dayDiv.onclick = () => selectDate(cellDateStr);
-                
-                grid.appendChild(dayDiv);
-            }
-        }
-
-        function selectDate(dateStr) {
-            selectedDate = dateStr;
-            
-            document.querySelectorAll('.calendar-day').forEach(d => d.classList.remove('selected'));
-            document.querySelectorAll('.calendar-day').forEach(d => {
-                if (d.getAttribute('data-date') === dateStr) {
-                    d.classList.add('selected');
-                }
-            });
-            
-            updateDayView(dateStr);
-        }
-
-        function updateDayView(dateStr) {
-            const selectedDateEl = document.getElementById('selectedDate');
-            const selectedWeekdayEl = document.getElementById('selectedWeekday');
-            const eventsListEl = document.getElementById('eventsList');
-            const panelFooter = document.getElementById('panelFooter');
-            
-            const [year, month, day] = dateStr.split('-');
-            const dateObj = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
-            const today = formatDate(new Date());
-            const isToday = dateStr === today;
-            
-            selectedDateEl.textContent = isToday ? 'Today' : 
-                dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-            selectedWeekdayEl.textContent = dateObj.toLocaleDateString('en-US', { weekday: 'long' });
-            
-            const dayEvents = allEvents.filter(event => 
-                (event.start_date === dateStr) || (event.date === dateStr)
-            );
-            
-            panelFooter.style.display = 'block';
-            
-            if (dayEvents.length === 0) {
-                eventsListEl.innerHTML = '<div class="no-events">No events scheduled</div>';
             } else {
                 let html = '';
                 if (dayEvents.length > 5) {
@@ -1997,4 +1501,500 @@ curl -s http://192.168.1.60:8000/api/ | jq .
 curl -s http://192.168.1.60:8000/api/health | jq .
 curl -s http://192.168.1.60:8000/api/health -H "Origin: http://192.168.1.60:8080" | jq .
 curl -H "Origin: http://192.168.1.60:8080" -H "Access-Control-Request-Method: GET" -H "Access-Control-Request-Headers: content-type" -X OPTIONS http://192.168.1.60:8000/api/health -v
+. "/home/pi/.cursor-server/bin/2f2737de9aa376933d975ae30290447c910fdf40/out/vs/workbench/contrib/terminal/common/scripts/shellIntegration-bash.sh"
+cd /home/pi/zoe && docker-compose ps
+cd /home/pi/zoe && sqlite3 data/developer_tasks.db "SELECT id, title, status, created_at, last_executed_at, execution_count FROM dynamic_tasks ORDER BY created_at DESC LIMIT 10;"
+cd /home/pi/zoe && curl -s http://localhost:8000/api/developer/tasks/list | jq .
+cd /home/pi/zoe && curl -s http://localhost:8000/api/developer/tasks/ | jq .
+cd /home/pi/zoe && curl -s http://localhost:8000/docs | grep -i "developer.*tasks" | head -5
+cd /home/pi/zoe && docker logs zoe-core --tail 20
+cd /home/pi/zoe && curl -s http://localhost:8000/api/developer/tasks/list
+cd /home/pi/zoe && docker exec zoe-core python -c "from routers import developer_tasks; print('Router imported successfully')"
+cd /home/pi/zoe && docker exec zoe-core python -c "import sys; sys.path.append('/app'); from routers.developer_tasks import router; print('Router prefix:', router.prefix); print('Routes:', [route.path for route in router.routes])"
+cd /home/pi/zoe && docker restart zoe-core
+cd /home/pi/zoe && sleep 10 && curl -s http://localhost:8000/api/developer/tasks/list | jq .
+cd /home/pi/zoe && docker logs zoe-core --tail 30
+cd /home/pi/zoe && docker restart zoe-core
+cd /home/pi/zoe && sleep 10 && curl -s http://localhost:8000/api/developer/tasks/list | jq .
+cd /home/pi/zoe && curl -s "http://localhost:8080/developer/tasks.html" | grep -i "completed" | head -3
+cd /home/pi/zoe && sqlite3 data/developer_tasks.db "SELECT title, objective, status FROM dynamic_tasks WHERE status = 'completed' AND created_at >= '2025-09-09 12:00:00' ORDER BY created_at DESC;"
+cd /home/pi/zoe && curl -s http://localhost:8000/api/developer/status | jq .
+cd /home/pi/zoe && curl -s "http://localhost:8080/developer/settings.html" | grep -i "guardrails\|resources\|learning\|aider\|n8n\|wakeword\|sessions\|metrics" | head -5
+cd /home/pi && git status
+cd /home/pi && git add .
+cd /home/pi && git commit -m "Update project documentation and development scripts
+
+- Updated documentation structure and content
+- Enhanced development scripts for autonomous system
+- Added new documentation files including README and current state
+- Cleaned up cursor server cache and history files
+- Updated project instructions and context documentation"
+cd /home/pi && git push origin main
+cd /home/pi && git remote -v
+cd /home/pi && git log --oneline -5
+cd /home/pi && /home/pi/zoe/scripts/utilities/push_to_github.sh
+. "/home/pi/.cursor-server/bin/2f2737de9aa376933d975ae30290447c910fdf40/out/vs/workbench/contrib/terminal/common/scripts/shellIntegration-bash.sh"
+. "/home/pi/.cursor-server/bin/2f2737de9aa376933d975ae30290447c910fdf40/out/vs/workbench/contrib/terminal/common/scripts/shellIntegration-bash.sh"
+cd /home/pi/zoe && python scripts/add_enhanced_tasks.py
+cd /home/pi/zoe && python -c "
+import sqlite3
+conn = sqlite3.connect('data/developer_tasks.db')
+cursor = conn.cursor()
+cursor.execute('SELECT COUNT(*) FROM dynamic_tasks')
+count = cursor.fetchone()[0]
+print(f'Total tasks in database: {count}')
+cursor.execute('SELECT title, priority FROM dynamic_tasks ORDER BY created_at DESC LIMIT 10')
+recent = cursor.fetchall()
+print('\nRecent tasks:')
+for title, priority in recent:
+    print(f'  - {title} ({priority})')
+conn.close()
+"
+find /home/pi/zoe/services/zoe-ui/dist/developer -name "*.html" -exec grep -l "redirect" {} \;
+find /home/pi/zoe -name ".htaccess" -o -name "nginx.conf" -o -name "apache.conf" 2>/dev/null
+ls -la /usr/share/nginx/html/developer/ 2>/dev/null || echo "Directory not found"
+find /home/pi -name "tools.html" -type f 2>/dev/null
+docker ps | grep zoe
+docker inspect zoe-ui | grep -A 10 -B 10 "Mounts"
+docker inspect zoe-ui | grep -A 20 "Mounts"
+docker restart zoe-ui
+find /home/pi/zoe/services/zoe-ui/dist -name "*.html" -exec grep -l "redirect" {} \;
+curl -s http://localhost:8080/developer/tools.html | head -20
+curl -s http://localhost:8080/developer/monitor.html | head -20
+curl -s http://localhost:8080/developer/backups.html | head -20
+curl -s http://localhost:8080/developer/tools.html | grep -i "redirect\|meta.*refresh" | head -5
+curl -s http://localhost:8080/developer/monitor.html | grep -i "redirect\|meta.*refresh" | head -5
+curl -s http://localhost:8080/developer/backups.html | grep -i "redirect\|meta.*refresh" | head -5
+curl -s http://localhost:8080/developer/tools.html | wc -l
+find /home/pi/zoe -name "tools.html" -type f
+ls -la /home/pi/zoe/services/zoe-ui/dist/developer/tools.html
+docker logs zoe-ui --tail 20
+curl -s http://localhost:8080/developer/ | grep -i "script" | head -5
+curl -s http://localhost:8080/developer/test-nav.html | head -10
+find /home/pi/zoe -name "*.html" -exec grep -l "meta.*refresh\|window\.location\|document\.location" {} \; 2>/dev/null | grep -E "(tools|monitor|backup)" | head -10
+curl -I http://localhost:8080/developer/tools.html
+docker exec zoe-ui nginx -s reload
+curl -s http://localhost:8080/developer/aider.html | head -20
+curl -s http://localhost:8080/developer/aider.html | grep -i "task-context\|task-list" | head -5
+curl -s http://localhost:8080/developer/tasks.html | grep -i "aider-btn" | head -3
+curl -s http://localhost:8080/developer/tasks.html | grep -i "taskDetailsModal\|showTaskDetails" | head -3
+curl -s http://localhost:8080/developer/aider.html | grep -i "task-context\|loadTasks" | head -3
+curl -s http://localhost:8080/developer/aider.html | grep -n "Developer</span>\|API_BASE_CANDIDATES\|/api/aider/sessions\|/api/developer/tasks" | cat
+curl -s http://localhost:8080/developer/aider.html | grep -n "/api/developer/tasks\|/api/aider/chat\|/api/aider/session\|/api/aider/sessions" | cat
+curl -s http://localhost:8080/developer/aider.html | grep -n "/api/aider/chat" | cat
+curl -s -o /dev/null -w "%{http_code}" http://192.168.1.60:8000/api/developer/tasks
+curl -s -w "%{http_code}" http://192.168.1.60:8000/api/developer/tasks | tail -1
+curl -I http://192.168.1.60:8000/api/developer/tasks 2>/dev/null | head -1
+curl -I http://192.168.1.60:8000/api/aider/sessions 2>/dev/null | head -1
+curl -s http://localhost:8080/developer/aider.html | grep -n "Developer</span>\|credentials.*include\|demo response" | head -5
+curl -s http://192.168.1.60:8000/api/developer/tasks/ | head -20
+curl -s http://192.168.1.60:8000/api/developer/tasks/list | head -10
+curl -s http://localhost:8080/developer/aider.html | grep -n "/api/developer/tasks/list" | head -3
+curl -s -w "%{http_code}" http://192.168.1.60:8000/api/aider/sessions
+curl -I http://192.168.1.60:8000/api/aider/sessions 2>/dev/null | head -1
+curl -s http://localhost:8080/developer/aider.html | grep -n "dynamically discovers\|Aider API not available" | head -3
+curl -s http://localhost:8080/test-api-discovery.html | grep -A 5 -B 5 "192.168.1.60\|localhost"
+curl -s http://192.168.1.60:8000/api/developer/tasks/ | grep -o '"endpoints":[^}]*' | head -1
+curl -s http://localhost:8080/developer/aider.html | grep -n "task-search\|task-list-container\|filterTasks" | head -5
+. "/home/pi/.cursor-server/bin/2f2737de9aa376933d975ae30290447c910fdf40/out/vs/workbench/contrib/terminal/common/scripts/shellIntegration-bash.sh"
+curl -X POST http://192.168.1.60:8000/api/creator/create -H "Content-Type: application/json" -d '{"request": "test page"}' -v
+curl http://192.168.1.60:8000/ -v
+curl http://192.168.1.60:8000/ | cat
+curl http://192.168.1.60:8000/ --silent
+ps aux | grep -E "(python|uvicorn|fastapi)" | grep -v grep
+ps aux | grep "uvicorn main:app --host 0.0.0.0 --port 8000" | grep -v grep
+curl -X POST http://192.168.1.60:8000/api/creator/create -H "Content-Type: application/json" -d '{"request": "test calendar page"}' | cat
+curl http://192.168.1.60:8000/api/creator/status | cat
+curl http://192.168.1.60:8000/api/creator/status --silent
+curl -s http://192.168.1.60:8000/api/creator/status
+cd /home/pi/zoe/services/zoe-core && python -c "import requests; print(requests.get('http://192.168.1.60:8000/api/creator/status').text)"
+ls -la /app/generated/ 2>/dev/null || echo "Generated directory not found on local system"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+import json
+
+# Test the creator endpoint
+response = requests.post('http://192.168.1.60:8000/api/creator/create', 
+                        headers={'Content-Type': 'application/json'},
+                        data=json.dumps({'request': 'Calendar Page Test'}))
+print('Response status:', response.status_code)
+print('Response:', response.json())
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+
+# Test the creator status endpoint
+response = requests.get('http://192.168.1.60:8000/api/creator/status')
+print('Status response:', response.json())
+"
+curl -s http://192.168.1.60:8000/api/calendar/events
+curl -s http://192.168.1.60:8000/api/calendar/status
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+import json
+
+# Test creating a new calendar event
+event_data = {
+    'title': 'Test Calendar Event',
+    'start_date': '2025-09-12',
+    'start_time': '14:00',
+    'category': 'personal'
+}
+
+response = requests.post('http://192.168.1.60:8000/api/calendar/events', 
+                        headers={'Content-Type': 'application/json'},
+                        data=json.dumps(event_data))
+print('Create event response:', response.status_code, response.json())
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+import json
+
+# Test updating the event
+update_data = {
+    'title': 'Updated Calendar Event',
+    'start_date': '2025-09-12',
+    'start_time': '15:00',
+    'category': 'work'
+}
+
+response = requests.put('http://192.168.1.60:8000/api/calendar/events/5', 
+                       headers={'Content-Type': 'application/json'},
+                       data=json.dumps(update_data))
+print('Update event response:', response.status_code, response.json())
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+
+# Test deleting the event
+response = requests.delete('http://192.168.1.60:8000/api/calendar/events/5')
+print('Delete event response:', response.status_code, response.json())
+"
+curl -s http://192.168.1.60:8000/api/health
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+response = requests.get('http://192.168.1.60:8000/api/health')
+print('Health check response:', response.status_code, response.json())
+"
+curl -s http://192.168.1.60:8000/api/lists | head -20
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+try:
+    response = requests.get('http://192.168.1.60:8000/api/lists')
+    print('Lists API response:', response.status_code)
+    if response.status_code == 200:
+        print('Lists data:', response.json())
+    else:
+        print('Response:', response.text)
+except Exception as e:
+    print('Error:', e)
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+try:
+    response = requests.get('http://192.168.1.60:8000/api/lists/tasks')
+    print('Tasks API response:', response.status_code)
+    if response.status_code == 200:
+        data = response.json()
+        print('Tasks data:', data)
+    else:
+        print('Response:', response.text)
+except Exception as e:
+    print('Error:', e)
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+import json
+
+# Create a sample task list
+task_data = {
+    'list_type': 'tasks',
+    'category': 'personal',
+    'name': 'Daily Tasks',
+    'items': [
+        {'text': 'Review project proposal', 'priority': 'high', 'completed': False},
+        {'text': 'Buy groceries', 'priority': 'medium', 'completed': False},
+        {'text': 'Call dentist', 'priority': 'low', 'completed': False},
+        {'text': 'Finish presentation', 'priority': 'high', 'completed': False},
+        {'text': 'Exercise for 30 minutes', 'priority': 'medium', 'completed': False}
+    ]
+}
+
+response = requests.post('http://192.168.1.60:8000/api/lists/tasks', 
+                        headers={'Content-Type': 'application/json'},
+                        data=json.dumps(task_data))
+print('Created task list:', response.status_code, response.json())
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+response = requests.get('http://192.168.1.60:8000/api/lists/tasks')
+print('Tasks loaded:', response.status_code)
+if response.status_code == 200:
+    data = response.json()
+    print('Task lists:', data)
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+import json
+
+# Test calendar settings API
+response = requests.get('http://192.168.1.60:8000/api/settings/calendar')
+print('Calendar settings response:', response.status_code)
+if response.status_code == 200:
+    print('Settings:', response.json())
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+import json
+
+# Test saving calendar settings
+settings_data = {
+    'settings': {
+        'workHours': {'start': '08:00', 'end': '18:00'},
+        'defaultView': 'day',
+        'showWorkTasks': True,
+        'showPersonalTasks': False,
+        'showAllDayEvents': True,
+        'timeSlotInterval': 30,
+        'syncFrequency': 'realtime'
+    }
+}
+
+response = requests.post('http://192.168.1.60:8000/api/settings/calendar', 
+                        headers={'Content-Type': 'application/json'},
+                        data=json.dumps(settings_data))
+print('Save settings response:', response.status_code, response.json())
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+
+# Verify settings were saved
+response = requests.get('http://192.168.1.60:8000/api/settings/calendar')
+print('Updated settings:', response.json())
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+import json
+
+# Create a work task list
+work_task_data = {
+    'list_type': 'tasks',
+    'category': 'work',
+    'name': 'Work Tasks',
+    'items': [
+        {'text': 'Review quarterly reports', 'priority': 'high', 'completed': False},
+        {'text': 'Prepare presentation slides', 'priority': 'medium', 'completed': False},
+        {'text': 'Team meeting preparation', 'priority': 'high', 'completed': False},
+        {'text': 'Update project documentation', 'priority': 'low', 'completed': False}
+    ]
+}
+
+response = requests.post('http://192.168.1.60:8000/api/lists/tasks', 
+                        headers={'Content-Type': 'application/json'},
+                        data=json.dumps(work_task_data))
+print('Created work task list:', response.status_code, response.json())
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+response = requests.get('http://192.168.1.60:8000/api/lists/tasks')
+print('All task lists:', response.status_code)
+if response.status_code == 200:
+    data = response.json()
+    print('Task lists count:', data['count'])
+    for list_item in data['lists']:
+        print(f\"- {list_item['name']} ({list_item['category']}): {len(list_item['items'])} tasks\")
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+import json
+
+# Create an all-day event
+event_data = {
+    'title': 'Team Meeting Day',
+    'start_date': '2025-09-12',
+    'start_time': None,
+    'all_day': True,
+    'category': 'work'
+}
+
+response = requests.post('http://192.168.1.60:8000/api/calendar/events', 
+                        headers={'Content-Type': 'application/json'},
+                        data=json.dumps(event_data))
+print('Created all-day event:', response.status_code, response.json())
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+import json
+
+# Create a regular timed event
+event_data = {
+    'title': 'Client Call',
+    'start_date': '2025-09-12',
+    'start_time': '14:00',
+    'all_day': False,
+    'category': 'work'
+}
+
+response = requests.post('http://192.168.1.60:8000/api/calendar/events', 
+                        headers={'Content-Type': 'application/json'},
+                        data=json.dumps(event_data))
+print('Created timed event:', response.status_code, response.json())
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+import json
+
+# Check if calendar events are loading
+response = requests.get('http://192.168.1.60:8000/api/calendar/events')
+print('Calendar events:', response.status_code)
+if response.status_code == 200:
+    data = response.json()
+    print('Events count:', data['count'])
+    for event in data['events']:
+        print(f'- {event[\"title\"]} at {event[\"start_time\"] or \"All Day\"} on {event[\"start_date\"]}')
+
+print()
+
+# Check if tasks are loading
+response = requests.get('http://192.168.1.60:8000/api/lists/tasks')
+print('Tasks:', response.status_code)
+if response.status_code == 200:
+    data = response.json()
+    print('Task lists count:', data['count'])
+    for list_item in data['lists']:
+        print(f'- {list_item[\"name\"]}: {len(list_item[\"items\"])} tasks')
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+import requests
+import json
+
+# Check calendar events response structure
+response = requests.get('http://192.168.1.60:8000/api/calendar/events')
+print('Calendar events:', response.status_code)
+if response.status_code == 200:
+    data = response.json()
+    print('Response keys:', list(data.keys()))
+    print('Events:', len(data.get('events', [])))
+    for event in data.get('events', [])[:3]:  # Show first 3 events
+        print(f'- {event[\"title\"]} at {event.get(\"start_time\", \"All Day\")} on {event[\"start_date\"]}')
+
+print()
+
+# Check tasks response structure  
+response = requests.get('http://192.168.1.60:8000/api/lists/tasks')
+print('Tasks:', response.status_code)
+if response.status_code == 200:
+    data = response.json()
+    print('Response keys:', list(data.keys()))
+    print('Lists count:', data.get('count', 0))
+    for list_item in data.get('lists', [])[:2]:  # Show first 2 lists
+        print(f'- {list_item[\"name\"]}: {len(list_item.get(\"items\", []))} tasks')
+"
+cd /home/pi/zoe/services/zoe-core && python -c "
+# Test current time functionality
+from datetime import datetime
+import json
+
+now = datetime.now()
+current_hour = now.hour
+current_minute = now.minute
+
+print(f'Current time: {current_hour:02d}:{current_minute:02d}')
+print(f'Previous hour: {current_hour - 1:02d}:00')
+print(f'Next hour: {current_hour + 1:02d}:00')
+
+# Test calendar settings
+settings = {
+    'workHours': {'start': '09:00', 'end': '17:00'},
+    'timeSlotInterval': 60,
+    'defaultView': 'day',
+    'showWorkTasks': True,
+    'showPersonalTasks': True,
+    'showAllDayEvents': True
+}
+
+print('\\nCalendar settings:')
+print(json.dumps(settings, indent=2))
+"
+free -h | cat
+ps -eo pid,ppid,comm,%mem,%cpu,rss --sort=-%mem | head -n 25 | cat
+ollama ps | cat
+ps -p 1665 -o pid,cmd --no-headers | cat
+ps -p 1845 -o pid,cmd --no-headers | cat
+ps -p 60363 -o pid,cmd --no-headers | cat
+docker ps --format '{{.Names}}\t{{.Status}}\t{{.Ports}}' | cat && echo '---- PORTS ----' && ss -tulpen | awk '($5 ~ /:(9001|9002|5678|11434)$/){print}' | cat && echo '---- HTTP PROBES ----' && (curl -s -o /dev/null -w '11434:%{http_code}\n' http://127.0.0.1:11434/ || echo '11434:unreachable') && (curl -s -o /dev/null -w '5678:%{http_code}\n' http://127.0.0.1:5678/ || echo '5678:unreachable') && (curl -s -o /dev/null -w '9001:%{http_code}\n' http://127.0.0.1:9001/ || echo '9001:unreachable') && (curl -s -o /dev/null -w '9002:%{http_code}\n' http://127.0.0.1:9002/ || echo '9002:unreachable')
+docker restart zoe-core | cat
+curl -s http://localhost:8000/api/developer/health | jq . || echo "Health endpoint failed"
+docker restart zoe-core | cat
+curl -s http://localhost:8000/api/developer/health | jq . || echo "Health check failed"
+docker restart zoe-core | cat
+curl -s http://localhost:8000/api/developer/health | jq . || echo "Health check failed"
+curl -s http://localhost:8000/api/developer/activity | jq . || echo "Activity endpoint failed"
+docker restart zoe-core | cat
+curl -s http://localhost:8000/api/developer/health | jq .
+curl -s http://localhost:8000/api/developer/health | jq '.services | to_entries[] | {key: .key, status: .value.status}' | cat
+timeout 5 curl -s http://localhost:8000/api/developer/health | head -5
+docker ps | grep zoe-core
+docker logs zoe-core --tail 10
+docker restart zoe-core | cat
+timeout 3 curl -s http://localhost:8000/api/developer/health | jq '.status' || echo "Still timing out"
+cd /home/pi/zoe && docker-compose ps
+curl -s http://localhost:8000/api/aider/health | jq .
+curl -s http://localhost:8000/api/aider/models | jq .
+docker-compose restart zoe-core
+sleep 5 && curl -s http://localhost:8000/api/aider/sessions | jq .
+curl -s -X POST http://localhost:8000/api/aider/session -H "Content-Type: application/json" -d '{"task_id": null, "files": []}' | jq .
+curl -s http://localhost:8000/api/developer/aider/health | jq .
+which aider
+ls -la /home/pi/zoe/aider_env/bin/ | grep aider
+/home/pi/zoe/aider_env/bin/aider --version
+docker exec zoe-core which aider
+docker exec zoe-core ls -la /home/pi/zoe/aider_env/bin/ | grep aider
+docker-compose restart zoe-core
+sleep 5 && curl -s http://localhost:8000/api/developer/aider/health | jq .
+docker exec zoe-core find /home -name "aider" -type f 2>/dev/null
+docker exec zoe-core ls -la /home/pi/zoe/aider_env/bin/
+docker exec zoe-core /home/pi/zoe/aider_env/bin/aider --version
+docker exec zoe-core /home/pi/zoe/tools/aider-env/bin/aider --version
+docker exec zoe-core file /home/pi/zoe/aider_env/bin/aider
+docker exec zoe-core head -5 /home/pi/zoe/aider_env/bin/aider
+docker exec zoe-core which python3
+docker exec zoe-core python3 /home/pi/zoe/aider_env/bin/aider --version
+docker exec zoe-core pip3 list | grep aider
+docker exec zoe-core pip3 install aider
+docker exec zoe-core pip3 uninstall aider -y && docker exec zoe-core pip3 install aider==0.86.1
+docker exec zoe-core pip3 install aider
+docker exec zoe-core aider --version
+docker exec zoe-core python3 -m aider --version
+docker-compose restart zoe-core
+sleep 5 && curl -s http://localhost:8000/api/developer/aider/health | jq .
+curl -s http://localhost:8000/api/developer/aider/models | jq .
+curl -s -X POST http://localhost:8000/api/aider/session -H "Content-Type: application/json" -d '{"task_id": null, "files": []}' | jq .
+curl -s http://localhost:8000/api/aider/sessions | jq .
+top -bn1 | head -20
+free -h
+ps aux --sort=-%mem | head -10
+ps aux --sort=-%cpu | head -10
+ps aux | grep ollama
+ollama list
+sudo ls -la /root/.ollama/models/blobs/
+sudo find /root/.ollama -name "*.json" -exec cat {} \;
+sudo ls -la /root/.ollama/
+sudo find /root -name "*ollama*" -type d 2>/dev/null
+sudo cat /proc/145736/cmdline | tr '\0' ' '
+which ollama
+sudo find /usr -name "*ollama*" 2>/dev/null
+sudo find /var -name "*ollama*" 2>/dev/null
+docker ps
+sudo ls -la /var/lib/docker/volumes/zoe_zoe_ollama_data/_data/models/
+sudo find /var/lib/docker/volumes/zoe_zoe_ollama_data/_data/models/manifests -name "*.json" -exec cat {} \;
+docker exec zoe-ollama ollama list
+docker exec zoe-ollama ps aux
+docker logs zoe-ollama --tail 20
+docker exec zoe-ollama ls -la /root/.ollama/models/blobs/ | grep 74701a8c35f6c8d9a4b91f3f3497643001d63e0c7a84e085bed452548fa88d45
+docker exec zoe-ollama find /root/.ollama -name "*74701a8c35f6c8d9a4b91f3f3497643001d63e0c7a84e085bed452548fa88d45*" -exec ls -la {} \;
+docker exec zoe-ollama find /root/.ollama -name "*.json" -exec grep -l "74701a8c35f6c8d9a4b91f3f3497643001d63e0c7a84e085bed452548fa88d45" {} \;
+docker exec zoe-ollama find /root/.ollama -name "*.json" -exec cat {} \; | grep -A5 -B5 "74701a8c35f6c8d9a4b91f3f3497643001d63e0c7a84e085bed452548fa88d45"
+docker exec zoe-ollama ls -lh /root/.ollama/models/blobs/sha256-74701a8c35f6c8d9a4b91f3f3497643001d63e0c7a84e085bed452548fa88d45
+docker exec zoe-ollama ollama ps
 . "/home/pi/.cursor-server/bin/2f2737de9aa376933d975ae30290447c910fdf40/out/vs/workbench/contrib/terminal/common/scripts/shellIntegration-bash.sh"
