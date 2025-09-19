@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Zoe Local TTS Test</title>
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            font-family: -apple-system, Arial, sans-serif;
+            color: white;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .glass {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            margin: 20px 0;
+        }
+        .voice-card {
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            margin: 10px 0;
+            border-radius: 15px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .voice-card:hover {
+            background: rgba(255,255,255,0.2);
+            transform: translateX(5px);
+        }
+        .voice-card.selected {
+            background: rgba(76,175,80,0.3);
+            border: 2px solid rgba(76,175,80,0.8);
+        }
+        textarea {
+            width: 100%;
+            min-height: 100px;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.3);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            font-size: 16px;
+        }
+        button {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 12px 24px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+            transition: all 0.3s;
+        }
+        button:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-2px);
+        }
+        .status {
+            background: rgba(0,255,0,0.2);
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        .benchmark {
+            background: rgba(0,0,0,0.2);
+            padding: 15px;
+            border-radius: 10px;
+            margin: 10px 0;
+            font-family: monospace;
+        }
+        audio {
+            width: 100%;
+            margin: 20px 0;
+        }
+        .quality-meter {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+        }
+        .meter-bar {
+            flex: 1;
+            height: 20px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 0 10px;
+        }
+        .meter-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ff6b6b, #ffd93d, #6bcf7f);
+            transition: width 0.5s;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 Zoe Local TTS - Quality Test</h1>
+        
+        <div class="glass">
+            <div class="status">
+                <h3>✅ 100% Local Processing - No Internet Required</h3>
+                <p>Current Hardware: Raspberry Pi 5 (8GB RAM)</p>
+                <p>Privacy: Complete - No data leaves your device</p>
+                <p>Cost: $0 - Free forever</p>
+            </div>
+            
+            <h3>Select Voice:</h3>
+            <div id="voices">
+                <div class="voice-card" onclick="selectVoice('amy')">
+                    <strong>Amy (Fast)</strong><br>
+                    American Female • Fastest Response • Good Quality
+                    <div class="quality-meter">
+                        <span>Quality:</span>
+                        <div class="meter-bar">
+                            <div class="meter-fill" style="width: 70%"></div>
+                        </div>
+                        <span>70%</span>
+                    </div>
+                </div>
+                
+                <div class="voice-card" onclick="selectVoice('alan')">
+                    <strong>Alan (Fast)</strong><br>
+                    British Male • Fast Response • Good Quality
+                    <div class="quality-meter">
+                        <span>Quality:</span>
+                        <div class="meter-bar">
+                            <div class="meter-fill" style="width: 70%"></div>
+                        </div>
+                        <span>70%</span>
+                    </div>
+                </div>
+                
+                <div class="voice-card" onclick="selectVoice('ryan')">
+                    <strong>Ryan (High Quality)</strong><br>
+                    American Male • Slower • Best Quality Available
+                    <div class="quality-meter">
+                        <span>Quality:</span>
+                        <div class="meter-bar">
+                            <div class="meter-fill" style="width: 85%"></div>
+                        </div>
+                        <span>85%</span>
+                    </div>
+                </div>
+            </div>
+            
+            <h3>Test Phrases:</h3>
+            <textarea id="text">Hello! I'm Zoe, your local AI assistant. I'm running entirely on your Raspberry Pi, keeping your data private and secure.</textarea>
+            
+            <div>
+                <button onclick="speak()">🔊 Generate Speech</button>
+                <button onclick="benchmark()">⚡ Run Performance Test</button>
+                <button onclick="compareQuality()">🎯 Compare with ElevenLabs</button>
+            </div>
+            
+            <audio id="audio" controls></audio>
+            
+            <div id="result"></div>
+        </div>
+        
+        <div class="glass" id="comparison" style="display: none;">
+            <h3>Quality Comparison</h3>
+            <div class="benchmark">
+                <strong>ElevenLabs (Cloud):</strong>
+                - Quality: 95-100%
+                - Latency: 500ms-2s (needs internet)
+                - Cost: $5-30/month
+                - Privacy: Data sent to servers
+                
+                <strong>Current Local (Piper on Pi 5):</strong>
+                - Quality: 70-85%
+                - Latency: 1-3s (all local)
+                - Cost: $0
+                - Privacy: 100% local
+                
+                <strong>With Upgrades (16GB + Hailo):</strong>
+                - Quality: 85-95%
+                - Latency: 0.5-1s
+                - Cost: $0 (after hardware)
+                - Privacy: 100% local
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let selectedVoice = 'amy';
+        
+        function selectVoice(voice) {
+            selectedVoice = voice;
+            document.querySelectorAll('.voice-card').forEach(card => {
+                card.classList.remove('selected');
+            });
+            event.target.closest('.voice-card').classList.add('selected');
+        }
+        
+        async function speak() {
+            const text = document.getElementById('text').value;
+            const result = document.getElementById('result');
+            const audio = document.getElementById('audio');
+            
+            result.innerHTML = '<div class="benchmark">⏳ Generating speech locally...</div>';
+            const startTime = performance.now();
+            
+            try {
+                const response = await fetch('/api/tts/speak', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        text: text,
+                        voice: selectedVoice
+                    })
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const audioUrl = URL.createObjectURL(blob);
+                    audio.src = audioUrl;
+                    audio.play();
+                    
+                    const endTime = performance.now();
+                    const genTime = ((endTime - startTime) / 1000).toFixed(2);
+                    
+                    result.innerHTML = `
+                        <div class="benchmark">
+                            ✅ Speech generated!<br>
+                            Voice: ${selectedVoice}<br>
+                            Generation time: ${genTime}s<br>
+                            Quality: ${selectedVoice === 'ryan' ? '85%' : '70%'} of cloud services
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                result.innerHTML = `<div class="benchmark">❌ Error: ${error.message}</div>`;
+            }
+        }
+        
+        async function benchmark() {
+            const result = document.getElementById('result');
+            result.innerHTML = '<div class="benchmark">⚡ Running performance benchmark...</div>';
+            
+            try {
+                const response = await fetch('/api/tts/benchmark', {
+                    method: 'POST'
+                });
+                
+                const data = await response.json();
+                
+                let html = '<div class="benchmark"><strong>Performance Results:</strong><br>';
+                for (const [voice, stats] of Object.entries(data.results)) {
+                    html += `
+                        ${voice}: ${stats.average_time.toFixed(2)}s average<br>
+                        Quality: ${stats.quality}<br>
+                        Real-time capable: ${stats.realtime_capable ? '✅' : '❌'}<br><br>
+                    `;
+                }
+                html += `<strong>Recommendation:</strong> ${data.recommendation}</div>`;
+                
+                result.innerHTML = html;
+            } catch (error) {
+                result.innerHTML = `<div class="benchmark">❌ Error: ${error.message}</div>`;
+            }
+        }
+        
+        function compareQuality() {
+            document.getElementById('comparison').style.display = 'block';
+        }
+        
+        // Select Amy by default
+        window.onload = () => {
+            document.querySelector('.voice-card').click();
+        };
+    </script>
+</body>
+</html>

@@ -21,3 +21,8 @@ openai>=1.0.0
 PyJWT==2.8.0
 bcrypt==4.1.2
 email-validator==2.1.0
+sentence-transformers==2.2.2
+faiss-cpu==1.7.4
+numpy==1.24.3
+openai-whisper==20231117
+schedule==1.2.0

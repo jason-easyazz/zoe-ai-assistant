@@ -60,6 +60,13 @@ class TaskRequirements(BaseModel):
     acceptance_criteria: List[str]  # How to verify success
     priority: str = "medium"
     assigned_to: str = "zack"
+    # Time estimation fields
+    estimated_duration_minutes: Optional[int] = None
+    estimated_duration_hours: Optional[float] = None
+    estimated_duration_days: Optional[float] = None
+    time_estimation_confidence: Optional[str] = None  # low, medium, high
+    actual_duration_minutes: Optional[int] = None
+    time_tracking_enabled: bool = True
     
 class DynamicTaskPlan(BaseModel):
     """Generated at execution time based on current state"""

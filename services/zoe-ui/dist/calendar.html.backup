@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Calendar</title>
+    <link rel="stylesheet" href="css/glass.css">
+</head>
+<body>
+    <nav class="nav-bar">
+        <div class="nav-left">
+            <a href="index.html" class="nav-logo"><span>🤖</span><span>Zoe</span></a>
+            <div class="nav-menu">
+                <a href="index.html">Chat</a>
+                <a href="dashboard.html">Dashboard</a>
+                <a href="calendar.html" class="active">Calendar</a>
+                <a href="lists.html">Lists</a>
+                <a href="memories.html">Memories</a>
+                <a href="workflows.html">Workflows</a>
+                <a href="settings.html">Settings</a>
+                <a href="javascript:void(0)" onclick="openMoreOverlay()">More...</a>
+            </div>
+        </div>
+    </nav>
+    
+    <div class="main-container">
+        <h1>📅 Calendar</h1>
+        <div class="glass-card">
+            <h2>Today's Events</h2>
+            <div id="eventsList"></div>
+            <button class="btn btn-primary mt-3" onclick="addEvent()">Add Event</button>
+        </div>
+    </div>
+    
+    <div id="moreOverlay" class="more-overlay" onclick="if(event.target.id==='moreOverlay') closeMoreOverlay()">
+        <div class="more-menu">
+            <h2>All Features</h2>
+            <button class="btn btn-secondary mt-3" onclick="closeMoreOverlay()">Close</button>
+        </div>
+    </div>
+    
+    <button class="fab" onclick="openQuickChat()">💬</button>
+    <script src="js/common.js"></script>
+</body>
+</html>

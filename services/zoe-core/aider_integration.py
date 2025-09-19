@@ -19,11 +19,13 @@ class AiderIntegration:
         # Check if running in container or host
         if os.path.exists("/app"):
             # Running in container
-            self.aider_path = "aider"  # Use system Aider if available
-            self.workspace_root = "/app"
+            self.aider_path = "python3"  # Use system Python
+            self.aider_module = "aider"  # Use installed Aider module
+            self.workspace_root = "/home/pi/zoe"
         else:
             # Running on host
             self.aider_path = "/home/pi/zoe/aider_env/bin/aider"
+            self.aider_module = None
             self.workspace_root = "/home/pi/zoe"
         self.max_memory_mb = 400  # Memory limit for Aider
         
@@ -67,18 +69,34 @@ class AiderIntegration:
                         f.write(f"{key} = {value}\n")
                 
                 # Prepare Aider command
-                cmd = [
-                    self.aider_path,
-                    "--model", model,
-                    "--max-memory-mb", str(self.max_memory_mb),
-                    "--no-auto-commits",
-                    "--no-dirty-commits",
-                    "--no-show-diffs",
-                    "--map-tokens", "0",
-                    "--max-tokens", "2000",
-                    "--yes",  # Auto-accept changes
-                    "--message", request
-                ]
+                if self.aider_module:
+                    # Use Python module approach
+                    cmd = [
+                        self.aider_path, "-m", self.aider_module,
+                        "--model", model,
+                        "--max-memory-mb", str(self.max_memory_mb),
+                        "--no-auto-commits",
+                        "--no-dirty-commits",
+                        "--no-show-diffs",
+                        "--map-tokens", "0",
+                        "--max-tokens", "2000",
+                        "--yes",  # Auto-accept changes
+                        "--message", request
+                    ]
+                else:
+                    # Use direct binary approach
+                    cmd = [
+                        self.aider_path,
+                        "--model", model,
+                        "--max-memory-mb", str(self.max_memory_mb),
+                        "--no-auto-commits",
+                        "--no-dirty-commits",
+                        "--no-show-diffs",
+                        "--map-tokens", "0",
+                        "--max-tokens", "2000",
+                        "--yes",  # Auto-accept changes
+                        "--message", request
+                    ]
                 
                 # Add context files if provided
                 if context_files:

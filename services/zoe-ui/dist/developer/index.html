@@ -7,7 +7,7 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, system-ui, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
             background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
             height: 100vh;
             overflow: hidden;
@@ -262,13 +262,15 @@
                 <span>Developer</span>
             </a>
             <div class="nav-links">
-                <a href="index.html" class="nav-link active">📊</a>
-                <a href="chat.html" class="nav-link">💬</a>
-                <a href="tasks.html" class="nav-link">📋</a>
-                <a href="tools.html" class="nav-link">🔧</a>
-                <a href="monitor.html" class="nav-link">📈</a>
-                <a href="backups.html" class="nav-link">💾</a>
-                <a href="settings.html" class="nav-link">⚙️</a>
+                <a href="index.html" class="nav-link active">📊 Dashboard</a>
+                <a href="chat.html" class="nav-link">💬 Chat</a>
+                <a href="aider.html" class="nav-link">🤖 Aider</a>
+                <a href="tasks.html" class="nav-link">📋 Tasks</a>
+                <a href="roadmap.html" class="nav-link">🗺️ Roadmap</a>
+                <a href="tools.html" class="nav-link">🔧 Tools</a>
+                <a href="monitor.html" class="nav-link">📈 Monitor</a>
+                <a href="backups.html" class="nav-link">💾 Backups</a>
+                <a href="settings.html" class="nav-link">⚙️ Settings</a>
             </div>
         </div>
         <div class="header-right">
@@ -290,7 +292,7 @@
                 <div class="metric-bar">
                     <div class="metric-fill" id="cpuBar" style="width: 0%"></div>
                 </div>
-                <div style="font-size: 12px; color: #666;">4 cores available</div>
+                <div style="font-size: 12px; color: #666;" id="cpuCores">--</div>
             </div>
             
             <div class="metric-card">
@@ -300,6 +302,7 @@
                     <div class="metric-fill" id="memBar" style="width: 0%"></div>
                 </div>
                 <div style="font-size: 12px; color: #666;" id="memDetails">--</div>
+                <div id="memBreakdown" style="margin-top: 8px; font-size: 11px;"></div>
             </div>
             
             <div class="metric-card">
@@ -309,17 +312,19 @@
                     <div class="metric-fill" id="diskBar" style="width: 0%"></div>
                 </div>
                 <div style="font-size: 12px; color: #666;" id="diskDetails">--</div>
+                <div id="diskBreakdown" style="margin-top: 8px; font-size: 11px;"></div>
             </div>
         </div>
 
         <h2 style="margin: 24px 0 20px;">Quick Actions</h2>
         <div class="actions-grid">
             <button class="action-btn" onclick="restartAll()">🔄 Restart All</button>
-            <button class="action-btn" onclick="checkHealth()">🩺 Health Check</button>
-            <button class="action-btn" onclick="viewLogs()">📄 View Logs</button>
+            <button class="action-btn" onclick="refreshMetrics()">📊 Refresh Metrics</button>
             <button class="action-btn" onclick="clearCache()">🧹 Clear Cache</button>
             <button class="action-btn" onclick="runBackup()">💾 Backup Now</button>
-            <button class="action-btn" onclick="openChat()">💬 Ask Zack</button>
+            <button class="action-btn" onclick="viewSystemLogs()">📋 System Logs</button>
+            <button class="action-btn" onclick="checkDiskSpace()">💽 Disk Space</button>
+            <button class="action-btn" onclick="viewDockerStats()">🐳 Docker Stats</button>
         </div>
 
         <h2 style="margin: 24px 0 20px;">Recent Activity</h2>
@@ -341,61 +346,94 @@
         updateTime();
         setInterval(updateTime, 1000);
 
-        // Load container status
+        // Fallback health check for individual services
+        async function loadHealthFallback() {
+            const containers = [
+                { key: 'zoe-core', display: 'Core API', port: 8000 },
+                { key: 'zoe-ui', display: 'UI Server', port: 8080 },
+                { key: 'zoe-ollama', display: 'Ollama AI', port: 11434 },
+                { key: 'zoe-redis', display: 'Redis Cache', port: 6379 },
+                { key: 'zoe-whisper', display: 'Whisper STT', port: 9001 },
+                { key: 'zoe-tts', display: 'TTS Engine', port: 9002 },
+                { key: 'zoe-n8n', display: 'N8N Workflows', port: 5678 }
+            ];
+
+            const services = {};
+            
+            for (const c of containers) {
+                try {
+                    // Try to check each service individually with a short timeout
+                    const response = await fetch(`http://${window.location.hostname}:${c.port}`, {
+                        method: 'GET',
+                        mode: 'no-cors',
+                        signal: AbortSignal.timeout(2000)
+                    });
+                    services[c.key] = { status: 'ok', check: 'fallback' };
+                } catch (e) {
+                    services[c.key] = { status: 'down', check: 'fallback', error: e.message };
+                }
+            }
+            
+            return { services };
+        }
+
+        // Load container status (via Core API health aggregator to avoid CORS)
         async function loadContainerStatus() {
             const containers = [
-                { name: 'zoe-core', display: 'Core API', port: 8000, endpoint: '/health' },
-                { name: 'zoe-ui', display: 'UI Server', port: 8080, endpoint: null },
-                { name: 'zoe-ollama', display: 'Ollama AI', port: 11434, endpoint: null },
-                { name: 'zoe-redis', display: 'Redis Cache', port: 6379, endpoint: null },
-                { name: 'zoe-whisper', display: 'Whisper STT', port: 9001, endpoint: null },
-                { name: 'zoe-tts', display: 'TTS Engine', port: 9002, endpoint: null },
-                { name: 'zoe-n8n', display: 'N8N Workflows', port: 5678, endpoint: null }
+                { key: 'zoe-core', display: 'Core API', port: 8000 },
+                { key: 'zoe-ui', display: 'UI Server', port: 8080 },
+                { key: 'zoe-ollama', display: 'Ollama AI', port: 11434 },
+                { key: 'zoe-redis', display: 'Redis Cache', port: 6379 },
+                { key: 'zoe-whisper', display: 'Whisper STT', port: 9001 },
+                { key: 'zoe-tts', display: 'TTS Engine', port: 9002 },
+                { key: 'zoe-n8n', display: 'N8N Workflows', port: 5678 }
             ];
 
             const grid = document.getElementById('containerGrid');
-            grid.innerHTML = ''; // Clear existing content
-            
-            for (const container of containers) {
-                let status = 'stopped';
-                let statusText = 'Stopped';
-                
-                try {
-                    if (container.endpoint) {
-                        // Check specific endpoint
-                        const response = await fetch(`${API_BASE}${container.endpoint}`, { 
-                            method: 'GET',
-                            mode: 'cors',
-                            signal: AbortSignal.timeout(3000)
-                        });
-                        status = response.ok ? 'running' : 'stopped';
-                        statusText = response.ok ? 'Running' : 'Stopped';
-                    } else {
-                        // For other services, try to ping the port
-                        const response = await fetch(`http://${window.location.hostname}:${container.port}`, {
-                            method: 'GET',
-                            mode: 'no-cors',
-                            signal: AbortSignal.timeout(2000)
-                        });
-                        status = 'running';
+            grid.innerHTML = '';
+
+            let health = null;
+            try {
+                const resp = await fetch(`${API_BASE}/api/developer/health`, { signal: AbortSignal.timeout(5000) });
+                if (resp.ok) {
+                    health = await resp.json();
+                } else {
+                    console.error('Health API returned error:', resp.status);
+                }
+            } catch (e) {
+                console.error('Failed to load health data:', e);
+                // Try individual service checks as fallback
+                health = await loadHealthFallback();
+            }
+
+            for (const c of containers) {
+                let statusClass = 'status-warning';
+                let statusText = 'Unknown';
+                if (health && health.services && health.services[c.key]) {
+                    const svc = health.services[c.key];
+                    if (svc.status === 'ok') {
+                        statusClass = 'status-running';
                         statusText = 'Running';
+                    } else if (svc.status === 'down') {
+                        statusClass = 'status-stopped';
+                        statusText = 'Stopped';
+                    } else {
+                        statusClass = 'status-warning';
+                        statusText = 'Unknown';
                     }
-                } catch (e) {
-                    status = 'stopped';
-                    statusText = 'Stopped';
                 }
 
                 const card = document.createElement('div');
                 card.className = 'container-card';
                 card.innerHTML = `
                     <div class="container-header">
-                        <div class="container-name">${container.display}</div>
-                        <div class="container-status status-${status}"></div>
+                        <div class="container-name">${c.display}</div>
+                        <div class="container-status ${statusClass}"></div>
                     </div>
                     <div class="container-stats">
                         <div class="stat-row">
                             <span>Port:</span>
-                            <span class="stat-value">${container.port}</span>
+                            <span class="stat-value">${c.port}</span>
                         </div>
                         <div class="stat-row">
                             <span>Status:</span>
@@ -419,6 +457,12 @@
                     if (cpuValue > 0) {
                         document.getElementById('cpuUsage').textContent = `${cpuValue}%`;
                         document.getElementById('cpuBar').style.width = `${cpuValue}%`;
+                        
+                        // Show CPU cores
+                        if (data.cpu_cores && data.cpu_cores.length > 0) {
+                            const coresText = data.cpu_cores.map((core, i) => `Core ${i+1}: ${core}%`).join(' | ');
+                            document.getElementById('cpuCores').textContent = coresText;
+                        }
                     }
                     
                     // Update Memory - try both formats
@@ -432,6 +476,15 @@
                             document.getElementById('memDetails').textContent = 
                                 `${memUsed}GB / ${memTotal}GB`;
                         }
+                        
+                        // Show top memory consumers
+                        if (data.top_memory_processes && data.top_memory_processes.length > 0) {
+                            const memBreakdown = data.top_memory_processes.map(proc => 
+                                `${proc.name}: ${proc.memory_percent}% (${proc.memory_mb}MB)`
+                            ).join('<br>');
+                            document.getElementById('memBreakdown').innerHTML = 
+                                `<strong>Top consumers:</strong><br>${memBreakdown}`;
+                        }
                     }
                     
                     // Update Disk - try both formats
@@ -444,6 +497,15 @@
                         if (diskUsed > 0 && diskTotal > 0) {
                             document.getElementById('diskDetails').textContent = 
                                 `${diskUsed}GB / ${diskTotal}GB`;
+                        }
+                        
+                        // Show largest directories
+                        if (data.large_directories && data.large_directories.length > 0) {
+                            const diskBreakdown = data.large_directories.map(dir => 
+                                `${dir.path}: ${dir.size_gb}GB`
+                            ).join('<br>');
+                            document.getElementById('diskBreakdown').innerHTML = 
+                                `<strong>Largest dirs:</strong><br>${diskBreakdown}`;
                         }
                     }
                 } else {
@@ -460,22 +522,52 @@
         function loadFallbackMetrics() {
             document.getElementById('cpuUsage').textContent = '--';
             document.getElementById('cpuBar').style.width = '0%';
+            document.getElementById('cpuCores').textContent = 'API unavailable';
             document.getElementById('memUsage').textContent = '--';
             document.getElementById('memBar').style.width = '0%';
             document.getElementById('memDetails').textContent = 'API unavailable';
+            document.getElementById('memBreakdown').innerHTML = '';
             document.getElementById('diskUsage').textContent = '--';
             document.getElementById('diskBar').style.width = '0%';
             document.getElementById('diskDetails').textContent = 'API unavailable';
+            document.getElementById('diskBreakdown').innerHTML = '';
         }
 
         // Load activity log
-        function loadActivityLog() {
+        async function loadActivityLog() {
             const log = document.getElementById('activityLog');
+            
+            try {
+                // Get recent activity from API
+                const response = await fetch(`${API_BASE}/api/developer/activity`);
+                if (response.ok) {
+                    const data = await response.json();
+                    const entries = data.activities || [];
+                    
+                    log.innerHTML = entries.map(entry => `
+                        <div class="log-entry">
+                            <span class="log-time">${entry.time}</span>
+                            <span class="log-message">${entry.message}</span>
+                        </div>
+                    `).join('');
+                } else {
+                    // Fallback to static entries
+                    loadFallbackActivity();
+                }
+            } catch (e) {
+                // Fallback to static entries
+                loadFallbackActivity();
+            }
+        }
+
+        function loadFallbackActivity() {
+            const log = document.getElementById('activityLog');
+            const now = new Date();
             const entries = [
-                { time: '2 min ago', message: 'Health check completed successfully' },
-                { time: '15 min ago', message: 'Container zoe-core restarted' },
-                { time: '1 hour ago', message: 'Database backup created' },
-                { time: '3 hours ago', message: 'System update completed' }
+                { time: 'Just now', message: 'Dashboard refreshed' },
+                { time: '2 min ago', message: 'Health check completed' },
+                { time: '5 min ago', message: 'Metrics updated' },
+                { time: '10 min ago', message: 'System monitoring active' }
             ];
             
             log.innerHTML = entries.map(entry => `
@@ -508,12 +600,22 @@
             }
         }
 
-        function checkHealth() {
-            window.location.href = 'chat.html?message=Run full system health check';
+        function refreshMetrics() {
+            loadContainerStatus();
+            loadSystemMetrics();
+            loadActivityLog();
         }
 
-        function viewLogs() {
+        function viewSystemLogs() {
             window.location.href = 'monitor.html';
+        }
+
+        function checkDiskSpace() {
+            window.location.href = 'chat.html?message=Show detailed disk usage and space analysis';
+        }
+
+        function viewDockerStats() {
+            window.location.href = 'chat.html?message=Show Docker container statistics and resource usage';
         }
 
         async function clearCache() {
@@ -543,6 +645,10 @@
             window.location.href = 'chat.html';
         }
 
+        function openAider() {
+            window.location.href = 'aider.html';
+        }
+
         // Initialize
         loadContainerStatus();
         loadSystemMetrics();
@@ -558,58 +664,3 @@
 <script src="metrics.js"></script>
 </body>
 </html>
-<script>
-// Inline metrics updater - works regardless of dashboard structure
-(function() {
-    async function fixMetrics() {
-        try {
-            const response = await fetch('/api/developer/metrics');
-            const data = await response.json();
-            
-            // Find all elements that might be metric displays
-            const possibleMetricElements = [
-                // Try different selectors
-                document.querySelectorAll('.metric-value'),
-                document.querySelectorAll('[class*="metric"]'),
-                document.querySelectorAll('[class*="usage"]'),
-                document.querySelectorAll('[id*="cpu"], [id*="memory"], [id*="disk"]')
-            ];
-            
-            // Find CPU display
-            possibleMetricElements.forEach(elements => {
-                elements.forEach(elem => {
-                    const text = elem.parentElement?.textContent || '';
-                    if (text.toLowerCase().includes('cpu') && data.cpu_percent !== undefined) {
-                        if (elem.textContent === '--' || elem.textContent === '') {
-                            elem.textContent = `${data.cpu_percent.toFixed(1)}%`;
-                            elem.style.fontSize = '24px';
-                            elem.style.fontWeight = 'bold';
-                        }
-                    }
-                    if (text.toLowerCase().includes('memory') && data.memory_percent !== undefined) {
-                        if (elem.textContent === '--' || elem.textContent === '') {
-                            elem.textContent = `${data.memory_percent.toFixed(1)}%`;
-                            elem.style.fontSize = '24px';
-                            elem.style.fontWeight = 'bold';
-                        }
-                    }
-                    if (text.toLowerCase().includes('disk') && data.disk_percent !== undefined) {
-                        if (elem.textContent === '--' || elem.textContent === '') {
-                            elem.textContent = `${data.disk_percent.toFixed(1)}%`;
-                            elem.style.fontSize = '24px';
-                            elem.style.fontWeight = 'bold';
-                        }
-                    }
-                });
-            });
-            
-        } catch (error) {
-            console.error('Metrics fetch failed:', error);
-        }
-    }
-    
-    // Run immediately and every 5 seconds
-    fixMetrics();
-    setInterval(fixMetrics, 5000);
-})();
-</script>

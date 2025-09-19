@@ -1,0 +1,12 @@
+{
+  "workHours": {
+    "start": "08:00",
+    "end": "18:00"
+  },
+  "defaultView": "day",
+  "showWorkTasks": true,
+  "showPersonalTasks": false,
+  "showAllDayEvents": true,
+  "timeSlotInterval": 30,
+  "syncFrequency": "realtime"
+}

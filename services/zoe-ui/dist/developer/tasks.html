@@ -7,7 +7,7 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, system-ui, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
             background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
             height: 100vh;
             overflow: hidden;
@@ -154,11 +154,65 @@
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
             cursor: pointer;
             transition: all 0.2s;
+            position: relative;
+            user-select: none;
         }
 
         .task-card:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.12);
+        }
+
+        .task-card.dragging {
+            opacity: 0.5;
+            transform: rotate(5deg);
+            z-index: 1000;
+        }
+
+        .task-card.drag-over {
+            border-top: 3px solid #7B61FF;
+            transform: translateY(-2px);
+        }
+
+        .task-order-handle {
+            position: absolute;
+            left: 4px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 16px;
+            height: 16px;
+            cursor: grab;
+            opacity: 0.3;
+            transition: opacity 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .task-card:hover .task-order-handle {
+            opacity: 0.7;
+        }
+
+        .task-order-handle:active {
+            cursor: grabbing;
+        }
+
+        .task-order-number {
+            position: absolute;
+            right: 8px;
+            top: 8px;
+            background: rgba(123, 97, 255, 0.1);
+            color: #7B61FF;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 600;
         }
 
         .task-title {
@@ -326,6 +380,310 @@
         .executing {
             animation: pulse 1.6s ease-in-out infinite;
         }
+
+        .aider-btn {
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            flex: 1;
+        }
+
+        .aider-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+
+        .task-details-modal {
+            max-width: 600px;
+            width: 90%;
+        }
+
+        .task-details-form {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .form-group label {
+            font-weight: 500;
+            color: #333;
+            font-size: 14px;
+        }
+
+        .form-input, .form-textarea, .form-select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        .form-input:focus, .form-textarea:focus, .form-select:focus {
+            outline: none;
+            border-color: #7B61FF;
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+
+        .requirements-list, .constraints-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .requirement-item, .constraint-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            background: rgba(0, 0, 0, 0.03);
+            border-radius: 4px;
+        }
+
+        .requirement-item input, .constraint-item input {
+            flex: 1;
+            border: none;
+            background: transparent;
+            font-size: 13px;
+        }
+
+        .requirement-item input:focus, .constraint-item input:focus {
+            outline: none;
+        }
+
+        .remove-item {
+            color: #ff4757;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 16px;
+        }
+
+        /* Task Overlay Modal - Minimalistic */
+        .task-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.4);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 2000;
+        }
+
+        .task-overlay-content {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            max-width: 600px;
+            width: 100%;
+            max-height: 80vh;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        .task-overlay-header {
+            padding: 20px;
+            border-bottom: 1px solid #e5e7eb;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .task-overlay-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #111827;
+            margin: 0;
+        }
+
+        .task-overlay-close {
+            background: none;
+            border: none;
+            font-size: 20px;
+            color: #6b7280;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+        }
+
+        .task-overlay-close:hover {
+            background: #f3f4f6;
+        }
+
+        .task-overlay-body {
+            padding: 20px;
+        }
+
+        .task-field {
+            margin-bottom: 16px;
+        }
+
+        .task-field-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: #6b7280;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+            display: block;
+        }
+
+        .task-field-input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 14px;
+            color: #111827;
+            background: white;
+            transition: border-color 0.2s;
+        }
+
+        .task-field-input:focus {
+            outline: none;
+            border-color: #7B61FF;
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+
+        .task-field-textarea {
+            min-height: 60px;
+            resize: vertical;
+        }
+
+        .task-field-select {
+            cursor: pointer;
+        }
+
+        .task-list-field {
+            margin-bottom: 20px;
+        }
+
+        .task-list-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .task-list-item input {
+            flex: 1;
+            padding: 6px 8px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .task-list-item input:focus {
+            outline: none;
+            border-color: #7B61FF;
+        }
+
+        .remove-item-btn {
+            background: #fee2e2;
+            border: 1px solid #fecaca;
+            color: #dc2626;
+            border-radius: 4px;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .add-item-btn {
+            background: #f3f4f6;
+            border: 1px solid #d1d5db;
+            color: #6b7280;
+            border-radius: 4px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-top: 6px;
+        }
+
+        .add-item-btn:hover {
+            background: #e5e7eb;
+        }
+
+        .task-actions {
+            display: flex;
+            gap: 8px;
+            padding: 16px 20px;
+            background: #f9fafb;
+            border-radius: 0 0 12px 12px;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        .task-action-btn {
+            flex: 1;
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: none;
+            font-weight: 500;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .task-action-btn.primary {
+            background: #7B61FF;
+            color: white;
+        }
+
+        .task-action-btn.primary:hover {
+            background: #6b4cff;
+        }
+
+        .task-action-btn.secondary {
+            background: #f3f4f6;
+            color: #374151;
+            border: 1px solid #d1d5db;
+        }
+
+        .task-action-btn.secondary:hover {
+            background: #e5e7eb;
+        }
+
+        .task-action-btn.danger {
+            background: #fee2e2;
+            color: #dc2626;
+            border: 1px solid #fecaca;
+        }
+
+        .task-action-btn.danger:hover {
+            background: #fecaca;
+        }
+
+        .priority-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .priority-critical { background: #fee; color: #c00; }
+        .priority-high { background: #fea; color: #a60; }
+        .priority-medium { background: #def; color: #06a; }
+        .priority-low { background: #dfd; color: #0a0; }
     </style>
 </head>
 <body>
@@ -336,13 +694,14 @@
                 <span>Developer</span>
             </a>
             <div class="nav-links">
-                <a href="index.html" class="nav-link">📊</a>
-                <a href="chat.html" class="nav-link">💬</a>
-                <a href="tasks.html" class="nav-link active">📋</a>
-                <a href="tools.html" class="nav-link">🔧</a>
-                <a href="monitor.html" class="nav-link">📈</a>
-                <a href="backups.html" class="nav-link">💾</a>
-                <a href="settings.html" class="nav-link">⚙️</a>
+                <a href="index.html" class="nav-link">📊 Dashboard</a>
+                <a href="chat.html" class="nav-link">💬 Chat</a>
+                <a href="aider.html" class="nav-link">🤖 Aider</a>
+                <a href="tasks.html" class="nav-link active">📋 Tasks</a>
+                <a href="tools.html" class="nav-link">🔧 Tools</a>
+                <a href="monitor.html" class="nav-link">📈 Monitor</a>
+                <a href="backups.html" class="nav-link">💾 Backups</a>
+                <a href="settings.html" class="nav-link">⚙️ Settings</a>
             </div>
         </div>
         <div class="header-right">
@@ -362,6 +721,12 @@
             <button id="tab-in_progress" class="tab" onclick="setTab('in_progress')">In Progress (<span id="count-in_progress">0</span>)</button>
             <button id="tab-completed" class="tab" onclick="setTab('completed')">Completed (<span id="count-completed">0</span>)</button>
             <div style="flex:1"></div>
+            <select id="sortOrder" class="tab" onchange="changeSortOrder()" style="background: rgba(255,255,255,0.6); border: 1px solid rgba(0,0,0,0.08); border-radius: 999px; padding: 8px 12px; font-size: 13px; color: #345;">
+                <option value="custom">Custom Order</option>
+                <option value="priority">Priority</option>
+                <option value="created">Created Date</option>
+                <option value="status">Status</option>
+            </select>
             <button id="compactToggle" class="tab" onclick="toggleCompact()">Compact</button>
         </div>
         <div class="task-column" style="padding: 0; background: transparent;">
@@ -475,6 +840,143 @@
         </div>
     </div>
 
+    <!-- Task Overlay Modal -->
+    <div id="taskOverlay" class="task-overlay">
+        <div class="task-overlay-content">
+            <div class="task-overlay-header">
+                <div class="task-overlay-title" id="overlayTaskTitle">Edit Task</div>
+                <button class="task-overlay-close" onclick="closeTaskOverlay()">✖</button>
+            </div>
+            
+            <div class="task-overlay-body">
+                <!-- Title -->
+                <div class="task-field">
+                    <label class="task-field-label">Title</label>
+                    <input type="text" id="overlayTitle" class="task-field-input" placeholder="Task title">
+                </div>
+
+                <!-- Objective -->
+                <div class="task-field">
+                    <label class="task-field-label">Objective</label>
+                    <textarea id="overlayObjective" class="task-field-input task-field-textarea" placeholder="What should this task accomplish?"></textarea>
+                </div>
+
+                <!-- Priority & Status -->
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                    <div class="task-field">
+                        <label class="task-field-label">Priority</label>
+                        <select id="overlayPriority" class="task-field-input task-field-select">
+                            <option value="low">Low</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                            <option value="critical">Critical</option>
+                        </select>
+                    </div>
+                    <div class="task-field">
+                        <label class="task-field-label">Status</label>
+                        <select id="overlayStatus" class="task-field-input task-field-select">
+                            <option value="pending">Pending</option>
+                            <option value="in_progress">In Progress</option>
+                            <option value="completed">Completed</option>
+                            <option value="cancelled">Cancelled</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Assigned To -->
+                <div class="task-field">
+                    <label class="task-field-label">Assigned To</label>
+                    <input type="text" id="overlayAssignee" class="task-field-input" placeholder="zack">
+                </div>
+
+                <!-- Requirements -->
+                <div class="task-list-field">
+                    <label class="task-field-label">Requirements</label>
+                    <div id="overlayRequirementsList">
+                        <!-- Dynamic requirements will be added here -->
+                    </div>
+                    <button class="add-item-btn" onclick="addOverlayRequirement()">+ Add Requirement</button>
+                </div>
+
+                <!-- Constraints -->
+                <div class="task-list-field">
+                    <label class="task-field-label">Constraints</label>
+                    <div id="overlayConstraintsList">
+                        <!-- Dynamic constraints will be added here -->
+                    </div>
+                    <button class="add-item-btn" onclick="addOverlayConstraint()">+ Add Constraint</button>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="task-actions">
+                <button class="task-action-btn secondary" onclick="analyzeTaskFromOverlay()">Analyze</button>
+                <button class="task-action-btn secondary" onclick="viewHistoryFromOverlay()">History</button>
+                <button class="task-action-btn primary" onclick="saveOverlayChanges()">Save</button>
+                <button class="task-action-btn primary" onclick="executeTaskFromOverlay()">Execute</button>
+                <button class="task-action-btn danger" onclick="deleteTaskFromOverlay()">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Task Details Modal -->
+    <div id="taskDetailsModal" class="modal-overlay">
+        <div class="modal task-details-modal">
+            <div class="modal-header">
+                <div class="modal-title">Task Details</div>
+                <button class="close-btn" onclick="closeTaskDetailsModal()">✖</button>
+            </div>
+            <div class="modal-body">
+                <div class="task-details-form">
+                    <div class="form-group">
+                        <label>Title</label>
+                        <input type="text" id="taskDetailsTitleInput" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label>Description</label>
+                        <textarea id="taskDetailsDescriptionInput" class="form-textarea" rows="3"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Objective</label>
+                        <textarea id="taskDetailsObjectiveInput" class="form-textarea" rows="2"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Priority</label>
+                        <select id="taskDetailsPriorityInput" class="form-select">
+                            <option value="low">Low</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Requirements</label>
+                        <div id="taskDetailsRequirementsList" class="requirements-list"></div>
+                        <button class="btn btn-secondary" onclick="addRequirement()">+ Add Requirement</button>
+                    </div>
+                    <div class="form-group">
+                        <label>Constraints</label>
+                        <div id="taskDetailsConstraintsList" class="constraints-list"></div>
+                        <button class="btn btn-secondary" onclick="addConstraint()">+ Add Constraint</button>
+                    </div>
+                    <div class="form-group">
+                        <label>Status</label>
+                        <select id="taskDetailsStatusInput" class="form-select">
+                            <option value="pending">Pending</option>
+                            <option value="in_progress">In Progress</option>
+                            <option value="completed">Completed</option>
+                            <option value="cancelled">Cancelled</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="task-btn" onclick="closeTaskDetailsModal()">Cancel</button>
+                <button class="task-btn" onclick="saveTaskDetails()" style="background: #7B61FF; color: white;">Save Changes</button>
+                <button class="task-btn" onclick="executeWithAiderFromModal()" style="background: #5AE0E0; color: #123;">🤖 Execute with Aider</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const PROTOCOL = window.location.protocol;
         const HOSTNAME = window.location.hostname;
@@ -572,11 +1074,20 @@
 
         // Tab/filter state
         let currentTab = localStorage.getItem('devTasksTab') || 'all';
+        let currentSortOrder = localStorage.getItem('devTasksSortOrder') || 'custom';
+        let taskOrder = JSON.parse(localStorage.getItem('devTasksOrder') || '[]');
+        
         function setTab(tab) {
             currentTab = tab;
             localStorage.setItem('devTasksTab', tab);
             updateTabsActive();
             // Re-render using last loaded list
+            renderList(window.__lastTasks || []);
+        }
+        
+        function changeSortOrder() {
+            currentSortOrder = document.getElementById('sortOrder').value;
+            localStorage.setItem('devTasksSortOrder', currentSortOrder);
             renderList(window.__lastTasks || []);
         }
         function toggleCompact() {
@@ -625,25 +1136,83 @@
         function renderList(tasks) {
             let filtered = tasks;
             if (currentTab !== 'all') filtered = tasks.filter(t => t.status === currentTab);
+            
+            // Apply sorting
+            const sorted = sortTasks(filtered);
+            
             const list = document.getElementById('taskList');
-            if (list) list.innerHTML = filtered.map(t => createTaskCard(t)).join('');
+            if (list) list.innerHTML = sorted.map((t, index) => createTaskCard(t, index)).join('');
+        }
+        
+        function sortTasks(tasks) {
+            if (currentSortOrder === 'custom') {
+                // Use custom order from localStorage
+                const ordered = [];
+                const taskMap = new Map(tasks.map(t => [t.id, t]));
+                
+                // First add tasks in custom order
+                for (const taskId of taskOrder) {
+                    if (taskMap.has(taskId)) {
+                        ordered.push(taskMap.get(taskId));
+                        taskMap.delete(taskId);
+                    }
+                }
+                
+                // Then add any remaining tasks
+                for (const task of taskMap.values()) {
+                    ordered.push(task);
+                }
+                
+                return ordered;
+            } else if (currentSortOrder === 'priority') {
+                const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+                return [...tasks].sort((a, b) => {
+                    const aPriority = priorityOrder[a.priority] || 999;
+                    const bPriority = priorityOrder[b.priority] || 999;
+                    return aPriority - bPriority;
+                });
+            } else if (currentSortOrder === 'created') {
+                return [...tasks].sort((a, b) => {
+                    const aDate = new Date(a.created_at || 0);
+                    const bDate = new Date(b.created_at || 0);
+                    return bDate - aDate; // Newest first
+                });
+            } else if (currentSortOrder === 'status') {
+                const statusOrder = { pending: 0, in_progress: 1, completed: 2, cancelled: 3 };
+                return [...tasks].sort((a, b) => {
+                    const aStatus = statusOrder[a.status] || 999;
+                    const bStatus = statusOrder[b.status] || 999;
+                    return aStatus - bStatus;
+                });
+            }
+            return tasks;
         }
 
         // Create task card HTML
-        function createTaskCard(task) {
+        function createTaskCard(task, orderIndex = 0) {
             const reqCount = Array.isArray(task.requirements) ? task.requirements.length : 0;
             const conCount = Array.isArray(task.constraints) ? task.constraints.length : 0;
             const execCount = typeof task.execution_count === 'number' ? task.execution_count : 0;
             const subtitle = task.objective ? `<div style="font-size:12px; color:#555; margin-bottom:6px;">${task.objective}</div>` : '';
             return `
-                <div class="task-card" id="task-${task.id}" onclick="showContextMenu(event, '${task.id}')">
-                    <div class="task-title">${task.title}</div>
+                <div class="task-card" id="task-${task.id}" 
+                     data-task-id="${task.id}" 
+                     data-order="${orderIndex}"
+                     draggable="true"
+                     ondragstart="handleDragStart(event)"
+                     ondragover="handleDragOver(event)"
+                     ondrop="handleDrop(event)"
+                     ondragend="handleDragEnd(event)"
+                     onclick="showTaskOverlay('${task.id}')">
+                    <div class="task-order-handle" onclick="event.stopPropagation()">⋮⋮</div>
+                    <div class="task-order-number">${orderIndex + 1}</div>
+                    <div class="task-title" style="margin-left: 20px; margin-right: 30px;">${task.title}</div>
                     ${subtitle}
-                    <div class="task-meta">
+                    <div class="task-meta" style="margin-left: 20px;">
                         <span class="task-priority priority-${task.priority}">${task.priority}</span>
                         <span>#${task.id}</span>
                     </div>
-                    <div class="task-meta" style="margin-top:6px;">
+                    <div class="task-meta" style="margin-top:6px; margin-left: 20px;">
                         <span>Requirements: ${reqCount}</span>
                         <span>Constraints: ${conCount}</span>
                         <span>Runs: ${execCount}</span>
@@ -897,6 +1466,294 @@
         }
         function closeHistoryModal() { document.getElementById('historyModal').style.display = 'none'; }
 
+        // Task Overlay Functions
+        let currentOverlayTaskId = null;
+
+        function showTaskOverlay(taskId) {
+            const tasks = window.__lastTasks || [];
+            const task = tasks.find(t => t.id === taskId);
+            if (!task) {
+                alert('Task not found');
+                return;
+            }
+
+            currentOverlayTaskId = taskId;
+            
+            // Populate form fields
+            document.getElementById('overlayTitle').value = task.title || '';
+            document.getElementById('overlayObjective').value = task.objective || '';
+            document.getElementById('overlayPriority').value = task.priority || 'medium';
+            document.getElementById('overlayStatus').value = task.status || 'pending';
+            document.getElementById('overlayAssignee').value = task.assigned_to || 'zack';
+            
+            // Populate requirements
+            populateOverlayList('overlayRequirementsList', task.requirements || []);
+            
+            // Populate constraints
+            populateOverlayList('overlayConstraintsList', task.constraints || []);
+            
+            // Show overlay
+            document.getElementById('taskOverlay').style.display = 'flex';
+        }
+
+        function populateOverlayList(containerId, items) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = '';
+            
+            if (items.length === 0) {
+                addOverlayListItem(containerId, '');
+            } else {
+                items.forEach(item => {
+                    addOverlayListItem(containerId, item);
+                });
+            }
+        }
+
+        function addOverlayListItem(containerId, value = '') {
+            const container = document.getElementById(containerId);
+            const item = document.createElement('div');
+            item.className = 'task-list-item';
+            item.innerHTML = `
+                <input type="text" value="${value}" placeholder="Enter item...">
+                <button class="remove-item-btn" onclick="removeOverlayListItem(this)">×</button>
+            `;
+            container.appendChild(item);
+        }
+
+        function addOverlayRequirement() {
+            addOverlayListItem('overlayRequirementsList', '');
+        }
+
+        function addOverlayConstraint() {
+            addOverlayListItem('overlayConstraintsList', '');
+        }
+
+        function removeOverlayListItem(button) {
+            const container = button.parentElement.parentElement;
+            const items = container.querySelectorAll('.task-list-item');
+            if (items.length > 1) {
+                button.parentElement.remove();
+            }
+        }
+
+        async function saveOverlayChanges() {
+            if (!currentOverlayTaskId) return;
+
+            const task = {
+                title: document.getElementById('overlayTitle').value.trim(),
+                objective: document.getElementById('overlayObjective').value.trim(),
+                priority: document.getElementById('overlayPriority').value,
+                status: document.getElementById('overlayStatus').value,
+                assigned_to: document.getElementById('overlayAssignee').value.trim() || 'zack',
+                requirements: Array.from(document.querySelectorAll('#overlayRequirementsList input'))
+                    .map(input => input.value.trim())
+                    .filter(value => value),
+                constraints: Array.from(document.querySelectorAll('#overlayConstraintsList input'))
+                    .map(input => input.value.trim())
+                    .filter(value => value)
+            };
+
+            if (!task.title || !task.objective) {
+                alert('Please provide title and objective.');
+                return;
+            }
+
+            try {
+                const response = await apiFetch(`/api/developer/tasks/${currentOverlayTaskId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(task)
+                });
+
+                if (response.ok) {
+                    closeTaskOverlay();
+                    loadTasks(); // Refresh the task list
+                } else {
+                    alert('Failed to save task');
+                }
+            } catch (error) {
+                console.error('Error saving task:', error);
+                alert('Failed to save task');
+            }
+        }
+
+        function closeTaskOverlay() {
+            document.getElementById('taskOverlay').style.display = 'none';
+            currentOverlayTaskId = null;
+        }
+
+        function analyzeTaskFromOverlay() {
+            if (currentOverlayTaskId) {
+                closeTaskOverlay();
+                analyzeTask(currentOverlayTaskId);
+            }
+        }
+
+        function viewHistoryFromOverlay() {
+            if (currentOverlayTaskId) {
+                closeTaskOverlay();
+                viewHistory(currentOverlayTaskId);
+            }
+        }
+
+        function executeTaskFromOverlay() {
+            if (currentOverlayTaskId) {
+                closeTaskOverlay();
+                executeTask(currentOverlayTaskId);
+            }
+        }
+
+        function deleteTaskFromOverlay() {
+            if (currentOverlayTaskId) {
+                closeTaskOverlay();
+                deleteTask(currentOverlayTaskId);
+            }
+        }
+
+        // Task Details Modal Functions
+        let currentTaskId = null;
+
+        function showTaskDetails(taskId) {
+            const tasks = window.__lastTasks || [];
+            const task = tasks.find(t => t.id === taskId);
+            if (!task) {
+                alert('Task not found');
+                return;
+            }
+
+            currentTaskId = taskId;
+            
+            // Populate form fields
+            document.getElementById('taskDetailsTitleInput').value = task.title || '';
+            document.getElementById('taskDetailsDescriptionInput').value = task.description || '';
+            document.getElementById('taskDetailsObjectiveInput').value = task.objective || '';
+            document.getElementById('taskDetailsPriorityInput').value = task.priority || 'medium';
+            document.getElementById('taskDetailsStatusInput').value = task.status || 'pending';
+            
+            // Populate requirements
+            const requirementsList = document.getElementById('taskDetailsRequirementsList');
+            requirementsList.innerHTML = '';
+            if (task.requirements && task.requirements.length > 0) {
+                task.requirements.forEach(req => addRequirementItem(req));
+            }
+            
+            // Populate constraints
+            const constraintsList = document.getElementById('taskDetailsConstraintsList');
+            constraintsList.innerHTML = '';
+            if (task.constraints && task.constraints.length > 0) {
+                task.constraints.forEach(con => addConstraintItem(con));
+            }
+            
+            // Show modal
+            document.getElementById('taskDetailsModal').style.display = 'flex';
+        }
+
+        function closeTaskDetailsModal() {
+            document.getElementById('taskDetailsModal').style.display = 'none';
+            currentTaskId = null;
+        }
+
+        function addRequirement() {
+            addRequirementItem('');
+        }
+
+        function addRequirementItem(value = '') {
+            const requirementsList = document.getElementById('taskDetailsRequirementsList');
+            const item = document.createElement('div');
+            item.className = 'requirement-item';
+            item.innerHTML = `
+                <input type="text" value="${value}" placeholder="Enter requirement...">
+                <span class="remove-item" onclick="removeRequirementItem(this)">×</span>
+            `;
+            requirementsList.appendChild(item);
+        }
+
+        function addConstraint() {
+            addConstraintItem('');
+        }
+
+        function addConstraintItem(value = '') {
+            const constraintsList = document.getElementById('taskDetailsConstraintsList');
+            const item = document.createElement('div');
+            item.className = 'constraint-item';
+            item.innerHTML = `
+                <input type="text" value="${value}" placeholder="Enter constraint...">
+                <span class="remove-item" onclick="removeConstraintItem(this)">×</span>
+            `;
+            constraintsList.appendChild(item);
+        }
+
+        function removeRequirementItem(element) {
+            element.parentElement.remove();
+        }
+
+        function removeConstraintItem(element) {
+            element.parentElement.remove();
+        }
+
+        async function saveTaskDetails() {
+            if (!currentTaskId) return;
+
+            const task = {
+                title: document.getElementById('taskDetailsTitleInput').value,
+                description: document.getElementById('taskDetailsDescriptionInput').value,
+                objective: document.getElementById('taskDetailsObjectiveInput').value,
+                priority: document.getElementById('taskDetailsPriorityInput').value,
+                status: document.getElementById('taskDetailsStatusInput').value,
+                requirements: Array.from(document.querySelectorAll('.requirement-item input'))
+                    .map(input => input.value.trim())
+                    .filter(value => value),
+                constraints: Array.from(document.querySelectorAll('.constraint-item input'))
+                    .map(input => input.value.trim())
+                    .filter(value => value)
+            };
+
+            try {
+                const response = await apiFetch(`/api/developer/tasks/${currentTaskId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(task)
+                });
+
+                if (response.ok) {
+                    closeTaskDetailsModal();
+                    loadTasks(); // Refresh the task list
+                } else {
+                    alert('Failed to save task');
+                }
+            } catch (error) {
+                console.error('Error saving task:', error);
+                alert('Failed to save task');
+            }
+        }
+
+        function executeWithAiderFromModal() {
+            if (!currentTaskId) return;
+
+            const tasks = window.__lastTasks || [];
+            const task = tasks.find(t => t.id === currentTaskId);
+            if (!task) {
+                alert('Task not found');
+                return;
+            }
+
+            // Create task context message
+            const taskContext = {
+                title: task.title,
+                description: task.description || 'No description',
+                requirements: task.requirements || [],
+                constraints: task.constraints || [],
+                objective: task.objective || '',
+                priority: task.priority || 'medium'
+            };
+
+            // Encode task context for URL
+            const encodedContext = encodeURIComponent(JSON.stringify(taskContext));
+            
+            // Navigate to Aider page with task context
+            window.open(`aider.html?task=${currentTaskId}&context=${encodedContext}`, '_blank');
+        }
+
         // Delete task
         async function deleteTask(taskId) {
             if (!confirm('Delete this task?')) return;
@@ -977,11 +1834,113 @@
             hideContextMenu();
         }
         
+        // Drag and Drop functionality
+        let draggedTaskId = null;
+        let draggedElement = null;
+
+        function handleDragStart(event) {
+            draggedTaskId = event.target.dataset.taskId;
+            draggedElement = event.target;
+            event.target.classList.add('dragging');
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/html', event.target.outerHTML);
+        }
+
+        function handleDragOver(event) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+            
+            const afterElement = getDragAfterElement(event.target.parentNode, event.clientY);
+            const dragging = document.querySelector('.dragging');
+            
+            if (afterElement == null) {
+                event.target.parentNode.appendChild(dragging);
+            } else {
+                event.target.parentNode.insertBefore(dragging, afterElement);
+            }
+        }
+
+        function handleDrop(event) {
+            event.preventDefault();
+            const draggedId = draggedTaskId;
+            const dropTarget = event.target.closest('.task-card');
+            
+            if (!dropTarget || !draggedId) return;
+            
+            const dropTargetId = dropTarget.dataset.taskId;
+            if (draggedId === dropTargetId) return;
+            
+            // Update task order
+            updateTaskOrder(draggedId, dropTargetId);
+            
+            // Re-render the list
+            renderList(window.__lastTasks || []);
+        }
+
+        function handleDragEnd(event) {
+            event.target.classList.remove('dragging');
+            draggedTaskId = null;
+            draggedElement = null;
+            
+            // Remove drag-over classes
+            document.querySelectorAll('.task-card').forEach(card => {
+                card.classList.remove('drag-over');
+            });
+        }
+
+        function getDragAfterElement(container, y) {
+            const draggableElements = [...container.querySelectorAll('.task-card:not(.dragging)')];
+            
+            return draggableElements.reduce((closest, child) => {
+                const box = child.getBoundingClientRect();
+                const offset = y - box.top - box.height / 2;
+                
+                if (offset < 0 && offset > closest.offset) {
+                    return { offset: offset, element: child };
+                } else {
+                    return closest;
+                }
+            }, { offset: Number.NEGATIVE_INFINITY }).element;
+        }
+
+        function updateTaskOrder(draggedId, dropTargetId) {
+            if (currentSortOrder !== 'custom') {
+                // Switch to custom order when dragging
+                currentSortOrder = 'custom';
+                document.getElementById('sortOrder').value = 'custom';
+                localStorage.setItem('devTasksSortOrder', 'custom');
+            }
+            
+            // Remove dragged task from order
+            taskOrder = taskOrder.filter(id => id !== draggedId);
+            
+            // Find drop target position
+            const dropIndex = taskOrder.indexOf(dropTargetId);
+            if (dropIndex === -1) {
+                // If drop target not in order, add at end
+                taskOrder.push(draggedId);
+            } else {
+                // Insert at drop target position
+                taskOrder.splice(dropIndex, 0, draggedId);
+            }
+            
+            // Save new order
+            localStorage.setItem('devTasksOrder', JSON.stringify(taskOrder));
+        }
+
         // Close context menu on click outside
         document.addEventListener('click', hideContextMenu);
         document.addEventListener('contextmenu', hideContextMenu);
 
+        // Close overlay when clicking outside
+        document.getElementById('taskOverlay').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeTaskOverlay();
+            }
+        });
+
         // Initialize
+        document.getElementById('sortOrder').value = currentSortOrder;
         loadTasks();
         setInterval(loadTasks, 30000);
     </script>

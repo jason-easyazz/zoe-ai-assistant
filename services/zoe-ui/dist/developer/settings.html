@@ -7,7 +7,7 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, system-ui, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
             background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
             height: 100vh;
             overflow: hidden;
@@ -141,8 +141,10 @@
         }
 
         .section-title {
-            font-size: 18px;
+            font-family: var(--font-family-display);
+            font-size: 16px;
             font-weight: 600;
+            line-height: 1.4;
             margin-bottom: 16px;
             color: #333;
         }
@@ -219,6 +221,12 @@
         .setting-textarea:focus {
             outline: none;
             border-color: #7B61FF;
+        }
+
+        .stat-value {
+            font-weight: 600;
+            color: #7B61FF;
+            font-size: 16px;
         }
 
         /* Buttons */
@@ -660,13 +668,14 @@
                 <span>Developer</span>
             </a>
             <div class="nav-links">
-                <a href="index.html" class="nav-link">📊</a>
-                <a href="chat.html" class="nav-link">💬</a>
-                <a href="tasks.html" class="nav-link">📋</a>
-                <a href="tools.html" class="nav-link">🔧</a>
-                <a href="monitor.html" class="nav-link">📈</a>
-                <a href="backups.html" class="nav-link">💾</a>
-                <a href="settings.html" class="nav-link active">⚙️</a>
+                <a href="index.html" class="nav-link">📊 Dashboard</a>
+                <a href="chat.html" class="nav-link">💬 Chat</a>
+                <a href="aider.html" class="nav-link">🤖 Aider</a>
+                <a href="tasks.html" class="nav-link">📋 Tasks</a>
+                <a href="tools.html" class="nav-link">🔧 Tools</a>
+                <a href="monitor.html" class="nav-link">📈 Monitor</a>
+                <a href="backups.html" class="nav-link">💾 Backups</a>
+                <a href="settings.html" class="nav-link active">⚙️ Settings</a>
             </div>
         </div>
         <div class="header-right">
@@ -680,7 +689,8 @@
             <div class="tab" onclick="switchTab('system')">⚙️ System</div>
             <div class="tab" onclick="switchTab('security')">🔒 Security</div>
             <div class="tab" onclick="switchTab('performance')">📈 Performance</div>
-            <div class="tab" onclick="switchTab('backup')">💾 Backup</div>
+            <div class="tab" onclick="switchTab('guardrails')">🛡️ Guardrails</div>
+            <div class="tab" onclick="switchTab('aider')">🤖 Aider</div>
             <div class="tab" onclick="switchTab('advanced')">🔧 Advanced</div>
         </div>
 
@@ -831,37 +841,124 @@
             </div>
         </div>
 
-        <!-- Backup Tab -->
-        <div id="backup-tab" class="tab-content">
+
+        <!-- Guardrails Tab -->
+        <div id="guardrails-tab" class="tab-content">
             <div class="settings-section">
-                <div class="section-title">Backup Settings</div>
+                <div class="section-title">Content Validation</div>
                 <div class="settings-grid">
                     <div class="setting-item">
-                        <div class="setting-label">Auto Backup</div>
-                        <div class="setting-checkbox">
-                            <input type="checkbox" id="autoBackup" checked>
-                            <label for="autoBackup">Enable automatic backups</label>
+                        <div class="setting-label">Enable Content Validation</div>
+                        <div class="checkbox-container">
+                            <input type="checkbox" id="enableContentValidation" checked>
+                            <label for="enableContentValidation">Validate all content for safety</label>
                         </div>
                     </div>
                     <div class="setting-item">
-                        <div class="setting-label">Frequency</div>
-                        <select class="setting-select" id="backupFrequency">
-                            <option value="daily">Daily</option>
-                            <option value="hourly">Hourly</option>
-                            <option value="weekly">Weekly</option>
-                        </select>
+                        <div class="setting-label">PII Detection</div>
+                        <div class="checkbox-container">
+                            <input type="checkbox" id="enablePIIDetection" checked>
+                            <label for="enablePIIDetection">Detect and block PII</label>
+                        </div>
                     </div>
                     <div class="setting-item">
-                        <div class="setting-label">Keep Backups</div>
-                        <input type="number" class="setting-input" id="backupRetention" value="7" min="1" max="30">
+                        <div class="setting-label">Code Execution Safety</div>
+                        <div class="checkbox-container">
+                            <input type="checkbox" id="enableCodeSafety" checked>
+                            <label for="enableCodeSafety">Review code before execution</label>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-label">Validation Strictness</div>
+                        <select class="setting-select" id="validationStrictness">
+                            <option value="strict">Strict</option>
+                            <option value="moderate" selected>Moderate</option>
+                            <option value="lenient">Lenient</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="settings-section">
+                <div class="section-title">Pattern Management</div>
+                <div class="settings-grid">
+                    <div class="setting-item">
+                        <div class="setting-label">Blocked Patterns</div>
+                        <textarea class="setting-textarea" id="blockedPatterns" placeholder="Enter patterns to block (one per line)"></textarea>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-label">Allowed Patterns</div>
+                        <textarea class="setting-textarea" id="allowedPatterns" placeholder="Enter patterns to allow (one per line)"></textarea>
                     </div>
                 </div>
             </div>
             <div class="action-buttons">
-                <button class="btn btn-primary" onclick="createBackup()">Create Backup</button>
-                <button class="btn btn-secondary" onclick="listBackups()">View Backups</button>
+                <button class="btn btn-primary" onclick="updateGuardrailsSettings()">Update Settings</button>
+                <button class="btn btn-secondary" onclick="testGuardrails()">Test Validation</button>
+                <button class="btn btn-secondary" onclick="clearGuardrailsCache()">Clear Cache</button>
             </div>
         </div>
+
+
+        <!-- Aider Tab -->
+        <div id="aider-tab" class="tab-content">
+            <div class="settings-section">
+                <div class="section-title">Aider Configuration</div>
+                <div class="settings-grid">
+                    <div class="setting-item">
+                        <div class="setting-label">Enable Aider</div>
+                        <div class="checkbox-container">
+                            <input type="checkbox" id="enableAider" checked>
+                            <label for="enableAider">Enable AI pair programming</label>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-label">Default Model</div>
+                        <select class="setting-select" id="aiderDefaultModel">
+                            <option value="ollama/llama3.2" selected>Ollama Llama3.2</option>
+                            <option value="gpt-4">GPT-4</option>
+                            <option value="claude-3">Claude 3</option>
+                        </select>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-label">Context Files Limit</div>
+                        <input type="number" class="setting-input" id="aiderContextLimit" value="10" min="1" max="50">
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-label">Auto-save Changes</div>
+                        <div class="checkbox-container">
+                            <input type="checkbox" id="aiderAutoSave" checked>
+                            <label for="aiderAutoSave">Automatically save generated code</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="settings-section">
+                <div class="section-title">Code Generation</div>
+                <div class="settings-grid">
+                    <div class="setting-item">
+                        <div class="setting-label">Generate Tests</div>
+                        <div class="checkbox-container">
+                            <input type="checkbox" id="aiderGenerateTests" checked>
+                            <label for="aiderGenerateTests">Generate tests with code</label>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-label">Test Framework</div>
+                        <select class="setting-select" id="aiderTestFramework">
+                            <option value="pytest" selected>Pytest</option>
+                            <option value="unittest">Unittest</option>
+                            <option value="nose">Nose</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="action-buttons">
+                <button class="btn btn-primary" onclick="updateAiderSettings()">Update Settings</button>
+                <button class="btn btn-secondary" onclick="testAiderConnection()">Test Connection</button>
+                <button class="btn btn-secondary" onclick="getAiderModels()">View Models</button>
+            </div>
+        </div>
+
 
         <!-- Advanced Tab -->
         <div id="advanced-tab" class="tab-content">
@@ -1473,6 +1570,284 @@
                 .catch(() => alert('Error restoring backup'));
             }
         }
+
+        // New Settings Functions
+        
+        // Guardrails Settings
+        function updateGuardrailsSettings() {
+            const settings = {
+                enableContentValidation: document.getElementById('enableContentValidation').checked,
+                enablePIIDetection: document.getElementById('enablePIIDetection').checked,
+                enableCodeSafety: document.getElementById('enableCodeSafety').checked,
+                validationStrictness: document.getElementById('validationStrictness').value,
+                blockedPatterns: document.getElementById('blockedPatterns').value.split('\n').filter(p => p.trim()),
+                allowedPatterns: document.getElementById('allowedPatterns').value.split('\n').filter(p => p.trim())
+            };
+            
+            fetch(`${API_BASE}/api/developer/guardrails/update-patterns`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pattern_type: 'content', patterns: settings })
+            })
+            .then(() => alert('Guardrails settings updated!'))
+            .catch(() => alert('Error updating guardrails settings'));
+        }
+
+        function testGuardrails() {
+            const testContent = prompt('Enter content to test:');
+            if (testContent) {
+                fetch(`${API_BASE}/api/developer/guardrails/validate-content`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: testContent, content_type: 'text' })
+                })
+                .then(response => response.json())
+                .then(data => alert('Validation result: ' + JSON.stringify(data, null, 2)))
+                .catch(() => alert('Error testing guardrails'));
+            }
+        }
+
+        function clearGuardrailsCache() {
+            fetch(`${API_BASE}/api/developer/guardrails/clear-cache`, { method: 'POST' })
+                .then(() => alert('Guardrails cache cleared!'))
+                .catch(() => alert('Error clearing cache'));
+        }
+
+        // Resource Settings
+        function updateResourceSettings() {
+            const settings = {
+                enableResourceMonitoring: document.getElementById('enableResourceMonitoring').checked,
+                monitoringInterval: parseFloat(document.getElementById('monitoringInterval').value),
+                cpuThreshold: parseFloat(document.getElementById('cpuThreshold').value),
+                memoryThreshold: parseFloat(document.getElementById('memoryThreshold').value),
+                enableTaskThrottling: document.getElementById('enableTaskThrottling').checked,
+                maxParallelTasks: parseInt(document.getElementById('maxParallelTasks').value),
+                throttleFactor: parseFloat(document.getElementById('throttleFactor').value)
+            };
+            
+            // Update resource monitoring
+            if (settings.enableResourceMonitoring) {
+                startResourceMonitoring();
+            } else {
+                stopResourceMonitoring();
+            }
+            
+            alert('Resource settings updated!');
+        }
+
+        function startResourceMonitoring() {
+            const interval = parseFloat(document.getElementById('monitoringInterval').value);
+            fetch(`${API_BASE}/api/developer/resources/start-monitoring`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ interval: interval })
+            })
+            .then(() => alert('Resource monitoring started!'))
+            .catch(() => alert('Error starting resource monitoring'));
+        }
+
+        function stopResourceMonitoring() {
+            fetch(`${API_BASE}/api/developer/resources/stop-monitoring`, { method: 'POST' })
+                .then(() => alert('Resource monitoring stopped!'))
+                .catch(() => alert('Error stopping resource monitoring'));
+        }
+
+        // Learning Settings
+        function updateLearningSettings() {
+            const settings = {
+                enableLearning: document.getElementById('enableLearning').checked,
+                learningRate: parseFloat(document.getElementById('learningRate').value),
+                successWeight: parseFloat(document.getElementById('successWeight').value),
+                failureWeight: parseFloat(document.getElementById('failureWeight').value),
+                learningDataRetention: parseInt(document.getElementById('learningDataRetention').value),
+                enableAutoCleanup: document.getElementById('enableAutoCleanup').checked
+            };
+            
+            alert('Learning settings updated!');
+        }
+
+        function getLearningInsights() {
+            fetch(`${API_BASE}/api/developer/learning/insights`)
+                .then(response => response.json())
+                .then(data => alert('Learning Insights: ' + JSON.stringify(data, null, 2)))
+                .catch(() => alert('Error getting learning insights'));
+        }
+
+        function getLearningRecommendations() {
+            fetch(`${API_BASE}/api/developer/learning/recommendations`)
+                .then(response => response.json())
+                .then(data => alert('Learning Recommendations: ' + JSON.stringify(data, null, 2)))
+                .catch(() => alert('Error getting learning recommendations'));
+        }
+
+        // Aider Settings
+        function updateAiderSettings() {
+            const settings = {
+                enableAider: document.getElementById('enableAider').checked,
+                defaultModel: document.getElementById('aiderDefaultModel').value,
+                contextLimit: parseInt(document.getElementById('aiderContextLimit').value),
+                autoSave: document.getElementById('aiderAutoSave').checked,
+                generateTests: document.getElementById('aiderGenerateTests').checked,
+                testFramework: document.getElementById('aiderTestFramework').value
+            };
+            
+            alert('Aider settings updated!');
+        }
+
+        function testAiderConnection() {
+            fetch(`${API_BASE}/api/developer/aider/health`)
+                .then(response => response.json())
+                .then(data => alert('Aider Health: ' + JSON.stringify(data, null, 2)))
+                .catch(() => alert('Error testing Aider connection'));
+        }
+
+        function getAiderModels() {
+            fetch(`${API_BASE}/api/developer/aider/models`)
+                .then(response => response.json())
+                .then(data => alert('Available Models: ' + JSON.stringify(data, null, 2)))
+                .catch(() => alert('Error getting Aider models'));
+        }
+
+        // N8N Settings
+        function updateN8NSettings() {
+            const settings = {
+                enableN8N: document.getElementById('enableN8N').checked,
+                n8nUrl: document.getElementById('n8nUrl').value,
+                apiKey: document.getElementById('n8nApiKey').value,
+                autoTrigger: document.getElementById('n8nAutoTrigger').checked,
+                defaultWorkflow: document.getElementById('n8nDefaultWorkflow').value,
+                workflowTimeout: parseInt(document.getElementById('n8nWorkflowTimeout').value)
+            };
+            
+            alert('N8N settings updated!');
+        }
+
+        function listN8NWorkflows() {
+            fetch(`${API_BASE}/api/developer/n8n/workflows`)
+                .then(response => response.json())
+                .then(data => {
+                    const select = document.getElementById('n8nDefaultWorkflow');
+                    select.innerHTML = '<option value="">Select default workflow</option>';
+                    if (data.workflows) {
+                        data.workflows.forEach(workflow => {
+                            const option = document.createElement('option');
+                            option.value = workflow.id;
+                            option.textContent = workflow.name;
+                            select.appendChild(option);
+                        });
+                    }
+                    alert('Workflows loaded!');
+                })
+                .catch(() => alert('Error listing N8N workflows'));
+        }
+
+        function testN8NConnection() {
+            fetch(`${API_BASE}/api/developer/n8n/workflows`)
+                .then(response => response.json())
+                .then(data => alert('N8N Connection: ' + JSON.stringify(data, null, 2)))
+                .catch(() => alert('Error testing N8N connection'));
+        }
+
+        // Wake Word Settings
+        function updateWakeWordSettings() {
+            const settings = {
+                enableWakeWord: document.getElementById('enableWakeWord').checked,
+                wakeWord: document.getElementById('wakeWord').value,
+                sensitivity: parseFloat(document.getElementById('wakeWordSensitivity').value),
+                audioDevice: document.getElementById('wakeWordAudioDevice').value
+            };
+            
+            fetch(`${API_BASE}/api/developer/wake-word/update-config`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(settings)
+            })
+            .then(() => alert('Wake word settings updated!'))
+            .catch(() => alert('Error updating wake word settings'));
+        }
+
+        function startWakeWordDetection() {
+            fetch(`${API_BASE}/api/developer/wake-word/start`, { method: 'POST' })
+                .then(() => alert('Wake word detection started!'))
+                .catch(() => alert('Error starting wake word detection'));
+        }
+
+        function stopWakeWordDetection() {
+            fetch(`${API_BASE}/api/developer/wake-word/stop`, { method: 'POST' })
+                .then(() => alert('Wake word detection stopped!'))
+                .catch(() => alert('Error stopping wake word detection'));
+        }
+
+        function resetWakeWordStats() {
+            fetch(`${API_BASE}/api/developer/wake-word/reset-stats`, { method: 'POST' })
+                .then(() => alert('Wake word statistics reset!'))
+                .catch(() => alert('Error resetting wake word statistics'));
+        }
+
+        // Session Settings
+        function updateSessionSettings() {
+            const settings = {
+                enableSessions: document.getElementById('enableSessions').checked,
+                sessionTimeout: parseInt(document.getElementById('sessionTimeout').value),
+                maxConcurrentSessions: parseInt(document.getElementById('maxConcurrentSessions').value),
+                autoCleanupSessions: document.getElementById('autoCleanupSessions').checked,
+                enableUserContext: document.getElementById('enableUserContext').checked,
+                contextRetention: parseInt(document.getElementById('contextRetention').value)
+            };
+            
+            alert('Session settings updated!');
+        }
+
+        function listActiveSessions() {
+            fetch(`${API_BASE}/api/developer/users`)
+                .then(response => response.json())
+                .then(data => alert('Active Sessions: ' + JSON.stringify(data, null, 2)))
+                .catch(() => alert('Error listing active sessions'));
+        }
+
+        function cleanupExpiredSessions() {
+            fetch(`${API_BASE}/api/developer/users/cleanup-sessions`, { method: 'POST' })
+                .then(() => alert('Expired sessions cleaned up!'))
+                .catch(() => alert('Error cleaning up expired sessions'));
+        }
+
+        // Metrics Settings
+        function updateMetricsSettings() {
+            const settings = {
+                enableMetricsCollection: document.getElementById('enableMetricsCollection').checked,
+                collectionInterval: parseInt(document.getElementById('metricsCollectionInterval').value),
+                dataRetention: parseInt(document.getElementById('metricsDataRetention').value),
+                autoGenerateReports: document.getElementById('autoGenerateReports').checked,
+                dashboardRefresh: parseInt(document.getElementById('dashboardRefresh').value),
+                showVelocityTrends: document.getElementById('showVelocityTrends').checked
+            };
+            
+            alert('Metrics settings updated!');
+        }
+
+        function generateWeeklyReport() {
+            fetch(`${API_BASE}/api/developer/metrics/weekly-report`)
+                .then(response => response.json())
+                .then(data => alert('Weekly Report: ' + JSON.stringify(data, null, 2)))
+                .catch(() => alert('Error generating weekly report'));
+        }
+
+        function viewMetricsDashboard() {
+            window.open('monitor.html', '_blank');
+        }
+
+        // Range slider updates
+        document.getElementById('throttleFactor').addEventListener('input', function() {
+            document.getElementById('throttleFactorValue').textContent = this.value;
+        });
+
+        document.getElementById('learningRate').addEventListener('input', function() {
+            document.getElementById('learningRateValue').textContent = this.value;
+        });
+
+        document.getElementById('wakeWordSensitivity').addEventListener('input', function() {
+            document.getElementById('wakeWordSensitivityValue').textContent = this.value;
+        });
 
         function resetSettings() {
             if (confirm('Reset all settings to defaults? This cannot be undone.')) {

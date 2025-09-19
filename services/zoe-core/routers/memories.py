@@ -1,6 +1,7 @@
 """
-Memories Management System
-Handles people, projects, and notes with /api/memories prefix
+Unified Memory Management System
+Handles people, projects, notes, relationships, and memory facts
+Combines basic CRUD with advanced memory features
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -9,11 +10,18 @@ from datetime import datetime, date
 import sqlite3
 import json
 import os
+import sys
+sys.path.append('/app')
+from memory_system import MemorySystem
 
 router = APIRouter(prefix="/api/memories", tags=["memories"])
 
 # Database path
 DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
+MEMORY_DB_PATH = "/app/data/memory.db"
+
+# Initialize advanced memory system
+memory_system = MemorySystem(MEMORY_DB_PATH)
 
 def init_memories_db():
     """Initialize memories tables"""
@@ -261,7 +269,7 @@ async def create_memory(
     
     return {"memory": {"id": memory_id, "type": type}}
 
-@router.get("/{memory_id}")
+@router.get("/item/{memory_id}")
 async def get_memory(
     memory_id: int,
     type: str = Query(..., description="Type: people, projects, or notes"),
@@ -329,7 +337,7 @@ async def get_memory(
             "updated_at": row[8]
         }
 
-@router.put("/{memory_id}")
+@router.put("/item/{memory_id}")
 async def update_memory(
     memory_id: int,
     type: str = Query(..., description="Type: people, projects, or notes"),
@@ -402,7 +410,7 @@ async def update_memory(
     
     return {"message": "Memory updated successfully"}
 
-@router.delete("/{memory_id}")
+@router.delete("/item/{memory_id}")
 async def delete_memory(
     memory_id: int,
     type: str = Query(..., description="Type: people, projects, or notes"),
@@ -426,3 +434,110 @@ async def delete_memory(
     conn.close()
     
     return {"message": "Memory deleted successfully"}
+
+# Advanced Memory System Endpoints
+
+@router.post("/search")
+async def search_memories(query: str = Query(..., description="Search query")):
+    """Search across all memories using semantic search"""
+    try:
+        # Use basic text search for now (vector search can be added later)
+        results = memory_system.search_memories(query)
+        return {"results": results, "query": query, "search_type": "text"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/person/{name}/context")
+async def get_person_context(name: str):
+    """Get full context about a person including relationships and facts"""
+    try:
+        context = memory_system.get_person_context(name)
+        if not context["found"]:
+            raise HTTPException(status_code=404, detail="Person not found")
+        return context
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/relationship")
+async def add_relationship(
+    person1: str = Query(..., description="First person"),
+    person2: str = Query(..., description="Second person"),
+    relationship: str = Query(..., description="Relationship type")
+):
+    """Add relationship between two people"""
+    try:
+        result = memory_system.add_relationship(person1, person2, relationship)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/facts")
+async def add_memory_fact(
+    entity_type: str = Query(..., description="Entity type: person, project, general"),
+    entity_id: int = Query(..., description="Entity ID"),
+    fact: str = Query(..., description="Fact to remember"),
+    category: str = Query("general", description="Fact category"),
+    importance: int = Query(5, description="Importance level 1-10")
+):
+    """Add a memory fact to an entity"""
+    try:
+        conn = sqlite3.connect(MEMORY_DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO memory_facts (entity_type, entity_id, fact, category, importance)
+            VALUES (?, ?, ?, ?, ?)
+        """, (entity_type, entity_id, fact, category, importance))
+        
+        fact_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        
+        return {"fact_id": fact_id, "message": "Memory fact added successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/facts")
+async def get_memory_facts(
+    entity_type: Optional[str] = Query(None, description="Filter by entity type"),
+    entity_id: Optional[int] = Query(None, description="Filter by entity ID"),
+    limit: int = Query(50, description="Number of facts to return")
+):
+    """Get memory facts with optional filtering"""
+    try:
+        conn = sqlite3.connect(MEMORY_DB_PATH)
+        cursor = conn.cursor()
+        
+        query = "SELECT * FROM memory_facts WHERE 1=1"
+        params = []
+        
+        if entity_type:
+            query += " AND entity_type = ?"
+            params.append(entity_type)
+        
+        if entity_id:
+            query += " AND entity_id = ?"
+            params.append(entity_id)
+        
+        query += " ORDER BY importance DESC, created_at DESC LIMIT ?"
+        params.append(limit)
+        
+        cursor.execute(query, params)
+        facts = []
+        
+        for row in cursor.fetchall():
+            facts.append({
+                "id": row[0],
+                "entity_type": row[1],
+                "entity_id": row[2],
+                "fact": row[3],
+                "category": row[4],
+                "importance": row[5],
+                "source": row[6],
+                "created_at": row[7]
+            })
+        
+        conn.close()
+        return {"facts": facts}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

@@ -2,9 +2,7 @@
 data/*.db
 data/*.sqlite
 data/billing/
-data/redis/
-logs/
-*.log
+data/logs/
 
 # Docker volumes
 volumes/
@@ -14,16 +12,6 @@ volumes/
 config/.env
 *.key
 *.pem
-
-# SSH Keys - NEVER commit!
-id_ed25519*
-id_rsa*
-*.pub
-
-# Ollama model data (too large)
-models/blobs/
-models/manifests/
-models/.ollama/
 
 # Temporary files
 *.tmp
@@ -44,6 +32,10 @@ __pycache__/
 venv/
 env/
 
+# Logs
+logs/
+*.log
+
 # OS files
 .DS_Store
 Thumbs.db
@@ -51,10 +43,3 @@ Thumbs.db
 # Keep structure files
 !.gitkeep
 !README.md
-SMART_CONTINUATION_PROMPT.txt
-smart_continuation.sh
-data/api_keys.enc
-backups/
-*.backup
-test_*.html
-tts_test.html

@@ -1,4 +1,4 @@
-const API_BASE = 'http://192.168.1.60:8000/api';
+const API_BASE = `${window.location.protocol}//${window.location.host}/api`;
 
 // API health check
 async function checkAPI() {
