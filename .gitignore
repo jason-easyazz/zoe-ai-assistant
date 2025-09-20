@@ -40,9 +40,13 @@ ENV/
 .vscode/
 .idea/
 .cursor-server/
+.cursor/
 *.swp
 *.swo
 *~
+
+# Backup directories
+.ssh_backup_*/
 
 # OS generated files
 .DS_Store
