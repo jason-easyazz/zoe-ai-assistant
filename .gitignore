@@ -39,6 +39,7 @@ ENV/
 # IDE files
 .vscode/
 .idea/
+.cursor-server/
 *.swp
 *.swo
 *~
