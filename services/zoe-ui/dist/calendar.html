@@ -15,7 +15,7 @@
             font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
             background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
             min-height: 100vh; color: #333;
-            font-size: clamp(14px, 1.6vw, 16px);
+            font-size: clamp(16px, 2.2vw, 20px);
             -webkit-touch-callout: none; /* Disable iOS callout */
             -webkit-user-select: none; /* Disable text selection */
             user-select: none;
@@ -26,28 +26,130 @@
         .nav-bar {
             position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
             backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
-            align-items: center; height: 60px;
+            padding: 12px 20px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 70px;
         }
         .nav-left { display: flex; align-items: center; gap: 15px; }
         .mini-orb { 
-            width: 32px; height: 32px; border-radius: 50%; 
+            width: 40px; height: 40px; border-radius: 50%; 
             background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
-            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 50px; min-height: 50px;
         }
         .mini-orb:hover { transform: scale(1.1); }
         .nav-menu { display: flex; gap: 20px; }
         .nav-item { 
             color: #666; text-decoration: none; 
             font-family: var(--font-family-primary);
-            font-size: 13px;
+            font-size: 16px;
             font-weight: 400;
             line-height: 1.4;
-            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
-            min-height: 44px; display: flex; align-items: center;
+            transition: all 0.3s ease; padding: 12px 16px; border-radius: 8px;
+            min-height: 50px; display: flex; align-items: center;
         }
         .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
         .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        /* Authentication Integration */
+        .user-menu {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .user-menu:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .user-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .username {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+        }
+        
+        .user-role {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .session-badge {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 500;
+            margin-left: 8px;
+        }
+        
+        .session-standard {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .session-passcode {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .user-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 8px 0;
+            min-width: 200px;
+            z-index: 1000;
+            display: none;
+            border: 1px solid #e1e5e9;
+        }
+        
+        .user-dropdown.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 8px 16px;
+            color: #333;
+            text-decoration: none;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .dropdown-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .dropdown-divider {
+            height: 1px;
+            background: #e1e5e9;
+            margin: 4px 0;
+        }
         
         .more-nav-btn { 
             color: #666; text-decoration: none; 
@@ -61,13 +163,6 @@
         }
         .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
         
-        .settings-btn { 
-            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
-            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
-            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
-            font-size: 16px; font-weight: bold;
-        }
-        .settings-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
         
         .notifications-btn { 
             background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
@@ -76,9 +171,36 @@
             font-size: 16px; font-weight: bold; position: relative;
         }
         .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
         .notifications-btn.has-notifications::after {
-            content: ''; position: absolute; top: 8px; right: 8px;
-            width: 8px; height: 8px; background: #ff4757; border-radius: 50%;
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+            animation: notificationDotPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 8px rgba(123, 97, 255, 0);
+            }
+        }
+        
+        @keyframes notificationDotPulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.2);
+                opacity: 0.8;
+            }
         }
         
         .api-indicator { 
@@ -96,28 +218,31 @@
         .api-indicator.offline::before { background: #ef4444; }
         .api-indicator.warning::before { background: #ea580c; }
 
-        /* Main Layout */
-        .main-container { padding: 70px 20px 20px; }
-        .top-info-bar { 
-            display: flex; justify-content: space-between; align-items: center; 
-            margin-bottom: 20px; padding: 0 10px;
+        /* Time/Date Display in Top Right */
+        .time-date-display {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
         }
-        .time-display { display: flex; flex-direction: column; }
-        .current-time { 
-            font-family: var(--font-family-display);
-            font-size: 18px;
-            font-weight: 300;
+        .current-time {
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
             line-height: 1.2;
-            color: #333; 
         }
-        .current-date { 
-            font-family: var(--font-family-primary);
+        .current-date {
             font-size: 11px;
-            font-weight: 400;
-            line-height: 1.4;
-            color: #666; margin-top: 2px; 
+            color: #666;
+            line-height: 1.2;
         }
-        .weather-widget { display: flex; align-items: center; gap: 6px; }
+
+        /* Main Layout */
+        .main-container { 
+            padding: 80px 20px 20px; 
+            min-height: calc(100vh - 100px);
+        }
 
         /* Calendar Header - Optimized for Pi Touch */
         .calendar-header { 
@@ -175,34 +300,35 @@
 
         /* Calendar Layout */
         .calendar-layout { 
-            display: grid; grid-template-columns: 2fr 1fr; gap: 20px; 
+            display: grid; grid-template-columns: 1fr 1fr; gap: 20px; 
             max-width: 1200px; margin: 0 auto; align-items: start;
+            height: calc(100vh - 140px);
         }
 
         /* Calendar Grid */
         .calendar-grid { 
-            display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; 
+            display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; 
             background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px); 
-            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 16px; padding: 20px;
-            height: fit-content;
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 16px; padding: 16px;
+            height: 100%;
         }
         .day-header { 
-            text-align: center; padding: 12px 8px; 
+            text-align: center; padding: 8px 4px; 
             font-family: var(--font-family-primary);
-            font-size: var(--font-size-xs);
-            font-weight: var(--font-weight-semibold);
-            line-height: var(--line-height-normal); 
+            font-size: 12px;
+            font-weight: 600;
+            line-height: 1.2; 
             color: #666; text-transform: uppercase;
         }
         .calendar-day { 
             aspect-ratio: 1; display: flex; align-items: center; justify-content: center; 
             border-radius: 8px; 
             font-family: var(--font-family-primary);
-            font-size: var(--font-size-sm);
-            font-weight: var(--font-weight-normal);
-            line-height: var(--line-height-normal);
+            font-size: 14px;
+            font-weight: 500;
+            line-height: 1.2;
             cursor: pointer; transition: all 0.3s ease; 
-            position: relative; font-weight: 500; min-height: 40px;
+            position: relative; min-height: 35px;
         }
         .calendar-day:hover { background: rgba(123, 97, 255, 0.1); transform: scale(1.05); }
         .calendar-day.today { 
@@ -226,8 +352,8 @@
         }
         .day-view.active { display: block; }
         .day-view-layout {
-            display: grid; grid-template-columns: 2fr 1fr; gap: 15px;
-            height: calc(100vh - 200px); max-height: 500px;
+            display: grid; grid-template-columns: 2fr 1fr; gap: 20px;
+            height: calc(100vh - 140px);
             overflow: hidden; /* Prevent whole page scrolling */
         }
         
@@ -402,8 +528,8 @@
 
         /* Drop Zones - Pi Touch Optimized */
         .time-slot {
-            border: none; border-radius: 6px;
-            padding: 1px; margin-bottom: 1px; min-height: 24px;
+            border: none; border-radius: 8px;
+            padding: 8px; margin-bottom: 4px; min-height: 50px;
             transition: all 0.3s ease; position: relative;
             background: transparent;
             cursor: pointer; /* Make entire slot clickable */
@@ -442,6 +568,7 @@
             background: rgba(255, 255, 255, 1); transform: translateY(-1px);
             box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2);
         }
+        
         .scheduled-task.dragging {
             opacity: 0.7;
             transform: rotate(2deg);
@@ -847,21 +974,21 @@
         }
         
         .event-item { 
-            padding: 8px; border-left: 3px solid transparent;
-            cursor: pointer; transition: all 0.3s ease; border-radius: 8px; margin-bottom: 4px;
+            padding: 4px 6px; border-left: 3px solid transparent;
+            cursor: pointer; transition: all 0.3s ease; border-radius: 6px; margin-bottom: 2px;
             background: rgba(255, 255, 255, 0.3); position: relative;
-            min-height: 45px; display: flex; flex-direction: column;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            min-height: 30px; display: flex; flex-direction: column;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
         }
         .event-item:hover { 
             transform: translateX(4px); background: rgba(255, 255, 255, 0.5); 
         }
         .event-time { 
-            font-size: 10px; color: #7B61FF; font-weight: 600; margin-bottom: 2px; 
+            font-size: 8px; color: #7B61FF; font-weight: 600; margin-bottom: 1px; 
             text-transform: uppercase;
         }
         .event-title { 
-            font-size: 12px; color: #333; font-weight: 500; margin-bottom: 0;
+            font-size: 10px; color: #333; font-weight: 500; margin-bottom: 0;
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
             line-height: 1.2;
         }
@@ -1137,6 +1264,33 @@
         .enhanced-form-field {
             margin-bottom: 15px;
         }
+        .series-edit-options {
+            display: flex;
+            gap: 20px;
+            margin-top: 8px;
+        }
+        .series-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            padding: 8px 12px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            background: rgba(255, 255, 255, 0.3);
+        }
+        .series-option:hover {
+            background: rgba(123, 97, 255, 0.1);
+        }
+        .series-option input[type="radio"] {
+            margin: 0;
+            accent-color: #7B61FF;
+        }
+        .series-option span {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+        }
         .enhanced-form-label {
             display: block; 
             font-family: var(--font-family-primary);
@@ -1269,7 +1423,9 @@
         }
         .enhanced-form-actions {
             display: flex; gap: 15px; justify-content: flex-end; margin-top: 25px;
-            padding-top: 20px; border-top: 1px solid rgba(255, 255, 255, 0.3);
+            padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.3);
+            position: sticky; bottom: 0; background: rgba(255,255,255,0.85);
+            backdrop-filter: blur(10px);
         }
         .enhanced-form-btn {
             padding: 12px 24px; border: none; border-radius: 8px;
@@ -1373,9 +1529,9 @@
     <!-- Navigation -->
     <div class="nav-bar">
         <div class="nav-left">
-            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
+            <div class="mini-orb" onclick="handleLogout()"></div>
             <div class="nav-menu">
-                <a href="index.html" class="nav-item">Chat</a>
+                <a href="chat.html" class="nav-item">Chat</a>
                 <a href="dashboard.html" class="nav-item">Dashboard</a>
                 <a href="lists.html" class="nav-item">Lists</a>
                 <a href="calendar.html" class="nav-item active">Calendar</a>
@@ -1385,24 +1541,36 @@
         </div>
         <div class="nav-right">
             <div class="api-indicator connecting" id="apiStatus">Connecting</div>
-            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">🔔</button>
-            <button class="settings-btn" onclick="window.location.href='settings.html'" title="Settings">⚙️</button>
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- Time/Date Display -->
+            <div class="time-date-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+            
+            <!-- User Menu (moved to mini-orb click) -->
+            <div class="user-menu" onclick="toggleUserDropdown()" style="display: none;">
+                <div class="user-avatar" id="userAvatar">?</div>
+                
+                <div class="user-dropdown" id="userDropdown">
+                    <a href="#" class="dropdown-item" onclick="showUserProfile()">Profile</a>
+                    <a href="#" class="dropdown-item" onclick="showSecuritySettings()">Security</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" class="dropdown-item" onclick="switchUser()">Switch User</a>
+                    <a href="#" class="dropdown-item" onclick="upgradeSession()" id="upgradeSessionItem" style="display: none;">Upgrade Session</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="admin.html" class="dropdown-item" id="adminLink" style="display: none;">Admin Dashboard</a>
+                    <div class="dropdown-divider" id="adminDivider" style="display: none;"></div>
+                    <a href="#" class="dropdown-item" onclick="logout()">Logout</a>
+                </div>
+            </div>
         </div>
     </div>
 
     <!-- Main Content -->
     <div class="main-container">
-        <!-- Top Info Bar -->
-        <div class="top-info-bar">
-            <div class="time-display">
-                <div class="current-time" id="currentTime">Loading...</div>
-                <div class="current-date" id="currentDate">Loading...</div>
-            </div>
-            <div class="weather-widget">
-                <div>☀️</div>
-                <div>23°</div>
-            </div>
-        </div>
 
         <!-- Calendar Header -->
         <div class="calendar-header">
@@ -1434,8 +1602,8 @@
                 <!-- Right Side: Available Tasks -->
                 <div class="day-tasks">
                     <div class="section-title">
-                        📋 Available Tasks
-                        <div class="task-filter-buttons">
+                        📋 Tasks
+                        <div class="task-filter-buttons" id="taskFilterButtons">
                             <button class="filter-btn" id="allTasksBtn" onclick="setTaskFilter('all')">All</button>
                             <button class="filter-btn" id="workTasksBtn" onclick="setTaskFilter('work')">Work</button>
                             <button class="filter-btn" id="personalTasksBtn" onclick="setTaskFilter('personal')">Personal</button>
@@ -1537,7 +1705,7 @@
         <!-- Notifications Panel -->
         <div class="notifications-panel" id="notificationsPanel">
             <div class="notifications-header">
-                <h3 class="notifications-title">🔔 Notifications</h3>
+                <h3 class="notifications-title">💬 Notifications</h3>
                 <button class="notifications-close" onclick="closeNotifications()">×</button>
             </div>
             <div class="notifications-content" id="notificationsContent">
@@ -1623,9 +1791,25 @@
                     <!-- Toggle between Event and Reminder -->
                     <div class="add-type-toggle">
                         <button class="toggle-btn active" id="toggleEvent" onclick="toggleAddType('event')">📅 Event</button>
-                        <button class="toggle-btn" id="toggleReminder" onclick="toggleAddType('reminder')">🔔 Reminder</button>
+                        <button class="toggle-btn" id="toggleReminder" onclick="toggleAddType('reminder')">💬 Reminder</button>
                     </div>
                     <h4 class="enhanced-form-title" id="formTitle">📝 Event Details</h4>
+                    
+                    <!-- Series editing options (only shown when editing recurring events) -->
+                    <div id="seriesEditOptions" class="enhanced-form-field" style="display: none;">
+                        <label class="enhanced-form-label">Edit Options</label>
+                        <div class="series-edit-options">
+                            <label class="series-option">
+                                <input type="radio" name="editScope" value="single" checked>
+                                <span>This occurrence only</span>
+                            </label>
+                            <label class="series-option">
+                                <input type="radio" name="editScope" value="series">
+                                <span>Entire series</span>
+                            </label>
+                        </div>
+                    </div>
+                    
                     <div class="enhanced-form-field">
                         <label class="enhanced-form-label">Event Title</label>
                         <input type="text" class="enhanced-form-input" id="enhancedEventTitle" placeholder="Enter event title">
@@ -1941,13 +2125,6 @@
             
             if (!eventData.all_day && !eventData.start_time) {
                 errors.push('Start time is required for timed events');
-            }
-            
-            if (eventData.start_date && eventData.start_time) {
-                const eventDateTime = new Date(`${eventData.start_date}T${eventData.start_time}`);
-                if (eventDateTime < new Date()) {
-                    errors.push('Event cannot be scheduled in the past');
-                }
             }
             
             return errors;
@@ -2361,7 +2538,7 @@
         }
 
         // Task management functions
-        async function loadTasksForDay(forceRefresh = false) {
+        async function loadTasksForDay(forceRefresh = true) {
             try {
                 const cacheKey = 'tasks';
                 let tasks = null;
@@ -2373,12 +2550,33 @@
                 if (!tasks) {
                     // Load both personal and work todos (cached)
                     const [personalResponse, workResponse] = await Promise.all([
-                        apiGetCached('/lists/personal_todos', 15000),
-                        apiGetCached('/lists/work_todos', 15000)
+                        apiGetCached('/lists/personal_todos', 15000).catch(() => null),
+                        apiGetCached('/lists/work_todos', 15000).catch(() => null)
                     ]);
                     
-                    const personalLists = personalResponse.lists || [];
-                    const workLists = workResponse.lists || [];
+                    // Normalize API responses to a consistent lists[] shape
+                    const normalizeLists = (resp, fallbackName) => {
+                        if (!resp) return [];
+                        if (Array.isArray(resp.lists)) return resp.lists;
+                        if (resp.list && resp.list.items) return [resp.list];
+                        if (Array.isArray(resp.items)) {
+                            return [{ id: resp.id || `${fallbackName}_default`, name: resp.name || fallbackName, items: resp.items }];
+                        }
+                        // Some APIs might return { data: { lists: [...] }} or { data: { items: [...] }}
+                        if (resp.data) {
+                            if (Array.isArray(resp.data.lists)) return resp.data.lists;
+                            if (Array.isArray(resp.data.items)) {
+                                return [{ id: resp.data.id || `${fallbackName}_default`, name: resp.data.name || fallbackName, items: resp.data.items }];
+                            }
+                            if (resp.data.list && resp.data.list.items) return [resp.data.list];
+                        }
+                        return [];
+                    };
+
+                    const personalLists = normalizeLists(personalResponse || {}, 'Personal Todos');
+                    const workLists = normalizeLists(workResponse || {}, 'Work Todos');
+
+                    // No per-list filters shown in UI; keep only category filters
                     
                     // Flatten all tasks from all lists
                     tasks = [];
@@ -2387,9 +2585,11 @@
                     personalLists.forEach(list => {
                         if (list.items && Array.isArray(list.items)) {
                             list.items.forEach(item => {
-                                if (!item.completed) { // Only show incomplete tasks
+                                if (item && (item.completed === false || item.completed === 0 || item.completed === 'false' || item.completed === null || typeof item.completed === 'undefined')) {
+                                    const text = item.text || item.title || item.name || '';
                                     tasks.push({
                                         ...item,
+                                        text,
                                         listId: list.id,
                                         listName: list.name,
                                         category: 'personal'
@@ -2403,9 +2603,11 @@
                     workLists.forEach(list => {
                         if (list.items && Array.isArray(list.items)) {
                             list.items.forEach(item => {
-                                if (!item.completed) { // Only show incomplete tasks
+                                if (item && (item.completed === false || item.completed === 0 || item.completed === 'false' || item.completed === null || typeof item.completed === 'undefined')) {
+                                    const text = item.text || item.title || item.name || '';
                                     tasks.push({
                                         ...item,
+                                        text,
                                         listId: list.id,
                                         listName: list.name,
                                         category: 'work'
@@ -2414,8 +2616,12 @@
                             });
                         }
                     });
+
+                    // No extra task-labeled lists endpoint available; only personal/work for now
                     
                     setCachedData(taskCache, cacheKey, tasks);
+                    // Also refresh task lists and filters lazily
+                    renderTaskFilterButtons();
                 }
                 
                 allTasks = tasks;
@@ -2436,18 +2642,12 @@
         function displayTasks() {
             const dayTasksList = document.getElementById('dayTasksList');
             
-            // First filter by settings, then by current filter
+            // Filter by active category only (always show personal + work by default)
             let filteredTasks = allTasks.filter(task => {
-                const isWorkTask = task.category === 'work' || task.listName.toLowerCase().includes('work');
-                const isPersonalTask = task.category === 'personal' || !isWorkTask;
-                
-                // Apply settings filter first
-                if (!calendarSettings.showWorkTasks && isWorkTask) return false;
-                if (!calendarSettings.showPersonalTasks && isPersonalTask) return false;
-                
+                const category = task.category === 'work' ? 'work' : 'personal';
                 // Apply current filter
-                if (currentTaskFilter === 'work') return isWorkTask;
-                if (currentTaskFilter === 'personal') return isPersonalTask;
+                if (currentTaskFilter === 'work') return category === 'work';
+                if (currentTaskFilter === 'personal') return category === 'personal';
                 return true; // 'all'
             });
             
@@ -2482,14 +2682,24 @@
         }
 
         function setTaskFilter(filter) {
-            currentTaskFilter = filter;
-            
-            // Update button states
-            document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
-            document.getElementById(filter + 'TasksBtn').classList.add('active');
-            
-            // Refresh task display
+            currentTaskFilter = filter; // 'all' | 'work' | 'personal'
+            document.querySelectorAll('.task-filter-buttons .filter-btn').forEach(btn => btn.classList.remove('active'));
+            if (filter === 'work') document.getElementById('workTasksBtn')?.classList.add('active');
+            else if (filter === 'personal') document.getElementById('personalTasksBtn')?.classList.add('active');
+            else document.getElementById('allTasksBtn')?.classList.add('active');
             displayTasks();
+        }
+
+        function renderTaskFilterButtons() {
+            // No-op: filters are static (All/Work/Personal) now
+            try {
+                const container = document.getElementById('taskFilterButtons');
+                if (!container) return;
+                // Ensure default buttons exist; do not add per-list buttons
+                // Active state is handled by setTaskFilter
+            } catch (e) {
+                console.error('Failed to render task filter buttons', e);
+            }
         }
 
         function generateTimeSlots() {
@@ -2531,15 +2741,26 @@
             const currentTimeTop = (now.getHours() * 60) + now.getMinutes();
             eventsHtml += `<div class="current-time-line" style="top: ${currentTimeTop}px;"></div>`;
             
+            const placed = [];
             dayEvents.forEach(event => {
                 if (!event.all_day && event.start_time) {
                     const [startHour, startMin] = event.start_time.split(':').map(Number);
                     const duration = event.duration || 30;
                     const startTop = (startHour * 60) + startMin;
+                    const endTop = startTop + duration;
+                    // Find non-overlapping column
+                    let col = 0;
+                    while (placed.some(p => p.col === col && !(endTop <= p.start || startTop >= p.end))) {
+                        col++;
+                    }
+                    placed.push({ col, start: startTop, end: endTop });
+                    const maxCol = placed.reduce((m, p) => Math.max(m, p.col), 0);
+                    const colWidthPct = 100 / (maxCol + 1);
+                    const leftPct = col * colWidthPct;
                     eventsHtml += `
                         <div class="scheduled-task category-${event.category || 'personal'}" 
                              data-event-id="${event.id}" 
-                             style="top: ${startTop}px; height: ${duration}px;"
+                             style="top: ${startTop}px; height: ${duration}px; left: ${leftPct}%; width: ${colWidthPct}%;"
                              draggable="true"
                              ondragstart="startEventDrag(event)"
                              onclick="openEventEditForm(${event.id})">
@@ -2772,29 +2993,17 @@
             }
             
             const rect = timelineEvents.getBoundingClientRect();
-            const y = e.clientY - rect.top;
+            const y = (e.clientY - rect.top) + timelineEvents.scrollTop;
             
             // Convert pixel position to time (1 pixel = 1 minute)
             const totalMinutes = Math.max(0, Math.round(y));
             const hour = Math.floor(totalMinutes / 60);
             const minute = totalMinutes % 60;
             
-            // Snap to 15-minute intervals for better precision
+            // Snap to 30-minute blocks by default
             let snappedHour = hour;
-            let snappedMinutes;
-            
-            if (minute < 7) {
-                snappedMinutes = 0;
-            } else if (minute < 22) {
-                snappedMinutes = 15;
-            } else if (minute < 37) {
-                snappedMinutes = 30;
-            } else if (minute < 52) {
-                snappedMinutes = 45;
-            } else {
-                snappedMinutes = 0;
-                snappedHour = hour + 1;
-            }
+            let snappedMinutes = minute < 15 ? 0 : (minute < 45 ? 30 : 60);
+            if (snappedMinutes === 60) { snappedMinutes = 0; snappedHour = hour + 1; }
             
             // Ensure hour doesn't go beyond 23
             if (snappedHour > 23) {
@@ -2862,6 +3071,7 @@
                     const timeEl = document.getElementById('enhancedEventTime');
                     const durationEl = document.getElementById('enhancedEventDuration');
                     const allDayEl = document.getElementById('enhancedAllDay');
+                    const seriesEditOptions = document.getElementById('seriesEditOptions');
                     
                     if (titleEl) titleEl.value = event.title || '';
                     if (descriptionEl) descriptionEl.value = event.description || '';
@@ -2869,6 +3079,15 @@
                     if (timeEl) timeEl.value = event.start_time || '';
                     if (durationEl) durationEl.value = event.duration || 30;
                     if (allDayEl) allDayEl.checked = event.all_day || false;
+                    
+                    // Show series edit options if this is a recurring event
+                    if (event.recurring && seriesEditOptions) {
+                        seriesEditOptions.style.display = 'block';
+                        // Set default to single occurrence
+                        document.querySelector('input[name="editScope"][value="single"]').checked = true;
+                    } else if (seriesEditOptions) {
+                        seriesEditOptions.style.display = 'none';
+                    }
                     
                     // Update the form title to indicate editing
                     const formTitle = document.querySelector('.enhanced-form h3');
@@ -2880,6 +3099,26 @@
                     const saveBtn = document.getElementById('enhancedEventSaveBtn');
                     if (saveBtn) {
                         saveBtn.textContent = 'Update Event';
+                    }
+                    // Add Delete button into actions (once)
+                    const actions = document.querySelector('.enhanced-form-actions');
+                    if (actions && !document.getElementById('enhancedEventDeleteBtn')) {
+                        const del = document.createElement('button');
+                        del.id = 'enhancedEventDeleteBtn';
+                        del.className = 'enhanced-form-btn delete';
+                        del.textContent = 'Delete';
+                        del.onclick = async () => { 
+                            const editScope = document.querySelector('input[name="editScope"]:checked')?.value;
+                            const occurrenceDate = document.getElementById('enhancedEventDate').value;
+                            
+                            if (editScope === 'single' && event.recurring) {
+                                await deleteEventOccurrence(eventId, occurrenceDate);
+                            } else {
+                                await deleteEvent(eventId);
+                            }
+                            closeEnhancedAddForm(); 
+                        };
+                        actions.insertBefore(del, actions.firstChild);
                     }
                     
                     // Store the event ID for updating
@@ -3040,29 +3279,17 @@
             }
             
             const rect = eventsContainer.getBoundingClientRect();
-            const y = e.clientY - rect.top;
+            const y = (e.clientY - rect.top) + eventsContainer.scrollTop;
             
             // Convert pixel position to time (1 pixel = 1 minute)
             const totalMinutes = Math.max(0, Math.round(y));
             const hour = Math.floor(totalMinutes / 60);
             const minute = totalMinutes % 60;
             
-            // Snap to 15-minute intervals for better precision
+            // Snap to 30-minute blocks by default
             let snappedHour = hour;
-            let snappedMinutes;
-            
-            if (minute < 7) {
-                snappedMinutes = 0;
-            } else if (minute < 22) {
-                snappedMinutes = 15;
-            } else if (minute < 37) {
-                snappedMinutes = 30;
-            } else if (minute < 52) {
-                snappedMinutes = 45;
-            } else {
-                snappedMinutes = 0;
-                snappedHour = hour + 1;
-            }
+            let snappedMinutes = minute < 15 ? 0 : (minute < 45 ? 30 : 60);
+            if (snappedMinutes === 60) { snappedMinutes = 0; snappedHour = hour + 1; }
             
             // Ensure hour doesn't go beyond 23
             if (snappedHour > 23) {
@@ -3109,18 +3336,22 @@
 
         async function createEventFromTask(task, time) {
             const dateStr = formatDate(currentDayView);
+            const listType = (task.category === 'work') ? 'work_todos' : 'personal_todos';
             const eventData = {
                 title: task.text,
                 start_date: dateStr,
                 start_time: time,
                 duration: 30, // Default 30 minutes
                 category: 'task',
-                description: `Scheduled from task list`
+                description: `Scheduled from task list`,
+                linked_list_type: listType,
+                linked_item_id: task.id,
+                linked_list_id: task.listId
             };
             
             try {
                 const newEvent = await saveEvent(eventData);
-                allEvents.push(newEvent);
+                allEvents.push({ ...newEvent, linked_list_type: listType, linked_item_id: task.id, linked_list_id: task.listId });
                 showNotification('Task converted to calendar event');
                 
                 // Event is already saved via saveEvent, no need for ensurePersistence
@@ -3397,6 +3628,10 @@
         function openNotifications() {
             document.getElementById('notificationsPanel').classList.add('open');
             loadNotifications();
+            
+            // Clear notification indicator when panel is opened
+            const notificationBtn = document.querySelector('.notifications-btn');
+            notificationBtn.classList.remove('has-notifications');
         }
 
         function closeNotifications() {
@@ -3416,6 +3651,14 @@
 
         function displayNotifications(notifications) {
             const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            // Update notification button indicator
+            if (notifications.length > 0) {
+                notificationBtn.classList.add('has-notifications');
+            } else {
+                notificationBtn.classList.remove('has-notifications');
+            }
             
             if (notifications.length === 0) {
                 notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
@@ -3456,7 +3699,7 @@
 
         async function acknowledgeNotification(notificationId) {
             try {
-                await apiRequest(`/reminders/notifications/${notificationId}/acknowledge`, {
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
                     method: 'POST'
                 });
                 // Reload notifications
@@ -3498,6 +3741,25 @@
             }
         }
 
+        // Update single occurrence of a recurring event
+        async function updateEventOccurrence(eventId, occurrenceDate, eventData) {
+            try {
+                const response = await apiRequest(`/calendar/events/${eventId}/occurrence?occurrence_date=${occurrenceDate}`, {
+                    method: 'PUT',
+                    body: JSON.stringify(eventData)
+                });
+                // Invalidate event cache when occurrence is updated
+                invalidateCache(eventCache, 'events');
+                return response.event || response;
+            } catch (error) {
+                console.error('Failed to update event occurrence:', error);
+                throw error;
+            }
+        }
+
+        // Checkbox completion removed from UI; keeping stub for safety if referenced
+        async function toggleEventTaskCompletion() { return; }
+
         // Delete event from API
         async function deleteEventFromAPI(eventId) {
             try {
@@ -3509,6 +3771,21 @@
             } catch (error) {
                 console.error('Failed to delete event:', error);
                 throw error;
+            }
+        }
+
+        // Delete single occurrence of a recurring event
+        async function deleteEventOccurrence(eventId, occurrenceDate) {
+            try {
+                await apiRequest(`/calendar/events/${eventId}/occurrence?occurrence_date=${occurrenceDate}`, {
+                    method: 'DELETE'
+                });
+                // Invalidate event cache when occurrence is deleted
+                invalidateCache(eventCache, 'events');
+                showNotification('Event occurrence deleted successfully');
+            } catch (error) {
+                console.error('Failed to delete event occurrence:', error);
+                showNotification('Failed to delete event occurrence', 'error');
             }
         }
 
@@ -3541,16 +3818,35 @@
             }
         }
 
+        // Time/Date Update Functions
+        function updateTimeDate() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            const timeElement = document.getElementById('currentTime');
+            const dateElement = document.getElementById('currentDate');
+            
+            if (timeElement) timeElement.textContent = timeString;
+            if (dateElement) dateElement.textContent = dateString;
+        }
+
         // Initialize
         document.addEventListener('DOMContentLoaded', async () => {
             selectedDate = formatDate(new Date());
             currentDayView = new Date();
             
+            // Update time/date immediately and every minute
+            updateTimeDate();
+            setInterval(updateTimeDate, 60000);
+            
             // Load settings first
             await loadCalendarSettings();
             
             // Set default filter button state
-            document.getElementById('allTasksBtn').classList.add('active');
+            const allBtn = document.getElementById('allTasksBtn');
+            if (allBtn) allBtn.classList.add('active');
+            renderTaskFilterButtons();
             
             loadEvents();
             loadTasksForDay();
@@ -3866,7 +4162,7 @@
                 toggleEvent.classList.remove('active');
                 toggleReminder.classList.add('active');
                 title.textContent = 'Add Reminder';
-                formTitle.textContent = '🔔 Reminder Details';
+                formTitle.textContent = '💬 Reminder Details';
                 // Show reminder-specific fields
                 reminderFields.style.display = 'block';
                 eventRemindersSection.style.display = 'none';
@@ -4278,19 +4574,13 @@
             // Check if we're in reminder mode
             const isReminderMode = document.getElementById('toggleReminder').classList.contains('active');
             
-            // Validate event data
-            const eventData = {
-                title: title,
-                start_date: date,
-                start_time: allDay ? null : time,
-                all_day: allDay,
-                duration: duration,
-                category: category,
-                description: description
-            };
-            
-            const validationErrors = validateEventData(eventData);
-            if (!showValidationErrors(validationErrors)) {
+            // Basic validation
+            if (!title) {
+                alert('Please enter a title');
+                return;
+            }
+            if (!date) {
+                alert('Please select a date');
                 return;
             }
             
@@ -4329,10 +4619,10 @@
                 }
             } else {
                 // Save as event
-            if (!allDay && !time) {
-                alert('Please enter a start time or check all-day event');
-                return;
-            }
+                if (!allDay && !time) {
+                    alert('Please enter a start time or check all-day event');
+                    return;
+                }
             
             // Get recurring data
             const recurringPattern = document.getElementById('enhancedEventRecurring').value;
@@ -4350,57 +4640,54 @@
                 }
             }
             
-            const eventData = {
-                title: title,
-                start_date: date,
-                start_time: allDay ? null : time,
-                duration: allDay ? 480 : duration, // 8 hours for all-day
-                all_day: allDay,
-                category: category,
-                description: description,
-                recurring: recurringData ? JSON.stringify(recurringData) : null
-            };
+                const eventData = {
+                    title: title,
+                    start_date: date,
+                    start_time: allDay ? null : time,
+                    duration: allDay ? 480 : duration, // 8 hours for all-day
+                    all_day: allDay,
+                    category: category,
+                    description: description,
+                    recurring: recurringData ? JSON.stringify(recurringData) : null
+                };
             
-            try {
-                if (isEditing) {
-                    // Update existing event
-                    const updatedEvent = await updateEvent(window.editingEventId, eventData);
-                    const eventIndex = allEvents.findIndex(e => e.id === window.editingEventId);
-                    if (eventIndex !== -1) {
-                        allEvents[eventIndex] = updatedEvent;
-                    }
-                    showNotification('Event updated successfully');
-                    window.editingEventId = null; // Clear editing state
-                } else {
-                    // Create new event
-                    const newEvent = await saveEvent(eventData);
-                    allEvents.push(newEvent);
+                try {
+                    if (isEditing) {
+                        // Check if this is a series edit or single occurrence edit
+                        const editScope = document.querySelector('input[name="editScope"]:checked')?.value;
+                        const currentEvent = allEvents.find(e => e.id === window.editingEventId);
                         
-                    // Create reminders for the event if any were added
-                    if (eventReminders.length > 0) {
-                        await createEventReminders(newEvent.id, eventReminders);
+                        if (editScope === 'single' && currentEvent?.recurring) {
+                            // Edit single occurrence - use the occurrence endpoint
+                            const occurrenceDate = document.getElementById('enhancedEventDate').value;
+                            const updatedEvent = await updateEventOccurrence(window.editingEventId, occurrenceDate, eventData);
+                            showNotification('Event occurrence updated successfully');
+                        } else {
+                            // Edit entire series or non-recurring event
+                            const updatedEvent = await updateEvent(window.editingEventId, eventData);
+                            const eventIndex = allEvents.findIndex(e => e.id === window.editingEventId);
+                            if (eventIndex !== -1) {
+                                allEvents[eventIndex] = updatedEvent;
+                            }
+                            showNotification(editScope === 'series' ? 'Event series updated successfully' : 'Event updated successfully');
+                        }
+                        window.editingEventId = null; // Clear editing state
+                    } else {
+                        // Create new event
+                        const newEvent = await saveEvent(eventData);
+                        allEvents.push(newEvent);
+                        showNotification('Event created successfully');
                     }
                     
-                    // Create cross-links for the event if any were added
-                    if (eventLinks.length > 0) {
-                        await createEventLinks(newEvent.id, eventLinks, newEvent.start_date);
+                    updateCalendar();
+                    if (currentView === 'day') {
+                        await updateDayViewDisplay(false);
                     }
-                    
-                    // Handle AI-generated cross-links
-                    if (formData.crossLinks && formData.crossLinks.length > 0) {
-                        await createEventLinks(newEvent.id, formData.crossLinks, newEvent.start_date);
-                    }
-                    showNotification('Event created successfully');
+                    closeEnhancedAddForm();
+                } catch (error) {
+                    console.error('Event save error:', error);
+                    showNotification(isEditing ? 'Failed to update event' : 'Failed to create event', 'error');
                 }
-                
-                updateCalendar();
-                if (currentView === 'day') {
-                    await updateDayViewDisplay(false);
-                }
-                closeEnhancedAddForm();
-            } catch (error) {
-                showNotification(isEditing ? 'Failed to update event' : 'Failed to create event', 'error');
-            }
             }
         }
 
@@ -4552,6 +4839,171 @@
                 showNotification('Some changes may not be saved', 'warning');
             }
         }
+
+        // Authentication Integration Functions
+        let currentUser = null;
+        let currentSession = null;
+
+        function initializeAuth() {
+            // Check for existing session
+            const stored = localStorage.getItem('zoe_session');
+            if (stored) {
+                try {
+                    currentSession = JSON.parse(stored);
+                    loadCurrentUser();
+                } catch (error) {
+                    console.error('Invalid session data:', error);
+                    redirectToAuth();
+                }
+            } else {
+                redirectToAuth();
+            }
+        }
+
+        async function loadCurrentUser() {
+            if (!currentSession) {
+                redirectToAuth();
+                return;
+            }
+
+            try {
+                const response = await fetch('http://localhost:8002/api/auth/user', {
+                    headers: {
+                        'X-Session-ID': currentSession.session_id
+                    }
+                });
+
+                if (response.ok) {
+                    currentUser = await response.json();
+                    updateUserUI();
+                } else if (response.status === 401) {
+                    localStorage.removeItem('zoe_session');
+                    redirectToAuth();
+                } else {
+                    console.error('Failed to load user:', await response.text());
+                }
+            } catch (error) {
+                console.error('Error loading user:', error);
+                // Continue with cached session data if available
+                if (currentSession.username) {
+                    currentUser = {
+                        username: currentSession.username,
+                        role: currentSession.role || 'user'
+                    };
+                    updateUserUI();
+                }
+            }
+        }
+
+        function updateUserUI() {
+            if (!currentUser) return;
+
+            // Update user avatar
+            const avatar = document.getElementById('userAvatar');
+            avatar.textContent = currentUser.username.charAt(0).toUpperCase();
+
+
+            // Show upgrade option for passcode sessions
+            if (currentSession?.session_type === 'passcode') {
+                document.getElementById('upgradeSessionItem').style.display = 'block';
+            } else {
+                document.getElementById('upgradeSessionItem').style.display = 'none';
+            }
+
+            // Show admin link for admin users
+            if (currentUser.role === 'admin') {
+                document.getElementById('adminLink').style.display = 'block';
+                document.getElementById('adminDivider').style.display = 'block';
+            }
+        }
+
+        function toggleUserDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function showUserProfile() {
+            // Implement user profile modal
+            alert('User profile coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function showSecuritySettings() {
+            // Implement security settings
+            alert('Security settings coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function switchUser() {
+            localStorage.removeItem('zoe_session');
+            window.location.href = 'auth.html?redirect=' + encodeURIComponent(window.location.pathname);
+        }
+
+        async function upgradeSession() {
+            const password = prompt('Enter your password to upgrade this session:');
+            if (!password) return;
+
+            try {
+                const response = await fetch('http://localhost:8002/api/auth/escalate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Session-ID': currentSession.session_id
+                    },
+                    body: JSON.stringify({ password })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    currentSession = data;
+                    localStorage.setItem('zoe_session', JSON.stringify(data));
+                    updateUserUI();
+                    showNotification('Session upgraded successfully!', 'success');
+                } else {
+                    const error = await response.json();
+                    alert('Session upgrade failed: ' + (error.detail || 'Invalid password'));
+                }
+            } catch (error) {
+                console.error('Upgrade error:', error);
+                alert('Session upgrade failed');
+            }
+            
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function logout() {
+            if (currentSession) {
+                // Notify server of logout
+                fetch('http://localhost:8002/api/auth/logout', {
+                    method: 'POST',
+                    headers: { 'X-Session-ID': currentSession.session_id }
+                }).catch(error => console.error('Logout error:', error));
+            }
+            
+            localStorage.removeItem('zoe_session');
+            window.location.href = 'auth.html';
+        }
+
+        function redirectToAuth() {
+            window.location.href = 'auth.html?redirect=' + encodeURIComponent(window.location.pathname);
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const userMenu = document.querySelector('.user-menu');
+            const dropdown = document.getElementById('userDropdown');
+            
+            if (userMenu && !userMenu.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+
+        // Initialize authentication when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeAuth();
+            // Your existing initialization code...
+        });
     </script>
+    <script src="js/auth.js"></script>
 </body>
 </html>

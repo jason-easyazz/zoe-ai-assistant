@@ -147,6 +147,36 @@
             line-height: 1.4;
             margin-bottom: 16px;
             color: #333;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: color 0.2s;
+        }
+
+        .section-title:hover {
+            color: #7B61FF;
+        }
+
+        .section-toggle {
+            font-size: 14px;
+            transition: transform 0.3s ease;
+        }
+
+        .section-toggle.collapsed {
+            transform: rotate(-90deg);
+        }
+
+        .section-content {
+            transition: all 0.3s ease;
+            overflow: hidden;
+        }
+
+        .section-content.collapsed {
+            max-height: 0;
+            opacity: 0;
+            margin-bottom: 0;
+            padding-bottom: 0;
         }
 
         .settings-grid {
@@ -697,8 +727,12 @@
         <!-- LLM Configuration Tab -->
         <div id="llm-tab" class="tab-content active">
             <div class="settings-section">
-                <div class="section-title">Model Configuration</div>
-                <div class="settings-grid">
+                <div class="section-title" onclick="toggleSection(this)">
+                    <span>Model Configuration</span>
+                    <span class="section-toggle">▼</span>
+                </div>
+                <div class="section-content">
+                    <div class="settings-grid">
                     <div class="setting-item">
                         <div class="setting-label">Global Daily Token Cap</div>
                         <input type="number" class="setting-input" id="globalTokenCap" value="100000" min="1000" max="10000000">
@@ -717,10 +751,15 @@
                         <button class="btn btn-primary" onclick="loadSystemModels()">Load All Models</button>
                     </div>
                 </div>
+                </div>
             </div>
 
             <div class="settings-section">
-                <div class="section-title">Model Routing</div>
+                <div class="section-title" onclick="toggleSection(this)">
+                    <span>Model Routing</span>
+                    <span class="section-toggle">▼</span>
+                </div>
+                <div class="section-content">
                 <div class="model-routing-container">
                     <div class="routing-header">
                         <span>Model</span>
@@ -738,14 +777,19 @@
                     </div>
                     <button class="btn btn-primary" onclick="addModelRow()">+ Add Model</button>
                 </div>
+                </div>
             </div>
         </div>
 
         <!-- System Configuration Tab -->
         <div id="system-tab" class="tab-content">
             <div class="settings-section">
-                <div class="section-title">System Settings</div>
-                <div class="settings-grid">
+                <div class="section-title" onclick="toggleSection(this)">
+                    <span>System Settings</span>
+                    <span class="section-toggle">▼</span>
+                </div>
+                <div class="section-content">
+                    <div class="settings-grid">
                     <div class="setting-item">
                         <div class="setting-label">Environment</div>
                         <select class="setting-select" id="environment">
@@ -777,14 +821,19 @@
                         </select>
                     </div>
                 </div>
+                </div>
             </div>
         </div>
 
         <!-- Security Tab -->
         <div id="security-tab" class="tab-content">
             <div class="settings-section">
-                <div class="section-title">Security Settings</div>
-                <div class="settings-grid">
+                <div class="section-title" onclick="toggleSection(this)">
+                    <span>Security Settings</span>
+                    <span class="section-toggle">▼</span>
+                </div>
+                <div class="section-content">
+                    <div class="settings-grid">
                     <div class="setting-item">
                         <div class="setting-label">Require Authentication</div>
                         <div class="setting-checkbox">
@@ -816,8 +865,12 @@
         <!-- Performance Tab -->
         <div id="performance-tab" class="tab-content">
             <div class="settings-section">
-                <div class="section-title">Performance Settings</div>
-                <div class="settings-grid">
+                <div class="section-title" onclick="toggleSection(this)">
+                    <span>Performance Settings</span>
+                    <span class="section-toggle">▼</span>
+                </div>
+                <div class="section-content">
+                    <div class="settings-grid">
                     <div class="setting-item">
                         <div class="setting-label">Max Memory (MB)</div>
                         <input type="number" class="setting-input" id="maxMemory" value="2048" min="512" max="8192">
@@ -838,6 +891,7 @@
                         </div>
                     </div>
                 </div>
+                </div>
             </div>
         </div>
 
@@ -845,25 +899,29 @@
         <!-- Guardrails Tab -->
         <div id="guardrails-tab" class="tab-content">
             <div class="settings-section">
-                <div class="section-title">Content Validation</div>
-                <div class="settings-grid">
+                <div class="section-title" onclick="toggleSection(this)">
+                    <span>Content Validation</span>
+                    <span class="section-toggle">▼</span>
+                </div>
+                <div class="section-content">
+                    <div class="settings-grid">
                     <div class="setting-item">
                         <div class="setting-label">Enable Content Validation</div>
-                        <div class="checkbox-container">
+                        <div class="setting-checkbox">
                             <input type="checkbox" id="enableContentValidation" checked>
                             <label for="enableContentValidation">Validate all content for safety</label>
                         </div>
                     </div>
                     <div class="setting-item">
                         <div class="setting-label">PII Detection</div>
-                        <div class="checkbox-container">
+                        <div class="setting-checkbox">
                             <input type="checkbox" id="enablePIIDetection" checked>
                             <label for="enablePIIDetection">Detect and block PII</label>
                         </div>
                     </div>
                     <div class="setting-item">
                         <div class="setting-label">Code Execution Safety</div>
-                        <div class="checkbox-container">
+                        <div class="setting-checkbox">
                             <input type="checkbox" id="enableCodeSafety" checked>
                             <label for="enableCodeSafety">Review code before execution</label>
                         </div>
@@ -877,10 +935,15 @@
                         </select>
                     </div>
                 </div>
+                </div>
             </div>
             <div class="settings-section">
-                <div class="section-title">Pattern Management</div>
-                <div class="settings-grid">
+                <div class="section-title" onclick="toggleSection(this)">
+                    <span>Pattern Management</span>
+                    <span class="section-toggle">▼</span>
+                </div>
+                <div class="section-content">
+                    <div class="settings-grid">
                     <div class="setting-item">
                         <div class="setting-label">Blocked Patterns</div>
                         <textarea class="setting-textarea" id="blockedPatterns" placeholder="Enter patterns to block (one per line)"></textarea>
@@ -889,6 +952,7 @@
                         <div class="setting-label">Allowed Patterns</div>
                         <textarea class="setting-textarea" id="allowedPatterns" placeholder="Enter patterns to allow (one per line)"></textarea>
                     </div>
+                </div>
                 </div>
             </div>
             <div class="action-buttons">
@@ -902,11 +966,15 @@
         <!-- Aider Tab -->
         <div id="aider-tab" class="tab-content">
             <div class="settings-section">
-                <div class="section-title">Aider Configuration</div>
-                <div class="settings-grid">
+                <div class="section-title" onclick="toggleSection(this)">
+                    <span>Aider Configuration</span>
+                    <span class="section-toggle">▼</span>
+                </div>
+                <div class="section-content">
+                    <div class="settings-grid">
                     <div class="setting-item">
                         <div class="setting-label">Enable Aider</div>
-                        <div class="checkbox-container">
+                        <div class="setting-checkbox">
                             <input type="checkbox" id="enableAider" checked>
                             <label for="enableAider">Enable AI pair programming</label>
                         </div>
@@ -925,19 +993,24 @@
                     </div>
                     <div class="setting-item">
                         <div class="setting-label">Auto-save Changes</div>
-                        <div class="checkbox-container">
+                        <div class="setting-checkbox">
                             <input type="checkbox" id="aiderAutoSave" checked>
                             <label for="aiderAutoSave">Automatically save generated code</label>
                         </div>
                     </div>
                 </div>
+                </div>
             </div>
             <div class="settings-section">
-                <div class="section-title">Code Generation</div>
-                <div class="settings-grid">
+                <div class="section-title" onclick="toggleSection(this)">
+                    <span>Code Generation</span>
+                    <span class="section-toggle">▼</span>
+                </div>
+                <div class="section-content">
+                    <div class="settings-grid">
                     <div class="setting-item">
                         <div class="setting-label">Generate Tests</div>
-                        <div class="checkbox-container">
+                        <div class="setting-checkbox">
                             <input type="checkbox" id="aiderGenerateTests" checked>
                             <label for="aiderGenerateTests">Generate tests with code</label>
                         </div>
@@ -951,6 +1024,7 @@
                         </select>
                     </div>
                 </div>
+                </div>
             </div>
             <div class="action-buttons">
                 <button class="btn btn-primary" onclick="updateAiderSettings()">Update Settings</button>
@@ -963,8 +1037,12 @@
         <!-- Advanced Tab -->
         <div id="advanced-tab" class="tab-content">
             <div class="settings-section">
-                <div class="section-title">Advanced Settings</div>
-                <div class="settings-grid">
+                <div class="section-title" onclick="toggleSection(this)">
+                    <span>Advanced Settings</span>
+                    <span class="section-toggle">▼</span>
+                </div>
+                <div class="section-content">
+                    <div class="settings-grid">
                     <div class="setting-item">
                         <div class="setting-label">Restart Policy</div>
                         <select class="setting-select" id="restartPolicy">
@@ -977,6 +1055,7 @@
                         <div class="setting-label">Docker Network</div>
                         <input type="text" class="setting-input" id="dockerNetwork" value="zoe-network">
                     </div>
+                </div>
                 </div>
             </div>
             <div class="action-buttons">
@@ -1041,6 +1120,23 @@
         }
         updateTime();
         setInterval(updateTime, 1000);
+
+        // Section toggling
+        function toggleSection(titleElement) {
+            const section = titleElement.parentElement;
+            const content = section.querySelector('.section-content');
+            const toggle = titleElement.querySelector('.section-toggle');
+            
+            if (content.classList.contains('collapsed')) {
+                content.classList.remove('collapsed');
+                toggle.classList.remove('collapsed');
+                toggle.textContent = '▼';
+            } else {
+                content.classList.add('collapsed');
+                toggle.classList.add('collapsed');
+                toggle.textContent = '▶';
+            }
+        }
 
         // Tab switching
         function switchTab(tabName) {

@@ -6,12 +6,23 @@ import subprocess
 import json
 import time
 import datetime
-import pytz
-import requests
 import socket
 from pathlib import Path
 import threading
 import logging
+
+# Try to import optional dependencies
+try:
+    import pytz
+    HAS_PYTZ = True
+except ImportError:
+    HAS_PYTZ = False
+
+try:
+    import requests
+    HAS_REQUESTS = True
+except ImportError:
+    HAS_REQUESTS = False
 
 router = APIRouter(prefix="/api/time")
 
@@ -71,56 +82,49 @@ def save_time_settings(settings: Dict):
         json.dump(settings, f, indent=2)
 
 def get_timezone_from_location(lat: float, lon: float) -> str:
-    """Get timezone from coordinates using timezone API"""
+    """Get timezone from coordinates - simplified version"""
     try:
-        # Use timezone API to get timezone from coordinates
-        response = requests.get(f"https://api.timezonedb.com/v2.1/get-time-zone", 
-                              params={
-                                  "key": "YOUR_API_KEY",  # You'll need to get a free API key
-                                  "format": "json",
-                                  "by": "position",
-                                  "lat": lat,
-                                  "lng": lon
-                              }, timeout=5)
-        
-        if response.status_code == 200:
-            data = response.json()
-            return data.get("zoneName", "UTC")
+        if HAS_REQUESTS:
+            # Simple timezone estimation based on longitude
+            # This is a basic approximation - in production you'd use a proper timezone API
+            if -180 <= lon <= -67.5:
+                return "America/New_York"
+            elif -67.5 < lon <= -52.5:
+                return "America/Chicago" 
+            elif -52.5 < lon <= -37.5:
+                return "America/Denver"
+            elif -37.5 < lon <= -22.5:
+                return "America/Los_Angeles"
+            elif -22.5 < lon <= -7.5:
+                return "Atlantic/Azores"
+            elif -7.5 < lon <= 7.5:
+                return "Europe/London"
+            elif 7.5 < lon <= 22.5:
+                return "Europe/Paris"
+            elif 22.5 < lon <= 37.5:
+                return "Europe/Berlin"
+            elif 37.5 < lon <= 52.5:
+                return "Europe/Moscow"
+            elif 52.5 < lon <= 67.5:
+                return "Asia/Karachi"
+            elif 67.5 < lon <= 82.5:
+                return "Asia/Kolkata"
+            elif 82.5 < lon <= 97.5:
+                return "Asia/Bangkok"
+            elif 97.5 < lon <= 112.5:
+                return "Asia/Shanghai"
+            elif 112.5 < lon <= 127.5:
+                return "Asia/Tokyo"
+            elif 127.5 < lon <= 142.5:
+                return "Australia/Sydney"
+            else:
+                return "Pacific/Auckland"
+        else:
+            # Fallback to UTC if requests not available
+            return "UTC"
     except Exception as e:
         logger.error(f"Failed to get timezone from location: {e}")
-    
-    # Fallback: use pytz to estimate timezone
-    try:
-        import geopy
-        from geopy.geocoders import Nominatim
-        
-        geolocator = Nominatim(user_agent="zoe-time-sync")
-        location = geolocator.reverse(f"{lat}, {lon}", language="en")
-        
-        if location and location.raw.get("address"):
-            address = location.raw["address"]
-            country_code = address.get("country_code", "").upper()
-            
-            # Map common country codes to timezones
-            country_timezone_map = {
-                "US": "America/New_York",
-                "GB": "Europe/London", 
-                "DE": "Europe/Berlin",
-                "FR": "Europe/Paris",
-                "JP": "Asia/Tokyo",
-                "AU": "Australia/Sydney",
-                "CA": "America/Toronto",
-                "BR": "America/Sao_Paulo",
-                "IN": "Asia/Kolkata",
-                "CN": "Asia/Shanghai",
-                "RU": "Europe/Moscow"
-            }
-            
-            return country_timezone_map.get(country_code, "UTC")
-    except Exception as e:
-        logger.error(f"Failed to estimate timezone: {e}")
-    
-    return "UTC"
+        return "UTC"
 
 def sync_with_ntp(ntp_server: str = "pool.ntp.org") -> bool:
     """Synchronize system time with NTP server"""
@@ -218,8 +222,16 @@ def get_available_timezones() -> List[str]:
         if result.returncode == 0:
             return result.stdout.strip().split('\n')
         else:
-            # Fallback to pytz timezones
-            return list(pytz.all_timezones)
+            # Fallback to pytz timezones if available
+            if HAS_PYTZ:
+                return list(pytz.all_timezones)
+            else:
+                # Return common timezones as fallback
+                return [
+                    "UTC", "America/New_York", "America/Chicago", "America/Denver", 
+                    "America/Los_Angeles", "Europe/London", "Europe/Paris", 
+                    "Europe/Berlin", "Asia/Tokyo", "Asia/Shanghai", "Australia/Sydney"
+                ]
             
     except Exception as e:
         logger.error(f"Failed to get timezones: {e}")
@@ -293,10 +305,18 @@ async def set_timezone_endpoint(timezone_data: dict):
             raise HTTPException(status_code=400, detail="Timezone is required")
         
         # Validate timezone
-        try:
-            pytz.timezone(timezone)
-        except pytz.UnknownTimeZoneError:
-            raise HTTPException(status_code=400, detail=f"Unknown timezone: {timezone}")
+        if HAS_PYTZ:
+            try:
+                pytz.timezone(timezone)
+            except pytz.UnknownTimeZoneError:
+                raise HTTPException(status_code=400, detail=f"Unknown timezone: {timezone}")
+        else:
+            # Basic validation without pytz
+            valid_timezones = ["UTC", "America/New_York", "America/Chicago", "America/Denver", 
+                             "America/Los_Angeles", "Europe/London", "Europe/Paris", 
+                             "Europe/Berlin", "Asia/Tokyo", "Asia/Shanghai", "Australia/Sydney"]
+            if timezone not in valid_timezones:
+                raise HTTPException(status_code=400, detail=f"Unknown timezone: {timezone}")
         
         # Set system timezone
         if set_timezone(timezone):
@@ -491,5 +511,6 @@ async def startup_time_sync():
             logger.info("Time sync initialized on startup")
     except Exception as e:
         logger.error(f"Startup time sync failed: {e}")
+
 
 

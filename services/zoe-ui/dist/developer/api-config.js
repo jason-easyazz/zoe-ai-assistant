@@ -7,7 +7,13 @@ window.API_CONFIG = {
         tasks: '/api/developer/tasks',
         systemOverview: '/api/developer/system/overview',
         systemDiagnostics: '/api/developer/system/diagnostics',
-        chat: '/api/chat'
+        chat: '/api/chat',
+        // New Widget System Endpoints
+        widgets: '/api/widgets',
+        widgetRegistry: '/api/widgets/registry',
+        widgetUpdates: '/api/widgets/updates',
+        widgetTemplates: '/api/widgets/templates',
+        widgetTesting: '/api/widgets/test'
     }
 };
 
@@ -22,6 +28,67 @@ window.apiCall = async function(endpoint, options = {}) {
     } catch (error) {
         console.error('API call failed:', error);
         throw error;
+    }
+};
+
+// Widget Management Functions for Developer Dashboard
+window.WidgetManager = {
+    // Get all registered widgets
+    async getWidgets() {
+        try {
+            return await apiCall('/api/widgets/registry');
+        } catch (error) {
+            console.error('Failed to load widgets:', error);
+            return { widgets: [] };
+        }
+    },
+    
+    // Get widget templates
+    async getTemplates() {
+        try {
+            return await apiCall('/api/widgets/templates');
+        } catch (error) {
+            console.error('Failed to load templates:', error);
+            return { templates: [] };
+        }
+    },
+    
+    // Test a widget
+    async testWidget(widgetName) {
+        try {
+            return await apiCall(`/api/widgets/test/${widgetName}`, {
+                method: 'POST'
+            });
+        } catch (error) {
+            console.error('Widget test failed:', error);
+            return { success: false, error: error.message };
+        }
+    },
+    
+    // Update widget
+    async updateWidget(widgetName) {
+        try {
+            return await apiCall(`/api/widgets/update/${widgetName}`, {
+                method: 'POST'
+            });
+        } catch (error) {
+            console.error('Widget update failed:', error);
+            return { success: false, error: error.message };
+        }
+    },
+    
+    // Create new widget
+    async createWidget(widgetData) {
+        try {
+            return await apiCall('/api/widgets/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(widgetData)
+            });
+        } catch (error) {
+            console.error('Widget creation failed:', error);
+            return { success: false, error: error.message };
+        }
     }
 };
 

@@ -4,7 +4,7 @@
 
 class ZoeAIProcessor {
     constructor() {
-        this.API_BASE = window.API_BASE || 'http://localhost:8000/api';
+        this.API_BASE = window.API_BASE || `${window.location.protocol}//${window.location.host}/api`;
         this.memory = { people: [], notes: [], general: [] };
         this.conversationContext = [];
         this.userPreferences = this.loadUserPreferences();

@@ -266,6 +266,7 @@
                 <a href="chat.html" class="nav-link">💬 Chat</a>
                 <a href="aider.html" class="nav-link">🤖 Aider</a>
                 <a href="tasks.html" class="nav-link">📋 Tasks</a>
+                <a href="widgets.html" class="nav-link">🧩 Widgets</a>
                 <a href="roadmap.html" class="nav-link">🗺️ Roadmap</a>
                 <a href="tools.html" class="nav-link">🔧 Tools</a>
                 <a href="monitor.html" class="nav-link">📈 Monitor</a>
@@ -325,6 +326,14 @@
             <button class="action-btn" onclick="viewSystemLogs()">📋 System Logs</button>
             <button class="action-btn" onclick="checkDiskSpace()">💽 Disk Space</button>
             <button class="action-btn" onclick="viewDockerStats()">🐳 Docker Stats</button>
+        </div>
+
+        <h2 style="margin: 24px 0 20px;">Widget System</h2>
+        <div class="actions-grid">
+            <button class="action-btn" onclick="window.location.href='widgets.html'">🧩 Manage Widgets</button>
+            <button class="action-btn" onclick="checkWidgetUpdates()">🔄 Check Updates</button>
+            <button class="action-btn" onclick="testAllWidgets()">🧪 Test All Widgets</button>
+            <button class="action-btn" onclick="window.location.href='templates.html'">📝 Widget Templates</button>
         </div>
 
         <h2 style="margin: 24px 0 20px;">Recent Activity</h2>
@@ -647,6 +656,42 @@
 
         function openAider() {
             window.location.href = 'aider.html';
+        }
+
+        // Widget System Functions
+        async function checkWidgetUpdates() {
+            try {
+                const response = await fetch(`${API_BASE}/api/widgets/updates`);
+                const updates = await response.json();
+                
+                if (updates.length > 0) {
+                    alert(`Found ${updates.length} widget updates available!`);
+                    window.location.href = 'widgets.html';
+                } else {
+                    alert('All widgets are up to date!');
+                }
+            } catch (error) {
+                console.error('Failed to check widget updates:', error);
+                alert('Failed to check widget updates');
+            }
+        }
+
+        async function testAllWidgets() {
+            try {
+                const response = await fetch(`${API_BASE}/api/widgets/test-all`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+                
+                if (result.success) {
+                    alert(`All widgets tested successfully! ${result.passed} passed, ${result.failed} failed`);
+                } else {
+                    alert('Widget testing failed: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Failed to test widgets:', error);
+                alert('Failed to test widgets');
+            }
         }
 
         // Initialize

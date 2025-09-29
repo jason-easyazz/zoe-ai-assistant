@@ -49,13 +49,177 @@
         }
         .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
         
-        .settings-btn { 
+        /* Authentication Integration */
+        .user-menu {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .user-menu:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .user-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .user-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        
+        .user-role {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.2;
+        }
+        
+        .user-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 8px 0;
+            min-width: 200px;
+            z-index: 1000;
+            display: none;
+            border: 1px solid #e1e5e9;
+        }
+        
+        .user-dropdown.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 8px 16px;
+            color: #333;
+            text-decoration: none;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .dropdown-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .dropdown-divider {
+            height: 1px;
+            background: #e1e5e9;
+            margin: 4px 0;
+        }
+        
+        .notifications-btn { 
             background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
             border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
             justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
-            font-size: 16px; font-weight: bold;
+            font-size: 16px; font-weight: bold; position: relative;
         }
-        .settings-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+            animation: notificationDotPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 8px rgba(123, 97, 255, 0);
+            }
+        }
+        
+        @keyframes notificationDotPulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.2);
+                opacity: 0.7;
+            }
+        }
+        
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .notifications-title {
+            font-size: 18px; font-weight: 600; color: #333; margin: 0;
+        }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content {
+            padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title {
+            font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px;
+        }
+        .notification-meta {
+            font-size: 12px; color: #666; display: flex; gap: 10px;
+        }
+        .notification-time {
+            color: #7B61FF; font-weight: 500;
+        }
+        .notification-priority {
+            padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600;
+        }
+        .no-notifications {
+            text-align: center; color: #666; font-size: 14px; padding: 40px 20px;
+        }
         
         .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
         .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
@@ -68,14 +232,6 @@
 
         /* Main Layout */
         .main-container { padding: 70px 20px 20px; }
-        .top-info-bar { 
-            display: flex; justify-content: space-between; align-items: center; 
-            margin-bottom: 20px; padding: 0 10px;
-        }
-        .time-display { display: flex; flex-direction: column; }
-        .current-time { font-size: 18px; font-weight: 300; color: #333; }
-        .current-date { font-size: 11px; color: #666; margin-top: 2px; }
-        .weather-widget { display: flex; align-items: center; gap: 6px; }
 
         /* Settings Layout */
         .settings-layout {
@@ -139,6 +295,74 @@
         }
         .setting-description {
             font-size: 14px; color: #666;
+        }
+
+        /* Smart Time & Language Settings Styles */
+        .current-time-display {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            color: white;
+            text-align: center;
+        }
+
+        .current-time-label {
+            font-size: 0.875rem;
+            opacity: 0.9;
+            margin-bottom: 0.5rem;
+        }
+
+        .current-time-value {
+            font-size: 2.5rem;
+            font-weight: 300;
+            font-variant-numeric: tabular-nums;
+            margin-bottom: 0.25rem;
+        }
+
+        .current-date-value {
+            font-size: 1rem;
+            opacity: 0.9;
+        }
+
+        .setting-subsection {
+            margin-top: 1.5rem;
+            padding-top: 1.5rem;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        .subsection-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 1rem;
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid #d1d5db;
+            color: #374151;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            transition: all 0.2s ease;
+        }
+
+        .btn-outline:hover {
+            background: #f9fafb;
+            border-color: #9ca3af;
+        }
+
+        /* Smart responsive behavior */
+        @media (max-width: 768px) {
+            .current-time-value {
+                font-size: 2rem;
+            }
+            
+            .setting-subsection {
+                margin-top: 1rem;
+                padding-top: 1rem;
+            }
         }
 
         /* Productivity Settings Styles */
@@ -312,14 +536,15 @@
             .more-grid { grid-template-columns: 1fr; }
         }
     </style>
+    <script src="js/auth.js"></script>
 </head>
 <body>
     <!-- Navigation -->
     <div class="nav-bar">
         <div class="nav-left">
-            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
+            <div class="mini-orb" onclick="handleLogout()"></div>
             <div class="nav-menu">
-                <a href="index.html" class="nav-item">Chat</a>
+                <a href="chat.html" class="nav-item">Chat</a>
                 <a href="dashboard.html" class="nav-item">Dashboard</a>
                 <a href="lists.html" class="nav-item">Lists</a>
                 <a href="calendar.html" class="nav-item">Calendar</a>
@@ -328,27 +553,43 @@
             </div>
         </div>
         <div class="nav-right">
-            <button class="nav-item" onclick="startFocusSession()" style="background: rgba(123, 97, 255, 0.1); color: #7B61FF; border: 1px solid rgba(123, 97, 255, 0.3);">
-                🎯 Focus
-            </button>
             <div class="api-indicator connecting" id="apiStatus">Connecting</div>
-            <button class="settings-btn" onclick="window.location.href='settings.html'" title="Settings">⚙️</button>
+            
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- User Menu -->
+            <div class="user-menu" onclick="toggleUserDropdown()">
+                <div class="user-avatar" id="userAvatar">?</div>
+                
+                <div class="user-dropdown" id="userDropdown">
+                    <a href="#" class="dropdown-item" onclick="showUserProfile()">Profile</a>
+                    <a href="#" class="dropdown-item" onclick="showSecuritySettings()">Security</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" class="dropdown-item" onclick="switchUser()">Switch User</a>
+                    <a href="#" class="dropdown-item" onclick="upgradeSession()" id="upgradeSessionItem" style="display: none;">Upgrade Session</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="admin.html" class="dropdown-item" id="adminLink" style="display: none;">Admin Dashboard</a>
+                    <div class="dropdown-divider" id="adminDivider" style="display: none;"></div>
+                    <a href="#" class="dropdown-item" onclick="logout()">Logout</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
         </div>
     </div>
 
     <!-- Main Content -->
     <div class="main-container">
-        <!-- Top Info Bar -->
-        <div class="top-info-bar">
-            <div class="time-display">
-                <div class="current-time" id="currentTime">Loading...</div>
-                <div class="current-date" id="currentDate">Loading...</div>
-            </div>
-            <div class="weather-widget">
-                <div>☀️</div>
-                <div>23°</div>
-            </div>
-        </div>
 
         <!-- Settings Layout -->
         <div class="settings-layout">
@@ -356,6 +597,98 @@
             <div class="settings-header">
                 <h1 class="settings-title">Settings</h1>
                 <p class="settings-subtitle">Configure your Zoe AI experience</p>
+            </div>
+
+            <!-- User Profile Section -->
+            <div class="settings-section">
+                <div class="section-header" onclick="toggleSection('profile')">
+                    <div class="section-title">Profile</div>
+                    <div class="section-subtitle">Manage your personal information and account settings</div>
+                </div>
+                <div class="section-content" id="profile">
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Username</div>
+                            <div class="setting-description">Your unique identifier</div>
+                        </div>
+                        <div class="setting-control">
+                            <input type="text" id="username" class="form-input" readonly>
+                        </div>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Email</div>
+                            <div class="setting-description">Your email address for notifications</div>
+                        </div>
+                        <div class="setting-control">
+                            <input type="email" id="email" class="form-input" placeholder="Enter email">
+                            <button onclick="updateProfile()" class="btn">Update</button>
+                        </div>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Role</div>
+                            <div class="setting-description">Your access level in the system</div>
+                        </div>
+                        <div class="setting-control">
+                            <span id="userRole" class="setting-value">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Security Section -->
+            <div class="settings-section">
+                <div class="section-header" onclick="toggleSection('security')">
+                    <div class="section-title">Security</div>
+                    <div class="section-subtitle">Manage your passwords, PIN codes, and security settings</div>
+                </div>
+                <div class="section-content" id="security">
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Change Password</div>
+                            <div class="setting-description">Update your account password</div>
+                        </div>
+                        <div class="setting-control">
+                            <button onclick="showChangePassword()" class="btn">Change</button>
+                        </div>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">PIN Code</div>
+                            <div class="setting-description">Set up a PIN for quick access on touch panels</div>
+                        </div>
+                        <div class="setting-control">
+                            <span id="pinStatus" class="setting-value">Loading...</span>
+                            <button onclick="managePinCode()" class="btn" id="pinBtn">Manage</button>
+                        </div>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Active Sessions</div>
+                            <div class="setting-description">View and manage your active sessions</div>
+                        </div>
+                        <div class="setting-control">
+                            <span id="sessionCount" class="setting-value">Loading...</span>
+                            <button onclick="viewSessions()" class="btn">View</button>
+                        </div>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Two-Factor Authentication</div>
+                            <div class="setting-description">Add extra security to your account</div>
+                        </div>
+                        <div class="setting-control">
+                            <span class="setting-value">Coming Soon</span>
+                            <button class="btn" disabled>Setup</button>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- General Settings -->
@@ -443,13 +776,65 @@
                             <button class="btn" onclick="saveApiKey('ha_token')">Save</button>
                         </div>
                     </div>
+                    
+                    <!-- N8N Settings -->
+                    <div class="setting-item" style="border-top: 1px solid rgba(255, 255, 255, 0.2); padding-top: 20px; margin-top: 20px;">
+                        <div class="setting-info">
+                            <div class="setting-name">N8N Server URL</div>
+                            <div class="setting-description">URL of your N8N instance (default: https://zoe.local:5678)</div>
+                        </div>
+                        <div class="setting-control">
+                            <input type="url" class="form-input" id="n8nUrl" placeholder="https://zoe.local:5678">
+                            <button class="btn" onclick="saveN8nSettings()">Save</button>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">N8N Username</div>
+                            <div class="setting-description">Your N8N username or email</div>
+                        </div>
+                        <div class="setting-control">
+                            <input type="text" class="form-input" id="n8nUsername" placeholder="Enter username">
+                            <button class="btn" onclick="saveN8nSettings()">Save</button>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">N8N Password</div>
+                            <div class="setting-description">Your N8N password</div>
+                        </div>
+                        <div class="setting-control">
+                            <input type="password" class="form-input" id="n8nPassword" placeholder="Enter password">
+                            <button class="btn" onclick="saveN8nSettings()">Save</button>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">N8N API Key</div>
+                            <div class="setting-description">API key for N8N (required for API access)</div>
+                        </div>
+                        <div class="setting-control">
+                            <input type="password" class="form-input" id="n8nApiKey" placeholder="Enter API key">
+                            <button class="btn" onclick="saveN8nSettings()">Save</button>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Test Connection</div>
+                            <div class="setting-description">Test your N8N connection</div>
+                        </div>
+                        <div class="setting-control">
+                            <button class="btn" onclick="testN8nConnection()">Test</button>
+                            <div id="n8nStatus" style="margin-left: 10px; font-size: 12px;"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
             <!-- Calendar Settings -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('calendar')">
-                    <div class="section-title">📅 Calendar Settings</div>
+                    <div class="section-title">Calendar Settings</div>
                     <div class="section-subtitle">Configure your calendar preferences and sync</div>
                 </div>
                 <div class="section-content" id="calendar">
@@ -564,7 +949,7 @@
             <!-- Productivity Settings -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('productivity')">
-                    <div class="section-title">🎯 Productivity Settings</div>
+                    <div class="section-title">Productivity Settings</div>
                     <div class="section-subtitle">Focus timer, break reminders, and productivity tracking</div>
                 </div>
                 <div class="section-content" id="productivity">
@@ -702,121 +1087,123 @@
                 </div>
             </div>
 
-            <!-- Time & Location Settings -->
+            <!-- Time and Language Settings -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('time-location')">
-                    <div class="section-title">🕒 Time & Location Settings</div>
-                    <div class="section-subtitle">Configure time synchronization, timezone, and location services</div>
+                    <div class="section-title">Time and language</div>
+                    <div class="section-subtitle">Configure time and location preferences</div>
                 </div>
                 <div class="section-content" id="time-location">
-                    <!-- Current Time Status -->
+                    <!-- Current Time Display -->
+                    <div class="current-time-display">
+                        <div class="current-time-label">Current time</div>
+                        <div class="current-time-value" id="currentTimeDisplay">Loading...</div>
+                        <div class="current-date-value" id="currentDateDisplay"></div>
+                    </div>
+
+                    <!-- Set Time Automatically -->
                     <div class="setting-item">
                         <div class="setting-info">
-                            <div class="setting-name">Current Time</div>
-                            <div class="setting-description" id="currentTimeDesc">Loading...</div>
+                            <div class="setting-name">Set automatically</div>
+                            <div class="setting-description">Use network time</div>
                         </div>
                         <div class="setting-control">
-                            <button class="btn" onclick="syncTimeNow()">🔄 Sync Now</button>
+                            <div class="toggle-switch" id="autoTimeToggle" onclick="toggleAutoTime()">
+                                <div class="toggle-slider"></div>
+                            </div>
                         </div>
                     </div>
 
-                    <!-- Timezone Settings -->
-                    <div class="setting-item">
+                    <!-- Time Format (only shown when auto-time is off) -->
+                    <div class="setting-item" id="timeFormatItem" style="display: none;">
                         <div class="setting-info">
-                            <div class="setting-name">Timezone</div>
-                            <div class="setting-description">Select your timezone for accurate time display</div>
+                            <div class="setting-name">24-hour time</div>
                         </div>
                         <div class="setting-control">
-                            <select class="form-select" id="timezoneSelect" onchange="updateTimezone(this.value)">
-                                <option value="UTC">Loading timezones...</option>
+                            <div class="toggle-switch" id="twentyFourHourToggle" onclick="toggleTwentyFourHour()">
+                                <div class="toggle-slider"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Date Format -->
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Date format</div>
+                        </div>
+                        <div class="setting-control">
+                            <select class="form-select" id="dateFormatSelect" onchange="updateDateFormat(this.value)">
+                                <option value="DD-MM-YYYY">DD/MM/YYYY</option>
+                                <option value="MM-DD-YYYY">MM/DD/YYYY</option>
+                                <option value="YYYY-MM-DD">YYYY-MM-DD</option>
                             </select>
                         </div>
                     </div>
 
-                    <!-- Auto Timezone Detection -->
-                    <div class="setting-item">
-                        <div class="setting-info">
-                            <div class="setting-name">Auto-detect Timezone</div>
-                            <div class="setting-description">Automatically detect timezone from location</div>
+                    <!-- Time Zone Section -->
+                    <div class="setting-subsection">
+                        <div class="subsection-title">Time Zone</div>
+                        
+                        <!-- Set Time Zone Automatically -->
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <div class="setting-name">Set automatically</div>
+                                <div class="setting-description">Use current location</div>
+                            </div>
+                            <div class="setting-control">
+                                <div class="toggle-switch" id="autoTimezoneToggle" onclick="toggleAutoTimezone()">
+                                    <div class="toggle-slider"></div>
+                                </div>
+                            </div>
                         </div>
-                        <div class="setting-control">
-                            <div class="toggle-switch" id="autoTimezoneToggle" onclick="toggleTimeLocationSetting('auto_detect_timezone')">
-                                <div class="toggle-slider"></div>
+
+                        <!-- Manual Time Zone Selection -->
+                        <div class="setting-item" id="timezoneItem" style="display: none;">
+                            <div class="setting-info">
+                                <div class="setting-name">Time zone</div>
+                                <div class="setting-description" id="timezoneDescription">Select your time zone</div>
+                            </div>
+                            <div class="setting-control">
+                                <select class="form-select" id="timezoneSelect" onchange="updateTimezone(this.value)">
+                                    <option value="UTC">Loading timezones...</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Location Search -->
+                        <div class="setting-item" id="locationItem">
+                            <div class="setting-info">
+                                <div class="setting-name">Location</div>
+                                <div class="setting-description" id="currentLocationDesc">Tap to set your location</div>
+                            </div>
+                            <div class="setting-control">
+                                <button class="btn btn-outline" onclick="openSmartLocationSearch()">
+                                    <span id="locationButtonText">Set Location</span>
+                                </button>
                             </div>
                         </div>
                     </div>
 
-                    <!-- NTP Sync Settings -->
-                    <div class="setting-item">
-                        <div class="setting-info">
-                            <div class="setting-name">Automatic Time Sync</div>
-                            <div class="setting-description">Keep time synchronized with internet time servers</div>
-                        </div>
-                        <div class="setting-control">
-                            <div class="toggle-switch" id="autoSyncToggle" onclick="toggleAutoSync()">
-                                <div class="toggle-slider"></div>
+                    <!-- Language Section -->
+                    <div class="setting-subsection">
+                        <div class="subsection-title">Language</div>
+                        
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <div class="setting-name">Language</div>
                             </div>
-                        </div>
-                    </div>
-
-                    <!-- Current Location -->
-                    <div class="setting-item">
-                        <div class="setting-info">
-                            <div class="setting-name">Current Location</div>
-                            <div class="setting-description" id="currentLocationDesc">Loading...</div>
-                        </div>
-                        <div class="setting-control">
-                            <button class="btn" onclick="openLocationSearch()">Change Location</button>
-                        </div>
-                    </div>
-
-                    <!-- Auto Location Detection -->
-                    <div class="setting-item">
-                        <div class="setting-info">
-                            <div class="setting-name">Auto-detect Location</div>
-                            <div class="setting-description">Automatically detect your location (requires permission)</div>
-                        </div>
-                        <div class="setting-control">
-                            <div class="toggle-switch" id="autoLocationToggle" onclick="toggleTimeLocationSetting('auto_location_detection')">
-                                <div class="toggle-slider"></div>
+                            <div class="setting-control">
+                                <select class="form-select" id="languageSelect" onchange="updateLanguage(this.value)">
+                                    <option value="en-US">English (United States)</option>
+                                    <option value="en-GB">English (United Kingdom)</option>
+                                    <option value="en-AU">English (Australia)</option>
+                                    <option value="es">Español</option>
+                                    <option value="fr">Français</option>
+                                    <option value="de">Deutsch</option>
+                                    <option value="ja">日本語</option>
+                                    <option value="zh">中文</option>
+                                </select>
                             </div>
-                        </div>
-                    </div>
-
-                    <!-- Weather API Key -->
-                    <div class="setting-item">
-                        <div class="setting-info">
-                            <div class="setting-name">Weather API Key</div>
-                            <div class="setting-description">OpenWeatherMap API key for weather data</div>
-                        </div>
-                        <div class="setting-control">
-                            <input type="password" class="form-input" id="weatherApiKey" placeholder="Enter OpenWeatherMap API key">
-                            <button class="btn" onclick="saveWeatherApiKey()">Save</button>
-                        </div>
-                    </div>
-
-                    <!-- Manual Location Input -->
-                    <div class="setting-item">
-                        <div class="setting-info">
-                            <div class="setting-name">Manual Location</div>
-                            <div class="setting-description">Enter coordinates manually if needed</div>
-                        </div>
-                        <div class="setting-control">
-                            <input type="number" class="form-input" id="latitudeInput" placeholder="Latitude" step="any">
-                            <input type="number" class="form-input" id="longitudeInput" placeholder="Longitude" step="any">
-                            <button class="btn" onclick="setManualLocation()">Set Location</button>
-                        </div>
-                    </div>
-
-                    <!-- Time Sync Status -->
-                    <div class="setting-item">
-                        <div class="setting-info">
-                            <div class="setting-name">Sync Status</div>
-                            <div class="setting-description" id="syncStatusDesc">Checking...</div>
-                        </div>
-                        <div class="setting-control">
-                            <span class="status-indicator" id="syncStatusIndicator"></span>
-                            <span id="syncStatusText">Unknown</span>
                         </div>
                     </div>
                 </div>
@@ -1062,7 +1449,7 @@
         // Load settings
         async function loadSettings() {
             try {
-                const response = await apiRequest('/settings');
+                const response = await apiRequest('/settings/');
                 const settings = response.settings || {};
                 
                 // Apply settings to UI
@@ -1584,57 +1971,198 @@
             document.getElementById('productivityInsightsEnabled').addEventListener('change', saveProductivitySettings);
         }
 
-        // Time and Location Management
-        let timeLocationSettings = {
+        // Time and Language Management
+        let timeLanguageSettings = {
             timezone: "UTC",
-            auto_detect_timezone: true,
+            twentyFourHour: false,
+            dateFormat: "DD-MM-YYYY",
+            ntpServer: "automatic",
+            language: "en-US",
             location: null,
-            weather_api_key: null,
-            auto_location_detection: false
+            autoLocationDetection: false,
+            autoTimeSync: true,
+            autoTimezoneSync: true
         };
 
-        async function loadTimeLocationSettings() {
+        // Live time display
+        let timeUpdateInterval = null;
+
+        async function loadTimeLanguageSettings() {
             try {
                 const response = await apiRequest('/settings/time-location');
                 if (response && response.settings) {
-                    timeLocationSettings = { ...timeLocationSettings, ...response.settings };
+                    timeLanguageSettings = { ...timeLanguageSettings, ...response.settings };
                 }
-                applyTimeLocationSettingsToUI();
+                
+                // Apply smart defaults if no settings exist
+                applySmartDefaults();
+                
+                applyTimeLanguageSettingsToUI();
                 loadAvailableTimezones();
             } catch (error) {
-                console.error('Failed to load time location settings:', error);
-                applyTimeLocationSettingsToUI();
+                console.error('Failed to load time language settings:', error);
+                applySmartDefaults();
+                applyTimeLanguageSettingsToUI();
                 loadAvailableTimezones();
             }
         }
 
-        function applyTimeLocationSettingsToUI() {
+        function applySmartDefaults() {
+            // Smart timezone detection based on browser
+            if (!timeLanguageSettings.timezone || timeLanguageSettings.timezone === 'UTC') {
+                try {
+                    timeLanguageSettings.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                } catch (e) {
+                    timeLanguageSettings.timezone = 'UTC';
+                }
+            }
+
+            // Smart language detection
+            if (!timeLanguageSettings.language || timeLanguageSettings.language === 'en-US') {
+                const browserLang = navigator.language || navigator.userLanguage;
+                timeLanguageSettings.language = browserLang;
+            }
+
+            // Smart date format based on locale
+            if (!timeLanguageSettings.dateFormat || timeLanguageSettings.dateFormat === 'DD-MM-YYYY') {
+                const locale = timeLanguageSettings.language || 'en-US';
+                if (locale.includes('en-US')) {
+                    timeLanguageSettings.dateFormat = 'MM-DD-YYYY';
+                } else if (locale.includes('en-GB') || locale.includes('en-AU')) {
+                    timeLanguageSettings.dateFormat = 'DD-MM-YYYY';
+                } else {
+                    timeLanguageSettings.dateFormat = 'YYYY-MM-DD';
+                }
+            }
+
+            // Smart 24-hour format based on locale
+            if (timeLanguageSettings.twentyFourHour === undefined) {
+                const locale = timeLanguageSettings.language || 'en-US';
+                // Most European countries use 24-hour format
+                const uses24Hour = ['de', 'fr', 'es', 'it', 'nl', 'sv', 'no', 'da', 'fi', 'ru', 'pl', 'cs', 'sk', 'hu', 'bg', 'hr', 'sl', 'et', 'lv', 'lt'].some(lang => locale.includes(lang));
+                timeLanguageSettings.twentyFourHour = uses24Hour;
+            }
+        }
+
+        function applyTimeLanguageSettingsToUI() {
+            // Update auto time sync toggle
+            updateToggleState('autoTimeToggle', timeLanguageSettings.autoTimeSync);
+
+            // Update auto timezone sync toggle
+            updateToggleState('autoTimezoneToggle', timeLanguageSettings.autoTimezoneSync);
+
+            // Show/hide manual controls based on auto settings
+            toggleManualTimeControls();
+            toggleManualTimezoneControls();
+
             // Update timezone select
             if (document.getElementById('timezoneSelect')) {
-                document.getElementById('timezoneSelect').value = timeLocationSettings.timezone;
+                document.getElementById('timezoneSelect').value = timeLanguageSettings.timezone;
             }
 
-            // Update toggle states
-            updateToggleState('autoTimezoneToggle', timeLocationSettings.auto_detect_timezone);
-            updateToggleState('autoLocationToggle', timeLocationSettings.auto_location_detection);
+            // Update 24-hour toggle
+            updateToggleState('twentyFourHourToggle', timeLanguageSettings.twentyFourHour);
+
+            // Update date format
+            if (document.getElementById('dateFormatSelect')) {
+                document.getElementById('dateFormatSelect').value = timeLanguageSettings.dateFormat;
+            }
+
+            // Update language
+            if (document.getElementById('languageSelect')) {
+                document.getElementById('languageSelect').value = timeLanguageSettings.language;
+            }
 
             // Update location display
-            if (timeLocationSettings.location) {
-                const location = timeLocationSettings.location;
-                document.getElementById('currentLocationDesc').textContent = 
-                    `${location.city || 'Unknown'}, ${location.country || 'Unknown'}`;
+            updateLocationDisplay();
+
+            // Start live time display
+            startLiveTimeDisplay();
+        }
+
+        function toggleManualTimeControls() {
+            const timeFormatItem = document.getElementById('timeFormatItem');
+            if (timeLanguageSettings.autoTimeSync) {
+                timeFormatItem.style.display = 'none';
             } else {
-                document.getElementById('currentLocationDesc').textContent = 'Location not set';
+                timeFormatItem.style.display = 'block';
+            }
+        }
+
+        function toggleManualTimezoneControls() {
+            const timezoneItem = document.getElementById('timezoneItem');
+            if (timeLanguageSettings.autoTimezoneSync) {
+                timezoneItem.style.display = 'none';
+            } else {
+                timezoneItem.style.display = 'block';
+            }
+        }
+
+        function updateLocationDisplay() {
+            const locationDesc = document.getElementById('currentLocationDesc');
+            const locationButton = document.getElementById('locationButtonText');
+            
+            if (timeLanguageSettings.location) {
+                const location = timeLanguageSettings.location;
+                const displayName = `${location.city || 'Unknown'}, ${location.country || 'Unknown'}`;
+                locationDesc.textContent = displayName;
+                locationButton.textContent = 'Change Location';
+            } else {
+                locationDesc.textContent = 'Tap to set your location';
+                locationButton.textContent = 'Set Location';
+            }
+        }
+
+        function startLiveTimeDisplay() {
+            // Clear existing interval
+            if (timeUpdateInterval) {
+                clearInterval(timeUpdateInterval);
             }
 
-            // Update weather API key
-            if (timeLocationSettings.weather_api_key) {
-                document.getElementById('weatherApiKey').value = timeLocationSettings.weather_api_key;
-            }
+            // Update time immediately
+            updateCurrentTimeDisplay();
 
-            // Update time display
-            updateTimeDisplay();
-            updateSyncStatus();
+            // Update every second
+            timeUpdateInterval = setInterval(updateCurrentTimeDisplay, 1000);
+        }
+
+        function updateCurrentTimeDisplay() {
+            const now = new Date();
+            const timeDisplay = document.getElementById('currentTimeDisplay');
+            const dateDisplay = document.getElementById('currentDateDisplay');
+
+            if (timeDisplay && dateDisplay) {
+                // Format time based on 24-hour setting
+                const timeOptions = {
+                    hour12: !timeLanguageSettings.twentyFourHour,
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                };
+                timeDisplay.textContent = now.toLocaleTimeString('en-US', timeOptions);
+
+                // Format date based on date format setting
+                const date = now.toLocaleDateString('en-US', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit'
+                });
+                
+                let formattedDate = date;
+                switch (timeLanguageSettings.dateFormat) {
+                    case 'DD-MM-YYYY':
+                        formattedDate = date.split('/').reverse().join('/');
+                        break;
+                    case 'MM-DD-YYYY':
+                        formattedDate = date;
+                        break;
+                    case 'YYYY-MM-DD':
+                        formattedDate = date.split('/').reverse().join('-');
+                        break;
+                }
+                
+                dateDisplay.textContent = formattedDate;
+            }
         }
 
         async function loadAvailableTimezones() {
@@ -1645,225 +2173,210 @@
                 const select = document.getElementById('timezoneSelect');
                 if (select && timezones.length > 0) {
                     select.innerHTML = '';
+                    
+                    // Get browser timezone for smart suggestion
+                    const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                    
+                    // Add smart suggestions at the top
+                    const smartSuggestions = getSmartTimezoneSuggestions(browserTimezone, timezones);
+                    if (smartSuggestions.length > 0) {
+                        const suggestionGroup = document.createElement('optgroup');
+                        suggestionGroup.label = '📍 Suggested';
+                        
+                        smartSuggestions.forEach(tz => {
+                            const option = document.createElement('option');
+                            option.value = tz;
+                            option.textContent = `⭐ ${tz}`;
+                            suggestionGroup.appendChild(option);
+                        });
+                        
+                        select.appendChild(suggestionGroup);
+                    }
+                    
+                    // Add regular timezones
                     timezones.forEach(tz => {
                         const option = document.createElement('option');
                         option.value = tz;
                         option.textContent = tz;
                         select.appendChild(option);
                     });
-                    select.value = timeLocationSettings.timezone;
+                    
+                    select.value = timeLanguageSettings.timezone;
                 }
             } catch (error) {
                 console.error('Failed to load timezones:', error);
             }
         }
 
-        async function updateTimezone(timezone) {
+        function getSmartTimezoneSuggestions(browserTimezone, allTimezones) {
+            const suggestions = [];
+            
+            // Add browser timezone as first suggestion
+            if (allTimezones.includes(browserTimezone)) {
+                suggestions.push(browserTimezone);
+            }
+            
+            // Add common timezones
+            const commonTimezones = [
+                'America/New_York',
+                'America/Los_Angeles', 
+                'Europe/London',
+                'Europe/Paris',
+                'Asia/Tokyo',
+                'Asia/Shanghai',
+                'Australia/Sydney'
+            ];
+            
+            commonTimezones.forEach(tz => {
+                if (allTimezones.includes(tz) && !suggestions.includes(tz)) {
+                    suggestions.push(tz);
+                }
+            });
+            
+            return suggestions.slice(0, 3); // Limit to 3 suggestions
+        }
+
+        // Simple setting functions
+        async function toggleTwentyFourHour() {
+            const toggle = document.getElementById('twentyFourHourToggle');
+            const isActive = toggle.classList.contains('active');
+            
+            timeLanguageSettings.twentyFourHour = !isActive;
+            updateToggleState('twentyFourHourToggle', timeLanguageSettings.twentyFourHour);
+            
             try {
-                await apiRequest('/settings/time-location', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        timezone: timezone,
-                        auto_detect_timezone: timeLocationSettings.auto_detect_timezone,
-                        location: timeLocationSettings.location,
-                        weather_api_key: timeLocationSettings.weather_api_key,
-                        auto_location_detection: timeLocationSettings.auto_location_detection
-                    })
-                });
-                
-                timeLocationSettings.timezone = timezone;
+                await saveTimeLanguageSettings();
+                showNotification('24-hour time setting updated', 'success');
+            } catch (error) {
+                console.error('Failed to update 24-hour setting:', error);
+                showNotification('Failed to update setting', 'error');
+            }
+        }
+
+        async function updateDateFormat(format) {
+            timeLanguageSettings.dateFormat = format;
+            
+            try {
+                await saveTimeLanguageSettings();
+                showNotification('Date format updated', 'success');
+            } catch (error) {
+                console.error('Failed to update date format:', error);
+                showNotification('Failed to update date format', 'error');
+            }
+        }
+
+        async function updateNtpServer(server) {
+            timeLanguageSettings.ntpServer = server;
+            
+            try {
+                await saveTimeLanguageSettings();
+                showNotification('NTP server updated', 'success');
+            } catch (error) {
+                console.error('Failed to update NTP server:', error);
+                showNotification('Failed to update NTP server', 'error');
+            }
+        }
+
+        async function updateTimezone(timezone) {
+            timeLanguageSettings.timezone = timezone;
+            
+            try {
+                await saveTimeLanguageSettings();
                 showNotification('Timezone updated', 'success');
-                updateTimeDisplay();
             } catch (error) {
                 console.error('Failed to update timezone:', error);
                 showNotification('Failed to update timezone', 'error');
             }
         }
 
-        async function toggleTimeLocationSetting(key) {
-            timeLocationSettings[key] = !timeLocationSettings[key];
-            updateToggleState(key + 'Toggle', timeLocationSettings[key]);
+        async function updateLanguage(language) {
+            timeLanguageSettings.language = language;
             
+            try {
+                await saveTimeLanguageSettings();
+                showNotification('Language updated', 'success');
+            } catch (error) {
+                console.error('Failed to update language:', error);
+                showNotification('Failed to update language', 'error');
+            }
+        }
+
+        async function saveTimeLanguageSettings() {
             try {
                 await apiRequest('/settings/time-location', {
                     method: 'POST',
-                    body: JSON.stringify(timeLocationSettings)
+                    body: JSON.stringify(timeLanguageSettings)
                 });
-                showNotification('Setting updated', 'success');
             } catch (error) {
-                console.error('Failed to update setting:', error);
+                console.error('Failed to save time language settings:', error);
+                throw error;
+            }
+        }
+
+        // Smart toggle functions
+        async function toggleAutoTime() {
+            const toggle = document.getElementById('autoTimeToggle');
+            const isActive = toggle.classList.contains('active');
+            
+            timeLanguageSettings.autoTimeSync = !isActive;
+            updateToggleState('autoTimeToggle', timeLanguageSettings.autoTimeSync);
+            toggleManualTimeControls();
+            
+            try {
+                await saveTimeLanguageSettings();
+                showNotification('Auto time sync updated', 'success');
+            } catch (error) {
+                console.error('Failed to update auto time setting:', error);
                 showNotification('Failed to update setting', 'error');
             }
         }
 
-        async function syncTimeNow() {
-            try {
-                showNotification('Synchronizing time...', 'info');
-                const response = await apiRequest('/settings/time-location/sync', {
-                    method: 'POST'
-                });
-                
-                if (response.success) {
-                    showNotification('Time synchronized successfully', 'success');
-                } else {
-                    showNotification('Time sync failed', 'error');
-                }
-                
-                updateTimeDisplay();
-                updateSyncStatus();
-            } catch (error) {
-                console.error('Failed to sync time:', error);
-                showNotification('Failed to sync time', 'error');
-            }
-        }
-
-        async function toggleAutoSync() {
-            const toggle = document.getElementById('autoSyncToggle');
+        async function toggleAutoTimezone() {
+            const toggle = document.getElementById('autoTimezoneToggle');
             const isActive = toggle.classList.contains('active');
             
+            timeLanguageSettings.autoTimezoneSync = !isActive;
+            updateToggleState('autoTimezoneToggle', timeLanguageSettings.autoTimezoneSync);
+            toggleManualTimezoneControls();
+            
             try {
-                if (isActive) {
-                    await apiRequest('/settings/time-location/auto-sync', { method: 'DELETE' });
-                    toggle.classList.remove('active');
-                    showNotification('Auto sync disabled', 'info');
-                } else {
-                    await apiRequest('/settings/time-location/auto-sync', { method: 'POST' });
-                    toggle.classList.add('active');
-                    showNotification('Auto sync enabled', 'success');
+                await saveTimeLanguageSettings();
+                showNotification('Auto timezone sync updated', 'success');
+            } catch (error) {
+                console.error('Failed to update auto timezone setting:', error);
+                showNotification('Failed to update setting', 'error');
+            }
+        }
+
+        async function openSmartLocationSearch() {
+            // Try to get user's current location first
+            if (navigator.geolocation) {
+                const useCurrentLocation = confirm('Would you like to use your current location?');
+                if (useCurrentLocation) {
+                    navigator.geolocation.getCurrentPosition(
+                        async (position) => {
+                            await handleCurrentLocation(position.coords.latitude, position.coords.longitude);
+                        },
+                        async () => {
+                            // Fallback to manual search
+                            await openManualLocationSearch();
+                        }
+                    );
+                    return;
                 }
-                updateSyncStatus();
-            } catch (error) {
-                console.error('Failed to toggle auto sync:', error);
-                showNotification('Failed to toggle auto sync', 'error');
-            }
-        }
-
-        async function saveWeatherApiKey() {
-            const apiKey = document.getElementById('weatherApiKey').value.trim();
-            
-            if (!apiKey) {
-                showNotification('Please enter an API key', 'error');
-                return;
             }
             
-            try {
-                timeLocationSettings.weather_api_key = apiKey;
-                await apiRequest('/settings/time-location', {
-                    method: 'POST',
-                    body: JSON.stringify(timeLocationSettings)
-                });
-                showNotification('Weather API key saved', 'success');
-            } catch (error) {
-                console.error('Failed to save weather API key:', error);
-                showNotification('Failed to save API key', 'error');
-            }
+            // Manual search
+            await openManualLocationSearch();
         }
 
-        async function setManualLocation() {
-            const lat = parseFloat(document.getElementById('latitudeInput').value);
-            const lon = parseFloat(document.getElementById('longitudeInput').value);
-            
-            if (isNaN(lat) || isNaN(lon)) {
-                showNotification('Please enter valid coordinates', 'error');
-                return;
-            }
-            
-            if (lat < -90 || lat > 90 || lon < -180 || lon > 180) {
-                showNotification('Invalid coordinates. Latitude: -90 to 90, Longitude: -180 to 180', 'error');
-                return;
-            }
-            
-            try {
-                const response = await apiRequest('/settings/time-location/location', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        latitude: lat,
-                        longitude: lon,
-                        city: 'Manual Location',
-                        country: 'Unknown'
-                    })
-                });
-                
-                if (response.success) {
-                    timeLocationSettings.location = {
-                        latitude: lat,
-                        longitude: lon,
-                        city: 'Manual Location',
-                        country: 'Unknown'
-                    };
-                    if (response.timezone) {
-                        timeLocationSettings.timezone = response.timezone;
-                        document.getElementById('timezoneSelect').value = response.timezone;
-                    }
-                    
-                    showNotification('Location updated successfully', 'success');
-                    applyTimeLocationSettingsToUI();
-                    
-                    // Clear inputs
-                    document.getElementById('latitudeInput').value = '';
-                    document.getElementById('longitudeInput').value = '';
-                }
-            } catch (error) {
-                console.error('Failed to set location:', error);
-                showNotification('Failed to set location', 'error');
-            }
-        }
-
-        function updateTimeDisplay() {
-            try {
-                const now = new Date();
-                const timeString = now.toLocaleString('en-US', {
-                    timeZone: timeLocationSettings.timezone,
-                    year: 'numeric',
-                    month: 'short',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit'
-                });
-                
-                document.getElementById('currentTimeDesc').textContent = 
-                    `${timeString} (${timeLocationSettings.timezone})`;
-            } catch (error) {
-                console.error('Failed to update time display:', error);
-            }
-        }
-
-        async function updateSyncStatus() {
-            try {
-                const response = await apiRequest('/api/time/status');
-                const status = response;
-                
-                const indicator = document.getElementById('syncStatusIndicator');
-                const text = document.getElementById('syncStatusText');
-                const desc = document.getElementById('syncStatusDesc');
-                
-                if (status.ntp_synced) {
-                    indicator.className = 'status-indicator status-online';
-                    text.textContent = 'Synchronized';
-                    desc.textContent = `Last sync: ${status.last_sync || 'Unknown'}`;
-                } else {
-                    indicator.className = 'status-indicator status-warning';
-                    text.textContent = 'Not Synced';
-                    desc.textContent = 'Time may be inaccurate';
-                }
-            } catch (error) {
-                console.error('Failed to update sync status:', error);
-                const indicator = document.getElementById('syncStatusIndicator');
-                const text = document.getElementById('syncStatusText');
-                indicator.className = 'status-indicator status-offline';
-                text.textContent = 'Unknown';
-            }
-        }
-
-        // Enhanced location search with timezone detection
-        async function openLocationSearch() {
+        async function openManualLocationSearch() {
             const query = prompt('Enter city name to search for:');
             if (!query) return;
             
             try {
-                // Use a geocoding service to get coordinates
-                const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`);
+                // Smart location search with better formatting
+                const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5&addressdetails=1`);
                 const results = await response.json();
                 
                 if (results.length === 0) {
@@ -1871,11 +2384,13 @@
                     return;
                 }
                 
-                // Show results
+                // Create a smart selection dialog
                 let message = 'Select a location:\n\n';
                 results.forEach((result, index) => {
-                    const displayName = result.display_name.split(',').slice(0, 2).join(',');
-                    message += `${index + 1}. ${displayName}\n`;
+                    const city = result.address?.city || result.address?.town || result.address?.village || 'Unknown';
+                    const country = result.address?.country || 'Unknown';
+                    const state = result.address?.state ? `, ${result.address.state}` : '';
+                    message += `${index + 1}. ${city}${state}, ${country}\n`;
                 });
                 
                 const choice = prompt(message + '\nEnter number (1-' + results.length + '):');
@@ -1886,13 +2401,33 @@
                     await updateLocation(
                         parseFloat(selected.lat),
                         parseFloat(selected.lon),
-                        selected.display_name.split(',')[0],
+                        selected.address?.city || selected.address?.town || selected.address?.village || 'Unknown',
                         selected.address?.country || 'Unknown'
                     );
                 }
             } catch (error) {
                 console.error('Failed to search locations:', error);
                 showNotification('Failed to search locations', 'error');
+            }
+        }
+
+        async function handleCurrentLocation(lat, lon) {
+            try {
+                // Get location details from coordinates
+                const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&addressdetails=1`);
+                const result = await response.json();
+                
+                if (result && result.address) {
+                    await updateLocation(
+                        lat,
+                        lon,
+                        result.address.city || result.address.town || result.address.village || 'Current Location',
+                        result.address.country || 'Unknown'
+                    );
+                }
+            } catch (error) {
+                console.error('Failed to get location details:', error);
+                showNotification('Failed to get location details', 'error');
             }
         }
 
@@ -1909,20 +2444,21 @@
                 });
                 
                 if (response.success) {
-                    timeLocationSettings.location = {
+                    timeLanguageSettings.location = {
                         latitude: lat,
                         longitude: lon,
                         city: city,
                         country: country
                     };
                     
+                    // Auto-update timezone if detected
                     if (response.timezone) {
-                        timeLocationSettings.timezone = response.timezone;
+                        timeLanguageSettings.timezone = response.timezone;
                         document.getElementById('timezoneSelect').value = response.timezone;
                     }
                     
                     showNotification('Location updated successfully', 'success');
-                    applyTimeLocationSettingsToUI();
+                    applyTimeLanguageSettingsToUI();
                 }
             } catch (error) {
                 console.error('Failed to update location:', error);
@@ -1930,64 +2466,446 @@
             }
         }
 
-        // Auto-detect location using browser geolocation
-        async function autoDetectLocation() {
-            if (!navigator.geolocation) {
-                showNotification('Geolocation not supported by browser', 'error');
-                return;
-            }
-            
-            try {
-                showNotification('Detecting location...', 'info');
-                
-                navigator.geolocation.getCurrentPosition(
-                    async (position) => {
-                        const lat = position.coords.latitude;
-                        const lon = position.coords.longitude;
-                        
-                        // Get city name from coordinates
-                        try {
-                            const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
-                            const data = await response.json();
-                            
-                            const city = data.address?.city || data.address?.town || data.address?.village || 'Unknown';
-                            const country = data.address?.country || 'Unknown';
-                            
-                            await updateLocation(lat, lon, city, country);
-                        } catch (error) {
-                            await updateLocation(lat, lon, 'Detected Location', 'Unknown');
-                        }
-                    },
-                    (error) => {
-                        console.error('Geolocation error:', error);
-                        showNotification('Failed to detect location', 'error');
-                    },
-                    { timeout: 10000, enableHighAccuracy: true }
-                );
-            } catch (error) {
-                console.error('Failed to auto-detect location:', error);
-                showNotification('Failed to detect location', 'error');
-            }
-        }
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             loadSettings();
             loadCalendarSettings();
             loadProductivitySettings();
-            loadTimeLocationSettings();
+            loadTimeLanguageSettings();
+            loadN8nSettings();
             addProductivityEventListeners();
             updateSystemStatus();
             loadCurrentLocation();
-            
-            // Update time display every second
-            setInterval(updateTimeDisplay, 1000);
+            loadUserProfile();
+            loadSecurityInfo();
             
             // Update system status every 30 seconds
             setInterval(updateSystemStatus, 30000);
+        });
+
+        // User Profile Functions
+        async function loadUserProfile() {
+            const user = window.zoeAuth.getCurrentUser();
+            if (user) {
+                document.getElementById('username').value = user.username;
+                document.getElementById('email').value = user.email || '';
+                document.getElementById('userRole').textContent = user.role || 'user';
+            }
+        }
+
+        async function updateProfile() {
+            const email = document.getElementById('email').value;
             
-            // Update sync status every 60 seconds
-            setInterval(updateSyncStatus, 60000);
+            try {
+                const response = await fetch('/api/auth/profile', {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Session-ID': window.zoeAuth.getCurrentSession().session_id
+                    },
+                    body: JSON.stringify({ email })
+                });
+
+                if (response.ok) {
+                    showUserNotification('Profile updated successfully!', 'success');
+                } else {
+                    const error = await response.json();
+                    showUserNotification(error.detail || 'Failed to update profile', 'error');
+                }
+            } catch (error) {
+                showUserNotification('Connection error', 'error');
+            }
+        }
+
+        // Security Functions
+        async function loadSecurityInfo() {
+            try {
+                // Load PIN status
+                const pinResponse = await fetch('/api/auth/passcode/status', {
+                    headers: { 'X-Session-ID': window.zoeAuth.getCurrentSession().session_id }
+                });
+                if (pinResponse.ok) {
+                    const pinData = await pinResponse.json();
+                    document.getElementById('pinStatus').textContent = pinData.has_passcode ? 'Configured' : 'Not Set';
+                }
+
+                // Load session count
+                const sessionsResponse = await fetch('/api/auth/sessions', {
+                    headers: { 'X-Session-ID': window.zoeAuth.getCurrentSession().session_id }
+                });
+                if (sessionsResponse.ok) {
+                    const sessionsData = await sessionsResponse.json();
+                    document.getElementById('sessionCount').textContent = sessionsData.sessions.length + ' active';
+                }
+            } catch (error) {
+                console.warn('Could not load security info:', error);
+            }
+        }
+
+        function showChangePassword() {
+            const currentPassword = prompt('Enter your current password:');
+            if (!currentPassword) return;
+
+            const newPassword = prompt('Enter new password:');
+            if (!newPassword) return;
+
+            const confirmPassword = prompt('Confirm new password:');
+            if (newPassword !== confirmPassword) {
+                showUserNotification('Passwords do not match', 'error');
+                return;
+            }
+
+            changePassword(currentPassword, newPassword);
+        }
+
+        async function changePassword(currentPassword, newPassword) {
+            try {
+                const response = await fetch('/api/auth/change-password', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Session-ID': window.zoeAuth.getCurrentSession().session_id
+                    },
+                    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
+                });
+
+                if (response.ok) {
+                    showUserNotification('Password changed successfully!', 'success');
+                } else {
+                    const error = await response.json();
+                    showUserNotification(error.detail || 'Failed to change password', 'error');
+                }
+            } catch (error) {
+                showUserNotification('Connection error', 'error');
+            }
+        }
+
+        function managePinCode() {
+            const pinStatus = document.getElementById('pinStatus').textContent;
+            if (pinStatus === 'Configured') {
+                if (confirm('Do you want to remove your PIN code?')) {
+                    removePinCode();
+                } else {
+                    const newPin = prompt('Enter new PIN (4-8 digits):');
+                    if (newPin && /^\d{4,8}$/.test(newPin)) {
+                        updatePinCode(newPin);
+                    } else if (newPin) {
+                        showUserNotification('PIN must be 4-8 digits', 'error');
+                    }
+                }
+            } else {
+                const newPin = prompt('Enter new PIN (4-8 digits):');
+                if (newPin && /^\d{4,8}$/.test(newPin)) {
+                    updatePinCode(newPin);
+                } else if (newPin) {
+                    showUserNotification('PIN must be 4-8 digits', 'error');
+                }
+            }
+        }
+
+        async function updatePinCode(newPin) {
+            try {
+                const response = await fetch('/api/auth/passcode', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Session-ID': window.zoeAuth.getCurrentSession().session_id
+                    },
+                    body: JSON.stringify({ new_passcode: newPin })
+                });
+
+                if (response.ok) {
+                    showUserNotification('PIN code updated successfully!', 'success');
+                    loadSecurityInfo();
+                } else {
+                    const error = await response.json();
+                    showUserNotification(error.detail || 'Failed to update PIN', 'error');
+                }
+            } catch (error) {
+                showUserNotification('Connection error', 'error');
+            }
+        }
+
+        async function removePinCode() {
+            try {
+                const response = await fetch('/api/auth/passcode', {
+                    method: 'DELETE',
+                    headers: { 'X-Session-ID': window.zoeAuth.getCurrentSession().session_id }
+                });
+
+                if (response.ok) {
+                    showUserNotification('PIN code removed successfully!', 'success');
+                    loadSecurityInfo();
+                } else {
+                    const error = await response.json();
+                    showUserNotification(error.detail || 'Failed to remove PIN', 'error');
+                }
+            } catch (error) {
+                showUserNotification('Connection error', 'error');
+            }
+        }
+
+        function viewSessions() {
+            // Create a simple modal to show sessions
+            showUserNotification('Session management available in admin panel', 'info');
+        }
+
+        // Enhanced notification function
+        function showUserNotification(message, type = 'info') {
+            // Try to use auth system notification first
+            if (window.zoeAuth && window.zoeAuth.showNotification) {
+                window.zoeAuth.showNotification(message, type);
+                return;
+            }
+
+            // Fallback notification
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed;
+                top: 80px;
+                right: 20px;
+                padding: 12px 20px;
+                border-radius: 8px;
+                color: white;
+                font-weight: 500;
+                z-index: 10000;
+                transition: all 0.3s ease;
+                max-width: 300px;
+                font-size: 14px;
+            `;
+
+            switch (type) {
+                case 'success':
+                    notification.style.background = '#22c55e';
+                    break;
+                case 'error':
+                    notification.style.background = '#ef4444';
+                    break;
+                case 'warning':
+                    notification.style.background = '#f59e0b';
+                    break;
+                default:
+                    notification.style.background = '#3b82f6';
+            }
+
+            notification.textContent = message;
+            document.body.appendChild(notification);
+
+            setTimeout(() => {
+                notification.style.transform = 'translateX(100%)';
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        }
+
+        // N8N Settings Functions
+        async function saveN8nSettings() {
+            const url = document.getElementById('n8nUrl').value.trim();
+            const username = document.getElementById('n8nUsername').value.trim();
+            const password = document.getElementById('n8nPassword').value.trim();
+            const apiKey = document.getElementById('n8nApiKey').value.trim();
+            
+            if (!url) {
+                showUserNotification('Please enter N8N server URL', 'error');
+                return;
+            }
+            
+            if (!apiKey) {
+                showUserNotification('Please enter N8N API key', 'error');
+                return;
+            }
+            
+            try {
+                const response = await apiRequest('/settings/n8n', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        n8n_url: url,
+                        n8n_username: username,
+                        n8n_password: password,
+                        n8n_api_key: apiKey
+                    })
+                });
+                
+                showUserNotification('N8N settings saved successfully!', 'success');
+                // Test connection after saving
+                testN8nConnection();
+            } catch (error) {
+                console.error('Failed to save N8N settings:', error);
+                showUserNotification('Failed to save N8N settings', 'error');
+            }
+        }
+
+        async function testN8nConnection() {
+            const statusDiv = document.getElementById('n8nStatus');
+            statusDiv.textContent = 'Testing...';
+            statusDiv.style.color = '#666';
+            
+            try {
+                const response = await apiRequest('/n8n/health');
+                
+                if (response.status === 'healthy') {
+                    statusDiv.textContent = '✅ Connected';
+                    statusDiv.style.color = '#22c55e';
+                } else {
+                    statusDiv.textContent = '⚠️ Unhealthy';
+                    statusDiv.style.color = '#f59e0b';
+                }
+            } catch (error) {
+                console.error('N8N connection test failed:', error);
+                statusDiv.textContent = '❌ Connection failed';
+                statusDiv.style.color = '#ef4444';
+            }
+        }
+
+        async function loadN8nSettings() {
+            try {
+                const response = await apiRequest('/settings/n8n');
+                const settings = response.settings || {};
+                
+                if (settings.n8n_url) {
+                    document.getElementById('n8nUrl').value = settings.n8n_url;
+                }
+                if (settings.n8n_username) {
+                    document.getElementById('n8nUsername').value = settings.n8n_username;
+                }
+                // Don't load password or API key for security
+                
+                // Test connection if settings exist
+                if (settings.n8n_url && settings.n8n_username) {
+                    testN8nConnection();
+                }
+            } catch (error) {
+                console.error('Failed to load N8N settings:', error);
+            }
+        }
+
+        // Notifications system
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+            
+            // Clear notification indicator when panel is opened
+            const notificationBtn = document.querySelector('.notifications-btn');
+            notificationBtn.classList.remove('has-notifications');
+        }
+
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+
+        async function loadNotifications() {
+            try {
+                const response = await apiRequest('/reminders/notifications/pending');
+                const notifications = response.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            // Update notification button indicator
+            if (notifications.length > 0) {
+                notificationBtn.classList.add('has-notifications');
+            } else {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
+                     onclick="handleNotificationClick(${notification.id})">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${new Date(notification.created_at).toLocaleTimeString()}</span>
+                        ${notification.priority ? `<span class="notification-priority" style="background: ${getPriorityColor(notification.priority)}; color: white;">${notification.priority}</span>` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function getPriorityColor(priority) {
+            switch(priority.toLowerCase()) {
+                case 'high': return '#ef4444';
+                case 'medium': return '#f59e0b';
+                case 'low': return '#10b981';
+                default: return '#6b7280';
+            }
+        }
+
+        function handleNotificationClick(notificationId) {
+            // Mark notification as acknowledged
+            acknowledgeNotification(notificationId);
+            closeNotifications();
+        }
+
+        async function acknowledgeNotification(notificationId) {
+            try {
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
+                    method: 'POST'
+                });
+                // Reload notifications
+                loadNotifications();
+            } catch (error) {
+                console.error('Failed to acknowledge notification:', error);
+            }
+        }
+
+        // User menu functions
+        function toggleUserDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function showUserProfile() {
+            // Implement user profile modal
+            alert('User profile coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function showSecuritySettings() {
+            // Implement security settings
+            alert('Security settings coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function switchUser() {
+            localStorage.removeItem('zoe_session');
+            window.location.href = 'auth.html?redirect=' + encodeURIComponent(window.location.pathname);
+        }
+
+        function upgradeSession() {
+            // Implement session upgrade
+            alert('Session upgrade coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function logout() {
+            localStorage.removeItem('zoe_session');
+            window.location.href = 'auth.html';
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const userMenu = document.querySelector('.user-menu');
+            const dropdown = document.getElementById('userDropdown');
+            
+            if (userMenu && !userMenu.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+
+        // Load notifications on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadNotifications();
         });
     </script>
 </body>

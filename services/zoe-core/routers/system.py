@@ -51,30 +51,36 @@ async def get_system_status():
         ]
         
         return {
-            "status": "healthy",
-            "uptime": uptime_str,
-            "cpu_usage": round(cpu_usage, 1),
-            "memory_usage": round(memory.percent, 1),
-            "disk_usage": round(disk.percent, 1),
-            "platform": platform.system(),
-            "python_version": platform.python_version(),
-            "services": services,
+            "status": {
+                "api_online": True,
+                "uptime": uptime_str,
+                "version": "5.0",
+                "cpu_usage": round(cpu_usage, 1),
+                "memory_usage": round(memory.percent, 1),
+                "disk_usage": round(disk.percent, 1),
+                "platform": platform.system(),
+                "python_version": platform.python_version(),
+                "services": services
+            },
             "timestamp": datetime.now().isoformat()
         }
         
     except Exception as e:
         # Fallback to basic status if psutil fails
         return {
-            "status": "degraded",
-            "uptime": "unknown",
-            "cpu_usage": 0.0,
-            "memory_usage": 0.0,
-            "disk_usage": 0.0,
-            "platform": platform.system(),
-            "python_version": platform.python_version(),
-            "services": [
-                {"name": "API Server", "status": "running", "uptime": "unknown"}
-            ],
+            "status": {
+                "api_online": False,
+                "uptime": "unknown",
+                "version": "5.0",
+                "cpu_usage": 0.0,
+                "memory_usage": 0.0,
+                "disk_usage": 0.0,
+                "platform": platform.system(),
+                "python_version": platform.python_version(),
+                "services": [
+                    {"name": "API Server", "status": "running", "uptime": "unknown"}
+                ]
+            },
             "timestamp": datetime.now().isoformat(),
             "error": str(e)
         }

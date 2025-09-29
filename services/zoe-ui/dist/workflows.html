@@ -49,13 +49,177 @@
         }
         .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
         
-        .settings-btn { 
+        /* Authentication Integration */
+        .user-menu {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .user-menu:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .user-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .user-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        
+        .user-role {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.2;
+        }
+        
+        .user-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 8px 0;
+            min-width: 200px;
+            z-index: 1000;
+            display: none;
+            border: 1px solid #e1e5e9;
+        }
+        
+        .user-dropdown.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 8px 16px;
+            color: #333;
+            text-decoration: none;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .dropdown-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .dropdown-divider {
+            height: 1px;
+            background: #e1e5e9;
+            margin: 4px 0;
+        }
+        
+        .notifications-btn { 
             background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
             border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
             justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
-            font-size: 16px; font-weight: bold;
+            font-size: 16px; font-weight: bold; position: relative;
         }
-        .settings-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+            animation: notificationDotPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 8px rgba(123, 97, 255, 0);
+            }
+        }
+        
+        @keyframes notificationDotPulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.2);
+                opacity: 0.7;
+            }
+        }
+        
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .notifications-title {
+            font-size: 18px; font-weight: 600; color: #333; margin: 0;
+        }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content {
+            padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title {
+            font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px;
+        }
+        .notification-meta {
+            font-size: 12px; color: #666; display: flex; gap: 10px;
+        }
+        .notification-time {
+            color: #7B61FF; font-weight: 500;
+        }
+        .notification-priority {
+            padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600;
+        }
+        .no-notifications {
+            text-align: center; color: #666; font-size: 14px; padding: 40px 20px;
+        }
         
         .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
         .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
@@ -68,14 +232,6 @@
 
         /* Main Layout */
         .main-container { padding: 70px 20px 20px; }
-        .top-info-bar { 
-            display: flex; justify-content: space-between; align-items: center; 
-            margin-bottom: 20px; padding: 0 10px;
-        }
-        .time-display { display: flex; flex-direction: column; }
-        .current-time { font-size: 18px; font-weight: 300; color: #333; }
-        .current-date { font-size: 11px; color: #666; margin-top: 2px; }
-        .weather-widget { display: flex; align-items: center; gap: 6px; }
 
         /* Workflows Header */
         .workflows-header {
@@ -319,28 +475,50 @@
         </div>
         <div class="nav-right">
             <div class="api-indicator connecting" id="apiStatus">Connecting</div>
-            <button class="settings-btn" onclick="window.location.href='settings.html'" title="Settings">⚙️</button>
+            
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- User Menu -->
+            <div class="user-menu" onclick="toggleUserDropdown()">
+                <div class="user-avatar" id="userAvatar">?</div>
+                
+                <div class="user-dropdown" id="userDropdown">
+                    <a href="#" class="dropdown-item" onclick="showUserProfile()">Profile</a>
+                    <a href="#" class="dropdown-item" onclick="showSecuritySettings()">Security</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" class="dropdown-item" onclick="switchUser()">Switch User</a>
+                    <a href="#" class="dropdown-item" onclick="upgradeSession()" id="upgradeSessionItem" style="display: none;">Upgrade Session</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="admin.html" class="dropdown-item" id="adminLink" style="display: none;">Admin Dashboard</a>
+                    <div class="dropdown-divider" id="adminDivider" style="display: none;"></div>
+                    <a href="#" class="dropdown-item" onclick="logout()">Logout</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
         </div>
     </div>
 
     <!-- Main Content -->
     <div class="main-container">
-        <!-- Top Info Bar -->
-        <div class="top-info-bar">
-            <div class="time-display">
-                <div class="current-time" id="currentTime">Loading...</div>
-                <div class="current-date" id="currentDate">Loading...</div>
-            </div>
-            <div class="weather-widget">
-                <div>☀️</div>
-                <div>23°</div>
-            </div>
-        </div>
 
         <!-- Workflows Header -->
         <div class="workflows-header">
             <h1 class="workflows-title">Automation Workflows</h1>
-            <p class="workflows-subtitle">Automate your daily tasks and routines</p>
+            <p class="workflows-subtitle">Powered by n8n - Automate your daily tasks and routines</p>
+            <div id="mockDataNotice" style="display: none; background: rgba(251, 146, 60, 0.1); color: #ea580c; padding: 8px 16px; border-radius: 8px; font-size: 12px; margin-top: 10px;">
+                📝 Currently showing mock data - n8n integration in progress
+            </div>
         </div>
 
         <!-- Workflows Grid -->
@@ -419,21 +597,61 @@
     </div>
 
     <!-- Add Workflow Button -->
-    <button class="add-workflow-btn" onclick="openAddModal()" title="Add Workflow">+</button>
+    <button class="add-workflow-btn" onclick="openAddModal()" title="Open n8n to create workflows">+</button>
 
     <script src="js/common.js"></script>
     <script>
         let allWorkflows = [];
 
-        // Load workflows
+        // Load workflows from n8n
         async function loadWorkflows() {
             try {
-                const response = await apiRequest('/workflows');
+                const response = await apiRequest('/n8n/workflows');
                 allWorkflows = response.workflows || [];
+                // Hide mock data notice if we got real data
+                const notice = document.getElementById('mockDataNotice');
+                if (notice) notice.style.display = 'none';
                 displayWorkflows();
             } catch (error) {
                 console.error('Failed to load workflows:', error);
-                allWorkflows = [];
+                console.log('Using mock data for demonstration...');
+                // Show mock data notice
+                const notice = document.getElementById('mockDataNotice');
+                if (notice) notice.style.display = 'block';
+                
+                // Mock data for demonstration while n8n integration is being fixed
+                allWorkflows = [
+                    {
+                        id: 'mock-1',
+                        name: 'Email Task Extractor',
+                        description: 'Automatically extracts tasks from incoming emails and adds them to your task list',
+                        active: true,
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString(),
+                        nodes: 5,
+                        icon: '📧'
+                    },
+                    {
+                        id: 'mock-2', 
+                        name: 'Calendar Sync',
+                        description: 'Syncs events between Google Calendar and your personal calendar',
+                        active: false,
+                        createdAt: new Date(Date.now() - 86400000).toISOString(),
+                        updatedAt: new Date(Date.now() - 3600000).toISOString(),
+                        nodes: 3,
+                        icon: '📅'
+                    },
+                    {
+                        id: 'mock-3',
+                        name: 'Weather Notifications',
+                        description: 'Sends daily weather updates and alerts for your location',
+                        active: true,
+                        createdAt: new Date(Date.now() - 172800000).toISOString(),
+                        updatedAt: new Date(Date.now() - 7200000).toISOString(),
+                        nodes: 4,
+                        icon: '🌤️'
+                    }
+                ];
                 displayWorkflows();
             }
         }
@@ -454,29 +672,29 @@
             }
             
             container.innerHTML = allWorkflows.map(workflow => `
-                <div class="workflow-card" onclick="editWorkflow(${workflow.id})">
+                <div class="workflow-card" onclick="editWorkflow('${workflow.id}')">
                     <div class="workflow-toggle">
                         <div class="toggle-switch ${workflow.active ? 'active' : ''}" 
-                             onclick="event.stopPropagation(); toggleWorkflow(${workflow.id})">
+                             onclick="event.stopPropagation(); toggleWorkflow('${workflow.id}')">
                             <div class="toggle-slider"></div>
                         </div>
                     </div>
                     <div class="workflow-header">
                         <div class="workflow-icon">${workflow.icon || '⚡'}</div>
                     </div>
-                    <div class="workflow-name">${workflow.name}</div>
-                    <div class="workflow-description">${workflow.description || 'No description'}</div>
+                    <div class="workflow-name">${workflow.name || 'Unnamed Workflow'}</div>
+                    <div class="workflow-description">${workflow.description || 'No description available'}</div>
                     <div class="workflow-status">
                         <div class="status-indicator status-${workflow.active ? 'active' : 'inactive'}"></div>
                         <span class="status-text">${workflow.active ? 'Active' : 'Inactive'}</span>
                     </div>
                     <div class="workflow-details">
-                        <span>Last run: ${workflow.last_run ? formatDate(workflow.last_run) : 'Never'}</span>
-                        <span>Runs: ${workflow.run_count || 0}</span>
+                        <span>Created: ${workflow.createdAt ? formatDate(workflow.createdAt) : 'Unknown'}</span>
+                        <span>Updated: ${workflow.updatedAt ? formatDate(workflow.updatedAt) : 'Unknown'}</span>
                     </div>
                     <div class="workflow-actions">
-                        <button class="workflow-btn" onclick="event.stopPropagation(); runWorkflow(${workflow.id})">Run Now</button>
-                        <button class="workflow-btn primary" onclick="event.stopPropagation(); editWorkflow(${workflow.id})">Edit</button>
+                        <button class="workflow-btn" onclick="event.stopPropagation(); runWorkflow('${workflow.id}')">Run Now</button>
+                        <button class="workflow-btn primary" onclick="event.stopPropagation(); editWorkflow('${workflow.id}')">View</button>
                     </div>
                 </div>
             `).join('');
@@ -491,9 +709,17 @@
             workflow.active = newState;
             
             try {
-                await apiRequest(`/workflows/${id}/toggle`, {
-                    method: 'POST',
-                    body: JSON.stringify({ active: newState })
+                // Check if it's mock data
+                if (id.startsWith('mock-')) {
+                    // For mock data, just update locally
+                    displayWorkflows();
+                    showNotification(`Workflow ${newState ? 'activated' : 'deactivated'} (mock)`, 'success');
+                    return;
+                }
+                
+                const endpoint = newState ? `/n8n/workflows/${id}/activate` : `/n8n/workflows/${id}/deactivate`;
+                await apiRequest(endpoint, {
+                    method: 'POST'
                 });
                 
                 displayWorkflows();
@@ -510,7 +736,14 @@
         // Run workflow manually
         async function runWorkflow(id) {
             try {
-                await apiRequest(`/workflows/${id}/run`, {
+                // Check if it's mock data
+                if (id.startsWith('mock-')) {
+                    // For mock data, simulate execution
+                    showNotification('Workflow executed! (mock - n8n integration in progress)', 'success');
+                    return;
+                }
+                
+                await apiRequest(`/n8n/workflows/${id}/execute`, {
                     method: 'POST'
                 });
                 
@@ -529,21 +762,22 @@
             if (!workflow) return;
             
             // For now, just show details in an alert
-            // In a full implementation, you'd open an edit modal
-            let details = `Name: ${workflow.name}\n`;
-            details += `Description: ${workflow.description || 'No description'}\n`;
+            // In a full implementation, you'd open an edit modal or redirect to n8n
+            let details = `Name: ${workflow.name || 'Unnamed Workflow'}\n`;
+            details += `Description: ${workflow.description || 'No description available'}\n`;
             details += `Status: ${workflow.active ? 'Active' : 'Inactive'}\n`;
-            details += `Trigger: ${workflow.trigger || 'Not set'}\n`;
-            details += `Last run: ${workflow.last_run ? formatDate(workflow.last_run) : 'Never'}\n`;
-            details += `Total runs: ${workflow.run_count || 0}`;
+            details += `Created: ${workflow.createdAt ? formatDate(workflow.createdAt) : 'Unknown'}\n`;
+            details += `Updated: ${workflow.updatedAt ? formatDate(workflow.updatedAt) : 'Unknown'}\n`;
+            details += `Nodes: ${workflow.nodes ? workflow.nodes.length : 0}\n`;
+            details += `\nTo edit this workflow, please use the n8n interface.`;
             
             alert(details);
         }
 
         // Open add modal
         function openAddModal() {
-            document.getElementById('addWorkflowModal').classList.add('active');
-            document.getElementById('workflowName').focus();
+            // Instead of opening the modal, redirect to n8n interface
+            window.open('/n8n', '_blank');
         }
 
         // Close add modal
@@ -565,15 +799,10 @@
             };
             
             try {
-                const response = await apiRequest('/workflows', {
-                    method: 'POST',
-                    body: JSON.stringify(formData)
-                });
-                
-                allWorkflows.push(response.workflow);
-                displayWorkflows();
+                // Note: Creating workflows directly in n8n requires more complex setup
+                // For now, we'll show a message directing users to n8n interface
+                showNotification('To create workflows, please use the n8n interface at /n8n', 'info');
                 closeAddModal();
-                showNotification('Workflow created!', 'success');
             } catch (error) {
                 console.error('Failed to create workflow:', error);
                 showNotification('Failed to create workflow', 'error');
@@ -587,6 +816,133 @@
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             loadWorkflows();
+            
+            // Load notifications on page load
+            loadNotifications();
+        });
+
+        // Notifications system
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+            
+            // Clear notification indicator when panel is opened
+            const notificationBtn = document.querySelector('.notifications-btn');
+            notificationBtn.classList.remove('has-notifications');
+        }
+
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+
+        async function loadNotifications() {
+            try {
+                const response = await apiRequest('/reminders/notifications/pending');
+                const notifications = response.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            // Update notification button indicator
+            if (notifications.length > 0) {
+                notificationBtn.classList.add('has-notifications');
+            } else {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
+                     onclick="handleNotificationClick(${notification.id})">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${new Date(notification.created_at).toLocaleTimeString()}</span>
+                        ${notification.priority ? `<span class="notification-priority" style="background: ${getPriorityColor(notification.priority)}; color: white;">${notification.priority}</span>` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function getPriorityColor(priority) {
+            switch(priority.toLowerCase()) {
+                case 'high': return '#ef4444';
+                case 'medium': return '#f59e0b';
+                case 'low': return '#10b981';
+                default: return '#6b7280';
+            }
+        }
+
+        function handleNotificationClick(notificationId) {
+            // Mark notification as acknowledged
+            acknowledgeNotification(notificationId);
+            closeNotifications();
+        }
+
+        async function acknowledgeNotification(notificationId) {
+            try {
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
+                    method: 'POST'
+                });
+                // Reload notifications
+                loadNotifications();
+            } catch (error) {
+                console.error('Failed to acknowledge notification:', error);
+            }
+        }
+
+        // User menu functions
+        function toggleUserDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function showUserProfile() {
+            // Implement user profile modal
+            alert('User profile coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function showSecuritySettings() {
+            // Implement security settings
+            alert('Security settings coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function switchUser() {
+            localStorage.removeItem('zoe_session');
+            window.location.href = 'auth.html?redirect=' + encodeURIComponent(window.location.pathname);
+        }
+
+        function upgradeSession() {
+            // Implement session upgrade
+            alert('Session upgrade coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function logout() {
+            localStorage.removeItem('zoe_session');
+            window.location.href = 'auth.html';
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const userMenu = document.querySelector('.user-menu');
+            const dropdown = document.getElementById('userDropdown');
+            
+            if (userMenu && !userMenu.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
         });
     </script>
 </body>

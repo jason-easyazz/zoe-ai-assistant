@@ -27,3 +27,4 @@ ReadWritePaths=/home/pi/zoe/data /home/pi/zoe/logs
 WantedBy=multi-user.target
 
 
+

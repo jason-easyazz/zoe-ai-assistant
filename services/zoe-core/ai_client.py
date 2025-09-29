@@ -53,34 +53,76 @@ async def handle_calendar_request(message: str, context: Dict) -> bool:
     return False
 
 async def get_ai_response(message: str, context: Dict = None) -> str:
-    """Route using RouteLLM + LiteLLM with intelligent fallback"""
+    """Direct self-aware response with user data access"""
     context = context or {}
     
     # Check for calendar event creation requests
     if await handle_calendar_request(message, context):
         return "Perfect! I've created your birthday event for March 24th. It's now saved in your calendar as an all-day celebration! 🎉📅"
     
-    # Use RouteLLM to analyze complexity and get routing decision
-    routing_decision = route_llm_router.classify_query(message, context)
-    
-    # Check if we should use LiteLLM proxy or direct Ollama
-    if routing_decision.get("provider") == "ollama":
-        # Direct Ollama call for local models
-        return await call_ollama_direct(message, routing_decision["model"], context)
-    else:
-        # Use LiteLLM proxy for cloud models
-        return await call_litellm_proxy(message, routing_decision, context)
+    try:
+        # Update self-awareness consciousness before processing
+        await update_self_awareness_context(message, context)
+        
+        # Fetch relevant user data and add to context
+        await fetch_user_data_context(message, context)
+        
+        # Use direct Ollama call with user data for faster response
+        response = await call_ollama_direct(message, "llama3.2:3b", context)
+        
+        # Reflect on the interaction after generating response
+        await reflect_on_interaction(message, response, context, {"model": "llama3.2:3b", "provider": "ollama"})
+        
+        return response
+    except Exception as e:
+        logger.error(f"Direct Ollama call failed: {e}")
+        return "I apologize, but I'm having trouble processing your request right now. Please try again in a moment."
 
 async def call_litellm_proxy(message: str, routing_decision: Dict, context: Dict) -> str:
     """Call LiteLLM proxy for cloud models with fallback"""
     mode = context.get("mode", "user")
     system = "You are Zack, a technical AI developer." if mode == "developer" else "You are Zoe, a friendly assistant."
     
+    # Add user data to system prompt if available
+    user_data = context.get("user_data", {})
+    if user_data and mode == "user":
+        system += "\n\nYou have access to the following user data:\n"
+        
+        # Add calendar events
+        if user_data.get("calendar_events"):
+            system += "\nCALENDAR EVENTS:\n"
+            for event in user_data["calendar_events"]:
+                system += f"- {event.get('title')} on {event.get('start_date')} at {event.get('start_time')} ({event.get('category')})\n"
+        
+        # Add lists
+        if user_data.get("lists"):
+            system += "\nLISTS:\n"
+            for list_item in user_data["lists"]:
+                system += f"- {list_item.get('name')} ({list_item.get('category')}): {list_item.get('description', 'No description')}\n"
+        
+        # Add journal entries
+        if user_data.get("journal_entries"):
+            system += "\nJOURNAL ENTRIES:\n"
+            for entry in user_data["journal_entries"][:3]:  # Show only recent 3
+                system += f"- {entry.get('title', 'Untitled')}: {entry.get('content', '')[:100]}...\n"
+        
+        # Add memories
+        if user_data.get("memories"):
+            system += "\nRECENT MEMORIES:\n"
+            for memory in user_data["memories"][:3]:  # Show only recent 3
+                system += f"- {memory.get('content', '')[:100]}...\n"
+        
+        system += "\nUse this data to provide specific, helpful responses about the user's schedule, tasks, and information."
+    
     # Map RouteLLM model names to LiteLLM model names
     model_mapping = {
-        "claude-3-sonnet": "claude-3-sonnet-20240229",
-        "gpt-4": "gpt-4",
-        "gpt-3.5-turbo": "gpt-3.5-turbo"
+        "claude-3-sonnet": "claude-instant",
+        "gpt-4": "gpt-3.5",
+        "gpt-3.5-turbo": "gpt-3.5",
+        "llama-ultra-fast": "llama-local",
+        "qwen-balanced": "llama-local",
+        "phi-code": "llama-local",
+        "mistral-complex": "llama-local"
     }
     
     litellm_model = model_mapping.get(routing_decision["model"], routing_decision["model"])
@@ -127,6 +169,37 @@ async def call_ollama_direct(message: str, model: str, context: Dict) -> str:
     mode = context.get("mode", "user")
     system = "You are Zack, a technical AI developer." if mode == "developer" else "You are Zoe, a friendly assistant."
     
+    # Add user data to system prompt if available
+    user_data = context.get("user_data", {})
+    if user_data and mode == "user":
+        system += "\n\nYou have access to the following user data:\n"
+        
+        # Add calendar events
+        if user_data.get("calendar_events"):
+            system += "\nCALENDAR EVENTS:\n"
+            for event in user_data["calendar_events"]:
+                system += f"- {event.get('title')} on {event.get('start_date')} at {event.get('start_time')} ({event.get('category')})\n"
+        
+        # Add lists
+        if user_data.get("lists"):
+            system += "\nLISTS:\n"
+            for list_item in user_data["lists"]:
+                system += f"- {list_item.get('name')} ({list_item.get('category')}): {list_item.get('description', 'No description')}\n"
+        
+        # Add journal entries
+        if user_data.get("journal_entries"):
+            system += "\nJOURNAL ENTRIES:\n"
+            for entry in user_data["journal_entries"][:3]:  # Show only recent 3
+                system += f"- {entry.get('title', 'Untitled')}: {entry.get('content', '')[:100]}...\n"
+        
+        # Add memories
+        if user_data.get("memories"):
+            system += "\nRECENT MEMORIES:\n"
+            for memory in user_data["memories"][:3]:  # Show only recent 3
+                system += f"- {memory.get('content', '')[:100]}...\n"
+        
+        system += "\nUse this data to provide specific, helpful responses about the user's schedule, tasks, and information."
+    
     # Build conversation context for Ollama
     conversation_history = context.get("conversation_history", [])
     prompt_parts = [system]
@@ -147,7 +220,7 @@ async def call_ollama_direct(message: str, model: str, context: Dict) -> str:
     
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
-            "http://zoe-ollama:11434/api/generate",
+            "http://localhost:11434/api/generate",
             json={
                 "model": model,
                 "prompt": full_prompt,
@@ -223,7 +296,7 @@ async def call_ollama(message: str, model: str, context: Dict) -> str:
     
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
-            "http://zoe-ollama:11434/api/generate",
+            "http://localhost:11434/api/generate",
             json={
                 "model": model,
                 "prompt": f"{system}\n\nUser: {message}\nAssistant:",
@@ -245,6 +318,122 @@ async def call_together(message: str, model: str, context: Dict) -> str:
     """Call Together AI"""
     # Implementation for Together
     return "I apologize, but I am temporarily unable to process your request. Please try again."
+
+# User data fetching functions
+async def fetch_user_data_context(message: str, context: Dict):
+    """Fetch relevant user data based on the message and add to context"""
+    try:
+        user_id = context.get("user_id", "default")
+        message_lower = message.lower()
+        
+        # Initialize user data context
+        user_data = {
+            "calendar_events": [],
+            "lists": [],
+            "journal_entries": [],
+            "memories": []
+        }
+        
+        # Check if user is asking about calendar
+        if any(word in message_lower for word in ['calendar', 'schedule', 'events', 'meeting', 'appointment', 'tomorrow', 'today', 'this week']):
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(f"http://localhost:8000/api/calendar/events?user_id={user_id}")
+                    if response.status_code == 200:
+                        events = response.json().get("events", [])
+                        user_data["calendar_events"] = events
+                        logger.info(f"Fetched {len(events)} calendar events for user {user_id}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch calendar events: {e}")
+        
+        # Check if user is asking about lists
+        if any(word in message_lower for word in ['list', 'shopping', 'tasks', 'todo', 'items']):
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(f"http://localhost:8000/api/lists?user_id={user_id}")
+                    if response.status_code == 200:
+                        lists = response.json().get("lists", [])
+                        user_data["lists"] = lists
+                        logger.info(f"Fetched {len(lists)} lists for user {user_id}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch lists: {e}")
+        
+        # Check if user is asking about journal
+        if any(word in message_lower for word in ['journal', 'entry', 'notes', 'thoughts', 'reflection']):
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(f"http://localhost:8000/api/journal/entries?user_id={user_id}")
+                    if response.status_code == 200:
+                        entries = response.json().get("entries", [])
+                        user_data["journal_entries"] = entries
+                        logger.info(f"Fetched {len(entries)} journal entries for user {user_id}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch journal entries: {e}")
+        
+        # Always fetch recent memories for context
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(f"http://localhost:8000/api/memories?user_id={user_id}&limit=5")
+                if response.status_code == 200:
+                    memories = response.json().get("memories", [])
+                    user_data["memories"] = memories
+                    logger.info(f"Fetched {len(memories)} memories for user {user_id}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch memories: {e}")
+        
+        # Add user data to context
+        context["user_data"] = user_data
+        
+    except Exception as e:
+        logger.warning(f"Failed to fetch user data context: {e}")
+
+# Self-awareness integration functions
+async def update_self_awareness_context(message: str, context: Dict):
+    """Update self-awareness consciousness with current context"""
+    try:
+        from self_awareness import self_awareness
+        
+        # Set user context for privacy isolation
+        user_id = context.get("user_id", "default")
+        self_awareness.set_user_context(user_id)
+        
+        # Create context for consciousness update
+        awareness_context = {
+            "current_task": context.get("mode", "general_assistance"),
+            "user_message": message,
+            "task_complexity": context.get("complexity", "medium"),
+            "active_tasks": context.get("active_tasks", 0),
+            "task_familiarity": context.get("familiarity", "medium")
+        }
+        
+        await self_awareness.update_consciousness(awareness_context)
+    except Exception as e:
+        logger.warning(f"Self-awareness context update failed: {e}")
+
+async def reflect_on_interaction(message: str, response: str, context: Dict, routing_decision: Dict):
+    """Reflect on the interaction for self-awareness"""
+    try:
+        from self_awareness import self_awareness
+        import time
+        
+        # Set user context for privacy isolation
+        user_id = context.get("user_id", "default")
+        self_awareness.set_user_context(user_id)
+        
+        # Create interaction data for reflection
+        interaction_data = {
+            "user_message": message,
+            "zoe_response": response,
+            "response_time": context.get("response_time", 0.0),
+            "user_satisfaction": context.get("user_satisfaction", 0.5),
+            "complexity": routing_decision.get("complexity", "medium"),
+            "context": context,
+            "summary": f"User asked about: {message[:50]}..."
+        }
+        
+        await self_awareness.reflect_on_interaction(interaction_data)
+    except Exception as e:
+        logger.warning(f"Self-reflection failed: {e}")
 
 # Compatibility exports
 generate_response = get_ai_response

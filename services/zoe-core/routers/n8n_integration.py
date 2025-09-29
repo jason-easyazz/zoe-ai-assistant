@@ -34,15 +34,48 @@ class IntegrationConfig(BaseModel):
     enabled: bool = True
     last_sync: Optional[str] = None
 
-# N8N API base URL
-N8N_BASE_URL = "http://zoe-n8n:5678/api/v1"
+# N8N API base URL - will be loaded from settings
+DEFAULT_N8N_BASE_URL = "https://zoe.local:5678/api/v1"
+
+def get_n8n_base_url():
+    """Get N8N base URL from settings"""
+    try:
+        from .settings import load_n8n_settings
+        settings = load_n8n_settings()
+        if settings.get('n8n_url'):
+            # Ensure the URL has the correct API path
+            url = settings['n8n_url'].rstrip('/')
+            if not url.endswith('/api/v1'):
+                url += '/api/v1'
+            return url
+    except Exception as e:
+        print(f"Failed to load N8N settings: {e}")
+    
+    return DEFAULT_N8N_BASE_URL
+
+def get_n8n_headers():
+    """Get N8N API headers from settings"""
+    try:
+        from .settings import load_n8n_settings
+        settings = load_n8n_settings()
+        api_key = settings.get('n8n_api_key')
+        
+        if api_key:
+            return {"X-N8N-API-KEY": api_key}
+    except Exception as e:
+        print(f"Failed to load N8N API key: {e}")
+    
+    return {}
 
 @router.get("/workflows")
 async def get_workflows():
     """Get all N8N workflows"""
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f"{N8N_BASE_URL}/workflows")
+        n8n_url = get_n8n_base_url()
+        headers = get_n8n_headers()
+        
+        async with httpx.AsyncClient(verify=False) as client:  # Disable SSL verification for self-signed certs
+            response = await client.get(f"{n8n_url}/workflows", headers=headers)
             workflows = response.json()
         
         return {
@@ -58,8 +91,14 @@ async def get_workflows():
 async def get_workflow(workflow_id: str):
     """Get specific workflow details"""
     try:
+        n8n_url = get_n8n_base_url()
+        auth = get_n8n_auth()
+        
         async with httpx.AsyncClient() as client:
-            response = await client.get(f"{N8N_BASE_URL}/workflows/{workflow_id}")
+            if auth:
+                response = await client.get(f"{n8n_url}/workflows/{workflow_id}", auth=auth)
+            else:
+                response = await client.get(f"{n8n_url}/workflows/{workflow_id}")
             workflow = response.json()
         
         return workflow
@@ -71,8 +110,14 @@ async def get_workflow(workflow_id: str):
 async def activate_workflow(workflow_id: str):
     """Activate a workflow"""
     try:
+        n8n_url = get_n8n_base_url()
+        auth = get_n8n_auth()
+        
         async with httpx.AsyncClient() as client:
-            response = await client.post(f"{N8N_BASE_URL}/workflows/{workflow_id}/activate")
+            if auth:
+                response = await client.post(f"{n8n_url}/workflows/{workflow_id}/activate", auth=auth)
+            else:
+                response = await client.post(f"{n8n_url}/workflows/{workflow_id}/activate")
             result = response.json()
         
         return {"message": "Workflow activated", "workflow_id": workflow_id}
@@ -84,8 +129,14 @@ async def activate_workflow(workflow_id: str):
 async def deactivate_workflow(workflow_id: str):
     """Deactivate a workflow"""
     try:
+        n8n_url = get_n8n_base_url()
+        auth = get_n8n_auth()
+        
         async with httpx.AsyncClient() as client:
-            response = await client.post(f"{N8N_BASE_URL}/workflows/{workflow_id}/deactivate")
+            if auth:
+                response = await client.post(f"{n8n_url}/workflows/{workflow_id}/deactivate", auth=auth)
+            else:
+                response = await client.post(f"{n8n_url}/workflows/{workflow_id}/deactivate")
             result = response.json()
         
         return {"message": "Workflow deactivated", "workflow_id": workflow_id}
@@ -97,13 +148,22 @@ async def deactivate_workflow(workflow_id: str):
 async def execute_workflow(workflow_id: str, data: Optional[Dict[str, Any]] = None):
     """Execute a workflow manually"""
     try:
+        n8n_url = get_n8n_base_url()
+        auth = get_n8n_auth()
         payload = {"data": data} if data else {}
         
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{N8N_BASE_URL}/workflows/{workflow_id}/execute",
-                json=payload
-            )
+            if auth:
+                response = await client.post(
+                    f"{n8n_url}/workflows/{workflow_id}/execute",
+                    json=payload,
+                    auth=auth
+                )
+            else:
+                response = await client.post(
+                    f"{n8n_url}/workflows/{workflow_id}/execute",
+                    json=payload
+                )
             result = response.json()
         
         return {
@@ -224,8 +284,14 @@ async def setup_integration(integration_name: str, config: IntegrationConfig):
 async def get_n8n_health():
     """Check N8N service health"""
     try:
+        n8n_url = get_n8n_base_url()
+        auth = get_n8n_auth()
+        
         async with httpx.AsyncClient() as client:
-            response = await client.get(f"{N8N_BASE_URL}/health")
+            if auth:
+                response = await client.get(f"{n8n_url}/health", auth=auth)
+            else:
+                response = await client.get(f"{n8n_url}/health")
             health = response.json()
         
         return {
@@ -381,6 +447,8 @@ async def install_template(template_name: str, user_id: str = "default"):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error installing template: {str(e)}")
+
+
 
 
 

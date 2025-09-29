@@ -183,6 +183,7 @@ class EventCreate(BaseModel):
     start_time: Optional[str] = None
     end_date: Optional[str] = None
     end_time: Optional[str] = None
+    duration: Optional[int] = 30
     category: Optional[str] = "personal"
     location: Optional[str] = None
     all_day: Optional[bool] = False
@@ -196,6 +197,7 @@ class EventUpdate(BaseModel):
     start_time: Optional[str] = None
     end_date: Optional[str] = None
     end_time: Optional[str] = None
+    duration: Optional[int] = None
     category: Optional[str] = None
     location: Optional[str] = None
     all_day: Optional[bool] = None
@@ -393,13 +395,24 @@ async def create_event(event: EventCreate, user_id: str = Query("default")):
     conn = get_connection()
     cursor = conn.cursor()
     
+    # Calculate end_time from start_time + duration if not provided
+    end_date = event.end_date
+    end_time = event.end_time
+    
+    if not end_time and event.start_time and event.duration:
+        from datetime import datetime, timedelta
+        start_dt = datetime.strptime(f"{event.start_date} {event.start_time}", "%Y-%m-%d %H:%M")
+        end_dt = start_dt + timedelta(minutes=event.duration)
+        end_date = end_dt.date().isoformat()
+        end_time = end_dt.time().strftime("%H:%M")
+    
     cursor.execute("""
         INSERT INTO events (user_id, title, description, start_date, start_time, 
-                          end_date, end_time, category, location, all_day, recurring, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          end_date, end_time, duration, category, location, all_day, recurring, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         user_id, event.title, event.description, event.start_date, event.start_time,
-        event.end_date, event.end_time, event.category, event.location, 
+        end_date, end_time, event.duration, event.category, event.location, 
         event.all_day, event.recurring, json.dumps(event.metadata) if event.metadata else None
     ))
     
@@ -407,7 +420,22 @@ async def create_event(event: EventCreate, user_id: str = Query("default")):
     conn.commit()
     conn.close()
     
-    return {"event": {"id": event_id, **event.dict()}}
+    # Return the created event with calculated end_time
+    return {"event": {
+        "id": event_id,
+        "title": event.title,
+        "description": event.description,
+        "start_date": event.start_date,
+        "start_time": event.start_time,
+        "end_date": end_date,
+        "end_time": end_time,
+        "duration": event.duration,
+        "category": event.category,
+        "location": event.location,
+        "all_day": event.all_day,
+        "recurring": event.recurring,
+        "metadata": event.metadata
+    }}
 
 @router.get("/events/{event_id}")
 async def get_event(event_id: int, user_id: str = Query("default")):
@@ -461,7 +489,25 @@ async def update_event(event_id: int, event_update: EventUpdate, user_id: str = 
     update_fields = []
     params = []
     
-    for field, value in event_update.dict(exclude_unset=True).items():
+    # Check if we need to recalculate end_time
+    update_data = event_update.dict(exclude_unset=True)
+    if "duration" in update_data or "start_time" in update_data:
+        # Get current event data to calculate new end_time
+        cursor.execute("SELECT start_date, start_time, duration FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
+        current = cursor.fetchone()
+        if current:
+            start_date = update_data.get("start_date", current[0])
+            start_time = update_data.get("start_time", current[1])
+            duration = update_data.get("duration", current[2])
+            
+            if start_time and duration:
+                from datetime import datetime, timedelta
+                start_dt = datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
+                end_dt = start_dt + timedelta(minutes=duration)
+                update_data["end_date"] = end_dt.date().isoformat()
+                update_data["end_time"] = end_dt.time().strftime("%H:%M")
+    
+    for field, value in update_data.items():
         if field == "metadata" and value is not None:
             update_fields.append(f"{field} = ?")
             params.append(json.dumps(value))
@@ -476,10 +522,22 @@ async def update_event(event_id: int, event_update: EventUpdate, user_id: str = 
         query = f"UPDATE events SET {', '.join(update_fields)} WHERE id = ? AND user_id = ?"
         cursor.execute(query, params)
         conn.commit()
+        
+        # Fetch and return the updated event
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
+        event = cursor.fetchone()
+        conn.close()
+        
+        if event:
+            return {"event": dict(event)}
+        else:
+            raise HTTPException(status_code=404, detail="Event not found after update")
     
     conn.close()
     
-    return {"message": "Event updated successfully"}
+    return {"message": "No fields to update"}
 
 @router.delete("/events/{event_id}")
 async def delete_event(event_id: int, user_id: str = Query("default")):

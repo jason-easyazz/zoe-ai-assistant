@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe AI Assistant - Easy Access</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+        
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            text-align: center;
+            max-width: 500px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        h1 {
+            margin: 0 0 10px 0;
+            font-size: 2.5em;
+            font-weight: 300;
+        }
+        
+        .subtitle {
+            opacity: 0.8;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        
+        .access-options {
+            display: grid;
+            gap: 15px;
+            margin: 30px 0;
+        }
+        
+        .access-button {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 12px;
+            padding: 20px;
+            color: white;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            display: block;
+        }
+        
+        .access-button:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+        
+        .access-button h3 {
+            margin: 0 0 5px 0;
+            font-size: 1.2em;
+        }
+        
+        .access-button p {
+            margin: 0;
+            opacity: 0.8;
+            font-size: 0.9em;
+        }
+        
+        .qr-section {
+            margin: 30px 0;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+        }
+        
+        .address-copy {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-family: monospace;
+            margin: 10px 0;
+            cursor: pointer;
+            user-select: all;
+        }
+        
+        .bookmark-hint {
+            opacity: 0.7;
+            font-size: 0.9em;
+            margin-top: 20px;
+        }
+        
+        .device-specific {
+            display: none;
+            margin: 20px 0;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Zoe AI</h1>
+        <div class="subtitle">Your Personal Assistant</div>
+        
+        <div class="access-options">
+            <a href="/" class="access-button">
+                <h3>🏠 Main Interface</h3>
+                <p>Full Zoe experience with voice and chat</p>
+            </a>
+            
+            <a href="/developer/" class="access-button">
+                <h3>🛠️ Developer Tools</h3>
+                <p>System monitoring and configuration</p>
+            </a>
+            
+            <a href="http://192.168.1.60:5678" class="access-button" target="_blank">
+                <h3>⚡ Automation (N8N)</h3>
+                <p>Workflow automation and integrations</p>
+            </a>
+            
+            <a href="http://192.168.1.60:8123" class="access-button" target="_blank">
+                <h3>🏡 Home Assistant</h3>
+                <p>Smart home control and automation</p>
+            </a>
+        </div>
+        
+        <div class="qr-section">
+            <h3>📱 Easy Access</h3>
+            <p>Bookmark or share this address:</p>
+            <div class="address-copy" onclick="copyAddress()" title="Click to copy">
+                http://192.168.1.60
+            </div>
+            <div class="bookmark-hint">
+                💡 Add to home screen or bookmark for quick access
+            </div>
+        </div>
+        
+        <div id="ios-hint" class="device-specific">
+            <strong>iOS:</strong> Tap Share → Add to Home Screen
+        </div>
+        
+        <div id="android-hint" class="device-specific">
+            <strong>Android:</strong> Menu → Add to Home Screen
+        </div>
+    </div>
+    
+    <script>
+        // Show device-specific hints
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+        const isAndroid = /Android/.test(navigator.userAgent);
+        
+        if (isIOS) {
+            document.getElementById('ios-hint').style.display = 'block';
+        } else if (isAndroid) {
+            document.getElementById('android-hint').style.display = 'block';
+        }
+        
+        function copyAddress() {
+            const address = 'http://192.168.1.60';
+            navigator.clipboard.writeText(address).then(() => {
+                const elem = document.querySelector('.address-copy');
+                const original = elem.textContent;
+                elem.textContent = '✓ Copied!';
+                setTimeout(() => {
+                    elem.textContent = original;
+                }, 2000);
+            }).catch(() => {
+                // Fallback for older browsers
+                const elem = document.querySelector('.address-copy');
+                elem.select();
+                document.execCommand('copy');
+            });
+        }
+        
+        // Auto-detect if accessed via IP and show appropriate message
+        if (window.location.hostname === '192.168.1.60') {
+            document.querySelector('.bookmark-hint').innerHTML = 
+                '✅ Perfect! You\'re already using the direct address';
+        }
+    </script>
+</body>
+</html>
+

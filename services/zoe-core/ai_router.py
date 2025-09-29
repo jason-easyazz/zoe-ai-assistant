@@ -19,8 +19,11 @@ USE_CLAUDE = os.getenv("USE_CLAUDE_FOR_DEVELOPER", "true").lower() == "true"
 CLAUDE_LIMIT = int(os.getenv("CLAUDE_DAILY_LIMIT", "100"))
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-LOCAL_MODEL_SIMPLE = os.getenv("DEFAULT_MODEL", "llama3.2:3b")
-LOCAL_MODEL_COMPLEX = "llama3.2:latest"  # Use bigger model for complex local tasks
+# Updated model configuration for optimal performance
+LOCAL_MODEL_ULTRA_FAST = "llama3.2:1b"  # Ultra-fast responses
+LOCAL_MODEL_BALANCED = "qwen2.5:3b"     # Balanced performance  
+LOCAL_MODEL_CODE = "phi3:mini"          # Code generation
+LOCAL_MODEL_COMPLEX = "mistral:latest"  # Complex reasoning
 
 # Usage tracking
 usage_file = "/app/data/ai_usage.json"

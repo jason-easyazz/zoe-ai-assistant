@@ -18,46 +18,86 @@ class ZoeRouteLLM:
         }
         self.usage = self._load_usage()
         
-        # Query complexity patterns
+        # Enhanced query complexity patterns with new model strategy
         self.patterns = {
+            "ultra_simple": {
+                "patterns": [
+                    r"what time", r"hello", r"hi", r"thanks", r"ok",
+                    r"turn (on|off)", r"weather", r"remind",
+                    r"add to list", r"what day", r"timer", r"status",
+                    r"yes", r"no", r"stop", r"start", r"pause"
+                ],
+                "model": "llama-ultra-fast",  # llama3.2:1b
+                "confidence": 0.95,
+                "max_tokens": 50
+            },
             "simple": {
                 "patterns": [
-                    r"what time", r"hello", r"hi", r"thanks",
-                    r"turn (on|off)", r"weather", r"remind",
-                    r"add to list", r"what day", r"timer"
+                    r"explain.*briefly", r"quick.*answer", r"what is",
+                    r"show.*list", r"count", r"calculate", r"convert",
+                    r"schedule.*event", r"add.*task", r"update.*status"
                 ],
-                "model": "llama3.2:1b",
-                "confidence": 0.95
+                "model": "qwen-balanced",  # qwen2.5:3b
+                "confidence": 0.90,
+                "max_tokens": 200
             },
             "medium": {
                 "patterns": [
-                    r"explain", r"how (do|does|to)",
-                    r"summarize", r"create.*list",
-                    r"plan", r"schedule", r"organize"
+                    r"explain.*detail", r"how (do|does|to)", r"why",
+                    r"summarize", r"create.*list", r"plan.*day",
+                    r"organize", r"compare", r"analyze.*simple",
+                    r"calendar.*event", r"family.*schedule", r"task.*management"
                 ],
-                "model": "llama3.2:3b",
-                "confidence": 0.85
+                "model": "qwen-balanced",  # qwen2.5:3b
+                "confidence": 0.85,
+                "max_tokens": 500
+            },
+            "code": {
+                "patterns": [
+                    r"(write|create|generate).*(script|code|program|function)",
+                    r"debug", r"fix.*code", r"optimize.*code",
+                    r"python", r"javascript", r"html", r"css", r"sql",
+                    r"api.*endpoint", r"dockerfile", r"yaml", r"json"
+                ],
+                "model": "phi-code",  # phi3:mini
+                "confidence": 0.90,
+                "max_tokens": 1000,
+                "prefer_local": True
             },
             "complex": {
                 "patterns": [
-                    r"(write|create|generate).*(script|code|program)",
-                    r"debug", r"analyze.*error", r"optimize",
-                    r"architect", r"design.*system",
-                    r"fix.*broken", r"diagnose"
+                    r"analyze.*complex", r"architect", r"design.*system",
+                    r"strategy", r"roadmap", r"integration", r"workflow",
+                    r"troubleshoot.*complex", r"diagnose.*advanced",
+                    r"family.*coordination", r"project.*planning"
                 ],
-                "model": "llama3.2:3b",  # Use Claude if available
-                "confidence": 0.70,
-                "prefer_cloud": True
+                "model": "mistral-complex",  # mistral:latest
+                "confidence": 0.80,
+                "max_tokens": 2000,
+                "prefer_local": True
             },
             "system": {
                 "patterns": [
-                    r"docker", r"container", r"service.*status",
-                    r"cpu.*temp", r"memory.*usage", r"disk.*space",
-                    r"restart", r"rebuild", r"backup"
+                    r"docker.*status", r"container.*health", r"service.*restart",
+                    r"cpu.*temperature", r"memory.*usage", r"disk.*space",
+                    r"backup.*system", r"security.*check", r"performance.*monitor",
+                    r"zoe.*status", r"system.*health", r"logs.*analyze"
                 ],
-                "model": "llama3.2:3b",
+                "model": "qwen-balanced",  # qwen2.5:3b
                 "confidence": 0.90,
+                "max_tokens": 800,
                 "needs_execution": True
+            },
+            "cloud_heavy": {
+                "patterns": [
+                    r"write.*novel", r"creative.*writing", r"research.*paper",
+                    r"complex.*analysis", r"advanced.*reasoning", r"philosophy",
+                    r"detailed.*explanation", r"comprehensive.*review"
+                ],
+                "model": "claude-sonnet",  # Cloud model
+                "confidence": 0.75,
+                "max_tokens": 4000,
+                "prefer_cloud": True
             }
         }
         

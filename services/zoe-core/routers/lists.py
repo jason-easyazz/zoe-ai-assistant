@@ -144,6 +144,111 @@ class ListUpdate(BaseModel):
     items: Optional[List[ListItem]] = None
     category: Optional[str] = None
 
+@router.get("/tasks")
+async def get_all_tasks(user_id: str = Query("default")):
+    """Get all tasks from personal and work todos for dashboard"""
+    init_lists_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Get personal todos
+        cursor.execute("""
+            SELECT id, name, items, list_category, created_at, updated_at
+            FROM lists 
+            WHERE list_type = 'personal_todos' AND user_id = ?
+            ORDER BY updated_at DESC
+        """, (user_id,))
+        personal_lists = cursor.fetchall()
+        
+        # Get work todos
+        cursor.execute("""
+            SELECT id, name, items, list_category, created_at, updated_at
+            FROM lists 
+            WHERE list_type = 'work_todos' AND user_id = ?
+            ORDER BY updated_at DESC
+        """, (user_id,))
+        work_lists = cursor.fetchall()
+        
+        all_tasks = []
+        task_count = 0
+        
+        # Process personal todos
+        for list_data in personal_lists:
+            list_id, name, items_json, category, created_at, updated_at = list_data
+            items = json.loads(items_json) if items_json else []
+            
+            for item in items:
+                if not item.get('completed', False):
+                    all_tasks.append({
+                        "id": item.get('id'),
+                        "text": item.get('text'),
+                        "list_name": name,
+                        "list_category": "personal",
+                        "priority": item.get('priority', 'medium'),
+                        "due_date": item.get('due_date'),
+                        "created_at": created_at
+                    })
+                    task_count += 1
+        
+        # Process work todos
+        for list_data in work_lists:
+            list_id, name, items_json, category, created_at, updated_at = list_data
+            items = json.loads(items_json) if items_json else []
+            
+            for item in items:
+                if not item.get('completed', False):
+                    all_tasks.append({
+                        "id": item.get('id'),
+                        "text": item.get('text'),
+                        "list_name": name,
+                        "list_category": "work",
+                        "priority": item.get('priority', 'medium'),
+                        "due_date": item.get('due_date'),
+                        "created_at": created_at
+                    })
+                    task_count += 1
+        
+        # Sort by priority and creation date
+        priority_order = {"high": 0, "medium": 1, "low": 2}
+        all_tasks.sort(key=lambda x: (priority_order.get(x["priority"], 1), x["created_at"]))
+        
+        # Format for dashboard compatibility - return as lists with items
+        dashboard_lists = []
+        if all_tasks:
+            # Group tasks by category for dashboard display
+            personal_tasks = [t for t in all_tasks if t["list_category"] == "personal"]
+            work_tasks = [t for t in all_tasks if t["list_category"] == "work"]
+            
+            if personal_tasks:
+                dashboard_lists.append({
+                    "id": "personal_dashboard",
+                    "name": "Personal Tasks",
+                    "items": personal_tasks[:5],  # Limit per category
+                    "category": "personal"
+                })
+            
+            if work_tasks:
+                dashboard_lists.append({
+                    "id": "work_dashboard", 
+                    "name": "Work Tasks",
+                    "items": work_tasks[:5],  # Limit per category
+                    "category": "work"
+                })
+        
+        return {
+            "lists": dashboard_lists,
+            "tasks": all_tasks[:10],  # Keep for other uses
+            "count": task_count,
+            "personal_count": len([t for t in all_tasks if t["list_category"] == "personal"]),
+            "work_count": len([t for t in all_tasks if t["list_category"] == "work"])
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching tasks: {str(e)}")
+    finally:
+        conn.close()
+
 @router.get("/types")
 async def get_list_types():
     """Get available list types and categories"""
