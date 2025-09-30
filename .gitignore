@@ -30,6 +30,32 @@ services/zoe-ui/dist/*.old
 services/zoe-ui/dist/*.sh
 services/zoe-ui/*.backup
 
+# Project-wide exclusions
+# Large directories (moved to backups/)
+models/
+tools/
+aider_env/
+
+# Development and backup files
+*.backup
+*_backup_*
+*.old
+*.bak
+*.tmp
+*.cache
+*.log
+
+# Shell scripts (moved to backups/)
+*.sh
+!scripts/maintenance/*.sh
+!scripts/permanent/*.sh
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
 # Security - SSH Keys and Credentials
 *.pem
 *.key
