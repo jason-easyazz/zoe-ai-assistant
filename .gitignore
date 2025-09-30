@@ -37,7 +37,9 @@ env/
 ENV/
 aider_env/
 tools/aider_env/
+tools/aider-env/
 **/aider_env/
+**/tools/aider-env/
 
 # IDE files
 .vscode/
