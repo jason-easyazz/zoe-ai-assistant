@@ -35,6 +35,9 @@ wheels/
 venv/
 env/
 ENV/
+aider_env/
+tools/aider_env/
+**/aider_env/
 
 # IDE files
 .vscode/
@@ -47,6 +50,8 @@ ENV/
 
 # Backup directories
 .ssh_backup_*/
+backups/
+**/backups/
 
 # OS generated files
 .DS_Store
