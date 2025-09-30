@@ -89,3 +89,4 @@ echo "2. Run: chmod +x generate-ssl-certificates.sh"
 echo "3. Run: ./generate-ssl-certificates.sh"
 echo "4. Verify HTTPS access at https://zoe.local"
 
+

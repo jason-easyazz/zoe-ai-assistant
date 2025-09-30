@@ -398,52 +398,62 @@
             font-weight: 600;
         }
 
-        /* Hero Time Widget - Beautiful purple gradient like the image */
-        .hero-time-widget {
-            background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 50%, #6d28d9 100%);
+        /* Beautiful Time Widget - Based on the provided design */
+        .beautiful-time-widget {
+            background: linear-gradient(180deg, #a855f7 0%, #7c3aed 50%, #6d28d9 100%);
             color: white;
             text-align: center;
             padding: 40px 24px;
             box-shadow: 0 12px 40px rgba(139, 92, 246, 0.3);
-            border-radius: 16px;
+            border-radius: 20px;
             position: relative;
             overflow: hidden;
+            min-height: 200px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
         }
         
         /* Brighter gradient for dark mode */
-        .dark-theme .hero-time-widget {
-            background: linear-gradient(135deg, #a855f7 0%, #8b5cf6 50%, #7c3aed 100%);
-            color: white;
+        .dark-theme .beautiful-time-widget {
+            background: linear-gradient(180deg, #c084fc 0%, #a855f7 50%, #8b5cf6 100%);
             box-shadow: 0 12px 40px rgba(168, 85, 247, 0.4);
         }
 
-        .hero-time {
-            font-size: 64px;
+        .beautiful-time {
+            font-size: 72px;
             font-weight: 300;
             line-height: 1;
-            margin-bottom: 8px;
+            margin-bottom: 12px;
             font-family: 'DejaVu Sans', 'Liberation Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-            text-shadow: 0 0 0 rgba(255, 255, 255, 0.8);
-            letter-spacing: -1px;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            letter-spacing: -2px;
+            color: white;
         }
 
-        .hero-date {
-            font-size: 20px;
+        .beautiful-date {
+            font-size: 22px;
             font-weight: 400;
             opacity: 0.95;
             margin-bottom: 24px;
             font-family: 'DejaVu Sans', 'Liberation Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            color: white;
         }
 
-        .weather-info {
+        .beautiful-weather {
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 16px;
+            gap: 12px;
             font-size: 18px;
             font-weight: 500;
             font-family: 'DejaVu Sans', 'Liberation Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-            margin-top: 8px;
+            color: white;
+        }
+
+        .beautiful-weather-icon {
+            font-size: 20px;
         }
 
         /* Weather Widget Styles */
@@ -1597,8 +1607,9 @@
     <!-- Dashboard Container -->
     <div class="dashboard-container">
         <div class="widget-grid" id="widgetGrid">
-            <!-- Hero Time Widget -->
-            <div class="widget size-large hero-time-widget" data-widget-type="time">
+
+            <!-- Beautiful Time Widget -->
+            <div class="widget size-large beautiful-time-widget" data-widget-type="time">
                 <div class="widget-controls">
                     <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">
                         📏
@@ -1608,12 +1619,12 @@
                     </button>
                 </div>
                 <div class="size-indicator">Large</div>
-                <div class="hero-time" id="heroTime">20:26</div>
-                <div class="hero-date" id="heroDate">Sunday 28 September</div>
-                <div class="weather-info">
-                    <span>☀️</span>
-                    <span>22°C</span>
-                    <span>Perth, WA</span>
+                <div class="beautiful-time" id="beautifulTime">--:--</div>
+                <div class="beautiful-date" id="beautifulDate">Loading...</div>
+                <div class="beautiful-weather">
+                    <span class="beautiful-weather-icon" id="beautifulWeatherIcon">☀️</span>
+                    <span id="beautifulWeatherTemp">--°C</span>
+                    <span id="beautifulWeatherLocation">Loading...</span>
                 </div>
             </div>
 
@@ -1873,85 +1884,6 @@
             }
         }
         
-        // Time Widget Module - Fixed and Beautiful
-        class TimeWidget extends WidgetModule {
-            constructor() {
-                super('time', {
-                    version: '2.0.0',
-                    defaultSize: 'size-large',
-                    updateInterval: 1000
-                });
-            }
-            
-            getTemplate() {
-                return `
-                    <div class="widget-controls">
-                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
-                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
-                    </div>
-                    <div class="size-indicator">Large</div>
-                    <div class="hero-time">--:--</div>
-                    <div class="hero-date">Loading...</div>
-                    <div class="weather-info">
-                        <span>☀️</span>
-                        <span>--°C</span>
-                        <span>Loading...</span>
-                    </div>
-                `;
-            }
-            
-            init(element) {
-                super.init(element);
-                // Add the beautiful styling class
-                element.classList.add('hero-time-widget');
-                // Ensure beautiful styling is applied
-                this.preserveStyling();
-            }
-            
-            update() {
-                if (!this.element) return;
-                
-                const now = new Date();
-                const timeElement = this.element.querySelector('.hero-time');
-                const dateElement = this.element.querySelector('.hero-date');
-                
-                if (timeElement) {
-                    timeElement.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-                    // Preserve beautiful styling
-                    timeElement.style.fontSize = '64px';
-                    timeElement.style.fontWeight = '300';
-                    timeElement.style.color = 'white';
-                    timeElement.style.textShadow = '0 0 0 rgba(255, 255, 255, 0.8)';
-                    timeElement.style.letterSpacing = '-1px';
-                }
-                
-                if (dateElement) {
-                    dateElement.textContent = now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
-                    // Preserve beautiful styling
-                    dateElement.style.fontSize = '20px';
-                    dateElement.style.fontWeight = '400';
-                    dateElement.style.color = 'white';
-                    dateElement.style.opacity = '0.95';
-                }
-                
-                // Ensure widget styling is preserved
-                this.preserveStyling();
-            }
-            
-            preserveStyling() {
-                if (!this.element) return;
-                
-                // Ensure the widget has the beautiful purple gradient
-                this.element.style.background = 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 50%, #6d28d9 100%)';
-                this.element.style.color = 'white';
-                this.element.style.textAlign = 'center';
-                this.element.style.padding = '40px 24px';
-                this.element.style.boxShadow = '0 12px 40px rgba(139, 92, 246, 0.3)';
-                this.element.style.borderRadius = '16px';
-                this.element.style.position = 'relative';
-                this.element.style.overflow = 'hidden';
-            }
-        }
         
         // Events Widget Module
         class EventsWidget extends WidgetModule {
@@ -2250,7 +2182,6 @@
         };
         
         // Register Core Widgets
-        WidgetRegistry.register('time', new TimeWidget());
         WidgetRegistry.register('events', new EventsWidget());
         WidgetRegistry.register('zoe', new ZoeWidget());
         
@@ -2301,8 +2232,22 @@
             // Resize widget
             resizeWidget(element, newSize) {
                 const widgetModule = this.activeWidgets.get(element);
-                if (widgetModule) {
+                if (widgetModule && widgetModule.resize) {
                     widgetModule.resize(newSize);
+                } else {
+                    // Fallback: direct DOM manipulation
+                    const currentSize = Array.from(element.classList).find(cls => cls.startsWith('size-'));
+                    if (currentSize) {
+                        element.classList.remove(currentSize);
+                    }
+                    element.classList.add(newSize);
+                    
+                    // Update size indicator
+                    const sizeIndicator = element.querySelector('.size-indicator');
+                    if (sizeIndicator) {
+                        sizeIndicator.textContent = newSize.replace('size-', '').charAt(0).toUpperCase() + 
+                                                  newSize.replace('size-', '').slice(1);
+                    }
                 }
             },
             
@@ -2633,6 +2578,19 @@
         // Initialize
         document.addEventListener('DOMContentLoaded', function() {
             console.log('🚀 Dashboard loading...');
+            
+            // Check if we're returning from another page
+            const returningFromNavigation = sessionStorage.getItem('navigatingFromDashboard');
+            if (returningFromNavigation) {
+                console.log('🔄 Returning from navigation - restoring state');
+                sessionStorage.removeItem('navigatingFromDashboard');
+                // Force a complete reload to ensure clean state
+                setTimeout(() => {
+                    window.location.reload();
+                }, 100);
+                return;
+            }
+            
             updateTime();
             setInterval(updateTime, 1000);
             setupDragAndDrop();
@@ -2679,18 +2637,47 @@
         // Time updates - Simplified to work with new widget system
         function updateTime() {
             const now = new Date();
-            const timeOptions = { hour: 'numeric', minute: '2-digit', hour12: true };
-            const dateOptions = { weekday: 'short', month: 'short', day: 'numeric' };
+            const timeOptions = { hour: '2-digit', minute: '2-digit', hour12: false };
+            const dateOptions = { weekday: 'long', month: 'long', day: 'numeric' };
             
             // Update header time
             const headerTime = document.getElementById('headerTime');
             const headerDate = document.getElementById('headerDate');
-            if (headerTime) headerTime.textContent = now.toLocaleTimeString([], timeOptions);
-            if (headerDate) headerDate.textContent = now.toLocaleDateString([], dateOptions);
+            if (headerTime) headerTime.textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+            if (headerDate) headerDate.textContent = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            // Update beautiful time widgets
+            const beautifulTimeElements = document.querySelectorAll('.beautiful-time');
+            const beautifulDateElements = document.querySelectorAll('.beautiful-date');
+            const beautifulWeatherIcons = document.querySelectorAll('.beautiful-weather-icon');
+            const beautifulWeatherTemps = document.querySelectorAll('#beautifulWeatherTemp');
+            const beautifulWeatherLocations = document.querySelectorAll('#beautifulWeatherLocation');
+            
+            beautifulTimeElements.forEach(element => {
+                element.textContent = now.toLocaleTimeString([], timeOptions);
+            });
+            
+            beautifulDateElements.forEach(element => {
+                element.textContent = now.toLocaleDateString([], dateOptions);
+            });
+            
+            // Update weather info (simple simulation)
+            beautifulWeatherIcons.forEach(element => {
+                element.textContent = '☀️';
+            });
+            
+            beautifulWeatherTemps.forEach(element => {
+                element.textContent = '22°C';
+            });
+            
+            beautifulWeatherLocations.forEach(element => {
+                element.textContent = 'Perth, WA';
+            });
             
             // Update all widgets using WidgetManager
             WidgetManager.updateAll();
         }
+
 
         // Notifications panel
         function toggleNotifications() {
@@ -2734,12 +2721,12 @@
                             </button>
                         </div>
                         <div class="size-indicator">Large</div>
-                        <div class="hero-time" id="heroTime">20:26</div>
-                        <div class="hero-date" id="heroDate">Sunday 28 September</div>
+                        <div class="hero-time" id="heroTime">--:--</div>
+                        <div class="hero-date" id="heroDate">Loading...</div>
                         <div class="weather-info">
-                            <span>☀️</span>
-                            <span>22°C</span>
-                            <span>Perth, WA</span>
+                            <span id="weatherIcon">☀️</span>
+                            <span id="weatherTemp">--°C</span>
+                            <span id="weatherLocation">Loading...</span>
                         </div>
                     </div>
 
@@ -2824,7 +2811,8 @@
             
             if (library) {
                 library.classList.toggle('open');
-                console.log('📚 Widget library toggled');
+                const isOpen = library.classList.contains('open');
+                console.log(`📚 Widget library ${isOpen ? 'opened' : 'closed'}`);
             } else {
                 console.error('❌ Widget library element not found!');
             }
@@ -2899,6 +2887,10 @@
         // Navigation functions
         function navigateToCalendar() {
             console.log('📅 Navigate to calendar');
+            // Save current dashboard state before navigating
+            saveWidgetLayout();
+            // Add a flag to indicate we're navigating away
+            sessionStorage.setItem('navigatingFromDashboard', 'true');
             window.location.href = 'calendar.html';
         }
 
@@ -2965,13 +2957,34 @@
             const nextIndex = (currentIndex + 1) % sizes.length;
             const newSize = sizes[nextIndex];
             
-            // Use WidgetManager to properly resize widget
-            WidgetManager.resizeWidget(widget, newSize);
+            // Remove old size class
+            if (currentSize) {
+                widget.classList.remove(currentSize);
+            }
+            
+            // Add new size class
+            widget.classList.add(newSize);
+            
+            // Update size indicator
+            const sizeIndicator = widget.querySelector('.size-indicator');
+            if (sizeIndicator) {
+                sizeIndicator.textContent = newSize.replace('size-', '').charAt(0).toUpperCase() + 
+                                          newSize.replace('size-', '').slice(1);
+            }
+            
+            // Try to use WidgetManager if available
+            if (WidgetManager && WidgetManager.resizeWidget) {
+                WidgetManager.resizeWidget(widget, newSize);
+            }
             
             // Save the layout after size change
             saveWidgetLayout();
             
             console.log('📏 Widget resized to:', newSize);
+            
+            // Debug: Check if widget has proper classes
+            console.log('🔍 Widget classes after resize:', widget.className);
+            console.log('🔍 Size indicator text:', sizeIndicator ? sizeIndicator.textContent : 'not found');
         }
 
         function removeWidget(widget) {
@@ -2992,13 +3005,38 @@
         function addWidget(type) {
             const grid = document.getElementById('widgetGrid');
             
-            // Use the new WidgetManager to create widgets
-            const widget = WidgetManager.createWidget(type, grid);
+            // Try WidgetManager first (for registered widgets)
+            let widget = null;
+            if (WidgetManager && WidgetManager.createWidget) {
+                widget = WidgetManager.createWidget(type, grid);
+            }
+            
+            // If WidgetManager failed or widget not registered, create manually
+            if (!widget) {
+                console.log(`📦 Creating widget manually: ${type}`);
+                widget = createWidgetManually(type, grid);
+                if (widget) {
+                    console.log(`✅ Manual widget creation successful: ${type}`);
+                } else {
+                    console.error(`❌ Manual widget creation failed: ${type}`);
+                }
+            }
+            
             if (!widget) {
                 console.error(`Failed to create widget: ${type}`);
                 return;
             }
 
+            // Close widget library after adding
+            toggleWidgetLibrary();
+            
+            // Save layout
+            saveWidgetLayout();
+            
+            console.log(`✅ Widget added: ${type}`);
+        }
+
+        function createWidgetManually(type, grid) {
             const templates = {
                 time: `
                     <div class="widget-controls">
@@ -3006,12 +3044,12 @@
                         <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
                     </div>
                     <div class="size-indicator">Large</div>
-                    <div class="hero-time" id="heroTime">20:26</div>
-                    <div class="hero-date" id="heroDate">Sunday 28 September</div>
-                    <div class="weather-info">
-                        <span>☀️</span>
-                        <span>22°C</span>
-                        <span>Perth, WA</span>
+                    <div class="beautiful-time" id="beautifulTime">--:--</div>
+                    <div class="beautiful-date" id="beautifulDate">Loading...</div>
+                    <div class="beautiful-weather">
+                        <span class="beautiful-weather-icon" id="beautifulWeatherIcon">☀️</span>
+                        <span id="beautifulWeatherTemp">--°C</span>
+                        <span id="beautifulWeatherLocation">Loading...</span>
                     </div>
                 `,
                 events: `
@@ -3218,6 +3256,34 @@
                 `
             };
 
+            // Create widget element
+            const widget = document.createElement('div');
+            widget.className = 'widget new';
+            widget.setAttribute('data-widget-type', type);
+            
+            // Set default size based on widget type
+            const defaultSizes = {
+                'time': 'size-large',
+                'events': 'size-medium', 
+                'todos': 'size-small',
+                'zoe': 'size-large',
+                'important-tasks': 'size-small',
+                'shopping': 'size-small',
+                'bucket': 'size-small',
+                'work-todos': 'size-small',
+                'personal-todos': 'size-small',
+                'weather': 'size-medium',
+                'music': 'size-medium',
+                'news': 'size-medium'
+            };
+            
+            widget.classList.add(defaultSizes[type] || 'size-small');
+            
+            // Add special styling class for time widget
+            if (type === 'time') {
+                widget.classList.add('beautiful-time-widget');
+            }
+            
             widget.innerHTML = templates[type] || templates.weather;
             
             // Add drag functionality to new widget
@@ -3266,6 +3332,8 @@
             
             // Remove 'new' class after animation
             setTimeout(() => widget.classList.remove('new'), 500);
+            
+            return widget;
         }
 
         // Close panels when clicking outside

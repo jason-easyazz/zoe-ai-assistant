@@ -865,6 +865,11 @@
         }
 
         function goBack() {
+            console.log('🔙 Returning to dashboard');
+            // Clear any calendar-specific state
+            sessionStorage.removeItem('calendarView');
+            sessionStorage.removeItem('selectedDate');
+            // Navigate back to dashboard
             window.location.href = 'dashboard.html';
         }
 

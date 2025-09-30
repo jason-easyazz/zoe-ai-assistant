@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zoe - Calendar</title>
+    <title>Enhanced Calendar Demo</title>
     <style>
         * {
             margin: 0;
@@ -915,152 +915,9 @@
             padding: 20px;
             font-size: 13px;
         }
-        
-        /* Navigation Bar */
-        .nav-bar {
-            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(0, 0, 0, 0.1);
-            padding: 12px 20px; z-index: 200; display: flex; justify-content: space-between;
-            align-items: center; height: 60px;
-        }
-        .nav-left { display: flex; align-items: center; gap: 15px; }
-        .mini-orb { 
-            width: 32px; height: 32px; border-radius: 50%; 
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
-            cursor: pointer; transition: all 0.3s ease;
-        }
-        .mini-orb:hover { transform: scale(1.1); }
-        .nav-menu { display: flex; gap: 20px; }
-        .nav-item { 
-            color: #666; text-decoration: none; font-size: 13px; font-weight: 400;
-            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
-        }
-        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
-        .nav-right { display: flex; align-items: center; gap: 10px; }
-        
-        .more-nav-btn { 
-            color: #666; font-size: 13px; font-weight: 400; padding: 8px 12px; 
-            border-radius: 6px; background: none; border: none; cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
-        
-        .settings-btn, .notifications-btn { 
-            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
-            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
-            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
-            font-size: 16px; font-weight: bold;
-        }
-        .settings-btn:hover, .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
-        
-        .api-indicator { 
-            font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 8px; 
-            display: flex; align-items: center; gap: 6px; 
-        }
-        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
-        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
-        .api-indicator.connecting { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
-        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-        .api-indicator.online::before { background: #22c55e; }
-        .api-indicator.offline::before { background: #ef4444; }
-        .api-indicator.connecting::before { background: #ea580c; }
-        
-        /* App Container with nav offset */
-        .app-container {
-            margin-top: 60px;
-            height: calc(100vh - 60px);
-        }
-        
-        /* More Overlay */
-        .more-overlay {
-            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
-            display: none; align-items: center; justify-content: center; z-index: 3000;
-            opacity: 0; transition: all 0.3s ease;
-        }
-        .more-overlay.active { display: flex; opacity: 1; }
-        .more-content {
-            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
-            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
-            padding: 40px; max-width: 500px; width: 90%; position: relative;
-            transform: scale(0.8); transition: transform 0.3s ease;
-        }
-        .more-overlay.active .more-content { transform: scale(1); }
-        .more-header { text-align: center; margin-bottom: 30px; }
-        .more-title {
-            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        }
-        .more-close {
-            position: absolute; top: 15px; right: 15px; 
-            background: rgba(255, 255, 255, 0.6); border: none;
-            border-radius: 50%; width: 36px; height: 36px;
-            font-size: 18px; cursor: pointer; color: #666;
-        }
-        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
-        .more-item {
-            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
-            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
-            transition: all 0.3s ease; min-height: 120px; display: flex;
-            flex-direction: column; align-items: center; justify-content: center;
-        }
-        .more-item:hover {
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            color: white; transform: translateY(-4px);
-        }
-        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
-        .more-item-label { font-size: 15px; font-weight: 500; }
     </style>
 </head>
 <body>
-    <!-- Navigation -->
-    <div class="nav-bar">
-        <div class="nav-left">
-            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
-            <div class="nav-menu">
-                <a href="index.html" class="nav-item">Chat</a>
-                <a href="dashboard.html" class="nav-item">Dashboard</a>
-                <a href="lists.html" class="nav-item">Lists</a>
-                <a href="calendar.html" class="nav-item active">Calendar</a>
-                <a href="journal.html" class="nav-item">Journal</a>
-                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
-            </div>
-        </div>
-        <div class="nav-right">
-            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
-            <button class="settings-btn" onclick="window.location.href='settings.html'" title="Settings">⚙️</button>
-        </div>
-    </div>
-    
-    <!-- More Overlay -->
-    <div class="more-overlay" id="moreOverlay">
-        <div class="more-content">
-            <button class="more-close" onclick="closeMoreOverlay()">×</button>
-            <div class="more-header">
-                <h2 class="more-title">More Options</h2>
-            </div>
-            <div class="more-grid">
-                <div class="more-item" onclick="navigateToPage('memories.html')">
-                    <div class="more-item-icon">🧠</div>
-                    <div class="more-item-label">Memories</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('workflows.html')">
-                    <div class="more-item-icon">⚡</div>
-                    <div class="more-item-label">Workflows</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('settings.html')">
-                    <div class="more-item-icon">⚙️</div>
-                    <div class="more-item-label">Settings</div>
-                </div>
-                <div class="more-item" onclick="alert('Coming soon!')">
-                    <div class="more-item-icon">📊</div>
-                    <div class="more-item-label">Analytics</div>
-                </div>
-            </div>
-        </div>
-    </div>
-</body>
     <div class="app-container month-view-active">
         <!-- Main Content -->
         <div class="main-content">
@@ -1235,23 +1092,16 @@
         </div>
     </div>
     
-    <script src="js/common.js"></script>
     <script>
-        // Global state
         let currentView = 'month';
-        let currentDate = new Date();
-        let selectedMonthDay = new Date();
+        let currentDate = new Date(2025, 8, 29);
+        let selectedMonthDay = new Date(2025, 8, 29);
         let selectedList = 'all';
         let selectedCategory = 'all';
         let selectedTasks = [];
         let draggedTask = null;
         let draggedEvent = null;
         let editingEventId = null;
-        
-        // Data from API
-        let events = [];
-        let tasks = [];
-        let availableLists = [];
         
         const listNames = {
             'work': 'Work',
@@ -1260,132 +1110,26 @@
             'shopping': 'Shopping'
         };
         
-        // Helper functions
-        function formatDateISO(date) {
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`;
-        }
+        const events = [
+            { id: 1, title: 'Team Meeting', date: new Date(2025, 8, 1), time: '09:00', duration: 60, category: 'work', linkedTasks: [] },
+            { id: 2, title: 'Personal Time', date: new Date(2025, 8, 2), time: '14:00', duration: 60, category: 'personal', linkedTasks: [] },
+            { id: 3, title: 'Work Tasks', date: new Date(2025, 8, 29), time: '09:00', duration: 120, category: 'work', linkedTasks: [
+                { id: 101, text: 'Review project proposal', completed: false },
+                { id: 102, text: 'Update documentation', completed: false }
+            ]},
+            { id: 4, title: 'Shopping Trip', date: new Date(2025, 8, 29), time: '15:00', duration: 60, category: 'shopping', linkedTasks: [
+                { id: 201, text: 'Buy groceries', completed: false },
+                { id: 202, text: 'Get coffee beans', completed: false }
+            ]},
+        ];
         
-        function parseEventDate(event) {
-            const dateStr = event.start_date || event.date;
-            return new Date(dateStr);
-        }
-        
-        function getCategoryFromList(listName, listType) {
-            const name = listName.toLowerCase();
-            const type = listType ? listType.toLowerCase() : '';
-            
-            if (name.includes('work') || type.includes('work')) return 'work';
-            if (name.includes('shop') || type === 'shopping') return 'shopping';
-            if (name.includes('bucket') || type === 'bucket') return 'bucket';
-            return 'personal';
-        }
-        
-        // Load lists from API
-        async function loadLists() {
-            try {
-                const listTypes = ['personal_todos', 'work_todos', 'shopping', 'bucket'];
-                const allLists = [];
-                
-                for (const listType of listTypes) {
-                    try {
-                        const response = await apiRequest(`/lists/${listType}`);
-                        if (response.lists && Array.isArray(response.lists)) {
-                            response.lists.forEach(list => {
-                                allLists.push({
-                                    ...list,
-                                    list_type: listType,
-                                    category: getCategoryFromList(list.name, listType)
-                                });
-                            });
-                        }
-                    } catch (error) {
-                        console.error(`Error loading ${listType}:`, error);
-                    }
-                }
-                
-                availableLists = allLists;
-                renderListSelector();
-                await loadTasks();
-            } catch (error) {
-                console.error('Error loading lists:', error);
-            }
-        }
-        
-        // Render dynamic list selector
-        function renderListSelector() {
-            const selector = document.getElementById('listSelector');
-            if (!selector) return;
-            
-            let html = `<div class="list-option all active" data-list="all" onclick="selectList('all', 'all')">All</div>`;
-            
-            const uniqueCategories = [...new Set(availableLists.map(l => l.category))];
-            uniqueCategories.forEach(category => {
-                html += `
-                    <div class="list-option ${category}" data-list="${category}" onclick="selectList('${category}', '${category}')">
-                        ${category.charAt(0).toUpperCase() + category.slice(1)}
-                    </div>
-                `;
-            });
-            
-            selector.innerHTML = html;
-        }
-        
-        // Load tasks from lists
-        async function loadTasks() {
-            try {
-                tasks = [];
-                
-                for (const list of availableLists) {
-                    if (list.items && Array.isArray(list.items)) {
-                        list.items.forEach((item, index) => {
-                            if (!item.completed && typeof item === 'object') {
-                                tasks.push({
-                                    id: `${list.id}-${item.id || index}`,
-                                    text: item.text || item,
-                                    list_id: list.id,
-                                    list_type: list.list_type,
-                                    list_name: list.name,
-                                    category: list.category,
-                                    completed: false
-                                });
-                            }
-                        });
-                    }
-                }
-                
-                renderTasks();
-            } catch (error) {
-                console.error('Error loading tasks:', error);
-            }
-        }
-        
-        // Load events from API
-        async function loadEvents() {
-            try {
-                const startDate = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
-                const endDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 2, 0);
-                
-                const response = await apiRequest(`/calendar/events?start_date=${formatDateISO(startDate)}&end_date=${formatDateISO(endDate)}`);
-                const apiEvents = Array.isArray(response) ? response : (response.events || []);
-                
-                events = apiEvents.map(event => ({
-                    id: event.id,
-                    title: event.title,
-                    date: parseEventDate(event),
-                    time: event.start_time || event.time || '09:00',
-                    duration: event.duration || 60,
-                    category: event.category || 'personal',
-                    linkedTasks: event.linked_tasks ? (typeof event.linked_tasks === 'string' ? JSON.parse(event.linked_tasks) : event.linked_tasks) : []
-                }));
-                
-                updateView();
-            } catch (error) {
-                console.error('Error loading events:', error);
-            }
-        }
+        const tasks = [
+            { id: 1, text: 'Finish presentation', list: 'work', category: 'work' },
+            { id: 2, text: 'Call mom', list: 'personal', category: 'personal' },
+            { id: 3, text: 'Learn guitar', list: 'bucket', category: 'bucket' },
+            { id: 4, text: 'Buy milk', list: 'shopping', category: 'shopping' },
+            { id: 5, text: 'Plan vacation', list: 'bucket', category: 'bucket' },
+        ];
         
         function syncScroll(source, target) {
             target.scrollTop = source.scrollTop;
@@ -1436,36 +1180,20 @@
             }
         }
         
-        async function addTaskFromInput(input, category) {
+        function addTaskFromInput(input, category) {
             const text = input.value.trim();
             if (!text) return;
             
-            // Find the first list of this category
-            const list = availableLists.find(l => l.category === category);
-            if (!list) {
-                showNotification('No list found for this category', 'error');
-                return;
-            }
-            
-            const itemData = {
+            const newTask = {
+                id: Date.now(),
                 text: text,
-                completed: false,
-                priority: 'medium'
+                list: category,
+                category: category
             };
             
-            try {
-                await apiRequest(`/lists/${list.list_type}/${list.id}/items`, {
-                    method: 'POST',
-                    body: JSON.stringify(itemData)
-                });
-                
-                input.value = '';
-                await loadLists(); // Reload lists to get the new task
-                showNotification('Task added');
-            } catch (error) {
-                console.error('Error adding task:', error);
-                showNotification('Failed to add task', 'error');
-            }
+            tasks.push(newTask);
+            input.value = '';
+            renderTasks();
         }
         
         function renderTasks() {
@@ -2011,31 +1739,13 @@
             draggedEvent = null;
         }
         
-        async function rescheduleEvent(event, newDate, newTime) {
-            const eventData = {
-                title: event.title,
-                start_date: formatDateISO(newDate),
-                start_time: newTime,
-                duration: event.duration,
-                category: event.category,
-                linked_tasks: JSON.stringify(event.linkedTasks || [])
-            };
-            
-            try {
-                await apiRequest(`/calendar/events/${event.id}`, {
-                    method: 'PUT',
-                    body: JSON.stringify(eventData)
-                });
-                
-                await loadEvents();
-                showNotification('Event rescheduled');
-            } catch (error) {
-                console.error('Error rescheduling event:', error);
-                showNotification('Failed to reschedule event', 'error');
-            }
+        function rescheduleEvent(event, newDate, newTime) {
+            event.date = new Date(newDate);
+            event.time = newTime;
+            updateView();
         }
         
-        async function linkTasksToEvent(event, taskArray) {
+        function linkTasksToEvent(event, taskArray) {
             taskArray.forEach(task => {
                 if (!event.linkedTasks) event.linkedTasks = [];
                 event.linkedTasks.push({
@@ -2048,33 +1758,15 @@
                 if (taskIndex > -1) tasks.splice(taskIndex, 1);
             });
             
-            const duration = event.linkedTasks.length > 2 ? Math.max(event.duration, 120) : event.duration;
-            
-            const eventData = {
-                title: event.title,
-                start_date: formatDateISO(event.date),
-                start_time: event.time,
-                duration,
-                category: event.category,
-                linked_tasks: JSON.stringify(event.linkedTasks)
-            };
-            
-            try {
-                await apiRequest(`/calendar/events/${event.id}`, {
-                    method: 'PUT',
-                    body: JSON.stringify(eventData)
-                });
-                
-                draggedTask = null;
-                selectedTasks = [];
-                updateSelectionIndicator();
-                renderTasks();
-                await loadEvents();
-                showNotification('Tasks linked to event');
-            } catch (error) {
-                console.error('Error linking tasks:', error);
-                showNotification('Failed to link tasks', 'error');
+            if (event.linkedTasks.length > 2) {
+                event.duration = Math.max(event.duration, 120);
             }
+            
+            draggedTask = null;
+            selectedTasks = [];
+            updateSelectionIndicator();
+            renderTasks();
+            updateView();
         }
         
         function startResize(e, event) {
@@ -2238,137 +1930,45 @@
             editingEventId = null;
         }
         
-        async function saveEvent() {
+        function saveEvent() {
             const event = events.find(e => e.id === editingEventId);
-            if (!event) return;
-            
-            const title = document.getElementById('editTitle').value;
-            const date = document.getElementById('editDate').value;
-            const time = document.getElementById('editTime').value;
-            const duration = parseInt(document.getElementById('editDuration').value);
-            const category = document.getElementById('editCategory').value;
-            
-            const eventData = {
-                title,
-                start_date: date,
-                start_time: time,
-                duration,
-                category,
-                linked_tasks: JSON.stringify(event.linkedTasks || [])
-            };
-            
-            try {
-                await apiRequest(`/calendar/events/${event.id}`, {
-                    method: 'PUT',
-                    body: JSON.stringify(eventData)
-                });
+            if (event) {
+                event.title = document.getElementById('editTitle').value;
+                event.date = new Date(document.getElementById('editDate').value);
+                event.time = document.getElementById('editTime').value;
+                event.duration = parseInt(document.getElementById('editDuration').value);
+                event.category = document.getElementById('editCategory').value;
                 
-                await loadEvents();
-                closeEventPanel();
-                showNotification('Event saved successfully');
-            } catch (error) {
-                console.error('Error saving event:', error);
-                showNotification('Failed to save event', 'error');
-            }
-        }
-        
-        async function deleteEvent() {
-            if (!confirm('Delete this event?')) return;
-            
-            const event = events.find(e => e.id === editingEventId);
-            if (!event) return;
-            
-            if (event.linkedTasks && event.linkedTasks.length > 0) {
-                const shouldRestore = confirm('Return incomplete tasks to the task list?');
-                if (shouldRestore) {
-                    // Restore tasks would require re-adding to lists via API
-                    // For now, we'll just note this - user can recreate tasks manually
-                }
-            }
-            
-            try {
-                await apiRequest(`/calendar/events/${editingEventId}`, {
-                    method: 'DELETE'
-                });
-                
-                events = events.filter(e => e.id !== editingEventId);
                 updateView();
                 closeEventPanel();
-                showNotification('Event deleted');
-            } catch (error) {
-                console.error('Error deleting event:', error);
-                showNotification('Failed to delete event', 'error');
             }
         }
         
-        // Helper function for navigation
-        function navigateToPage(page) {
-            window.location.href = page;
-        }
-        
-        // Create event from task
-        async function createEventFromTasks(taskArray, date, time) {
-            const category = taskArray[0].category;
-            const listName = listNames[category];
-            
-            let title;
-            if (taskArray.length === 1) {
-                title = taskArray[0].text;
-            } else {
-                title = category === 'shopping' ? 'Shopping Trip' : `${listName} Tasks`;
-            }
-            
-            const duration = taskArray.length > 2 ? 120 : 60;
-            
-            const eventData = {
-                title,
-                start_date: formatDateISO(date),
-                start_time: time,
-                duration,
-                category,
-                linked_tasks: JSON.stringify(taskArray.map(t => ({ 
-                    id: t.id, 
-                    text: t.text, 
-                    completed: false 
-                })))
-            };
-            
-            try {
-                const response = await apiRequest('/calendar/events', {
-                    method: 'POST',
-                    body: JSON.stringify(eventData)
-                });
+        function deleteEvent() {
+            if (confirm('Delete this event?')) {
+                const event = events.find(e => e.id === editingEventId);
                 
-                // Remove tasks from sidebar
-                taskArray.forEach(task => {
-                    tasks = tasks.filter(t => t.id !== task.id);
-                });
+                if (event && event.linkedTasks && event.linkedTasks.length > 0) {
+                    const shouldRestore = confirm('Return incomplete tasks to the task list?');
+                    if (shouldRestore) {
+                        event.linkedTasks.filter(t => !t.completed).forEach(task => {
+                            tasks.push({
+                                id: task.id,
+                                text: task.text,
+                                list: event.category,
+                                category: event.category
+                            });
+                        });
+                        renderTasks();
+                    }
+                }
                 
-                draggedTask = null;
-                selectedTasks = [];
-                updateSelectionIndicator();
-                renderTasks();
-                await loadEvents();
-                showNotification('Task(s) scheduled');
-            } catch (error) {
-                console.error('Error creating event:', error);
-                showNotification('Failed to create event', 'error');
+                const index = events.findIndex(e => e.id === editingEventId);
+                if (index > -1) events.splice(index, 1);
+                updateView();
+                closeEventPanel();
             }
         }
-        
-        // Initialize on page load
-        document.addEventListener('DOMContentLoaded', async () => {
-            // Initialize date to today
-            currentDate = new Date();
-            selectedMonthDay = new Date();
-            
-            // Load data
-            await loadLists();
-            await loadEvents();
-            
-            // Set initial view
-            updateView();
-        });
         
         renderTasks();
         updateView();

@@ -91,3 +91,4 @@ fi
 echo ""
 echo -e "${GREEN}🎉 Certificate verification complete!${NC}"
 
+
