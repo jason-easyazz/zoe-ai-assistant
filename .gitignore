@@ -37,6 +37,7 @@ venv/
 env/
 aider_env/
 tools/aider_env/
+tools/aider-env/
 
 # Logs
 logs/
