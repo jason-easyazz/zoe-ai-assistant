@@ -23,6 +23,13 @@ scripts/temporary/*
 backups/
 **/backups/
 
+# zoe-ui backup and development files
+services/zoe-ui/dist/*.backup
+services/zoe-ui/dist/*_backup_*
+services/zoe-ui/dist/*.old
+services/zoe-ui/dist/*.sh
+services/zoe-ui/*.backup
+
 # Security - SSH Keys and Credentials
 *.pem
 *.key
