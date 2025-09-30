@@ -23,6 +23,31 @@ scripts/temporary/*
 backups/
 **/backups/
 
+# Security - SSH Keys and Credentials
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+*.pub
+ssh_keys/
+credentials/
+
+# Cloudflare and Tunnel credentials
+*cloudflare*
+*tunnel*
+*.json
+!package.json
+!tsconfig.json
+!*.config.json
+
+# API Keys and Secrets
+*.env
+.env.*
+secrets/
+api_keys/
+**/api_keys.json
+**/credentials.json
+
 # IDE files
 .vscode/
 .idea/

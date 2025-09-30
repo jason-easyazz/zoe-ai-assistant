@@ -4,6 +4,7 @@ Replace n8n's basic auth with Zoe's central authentication
 """
 
 import json
+import os
 import aiohttp
 import asyncio
 from datetime import datetime, timedelta
@@ -381,7 +382,7 @@ class N8nIntegration:
         try:
             headers = {
                 "Content-Type": "application/json",
-                "X-N8N-API-KEY": "your-n8n-api-key"  # Would be configured
+                "X-N8N-API-KEY": os.getenv("N8N_API_KEY", "")  # From environment
             }
 
             url = f"{self.n8n_url}{endpoint}"
