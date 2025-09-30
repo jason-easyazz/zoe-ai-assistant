@@ -19,6 +19,10 @@ config/.env
 scripts/temporary/*
 !scripts/temporary/.gitkeep
 
+# Backup directories
+backups/
+**/backups/
+
 # IDE files
 .vscode/
 .idea/
@@ -31,6 +35,8 @@ __pycache__/
 .Python
 venv/
 env/
+aider_env/
+tools/aider_env/
 
 # Logs
 logs/
