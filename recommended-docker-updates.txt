@@ -1,0 +1,33 @@
+# Docker Compose Updates for Standard Ports
+
+## Update the zoe-ui service in docker-compose.yml:
+
+Change from:
+  ports:
+    - 8080:80
+    - 8443:443
+
+To:
+  ports:
+    - 80:80      # HTTP (redirects to HTTPS)
+    - 443:443    # HTTPS on standard port
+
+## Update the nginx.conf volume mount:
+  volumes:
+    - ./services/zoe-ui/dist:/usr/share/nginx/html
+    - ./recommended-nginx.conf:/etc/nginx/conf.d/default.conf:ro  # Updated config
+    - ./ssl:/etc/nginx/ssl:ro
+
+## N8N Environment Variables Update:
+Add to zoe-n8n service environment:
+    - N8N_EDITOR_BASE_URL=https://zoe.local/n8n/
+    - WEBHOOK_URL=https://zoe.local/n8n/
+    - N8N_PATH=/n8n/
+
+## Optional: Hide direct port access
+Remove or comment out port mappings for services that will be proxied:
+# Comment these out after confirming proxy works:
+# - 8000:8000  # zoe-core (accessed via /api/)
+# - 5678:5678  # zoe-n8n (accessed via /n8n/)
+# Keep 8123:8123 for Home Assistant as backup
+

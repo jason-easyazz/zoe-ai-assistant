@@ -1,0 +1,48 @@
+{
+  "zoe": {
+    "name": "Zoe AI Assistant",
+    "version": "5.0",
+    "hostname": "zoe.local",
+    "main_url": "http://192.168.1.60",
+    "main_url_secure": "https://192.168.1.60",
+    "api_url": "http://192.168.1.60/api",
+    "discovery_method": "mDNS"
+  },
+  "services": {
+    "automation": {
+      "name": "N8N Automation",
+      "url": "http://zoe.local:5678",
+      "type": "workflow",
+      "description": "Workflow automation and integrations"
+    },
+    "home": {
+      "name": "Home Assistant",
+      "url": "http://zoe.local:8123",
+      "type": "home_automation",
+      "description": "Home automation and device control"
+    },
+    "ollama": {
+      "name": "Ollama AI",
+      "url": "http://zoe.local:11434",
+      "type": "ai_api",
+      "description": "Local AI model API"
+    },
+    "whisper": {
+      "name": "Whisper STT",
+      "url": "http://zoe.local:9001",
+      "type": "ai_api",
+      "description": "Speech to text service"
+    },
+    "tts": {
+      "name": "TTS Service",
+      "url": "http://zoe.local:9002",
+      "type": "ai_api",
+      "description": "Text to speech service"
+    }
+  },
+  "discovery_info": {
+    "url": "http://zoe.local",
+    "method": "hostname",
+    "timestamp": 1758284928.5948431
+  }
+}

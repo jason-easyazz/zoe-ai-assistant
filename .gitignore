@@ -67,4 +67,8 @@ Thumbs.db
 
 # Temporary files
 *.tmp
-*.temp
+*.temp.env
+*.db
+data/api_keys.json
+data/backups/
+*.pyc
