@@ -3,7 +3,7 @@ Unified Memory Management System
 Handles people, projects, notes, relationships, and memory facts
 Combines basic CRUD with advanced memory features
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date
@@ -13,6 +13,8 @@ import os
 import sys
 sys.path.append('/app')
 from memory_system import MemorySystem
+from light_rag_memory import LightRAGMemorySystem
+from auth_integration import validate_session, AuthenticatedSession
 
 router = APIRouter(prefix="/api/memories", tags=["memories"])
 
@@ -22,6 +24,9 @@ MEMORY_DB_PATH = "/app/data/memory.db"
 
 # Initialize advanced memory system
 memory_system = MemorySystem(MEMORY_DB_PATH)
+
+# Initialize Light RAG memory system
+light_rag_system = LightRAGMemorySystem(MEMORY_DB_PATH)
 
 def init_memories_db():
     """Initialize memories tables"""
@@ -81,10 +86,145 @@ def init_memories_db():
         )
     """)
     
+    # Collections table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS collections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT DEFAULT 'default',
+            name TEXT NOT NULL,
+            icon TEXT DEFAULT '📁',
+            color TEXT DEFAULT '#3b82f6',
+            x REAL DEFAULT 0,
+            y REAL DEFAULT 0,
+            size INTEGER DEFAULT 60,
+            metadata JSON,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Tiles table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT DEFAULT 'default',
+            collection_id INTEGER,
+            name TEXT,
+            content TEXT,
+            preview_type TEXT,
+            preview_data JSON,
+            x REAL DEFAULT 0,
+            y REAL DEFAULT 0,
+            size INTEGER DEFAULT 50,
+            tile_x REAL,
+            tile_y REAL,
+            tile_width INTEGER,
+            metadata JSON,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE
+        )
+    """)
+    
+    # Relationships table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS relationships (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT DEFAULT 'default',
+            person1_id INTEGER,
+            person2_id INTEGER,
+            relationship_type TEXT,
+            strength REAL DEFAULT 0.5,
+            metadata JSON,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (person1_id) REFERENCES people(id) ON DELETE CASCADE,
+            FOREIGN KEY (person2_id) REFERENCES people(id) ON DELETE CASCADE
+        )
+    """)
+    
+    # Enhanced person data tables
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS person_timeline (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT DEFAULT 'default',
+            person_id INTEGER,
+            event_type TEXT,
+            event_text TEXT,
+            event_date TEXT,
+            location TEXT,
+            metadata JSON,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS person_activities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT DEFAULT 'default',
+            person_id INTEGER,
+            activity TEXT,
+            frequency TEXT,
+            last_done TEXT,
+            metadata JSON,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS person_conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT DEFAULT 'default',
+            person_id INTEGER,
+            topic TEXT,
+            notes TEXT,
+            conversation_date TEXT,
+            metadata JSON,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS person_gifts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT DEFAULT 'default',
+            person_id INTEGER,
+            item TEXT,
+            occasion TEXT,
+            status TEXT DEFAULT 'idea',
+            metadata JSON,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS person_important_dates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT DEFAULT 'default',
+            person_id INTEGER,
+            name TEXT,
+            date TEXT,
+            metadata JSON,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE
+        )
+    """)
+    
     # Create indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_people_user ON people(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_notes_user ON notes(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_collections_user ON collections(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_tiles_collection ON tiles(collection_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_relationships_user ON relationships(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_timeline_person ON person_timeline(person_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_activities_person ON person_activities(person_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_conversations_person ON person_conversations(person_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_gifts_person ON person_gifts(person_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_dates_person ON person_important_dates(person_id)")
     
     conn.commit()
     conn.close()
@@ -122,12 +262,81 @@ class NoteCreate(BaseModel):
     tags: Optional[List[str]] = None
     metadata: Optional[Dict[str, Any]] = None
 
+class CollectionCreate(BaseModel):
+    name: str
+    icon: Optional[str] = "📁"
+    color: Optional[str] = "#3b82f6"
+    x: Optional[float] = 0
+    y: Optional[float] = 0
+    size: Optional[int] = 60
+    metadata: Optional[Dict[str, Any]] = None
+
+class TileCreate(BaseModel):
+    collection_id: int
+    name: Optional[str] = None
+    content: Optional[str] = None
+    preview_type: Optional[str] = None
+    preview_data: Optional[Dict[str, Any]] = None
+    x: Optional[float] = 0
+    y: Optional[float] = 0
+    size: Optional[int] = 50
+    tile_x: Optional[float] = None
+    tile_y: Optional[float] = None
+    tile_width: Optional[int] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class RelationshipCreate(BaseModel):
+    person1_id: int
+    person2_id: int
+    relationship_type: str
+    strength: Optional[float] = 0.5
+    metadata: Optional[Dict[str, Any]] = None
+
+class TimelineEventCreate(BaseModel):
+    person_id: int
+    event_type: str
+    event_text: str
+    event_date: str
+    location: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+class ActivityCreate(BaseModel):
+    person_id: int
+    activity: str
+    frequency: str
+    last_done: str
+    metadata: Optional[Dict[str, Any]] = None
+
+class ConversationCreate(BaseModel):
+    person_id: int
+    topic: str
+    notes: str
+    conversation_date: str
+    metadata: Optional[Dict[str, Any]] = None
+
+class GiftCreate(BaseModel):
+    person_id: int
+    item: str
+    occasion: str
+    status: Optional[str] = "idea"
+    metadata: Optional[Dict[str, Any]] = None
+
+class ImportantDateCreate(BaseModel):
+    person_id: int
+    name: str
+    date: str
+    metadata: Optional[Dict[str, Any]] = None
+
 @router.get("/")
 async def get_memories(
     type: str = Query(..., description="Type: people, projects, or notes"),
-    user_id: str = Query("default", description="User ID")
+    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
+    session: Optional[AuthenticatedSession] = Depends(lambda: None),
 ):
     """Get memories by type"""
+    # For web interface compatibility, allow no authentication
+    if user_id is None:
+        user_id = session.user_id if session else 'default' 
     if type not in ["people", "projects", "notes"]:
         raise HTTPException(status_code=400, detail="Type must be people, projects, or notes")
     
@@ -213,12 +422,15 @@ async def get_memories(
 @router.post("/")
 async def create_memory(
     type: str = Query(..., description="Type: people, projects, or notes"),
-    user_id: str = Query("default", description="User ID"),
+    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
     person: Optional[PersonCreate] = None,
     project: Optional[ProjectCreate] = None,
-    note: Optional[NoteCreate] = None
+    note: Optional[NoteCreate] = None,
+    session: AuthenticatedSession = Depends(validate_session),
 ):
     """Create a new memory"""
+    if user_id is None:
+        user_id = session.user_id
     if type not in ["people", "projects", "notes"]:
         raise HTTPException(status_code=400, detail="Type must be people, projects, or notes")
     
@@ -273,9 +485,12 @@ async def create_memory(
 async def get_memory(
     memory_id: int,
     type: str = Query(..., description="Type: people, projects, or notes"),
-    user_id: str = Query("default", description="User ID")
+    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
+    session: AuthenticatedSession = Depends(validate_session),
 ):
     """Get a specific memory"""
+    if user_id is None:
+        user_id = session.user_id
     if type not in ["people", "projects", "notes"]:
         raise HTTPException(status_code=400, detail="Type must be people, projects, or notes")
     
@@ -341,12 +556,15 @@ async def get_memory(
 async def update_memory(
     memory_id: int,
     type: str = Query(..., description="Type: people, projects, or notes"),
-    user_id: str = Query("default", description="User ID"),
+    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
     person: Optional[PersonCreate] = None,
     project: Optional[ProjectCreate] = None,
-    note: Optional[NoteCreate] = None
+    note: Optional[NoteCreate] = None,
+    session: AuthenticatedSession = Depends(validate_session),
 ):
     """Update a memory"""
+    if user_id is None:
+        user_id = session.user_id
     if type not in ["people", "projects", "notes"]:
         raise HTTPException(status_code=400, detail="Type must be people, projects, or notes")
     
@@ -414,9 +632,12 @@ async def update_memory(
 async def delete_memory(
     memory_id: int,
     type: str = Query(..., description="Type: people, projects, or notes"),
-    user_id: str = Query("default", description="User ID")
+    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
+    session: AuthenticatedSession = Depends(validate_session),
 ):
     """Delete a memory"""
+    if user_id is None:
+        user_id = session.user_id
     if type not in ["people", "projects", "notes"]:
         raise HTTPException(status_code=400, detail="Type must be people, projects, or notes")
     
@@ -444,6 +665,159 @@ async def search_memories(query: str = Query(..., description="Search query")):
         # Use basic text search for now (vector search can be added later)
         results = memory_system.search_memories(query)
         return {"results": results, "query": query, "search_type": "text"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Light RAG Enhanced Endpoints
+
+@router.post("/search/light-rag")
+async def light_rag_search(
+    query: str = Query(..., description="Search query"),
+    limit: int = Query(10, description="Number of results"),
+    use_cache: bool = Query(True, description="Use search cache")
+# ):
+    """Enhanced search using Light RAG with vector embeddings and relationship awareness"""
+    try:
+        results = light_rag_system.light_rag_search(query, limit, use_cache)
+        
+        # Convert MemoryResult objects to dictionaries for JSON serialization
+        results_dict = []
+        for result in results:
+            results_dict.append({
+                "fact_id": result.fact_id,
+                "fact": result.fact,
+                "entity_type": result.entity_type,
+                "entity_id": result.entity_id,
+                "entity_name": result.entity_name,
+                "category": result.category,
+                "importance": result.importance,
+                "similarity_score": result.similarity_score,
+                "relationship_boost": result.relationship_boost,
+                "final_score": result.final_score,
+                "entity_context": result.entity_context,
+                "relationship_path": result.relationship_path,
+                "created_at": result.created_at
+            })
+        
+        return {
+            "results": results_dict,
+            "query": query,
+            "search_type": "light_rag",
+            "total_results": len(results_dict),
+            "limit": limit,
+            "cache_used": use_cache
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/memories/enhanced")
+async def add_enhanced_memory(
+    entity_type: str = Query(..., description="Entity type: person, project, general"),
+    entity_id: int = Query(..., description="Entity ID"),
+    fact: str = Query(..., description="Fact to remember"),
+    category: str = Query("general", description="Fact category"),
+    importance: int = Query(5, description="Importance level 1-10"),
+    source: str = Query("user", description="Source of the memory")
+# ):
+    """Add memory with automatic embedding generation and relationship context"""
+    try:
+        result = light_rag_system.add_memory_with_embedding(
+            entity_type, entity_id, fact, category, importance, source
+        )
+        return {
+            "success": True,
+            "message": "Memory added with Light RAG enhancement",
+            "data": result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/contextual/{entity_name}")
+async def get_contextual_memories(
+    entity_name: str,
+    context_type: str = Query("all", description="Context type: all, direct, related")
+# ):
+    """Get memories with full contextual awareness including relationships"""
+    try:
+        memories = light_rag_system.get_contextual_memories(entity_name, context_type)
+        return {
+            "entity": entity_name,
+            "memories": memories,
+            "context_type": context_type,
+            "total_memories": len(memories)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/migrate")
+async def migrate_memories_to_light_rag():
+    """Migrate existing memories to include embeddings and relationship context"""
+    try:
+        result = light_rag_system.migrate_existing_memories()
+        return {
+            "success": True,
+            "message": "Memory migration completed",
+            "migration_stats": result
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/stats/light-rag")
+async def get_light_rag_stats():
+    """Get Light RAG system statistics and performance metrics"""
+    try:
+        stats = light_rag_system.get_system_stats()
+        return {
+            "system_stats": stats,
+            "status": "operational"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/search/comparison")
+async def compare_search_methods(
+    query: str = Query(..., description="Search query to compare"),
+    limit: int = Query(10, description="Number of results")
+# ):
+    """Compare traditional search vs Light RAG search for the same query"""
+    try:
+        # Traditional search
+        traditional_results = memory_system.search_memories(query)
+        
+        # Light RAG search
+        light_rag_results = light_rag_system.light_rag_search(query, limit)
+        
+        # Convert Light RAG results to comparable format
+        light_rag_formatted = []
+        for result in light_rag_results:
+            light_rag_formatted.append({
+                "fact": result.fact,
+                "type": result.entity_type,
+                "entity": result.entity_name,
+                "importance": result.importance,
+                "date": result.created_at,
+                "similarity_score": result.similarity_score,
+                "final_score": result.final_score
+            })
+        
+        return {
+            "query": query,
+            "traditional_search": {
+                "results": traditional_results,
+                "count": len(traditional_results),
+                "method": "text_matching"
+            },
+            "light_rag_search": {
+                "results": light_rag_formatted,
+                "count": len(light_rag_formatted),
+                "method": "vector_embeddings_with_relationships"
+            },
+            "comparison": {
+                "traditional_count": len(traditional_results),
+                "light_rag_count": len(light_rag_formatted),
+                "improvement_factor": len(light_rag_formatted) / max(len(traditional_results), 1)
+            }
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -539,5 +913,412 @@ async def get_memory_facts(
         
         conn.close()
         return {"facts": facts}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Collections endpoints
+@router.get("/collections")
+async def get_collections(
+    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
+    session: AuthenticatedSession = Depends(validate_session),
+):
+    """Get all collections for a user"""
+    if user_id is None:
+        user_id = session.user_id
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT id, name, icon, color, x, y, size, metadata, created_at, updated_at
+        FROM collections 
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+    """, (user_id,))
+    
+    collections = []
+    for row in cursor.fetchall():
+        collections.append({
+            "id": row[0],
+            "name": row[1],
+            "icon": row[2],
+            "color": row[3],
+            "x": row[4],
+            "y": row[5],
+            "size": row[6],
+            "metadata": json.loads(row[7]) if row[7] else None,
+            "created_at": row[8],
+            "updated_at": row[9]
+        })
+    
+    conn.close()
+    return {"collections": collections}
+
+@router.post("/collections")
+async def create_collection(
+    collection: CollectionCreate,
+    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
+    session: AuthenticatedSession = Depends(validate_session),
+):
+    """Create a new collection"""
+    if user_id is None:
+        user_id = session.user_id
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO collections (user_id, name, icon, color, x, y, size, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        user_id, collection.name, collection.icon, collection.color,
+        collection.x, collection.y, collection.size,
+        json.dumps(collection.metadata) if collection.metadata else None
+    ))
+    
+    collection_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    
+    return {"collection": {"id": collection_id, "name": collection.name}}
+
+# Tiles endpoints
+@router.get("/collections/{collection_id}/tiles")
+async def get_tiles(
+    collection_id: int,
+    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
+    session: AuthenticatedSession = Depends(validate_session),
+):
+    """Get all tiles in a collection"""
+    if user_id is None:
+        user_id = session.user_id
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT id, name, content, preview_type, preview_data, x, y, size,
+               tile_x, tile_y, tile_width, metadata, created_at, updated_at
+        FROM tiles 
+        WHERE collection_id = ? AND user_id = ?
+        ORDER BY created_at DESC
+    """, (collection_id, user_id))
+    
+    tiles = []
+    for row in cursor.fetchall():
+        tiles.append({
+            "id": row[0],
+            "name": row[1],
+            "content": row[2],
+            "preview_type": row[3],
+            "preview_data": json.loads(row[4]) if row[4] else None,
+            "x": row[5],
+            "y": row[6],
+            "size": row[7],
+            "tile_x": row[8],
+            "tile_y": row[9],
+            "tile_width": row[10],
+            "metadata": json.loads(row[11]) if row[11] else None,
+            "created_at": row[12],
+            "updated_at": row[13]
+        })
+    
+    conn.close()
+    return {"tiles": tiles}
+
+@router.post("/tiles")
+async def create_tile(
+    tile: TileCreate,
+    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
+    session: AuthenticatedSession = Depends(validate_session),
+):
+    """Create a new tile"""
+    if user_id is None:
+        user_id = session.user_id
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO tiles (user_id, collection_id, name, content, preview_type, preview_data,
+                          x, y, size, tile_x, tile_y, tile_width, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        user_id, tile.collection_id, tile.name, tile.content, tile.preview_type,
+        json.dumps(tile.preview_data) if tile.preview_data else None,
+        tile.x, tile.y, tile.size, tile.tile_x, tile.tile_y, tile.tile_width,
+        json.dumps(tile.metadata) if tile.metadata else None
+    ))
+    
+    tile_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    
+    return {"tile": {"id": tile_id, "name": tile.name}}
+
+@router.put("/tiles/{tile_id}")
+async def update_tile(
+    tile_id: int,
+    tile: TileCreate,
+    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
+    session: AuthenticatedSession = Depends(validate_session),
+):
+    """Update a tile"""
+    if user_id is None:
+        user_id = session.user_id
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        UPDATE tiles SET name = ?, content = ?, preview_type = ?, preview_data = ?,
+                        x = ?, y = ?, size = ?, tile_x = ?, tile_y = ?, tile_width = ?,
+                        metadata = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+    """, (
+        tile.name, tile.content, tile.preview_type,
+        json.dumps(tile.preview_data) if tile.preview_data else None,
+        tile.x, tile.y, tile.size, tile.tile_x, tile.tile_y, tile.tile_width,
+        json.dumps(tile.metadata) if tile.metadata else None,
+        tile_id, user_id
+    ))
+    
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Tile not found")
+    
+    conn.commit()
+    conn.close()
+    
+    return {"message": "Tile updated successfully"}
+
+@router.delete("/tiles/{tile_id}")
+async def delete_tile(
+    tile_id: int,
+    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
+    session: AuthenticatedSession = Depends(validate_session),
+):
+    """Delete a tile"""
+    if user_id is None:
+        user_id = session.user_id
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("DELETE FROM tiles WHERE id = ? AND user_id = ?", (tile_id, user_id))
+    
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Tile not found")
+    
+    conn.commit()
+    conn.close()
+    
+    return {"message": "Tile deleted successfully"}
+
+# Enhanced person data endpoints
+@router.get("/people/{person_id}/enhanced")
+async def get_enhanced_person(
+    person_id: int,
+    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
+    session: AuthenticatedSession = Depends(validate_session),
+):
+    """Get enhanced person data including timeline, activities, etc."""
+    if user_id is None:
+        user_id = session.user_id
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Get basic person data
+    cursor.execute("""
+        SELECT id, name, relationship, birthday, phone, email, address, notes,
+               avatar_url, tags, metadata, created_at, updated_at
+        FROM people 
+        WHERE id = ? AND user_id = ?
+    """, (person_id, user_id))
+    
+    person_row = cursor.fetchone()
+    if not person_row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Person not found")
+    
+    person_data = {
+        "id": person_row[0],
+        "name": person_row[1],
+        "relationship": person_row[2],
+        "birthday": person_row[3],
+        "phone": person_row[4],
+        "email": person_row[5],
+        "address": person_row[6],
+        "notes": person_row[7],
+        "avatar_url": person_row[8],
+        "tags": json.loads(person_row[9]) if person_row[9] else None,
+        "metadata": json.loads(person_row[10]) if person_row[10] else None,
+        "created_at": person_row[11],
+        "updated_at": person_row[12]
+    }
+    
+    # Get timeline events
+    cursor.execute("""
+        SELECT event_type, event_text, event_date, location, metadata
+        FROM person_timeline 
+        WHERE person_id = ? AND user_id = ?
+        ORDER BY event_date DESC
+    """, (person_id, user_id))
+    
+    timeline = []
+    for row in cursor.fetchall():
+        timeline.append({
+            "type": row[0],
+            "text": row[1],
+            "date": row[2],
+            "location": row[3],
+            "metadata": json.loads(row[4]) if row[4] else None
+        })
+    
+    # Get activities
+    cursor.execute("""
+        SELECT activity, frequency, last_done, metadata
+        FROM person_activities 
+        WHERE person_id = ? AND user_id = ?
+        ORDER BY created_at DESC
+    """, (person_id, user_id))
+    
+    activities = []
+    for row in cursor.fetchall():
+        activities.append({
+            "activity": row[0],
+            "frequency": row[1],
+            "last_done": row[2],
+            "metadata": json.loads(row[3]) if row[3] else None
+        })
+    
+    # Get conversations
+    cursor.execute("""
+        SELECT topic, notes, conversation_date, metadata
+        FROM person_conversations 
+        WHERE person_id = ? AND user_id = ?
+        ORDER BY conversation_date DESC
+    """, (person_id, user_id))
+    
+    conversations = []
+    for row in cursor.fetchall():
+        conversations.append({
+            "topic": row[0],
+            "notes": row[1],
+            "date": row[2],
+            "metadata": json.loads(row[3]) if row[3] else None
+        })
+    
+    # Get gifts
+    cursor.execute("""
+        SELECT item, occasion, status, metadata
+        FROM person_gifts 
+        WHERE person_id = ? AND user_id = ?
+        ORDER BY created_at DESC
+    """, (person_id, user_id))
+    
+    gifts = []
+    for row in cursor.fetchall():
+        gifts.append({
+            "item": row[0],
+            "occasion": row[1],
+            "status": row[2],
+            "metadata": json.loads(row[3]) if row[3] else None
+        })
+    
+    # Get important dates
+    cursor.execute("""
+        SELECT name, date, metadata
+        FROM person_important_dates 
+        WHERE person_id = ? AND user_id = ?
+        ORDER BY date ASC
+    """, (person_id, user_id))
+    
+    important_dates = []
+    for row in cursor.fetchall():
+        important_dates.append({
+            "name": row[0],
+            "date": row[1],
+            "metadata": json.loads(row[2]) if row[2] else None
+        })
+    
+    # Get relationships
+    cursor.execute("""
+        SELECT r.person2_id, p.name, r.relationship_type, r.strength
+        FROM relationships r
+        JOIN people p ON r.person2_id = p.id
+        WHERE r.person1_id = ? AND r.user_id = ?
+    """, (person_id, user_id))
+    
+    relationships = []
+    for row in cursor.fetchall():
+        relationships.append({
+            "person_id": row[0],
+            "person_name": row[1],
+            "relationship_type": row[2],
+            "strength": row[3]
+        })
+    
+    conn.close()
+    
+    person_data.update({
+        "timeline": timeline,
+        "activities": activities,
+        "conversations": conversations,
+        "gifts": gifts,
+        "important_dates": important_dates,
+        "relationships": relationships
+    })
+    
+    return {"person": person_data}
+
+# Dedicated people endpoint
+@router.post("/people")
+async def create_person(
+    person: PersonCreate,
+    session: AuthenticatedSession = Depends(validate_session),
+):
+    """Create a new person"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        INSERT INTO people (user_id, name, relationship, birthday, phone, email, 
+                          address, notes, avatar_url, tags, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        session.user_id, person.name, person.relationship, person.birthday, person.phone,
+        person.email, person.address, person.notes, person.avatar_url,
+        json.dumps(person.tags) if person.tags else None,
+        json.dumps(person.metadata) if person.metadata else None
+    ))
+    
+    person_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    
+    return {"person": {"id": person_id, "name": person.name, "relationship": person.relationship}}
+
+# Link preview endpoint
+@router.post("/link-preview")
+async def get_link_preview(url: str = Query(..., description="URL to preview")):
+    """Get link preview data"""
+    try:
+        import requests
+        from urllib.parse import urlparse
+        
+        # Simple link preview - in production you'd use a proper service
+        parsed_url = urlparse(url)
+        domain = parsed_url.netloc.replace('www.', '')
+        
+        return {
+            "url": url,
+            "title": f"{domain} Preview",
+            "description": "This is a preview of the link. In production, this would fetch real metadata.",
+            "image": "🔗",
+            "domain": domain
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

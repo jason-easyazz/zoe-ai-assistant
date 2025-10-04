@@ -1,0 +1,615 @@
+/* Enhanced Memories Styles */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+    background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+    min-height: 100vh;
+    color: #333;
+}
+
+/* Navigation */
+.nav-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+    padding: 15px 20px;
+    z-index: 1000;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.nav-left {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.mini-orb {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+    cursor: pointer;
+}
+
+.page-title {
+    font-size: 24px;
+    font-weight: 300;
+}
+
+.icon-btn {
+    padding: 10px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 20px;
+    opacity: 0.7;
+    transition: opacity 0.3s;
+}
+
+.icon-btn:hover {
+    opacity: 1;
+}
+
+/* Tabs */
+.tabs-container {
+    position: fixed;
+    top: 70px;
+    left: 0;
+    right: 0;
+    background: white;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+    display: flex;
+    gap: 10px;
+    padding: 10px 20px;
+    z-index: 999;
+}
+
+.tab-btn {
+    padding: 10px 20px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 16px;
+    border-radius: 8px;
+    transition: all 0.3s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.tab-btn.active {
+    background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+    color: white;
+}
+
+/* Type Filters */
+.type-filters {
+    position: fixed;
+    top: 130px;
+    left: 0;
+    right: 0;
+    background: white;
+    padding: 10px 20px;
+    display: flex;
+    gap: 10px;
+    z-index: 998;
+}
+
+.type-filter {
+    padding: 8px 16px;
+    border: 1px solid #ddd;
+    background: white;
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.type-filter.active {
+    background: #7B61FF;
+    color: white;
+    border-color: #7B61FF;
+}
+
+/* View Containers */
+.view-container {
+    display: none;
+    margin-top: 180px;
+    padding: 20px;
+}
+
+.view-container.active {
+    display: block;
+}
+
+/* Memory Cards (List View) */
+.memories-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 20px;
+}
+
+.memory-card {
+    background: white;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: transform 0.3s, box-shadow 0.3s;
+}
+
+.memory-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.card-icon {
+    font-size: 24px;
+}
+
+.card-title {
+    font-size: 18px;
+    font-weight: 500;
+}
+
+.card-subtitle {
+    color: #666;
+    font-size: 14px;
+    margin-bottom: 10px;
+}
+
+.card-content {
+    color: #555;
+    font-size: 14px;
+    line-height: 1.6;
+    margin-bottom: 15px;
+}
+
+.card-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.card-actions button {
+    padding: 8px 16px;
+    border: 1px solid #ddd;
+    background: white;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.3s;
+}
+
+.card-actions button:hover {
+    background: #f5f5f5;
+}
+
+/* Graph View */
+.graph-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 15px;
+}
+
+.graph-controls button,
+.graph-controls select {
+    padding: 8px 16px;
+    border: 1px solid #ddd;
+    background: white;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.graph-container {
+    width: 100%;
+    height: 600px;
+    border: 1px solid #ddd;
+    border-radius: 12px;
+    background: white;
+}
+
+.graph-legend {
+    display: flex;
+    gap: 20px;
+    margin-top: 15px;
+    padding: 15px;
+    background: white;
+    border-radius: 8px;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.legend-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+}
+
+.legend-dot.people { background: #7B61FF; }
+.legend-dot.projects { background: #5AE0E0; }
+.legend-dot.notes { background: #FFA500; }
+
+/* Timeline View */
+.timeline-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.timeline-search {
+    flex: 1;
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-size: 16px;
+}
+
+.timeline-container {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.timeline-group {
+    margin-bottom: 40px;
+}
+
+.timeline-date-header {
+    font-size: 18px;
+    font-weight: 500;
+    margin-bottom: 20px;
+    color: #7B61FF;
+    position: sticky;
+    top: 130px;
+    background: #fafbfc;
+    padding: 10px 0;
+    z-index: 10;
+}
+
+.timeline-entry {
+    display: flex;
+    gap: 15px;
+    padding: 20px;
+    background: white;
+    border-radius: 12px;
+    margin-bottom: 15px;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.timeline-entry:hover {
+    transform: translateX(5px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+.timeline-icon {
+    font-size: 32px;
+    flex-shrink: 0;
+}
+
+.timeline-content {
+    flex: 1;
+}
+
+.timeline-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 5px;
+}
+
+.timeline-title {
+    font-size: 18px;
+    font-weight: 500;
+}
+
+.timeline-time {
+    font-size: 12px;
+    color: #999;
+}
+
+.timeline-subtitle {
+    color: #666;
+    font-size: 14px;
+    margin-bottom: 8px;
+}
+
+.timeline-preview {
+    color: #555;
+    font-size: 14px;
+    line-height: 1.6;
+    margin-bottom: 10px;
+}
+
+.timeline-tags {
+    display: flex;
+    gap: 8px;
+}
+
+.timeline-tag {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 12px;
+    background: #f5f5f5;
+}
+
+.timeline-tag.people { background: rgba(123, 97, 255, 0.1); color: #7B61FF; }
+.timeline-tag.projects { background: rgba(90, 224, 224, 0.1); color: #5AE0E0; }
+.timeline-tag.notes { background: rgba(255, 165, 0, 0.1); color: #FFA500; }
+
+/* Detail Panels */
+.detail-panel,
+.wikilink-modal {
+    position: fixed;
+    top: 0;
+    right: -400px;
+    width: 400px;
+    height: 100vh;
+    background: white;
+    box-shadow: -4px 0 16px rgba(0, 0, 0, 0.1);
+    transition: right 0.3s;
+    z-index: 2000;
+    padding: 20px;
+    overflow-y: auto;
+}
+
+.detail-panel.visible,
+.wikilink-modal.visible {
+    right: 0;
+}
+
+.detail-close,
+.wikilink-close {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    font-size: 32px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: #999;
+}
+
+.wikilink-back {
+    margin-bottom: 20px;
+    padding: 8px 16px;
+    border: 1px solid #ddd;
+    background: white;
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+/* Search Panel */
+.search-panel {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(8px);
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 100px;
+    z-index: 3000;
+}
+
+.search-panel.visible {
+    display: flex;
+}
+
+.search-panel-content {
+    background: white;
+    border-radius: 16px;
+    padding: 30px;
+    width: 90%;
+    max-width: 600px;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+
+.search-close {
+    float: right;
+    font-size: 32px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: #999;
+}
+
+.search-input {
+    width: 100%;
+    padding: 16px;
+    font-size: 18px;
+    border: 2px solid #7B61FF;
+    border-radius: 12px;
+    margin-bottom: 20px;
+}
+
+.search-result-item {
+    display: flex;
+    gap: 15px;
+    padding: 15px;
+    border-radius: 8px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: background 0.3s;
+}
+
+.search-result-item:hover {
+    background: #f5f5f5;
+}
+
+.search-result-icon {
+    font-size: 32px;
+}
+
+.search-result-content {
+    flex: 1;
+}
+
+.search-result-title {
+    font-size: 16px;
+    font-weight: 500;
+    margin-bottom: 5px;
+}
+
+.search-result-excerpt {
+    font-size: 14px;
+    color: #666;
+    margin-bottom: 5px;
+}
+
+.search-result-meta {
+    display: flex;
+    gap: 10px;
+    font-size: 12px;
+    color: #999;
+}
+
+/* Wikilinks */
+.wikilink {
+    color: #7B61FF;
+    text-decoration: none;
+    border-bottom: 1px dashed #7B61FF;
+    cursor: pointer;
+}
+
+.wikilink:hover {
+    background: rgba(123, 97, 255, 0.1);
+}
+
+/* Add Button */
+.add-memory-btn {
+    position: fixed;
+    bottom: 30px;
+    right: 30px;
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+    color: white;
+    border: none;
+    font-size: 32px;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(123, 97, 255, 0.3);
+    z-index: 999;
+    transition: transform 0.3s;
+}
+
+.add-memory-btn:hover {
+    transform: scale(1.1);
+}
+
+/* Modal */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(8px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 3000;
+}
+
+.modal.active {
+    display: flex;
+}
+
+.modal-content {
+    background: white;
+    border-radius: 16px;
+    padding: 30px;
+    width: 90%;
+    max-width: 500px;
+    position: relative;
+}
+
+.modal-close {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    font-size: 32px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: #999;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+}
+
+.form-input,
+.form-select,
+.form-textarea {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-size: 16px;
+}
+
+.form-textarea {
+    min-height: 120px;
+    resize: vertical;
+}
+
+.form-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 20px;
+}
+
+.btn {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.btn.primary {
+    background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+    color: white;
+}
+
+.btn.secondary {
+    background: #f5f5f5;
+    color: #666;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #999;
+    font-size: 18px;
+}

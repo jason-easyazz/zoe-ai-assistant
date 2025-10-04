@@ -5,7 +5,7 @@ Zoe Core Service - Main Application
 Enhanced to include touch panel configuration management.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -20,6 +20,9 @@ from routers import touch_panel_config
 
 # Import missing routers for complete API functionality
 from routers import calendar, memories, lists, reminders, developer, homeassistant, weather, developer_tasks, settings, journal, family, enhanced_calendar, event_permissions, system, self_awareness
+
+# Import metrics middleware
+from middleware.metrics import MetricsMiddleware, get_metrics
 
 app = FastAPI(
     title="Zoe Core API", 
@@ -36,6 +39,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Metrics middleware
+app.add_middleware(MetricsMiddleware)
+
+
+from auth_integration import validate_session
 # Include routers
 app.include_router(auth.router)
 app.include_router(tasks.router)
@@ -100,6 +108,11 @@ async def root():
         "version": "5.0",
         "documentation": "/docs"
     }
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint"""
+    return Response(content=get_metrics(), media_type="text/plain")
 
 if __name__ == "__main__":
     uvicorn.run(

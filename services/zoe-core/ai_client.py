@@ -67,11 +67,19 @@ async def get_ai_response(message: str, context: Dict = None) -> str:
         # Fetch relevant user data and add to context
         await fetch_user_data_context(message, context)
         
-        # Use direct Ollama call with user data for faster response
-        response = await call_ollama_direct(message, "llama3.2:3b", context)
+        # Decide route using RouteLLM-backed router
+        routing_decision = route_llm_router.classify_query(message, context)
+        # Prefer LiteLLM proxy when model maps to proxy-managed routes
+        use_proxy = routing_decision.get("provider") == "litellm"
+        if use_proxy:
+            response = await call_litellm_proxy(message, routing_decision, context)
+        else:
+            # Local model via Ollama
+            model = routing_decision.get("model", "llama3.2:3b")
+            response = await call_ollama_direct(message, model, context)
         
         # Reflect on the interaction after generating response
-        await reflect_on_interaction(message, response, context, {"model": "llama3.2:3b", "provider": "ollama"})
+        await reflect_on_interaction(message, response, context, routing_decision)
         
         return response
     except Exception as e:

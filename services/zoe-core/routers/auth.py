@@ -9,7 +9,7 @@ import os
 from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)  # Don't auto-raise, we'll handle it manually for 401
 
 SECRET_KEY = os.getenv("ZOE_AUTH_SECRET_KEY", "change-me-in-prod")
 ALGORITHM = "HS256"
@@ -28,16 +28,38 @@ class UserRegister(BaseModel):
     password: str
 
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Dependency to get current user from JWT token. Falls back to default for MVP."""
+def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
+    """Dependency to get current user from JWT token. Secure: 401 on invalid/expired tokens."""
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     token = credentials.credentials
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("user_id", "default")
-        return {"user_id": user_id, "username": payload.get("username")}
+        user_id = payload.get("user_id")
+        username = payload.get("username")
+        if not user_id or not username:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return {"user_id": user_id, "username": username}
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     except Exception:
-        # MVP fallback
-        return {"user_id": "default", "username": "default"}
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 def _connect() -> sqlite3.Connection:
@@ -122,3 +144,21 @@ async def login(credentials: UserLogin):
 
 
 
+
+
+from fastapi import APIRouter, Depends, Header, HTTPException
+import os, httpx
+from auth_integration import validate_session
+router = APIRouter(prefix="/api/auth", tags=["auth-proxy"]) 
+ZOE_AUTH_URL = os.getenv("ZOE_AUTH_INTERNAL_URL", "http://zoe-auth:8002")
+@router.get("/profiles")
+async def profiles(x_session_id: str = Header(None, alias="X-Session-ID")):
+    if not x_session_id:
+        raise HTTPException(status_code=401, detail="Missing X-Session-ID")
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        r = await client.get(f"{ZOE_AUTH_URL}/api/auth/user", headers={"X-Session-ID": x_session_id})
+        if r.status_code == 401:
+            raise HTTPException(status_code=401, detail="Invalid or expired session")
+        r.raise_for_status()
+        u = r.json()
+        return {"profiles": [{"user_id": u.get("user_id"), "username": u.get("username"), "role": u.get("role"), "permissions": u.get("permissions", [])}]} 
