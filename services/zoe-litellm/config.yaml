@@ -42,5 +42,5 @@ router_settings:
   prewarm_models: ["llama-ultra-fast", "qwen-balanced"]
 
 general_settings:
-  master_key: "sk-1234"  # Change this to a secure key
+  master_key: ${LITELLM_MASTER_KEY:-sk-litellm-$(openssl rand -hex 16)}
   disable_database_usage: true
