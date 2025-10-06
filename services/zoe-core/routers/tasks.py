@@ -186,7 +186,14 @@ async def list_tasks(status: Optional[str] = None, user: Dict[str, Any] = Depend
     cols = [c[1] for c in cur.fetchall()]
     uses_metadata = "metadata" in cols
     id_col = "task_id" if "task_id" in cols else "id"
-    base = f"SELECT {id_col} as id, title, description, status, priority, assigned_to, created_at, completed_at, " + ("metadata" if uses_metadata else "tags") + " as extras FROM tasks"
+    
+    # Validate column names to prevent SQL injection
+    valid_id_cols = ["task_id", "id"]
+    if id_col not in valid_id_cols:
+        id_col = "task_id"  # Default to safe value
+    
+    extras_col = "metadata" if uses_metadata else "tags"
+    base = f"SELECT {id_col} as id, title, description, status, priority, assigned_to, created_at, completed_at, {extras_col} as extras FROM tasks"
     params: List[Any] = []
     has_user = "user_id" in cols
     where_parts: List[str] = []
@@ -220,10 +227,17 @@ async def next_task(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[st
     cols = [c[1] for c in cur.fetchall()]
     uses_metadata = "metadata" in cols
     id_col = "task_id" if "task_id" in cols else "id"
+    # Validate column names to prevent SQL injection
+    valid_id_cols = ["task_id", "id"]
+    if id_col not in valid_id_cols:
+        id_col = "task_id"  # Default to safe value
+    
+    extras_col = "metadata" if uses_metadata else "tags"
+    
     if "user_id" in cols:
         cur.execute(
             f"""
-            SELECT {id_col} as id, title, description, status, priority, assigned_to, created_at, completed_at, " + ("metadata" if uses_metadata else "tags") + " as extras
+            SELECT {id_col} as id, title, description, status, priority, assigned_to, created_at, completed_at, {extras_col} as extras
             FROM tasks
             WHERE status = 'pending' AND user_id = ?
             ORDER BY 
@@ -236,7 +250,7 @@ async def next_task(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[st
     else:
         cur.execute(
             f"""
-            SELECT {id_col} as id, title, description, status, priority, assigned_to, created_at, completed_at, " + ("metadata" if uses_metadata else "tags") + " as extras
+            SELECT {id_col} as id, title, description, status, priority, assigned_to, created_at, completed_at, {extras_col} as extras
             FROM tasks
             WHERE status = 'pending'
             ORDER BY 
@@ -341,10 +355,17 @@ async def update_task(task_id: str, update: TaskUpdate, user: Dict[str, Any] = D
     cur.execute("PRAGMA table_info(tasks)")
     cols = [c[1] for c in cur.fetchall()]
     uses_metadata = "metadata" in cols
+    
+    # Validate column names to prevent SQL injection
+    valid_id_cols = ["task_id", "id"]
+    key_col = "task_id" if "task_id" in cols else "id"
+    if key_col not in valid_id_cols:
+        key_col = "task_id"  # Default to safe value
+    
     if update.tags is not None:
         if uses_metadata:
             # Fetch existing metadata and merge
-            cur.execute("SELECT metadata FROM tasks WHERE " + ("task_id" if "task_id" in cols else "id") + " = ?", (task_id,))
+            cur.execute(f"SELECT metadata FROM tasks WHERE {key_col} = ?", (task_id,))
             row = cur.fetchone()
             meta = {}
             if row and row[0]:
@@ -360,10 +381,10 @@ async def update_task(task_id: str, update: TaskUpdate, user: Dict[str, Any] = D
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    # Build and execute update
+    # Build and execute update - use parameterized queries
     sets = ", ".join([f"{k} = ?" for k in fields.keys()])
     params = list(fields.values()) + [task_id]
-    key_col = "task_id" if "task_id" in cols else "id"
+    
     if "user_id" in cols:
         cur.execute(f"UPDATE tasks SET {sets} WHERE {key_col} = ? AND user_id = ?", params + [user.get("user_id", "default")])
     else:
@@ -372,7 +393,8 @@ async def update_task(task_id: str, update: TaskUpdate, user: Dict[str, Any] = D
         conn.close()
         raise HTTPException(status_code=404, detail="Task not found")
     conn.commit()
-    cur.execute("SELECT " + key_col + " as id, title, description, status, priority, assigned_to, created_at, completed_at, " + ("metadata" if uses_metadata else "tags") + " as extras FROM tasks WHERE " + key_col + " = ?", (task_id,))
+    extras_col = "metadata" if uses_metadata else "tags"
+    cur.execute(f"SELECT {key_col} as id, title, description, status, priority, assigned_to, created_at, completed_at, {extras_col} as extras FROM tasks WHERE {key_col} = ?", (task_id,))
     row = cur.fetchone()
     conn.close()
     task = dict(row)

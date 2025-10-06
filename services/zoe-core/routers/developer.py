@@ -226,26 +226,66 @@ RESPONSE FORMATTING RULES:
 - FOLLOW THE USER'S SPECIFIC INSTRUCTIONS EXACTLY
 """
 
-def execute_command(cmd: str, timeout: int = 30, cwd: str = None) -> dict:
-    """Execute system command and return results"""
+def execute_command(cmd: str, timeout: int = 30, cwd: str = None, allow_shell: bool = False) -> dict:
+    """Execute system command and return results with security validation"""
     try:
         if cwd is None:
             cwd = "/home/pi/zoe" if os.path.exists("/home/pi/zoe") else "/app"
         
-        result = subprocess.run(
-            cmd,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=cwd
-        )
+        # Security validation for command injection prevention
+        if not allow_shell:
+            # Validate command against whitelist of safe commands
+            safe_commands = {
+                'docker', 'ps', 'logs', 'exec', 'inspect', 'stats', 'top',
+                'free', 'df', 'du', 'ls', 'cat', 'head', 'tail', 'grep',
+                'wc', 'sort', 'uniq', 'awk', 'sed', 'cut', 'find',
+                'netstat', 'ss', 'uptime', 'whoami', 'pwd', 'date',
+                'ps', 'top', 'htop', 'iostat', 'vmstat', 'lsof'
+            }
+            
+            # Parse command to check for dangerous patterns
+            cmd_parts = cmd.strip().split()
+            if not cmd_parts:
+                return {"success": False, "stdout": "", "stderr": "Empty command", "code": -1}
+            
+            # Check for shell metacharacters that could be dangerous
+            dangerous_chars = [';', '&', '|', '`', '$', '(', ')', '<', '>', '\\', '"', "'"]
+            if any(char in cmd for char in dangerous_chars):
+                return {"success": False, "stdout": "", "stderr": "Command contains potentially dangerous characters", "code": -1}
+            
+            # Check if first command is in whitelist
+            if cmd_parts[0] not in safe_commands:
+                return {"success": False, "stdout": "", "stderr": f"Command '{cmd_parts[0]}' not in allowed list", "code": -1}
+        
+        # Use shell=False for better security when possible
+        if allow_shell:
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=cwd
+            )
+        else:
+            # Parse command into list for safer execution
+            cmd_parts = cmd.strip().split()
+            result = subprocess.run(
+                cmd_parts,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=cwd
+            )
+        
         return {
             "success": result.returncode == 0,
             "stdout": result.stdout[:10000],
             "stderr": result.stderr[:5000],
             "code": result.returncode
         }
+    except subprocess.TimeoutExpired:
+        return {"success": False, "stdout": "", "stderr": "Command timed out", "code": -1}
     except Exception as e:
         return {"success": False, "stdout": "", "stderr": str(e), "code": -1}
 
@@ -254,22 +294,22 @@ def get_system_context() -> str:
     context_parts = []
     
     # Get Docker status
-    docker_result = execute_command("docker ps --format '{{.Names}}: {{.Status}}'")
+    docker_result = execute_command("docker ps --format '{{.Names}}: {{.Status}}'", allow_shell=True)
     if docker_result["success"]:
         context_parts.append(f"Docker Status:\n{docker_result['stdout']}")
     
     # Get memory usage
-    mem_result = execute_command("free -h | head -2")
+    mem_result = execute_command("free -h | head -2", allow_shell=True)
     if mem_result["success"]:
         context_parts.append(f"Memory:\n{mem_result['stdout']}")
     
     # Get disk usage
-    disk_result = execute_command("df -h / | tail -1")
+    disk_result = execute_command("df -h / | tail -1", allow_shell=True)
     if disk_result["success"]:
         context_parts.append(f"Disk:\n{disk_result['stdout']}")
     
     # Get recent errors from logs
-    log_result = execute_command("docker logs zoe-core --tail 20 2>&1 | grep -i error || echo 'No recent errors'")
+    log_result = execute_command("docker logs zoe-core --tail 20 2>&1 | grep -i error || echo 'No recent errors'", allow_shell=True)
     if log_result["success"]:
         context_parts.append(f"Recent Logs:\n{log_result['stdout'][:500]}")
     
@@ -627,7 +667,7 @@ async def developer_chat(msg: ChatMessage):
     else:
         # No AI available - provide helpful command-based response
         if any(word in message_lower for word in ['docker', 'container', 'status']):
-            docker_result = execute_command("docker ps --format 'table {{.Names}}\t{{.Status}}'")
+            docker_result = execute_command("docker ps --format 'table {{.Names}}\t{{.Status}}'", allow_shell=True)
             return {
                 "response": f"**Docker Status (AI not available):**\n```\n{docker_result['stdout']}\n```",
                 "executed": True,
@@ -685,12 +725,12 @@ async def analyze_system():
     
     # Gather comprehensive system data
     analysis_data = {
-        "containers": execute_command("docker ps -a --format json"),
-        "memory": execute_command("free -h"),
-        "disk": execute_command("df -h"),
-        "processes": execute_command("ps aux --sort=-%cpu | head -20"),
-        "errors": execute_command("docker logs zoe-core --tail 50 2>&1 | grep -i error"),
-        "network": execute_command("netstat -tuln | grep LISTEN")
+        "containers": execute_command("docker ps -a --format json", allow_shell=True),
+        "memory": execute_command("free -h", allow_shell=True),
+        "disk": execute_command("df -h", allow_shell=True),
+        "processes": execute_command("ps aux --sort=-%cpu | head -20", allow_shell=True),
+        "errors": execute_command("docker logs zoe-core --tail 50 2>&1 | grep -i error", allow_shell=True),
+        "network": execute_command("netstat -tuln | grep LISTEN", allow_shell=True)
     }
     
     # Build analysis prompt
@@ -758,7 +798,7 @@ Focus on practical improvements that would have the most impact."""
 
 @router.post("/execute")
 async def execute_direct(cmd: CommandRequest):
-    """Execute command directly (unchanged)"""
+    """Execute command directly with security validation (command injection protection enabled)"""
     result = execute_command(cmd.command, cmd.timeout)
     return result
 
@@ -767,7 +807,7 @@ async def get_status():
     """Get developer status with AI capability indicator"""
     
     # Get actual container count
-    docker_result = execute_command("docker ps -q | wc -l")
+    docker_result = execute_command("docker ps -q | wc -l", allow_shell=True)
     try:
         running_count = int(docker_result["stdout"].strip()) if docker_result["success"] else 0
     except:
@@ -1193,10 +1233,10 @@ async def get_recent_activity():
     """Get recent system activity"""
     try:
         # Get recent Docker events
-        docker_events = execute_command("docker events --since 1h --format '{{.Time}} {{.Action}} {{.Actor.Attributes.name}}' | tail -10")
+        docker_events = execute_command("docker events --since 1h --format '{{.Time}} {{.Action}} {{.Actor.Attributes.name}}' | tail -10", allow_shell=True)
         
         # Get recent log entries
-        core_logs = execute_command("docker logs zoe-core --tail 5 --since 1h 2>&1 | grep -E '(ERROR|WARN|INFO)' | tail -3")
+        core_logs = execute_command("docker logs zoe-core --tail 5 --since 1h 2>&1 | grep -E '(ERROR|WARN|INFO)' | tail -3", allow_shell=True)
         
         activities = []
         
