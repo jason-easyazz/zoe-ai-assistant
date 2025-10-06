@@ -462,10 +462,10 @@ async def execute_task_async(task_id: str, execution_id: int, plan: dict):
                 'requirements': json.loads(task_data[1]),
                 'constraints': json.loads(task_data[2]) if task_data[2] else []
             })
+            # Execute only one plan: prefer freshly generated plan for current context
             result = executor.execute_plan(fresh_plan)
         else:
             result = {'status': 'failed', 'error': 'Task not found'}
-        result = executor.execute_plan(plan)
         
         logger.info(f"Task {task_id} execution completed: {result['status']}")
         
@@ -511,17 +511,17 @@ async def list_dynamic_tasks(status: Optional[str] = None):
     conn = sqlite3.connect('/app/data/developer_tasks.db')
     cursor = conn.cursor()
     
-    query = '''
-        SELECT id, title, objective, priority, status, created_at, execution_count
-        FROM dynamic_tasks
-    '''
-    
+    base_query = (
+        "SELECT id, title, objective, priority, status, created_at, execution_count "
+        "FROM dynamic_tasks"
+    )
+    params = []
     if status:
-        query += f" WHERE status = '{status}'"
-    
-    query += " ORDER BY created_at DESC"
-    
-    cursor.execute(query)
+        base_query += " WHERE status = ?"
+        params.append(status)
+    base_query += " ORDER BY created_at DESC"
+
+    cursor.execute(base_query, params)
     rows = cursor.fetchall()
     conn.close()
     
