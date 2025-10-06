@@ -96,8 +96,9 @@ class ResourceMonitor:
     
     def _collect_metrics(self) -> ResourceMetrics:
         """Collect current resource metrics"""
-        # CPU usage
-        cpu_percent = psutil.cpu_percent(interval=1)
+        # CPU usage - use non-blocking call (interval=0)
+        # This gets the CPU usage since last call instead of blocking for 1 second
+        cpu_percent = psutil.cpu_percent(interval=0)
         
         # Memory usage
         memory = psutil.virtual_memory()
