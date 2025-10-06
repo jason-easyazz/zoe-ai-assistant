@@ -152,7 +152,7 @@ async def call_litellm_proxy(message: str, routing_decision: Dict, context: Dict
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 "http://zoe-litellm:8001/v1/chat/completions",
-                headers={"Authorization": "Bearer sk-1234"},  # Using master key from config
+                headers={"Authorization": f"Bearer {os.getenv('LITELLM_MASTER_KEY', 'sk-1234')}"},  # Using master key from config
                 json={
                     "model": litellm_model,
                     "messages": messages,

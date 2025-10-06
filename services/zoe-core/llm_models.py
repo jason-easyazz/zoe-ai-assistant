@@ -93,9 +93,11 @@ class LLMModelManager:
         # Fallback to any available provider
         for provider_name, provider in self.config.get("providers", {}).items():
             if provider.get("enabled") and provider.get("models"):
-                model = provider.get("default") or provider["models"][0]
-                logger.info(f"Fallback to {provider_name}/{model}")
-                return provider_name, model
+                models = provider.get("models", [])
+                model = provider.get("default") or (models[0] if models else None)
+                if model:
+                    logger.info(f"Fallback to {provider_name}/{model}")
+                    return provider_name, model
         
         # Ultimate fallback
         return "ollama", "llama3.2:3b"
