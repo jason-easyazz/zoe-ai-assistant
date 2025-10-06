@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Zoe - Authentication</title>
+    <style>
+        * { 
+            margin: 0; padding: 0; box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh; color: #333;
+            display: flex; align-items: center; justify-content: center;
+            font-size: clamp(14px, 1.6vw, 16px);
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+            touch-action: manipulation;
+        }
+
+        .auth-container {
+            background: rgba(255, 255, 255, 0.6);
+            backdrop-filter: blur(40px);
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 420px;
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            transition: all 0.3s ease;
+        }
+
+        .zoe-logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .orb {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            margin: 0 auto 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            animation: mini-breathe 3s ease-in-out infinite;
+        }
+
+        @keyframes mini-breathe {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        .title {
+            font-size: 28px;
+            font-weight: 600;
+            color: #333;
+            text-align: center;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .auth-tabs {
+            display: flex;
+            margin-bottom: 30px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 4px;
+        }
+
+        .auth-tab {
+            flex: 1;
+            text-align: center;
+            padding: 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .auth-tab.active {
+            background: white;
+            color: #7B61FF;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .auth-form {
+            display: none;
+        }
+
+        .auth-form.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 500;
+            color: #444;
+            font-size: 14px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 14px 16px;
+            border: 2px solid #e1e5e9;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            background: white;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #7B61FF;
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+
+        .passcode-input {
+            text-align: center;
+            font-size: 24px;
+            letter-spacing: 8px;
+            font-family: 'SF Mono', Monaco, monospace;
+        }
+
+        .passcode-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .passcode-btn {
+            aspect-ratio: 1;
+            border: none;
+            border-radius: 50%;
+            background: #f8f9fa;
+            font-size: 24px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: #333;
+            min-height: 60px;
+        }
+
+        .passcode-btn:hover {
+            background: #e9ecef;
+            transform: scale(1.05);
+        }
+
+        .passcode-btn:active {
+            transform: scale(0.95);
+        }
+
+        .passcode-btn.zero {
+            grid-column: 2;
+        }
+
+        .passcode-btn.backspace {
+            grid-column: 3;
+            background: #dc3545;
+            color: white;
+            font-size: 18px;
+        }
+
+        .passcode-btn.backspace:hover {
+            background: #c82333;
+        }
+
+        .auth-button {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 10px;
+        }
+
+        .auth-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(123, 97, 255, 0.3);
+        }
+
+        .auth-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .forgot-link {
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        .forgot-link a {
+            color: #7B61FF;
+            text-decoration: none;
+            font-size: 14px;
+        }
+
+        .device-selector {
+            margin-bottom: 20px;
+        }
+
+        .device-options {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .device-option {
+            padding: 8px 12px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 12px;
+            flex: 1;
+            text-align: center;
+            min-width: 80px;
+        }
+
+        .device-option.active {
+            border-color: #7B61FF;
+            background: rgba(123, 97, 255, 0.1);
+            color: #7B61FF;
+        }
+
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            border: 1px solid #f5c6cb;
+        }
+
+        .success-message {
+            background: #d4edda;
+            color: #155724;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            border: 1px solid #c3e6cb;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 8px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .session-info {
+            background: #e7f3ff;
+            border: 1px solid #b6d7ff;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+
+        .escalate-prompt {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: #856404;
+        }
+
+        /* Touch Panel Styles */
+        .touch-panel-mode {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+        }
+
+        .touch-panel-mode .auth-container {
+            max-width: 500px;
+            padding: 50px;
+        }
+
+        .touch-panel-mode .title {
+            font-size: 32px;
+            color: white;
+        }
+
+        .touch-panel-mode .subtitle {
+            color: #bdc3c7;
+        }
+
+        .touch-panel-mode .auth-container {
+            background: rgba(52, 73, 94, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .touch-panel-mode .form-input {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.2);
+            color: white;
+        }
+
+        .touch-panel-mode .form-input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .touch-panel-mode .form-label {
+            color: #ecf0f1;
+        }
+
+        .touch-panel-mode .passcode-btn {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .touch-panel-mode .passcode-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        @media (max-width: 480px) {
+            .auth-container {
+                margin: 20px;
+                padding: 30px 25px;
+            }
+            
+            .passcode-grid {
+                gap: 10px;
+            }
+            
+            .passcode-btn {
+                min-height: 50px;
+                font-size: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="auth-container">
+        <div class="zoe-logo">
+            <div class="orb">Z</div>
+            <div class="title">Welcome to Zoe</div>
+            <div class="subtitle">Please sign in to continue</div>
+        </div>
+
+        <div id="errorMessage" class="error-message" style="display: none;"></div>
+        <div id="successMessage" class="success-message" style="display: none;"></div>
+        <div id="sessionInfo" class="session-info" style="display: none;"></div>
+        <div id="escalatePrompt" class="escalate-prompt" style="display: none;"></div>
+
+        <div class="auth-tabs">
+            <div class="auth-tab active" data-tab="password">Password</div>
+            <div class="auth-tab" data-tab="passcode">PIN Code</div>
+        </div>
+
+        <!-- Password Login Form -->
+        <form id="passwordForm" class="auth-form active">
+            <div class="form-group">
+                <label class="form-label">Username</label>
+                <input type="text" class="form-input" id="username" placeholder="Enter your username" autocomplete="username">
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Password</label>
+                <input type="password" class="form-input" id="password" placeholder="Enter your password" autocomplete="current-password">
+            </div>
+
+            <div class="device-selector">
+                <label class="form-label">Device Type</label>
+                <div class="device-options">
+                    <div class="device-option active" data-device="web">Web</div>
+                    <div class="device-option" data-device="mobile">Mobile</div>
+                    <div class="device-option" data-device="touch_panel">Touch Panel</div>
+                </div>
+            </div>
+            
+            <button type="submit" class="auth-button" id="passwordLoginBtn">
+                <span class="btn-text">Sign In</span>
+            </button>
+        </form>
+
+        <!-- Passcode Login Form -->
+        <form id="passcodeForm" class="auth-form">
+            <div class="form-group">
+                <label class="form-label">Username</label>
+                <input type="text" class="form-input" id="passcodeUsername" placeholder="Enter your username">
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">PIN Code</label>
+                <input type="password" class="form-input passcode-input" id="passcodeInput" placeholder="••••" maxlength="8" readonly>
+            </div>
+
+            <div class="passcode-grid">
+                <button type="button" class="passcode-btn" data-num="1">1</button>
+                <button type="button" class="passcode-btn" data-num="2">2</button>
+                <button type="button" class="passcode-btn" data-num="3">3</button>
+                <button type="button" class="passcode-btn" data-num="4">4</button>
+                <button type="button" class="passcode-btn" data-num="5">5</button>
+                <button type="button" class="passcode-btn" data-num="6">6</button>
+                <button type="button" class="passcode-btn" data-num="7">7</button>
+                <button type="button" class="passcode-btn" data-num="8">8</button>
+                <button type="button" class="passcode-btn" data-num="9">9</button>
+                <button type="button" class="passcode-btn zero" data-num="0">0</button>
+                <button type="button" class="passcode-btn backspace">⌫</button>
+            </div>
+
+            <div class="device-selector">
+                <label class="form-label">Device Type</label>
+                <div class="device-options">
+                    <div class="device-option active" data-device="touch_panel">Touch Panel</div>
+                    <div class="device-option" data-device="web">Web</div>
+                    <div class="device-option" data-device="mobile">Mobile</div>
+                </div>
+            </div>
+            
+            <button type="submit" class="auth-button" id="passcodeLoginBtn">
+                <span class="btn-text">Sign In with PIN</span>
+            </button>
+        </form>
+
+        <!-- Session Escalation Form -->
+        <form id="escalationForm" class="auth-form">
+            <div class="form-group">
+                <label class="form-label">Enter Password to Continue</label>
+                <input type="password" class="form-input" id="escalationPassword" placeholder="Enter your full password">
+            </div>
+            
+            <button type="submit" class="auth-button" id="escalateBtn">
+                <span class="btn-text">Upgrade Session</span>
+            </button>
+
+            <button type="button" class="auth-button" id="cancelEscalation" style="background: #6c757d; margin-top: 10px;">
+                <span class="btn-text">Continue with Limited Access</span>
+            </button>
+        </form>
+
+        <div class="forgot-link">
+            <a href="#" id="forgotPassword">Forgot your password?</a>
+        </div>
+    </div>
+
+    <script>
+        class ZoeAuth {
+            constructor() {
+                this.apiBase = window.location.hostname === 'localhost' ? 
+                    'http://localhost:8002' : 'http://zoe-auth:8002';
+                this.currentSession = null;
+                this.deviceType = 'web';
+                this.deviceId = this.generateDeviceId();
+                
+                this.init();
+            }
+
+            init() {
+                this.setupEventListeners();
+                this.checkExistingSession();
+                this.detectTouchPanel();
+                this.handleUrlParameters();
+            }
+
+            generateDeviceId() {
+                let deviceId = localStorage.getItem('zoe_device_id');
+                if (!deviceId) {
+                    deviceId = 'web_' + Math.random().toString(36).substr(2, 9);
+                    localStorage.setItem('zoe_device_id', deviceId);
+                }
+                return deviceId;
+            }
+
+            detectTouchPanel() {
+                const urlParams = new URLSearchParams(window.location.search);
+                if (urlParams.get('mode') === 'touch' || window.innerWidth >= 1024) {
+                    document.body.classList.add('touch-panel-mode');
+                    this.switchTab('passcode');
+                }
+            }
+
+            handleUrlParameters() {
+                const urlParams = new URLSearchParams(window.location.search);
+                const mode = urlParams.get('mode');
+                const user = urlParams.get('user');
+                const first = urlParams.get('first');
+
+                // Pre-fill username if provided
+                if (user && user !== 'guest') {
+                    document.getElementById('username').value = user;
+                    document.getElementById('passcodeUsername').value = user;
+                }
+
+                // Handle user creation mode
+                if (mode === 'create') {
+                    this.showUserCreation(first === 'true');
+                }
+
+                // Handle guest mode
+                if (user === 'guest') {
+                    this.handleGuestLogin();
+                }
+            }
+
+            showUserCreation(isFirstUser = false) {
+                const title = document.querySelector('.title');
+                const subtitle = document.querySelector('.subtitle');
+                
+                title.textContent = isFirstUser ? 'Create First User' : 'Create New User';
+                subtitle.textContent = isFirstUser ? 'Set up your Zoe administrator account' : 'Add a new user to Zoe';
+
+                // Show creation form (reuse password form but change behavior)
+                this.switchTab('password');
+                
+                // Update button text
+                const loginBtn = document.getElementById('passwordLoginBtn');
+                loginBtn.querySelector('.btn-text').textContent = 'Create Account';
+                
+                // Add confirmation field
+                this.addPasswordConfirmation();
+            }
+
+            addPasswordConfirmation() {
+                const passwordGroup = document.getElementById('password').closest('.form-group');
+                
+                // Check if confirmation already exists
+                if (document.getElementById('confirmPassword')) return;
+
+                const confirmGroup = document.createElement('div');
+                confirmGroup.className = 'form-group';
+                confirmGroup.innerHTML = `
+                    <label class="form-label">Confirm Password</label>
+                    <input type="password" class="form-input" id="confirmPassword" placeholder="Confirm your password" autocomplete="new-password">
+                `;
+                
+                passwordGroup.parentNode.insertBefore(confirmGroup, passwordGroup.nextSibling);
+            }
+
+            async handleGuestLogin() {
+                // Auto-login as guest
+                try {
+                    const response = await fetch(`${this.apiBase}/api/auth/guest`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            device_info: {
+                                type: this.deviceType,
+                                device_id: this.deviceId
+                            }
+                        })
+                    });
+
+                    const data = await response.json();
+                    if (data.success) {
+                        this.handleSuccessfulLogin(data);
+                    } else {
+                        this.showError('Guest access failed');
+                    }
+                } catch (error) {
+                    this.showError('Connection error');
+                }
+            }
+
+            setupEventListeners() {
+                // Tab switching
+                document.querySelectorAll('.auth-tab').forEach(tab => {
+                    tab.addEventListener('click', () => {
+                        this.switchTab(tab.dataset.tab);
+                    });
+                });
+
+                // Device selection
+                document.querySelectorAll('.device-option').forEach(option => {
+                    option.addEventListener('click', () => {
+                        const container = option.closest('.device-options');
+                        container.querySelectorAll('.device-option').forEach(o => o.classList.remove('active'));
+                        option.classList.add('active');
+                        this.deviceType = option.dataset.device;
+                    });
+                });
+
+                // Passcode input
+                document.querySelectorAll('.passcode-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        if (btn.classList.contains('backspace')) {
+                            this.backspacePasscode();
+                        } else {
+                            this.addPasscodeDigit(btn.dataset.num);
+                        }
+                    });
+                });
+
+                // Form submissions
+                document.getElementById('passwordForm').addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    this.handlePasswordLogin();
+                });
+
+                document.getElementById('passcodeForm').addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    this.handlePasscodeLogin();
+                });
+
+                document.getElementById('escalationForm').addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    this.handleSessionEscalation();
+                });
+
+                document.getElementById('cancelEscalation').addEventListener('click', () => {
+                    this.hideEscalationPrompt();
+                });
+
+                document.getElementById('forgotPassword').addEventListener('click', (e) => {
+                    e.preventDefault();
+                    this.handleForgotPassword();
+                });
+
+                // Keyboard support for passcode
+                document.addEventListener('keydown', (e) => {
+                    if (document.querySelector('.auth-form.active').id === 'passcodeForm') {
+                        if (e.key >= '0' && e.key <= '9') {
+                            this.addPasscodeDigit(e.key);
+                        } else if (e.key === 'Backspace') {
+                            this.backspacePasscode();
+                        }
+                    }
+                });
+            }
+
+            switchTab(tabName) {
+                // Update tab appearance
+                document.querySelectorAll('.auth-tab').forEach(tab => {
+                    tab.classList.toggle('active', tab.dataset.tab === tabName);
+                });
+
+                // Update form visibility
+                document.querySelectorAll('.auth-form').forEach(form => {
+                    form.classList.toggle('active', form.id === tabName + 'Form');
+                });
+
+                // Clear any previous errors
+                this.hideMessage();
+            }
+
+            addPasscodeDigit(digit) {
+                const input = document.getElementById('passcodeInput');
+                if (input.value.length < 8) {
+                    input.value += digit;
+                }
+            }
+
+            backspacePasscode() {
+                const input = document.getElementById('passcodeInput');
+                input.value = input.value.slice(0, -1);
+            }
+
+            async handlePasswordLogin() {
+                const username = document.getElementById('username').value;
+                const password = document.getElementById('password').value;
+                const confirmPassword = document.getElementById('confirmPassword');
+                const btn = document.getElementById('passwordLoginBtn');
+                const isCreating = btn.querySelector('.btn-text').textContent.includes('Create');
+
+                if (!username || !password) {
+                    this.showError('Please enter both username and password');
+                    return;
+                }
+
+                if (isCreating) {
+                    if (!confirmPassword || password !== confirmPassword.value) {
+                        this.showError('Passwords do not match');
+                        return;
+                    }
+                    await this.handleUserCreation(username, password, btn);
+                } else {
+                    await this.handleUserLogin(username, password, btn);
+                }
+            }
+
+            async handleUserLogin(username, password, btn) {
+                this.setLoading(btn, true);
+
+                try {
+                    const response = await fetch(`${this.apiBase}/api/auth/login`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            username,
+                            password,
+                            device_info: {
+                                type: this.deviceType,
+                                device_id: this.deviceId,
+                                user_agent: navigator.userAgent
+                            }
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (data.success) {
+                        this.handleSuccessfulLogin(data);
+                    } else {
+                        this.showError(data.error_message || 'Login failed');
+                    }
+                } catch (error) {
+                    console.warn('Auth service unavailable, trying demo login');
+                    // Demo/offline login for development
+                    if ((username === 'admin' && password === 'admin') || 
+                        (username === 'user' && password === 'user') ||
+                        (username === 'Admin' && password === 'demo') ||
+                        (username === 'User' && password === 'demo')) {
+                        
+                        const demoSession = {
+                            success: true,
+                            user_id: username.toLowerCase(),
+                            username: username,
+                            role: username.toLowerCase() === 'admin' ? 'admin' : 'user',
+                            session_id: 'demo_' + Date.now(),
+                            session_type: 'password',
+                            created_at: new Date().toISOString(),
+                            expires_at: new Date(Date.now() + 24*60*60*1000).toISOString(),
+                            demo_mode: true
+                        };
+                        
+                        this.handleSuccessfulLogin(demoSession);
+                        this.showInfo('Demo mode - auth service offline');
+                    } else {
+                        this.showError('Auth service unavailable. Try admin/admin or user/user for demo.');
+                    }
+                } finally {
+                    this.setLoading(btn, false);
+                }
+            }
+
+            async handleUserCreation(username, password, btn) {
+                this.setLoading(btn, true);
+
+                try {
+                    const isFirstUser = new URLSearchParams(window.location.search).get('first') === 'true';
+                    const response = await fetch(`${this.apiBase}/api/auth/register`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            username,
+                            password,
+                            role: isFirstUser ? 'admin' : 'user',
+                            device_info: {
+                                type: this.deviceType,
+                                device_id: this.deviceId,
+                                user_agent: navigator.userAgent
+                            }
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (data.success) {
+                        this.showSuccess('Account created successfully!');
+                        setTimeout(() => {
+                            this.handleSuccessfulLogin(data);
+                        }, 1500);
+                    } else {
+                        this.showError(data.error_message || 'Account creation failed');
+                    }
+                } catch (error) {
+                    this.showError('Connection error. Please try again.');
+                } finally {
+                    this.setLoading(btn, false);
+                }
+            }
+
+            async handlePasscodeLogin() {
+                const username = document.getElementById('passcodeUsername').value;
+                const passcode = document.getElementById('passcodeInput').value;
+                const btn = document.getElementById('passcodeLoginBtn');
+
+                if (!username || !passcode) {
+                    this.showError('Please enter username and PIN code');
+                    return;
+                }
+
+                this.setLoading(btn, true);
+
+                try {
+                    const response = await fetch(`${this.apiBase}/api/auth/login/passcode`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            username,
+                            passcode,
+                            device_info: {
+                                type: this.deviceType,
+                                device_id: this.deviceId,
+                                location: this.getLocation()
+                            }
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (data.success) {
+                        this.handleSuccessfulLogin(data);
+                    } else {
+                        this.showError(data.error_message || 'PIN login failed');
+                        // Clear passcode on error
+                        document.getElementById('passcodeInput').value = '';
+                    }
+                } catch (error) {
+                    this.showError('Connection error. Please try again.');
+                    document.getElementById('passcodeInput').value = '';
+                } finally {
+                    this.setLoading(btn, false);
+                }
+            }
+
+            async handleSessionEscalation() {
+                const password = document.getElementById('escalationPassword').value;
+                const btn = document.getElementById('escalateBtn');
+
+                if (!password) {
+                    this.showError('Please enter your password');
+                    return;
+                }
+
+                this.setLoading(btn, true);
+
+                try {
+                    const response = await fetch(`${this.apiBase}/api/auth/escalate`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Session-ID': this.currentSession.session_id
+                        },
+                        body: JSON.stringify({ password })
+                    });
+
+                    const data = await response.json();
+
+                    if (data.success) {
+                        this.showSuccess('Session upgraded successfully!');
+                        this.currentSession = data;
+                        this.hideEscalationPrompt();
+                        setTimeout(() => this.redirectToApp(), 1500);
+                    } else {
+                        this.showError(data.error_message || 'Escalation failed');
+                    }
+                } catch (error) {
+                    this.showError('Connection error. Please try again.');
+                } finally {
+                    this.setLoading(btn, false);
+                }
+            }
+
+            handleSuccessfulLogin(data) {
+                this.currentSession = data;
+                localStorage.setItem('zoe_session', JSON.stringify(data));
+
+                if (data.session_type === 'passcode') {
+                    this.showSessionInfo(data);
+                } else {
+                    this.showSuccess('Login successful!');
+                    setTimeout(() => this.redirectToApp(), 1500);
+                }
+            }
+
+            showSessionInfo(sessionData) {
+                const info = document.getElementById('sessionInfo');
+                info.innerHTML = `
+                    <strong>Signed in with PIN</strong><br>
+                    Session Type: ${sessionData.session_type}<br>
+                    Limited permissions - some features may require password verification
+                `;
+                info.style.display = 'block';
+
+                // Auto-redirect after showing info
+                setTimeout(() => this.redirectToApp(), 3000);
+            }
+
+            showEscalationPrompt(reason) {
+                const prompt = document.getElementById('escalatePrompt');
+                prompt.innerHTML = `
+                    <strong>Password Required</strong><br>
+                    ${reason || 'This action requires full authentication. Please enter your password to continue.'}
+                `;
+                prompt.style.display = 'block';
+                
+                this.switchTab('escalation');
+            }
+
+            hideEscalationPrompt() {
+                document.getElementById('escalatePrompt').style.display = 'none';
+                this.redirectToApp();
+            }
+
+            async checkExistingSession() {
+                const stored = localStorage.getItem('zoe_session');
+                if (stored) {
+                    try {
+                        const session = JSON.parse(stored);
+                        
+                        // Validate session with server
+                        const response = await fetch(`${this.apiBase}/api/auth/user`, {
+                            headers: { 'X-Session-ID': session.session_id }
+                        });
+
+                        if (response.ok) {
+                            this.currentSession = session;
+                            this.redirectToApp();
+                            return;
+                        }
+                    } catch (error) {
+                        // Invalid session, continue with login
+                    }
+                    
+                    localStorage.removeItem('zoe_session');
+                }
+            }
+
+            redirectToApp() {
+                const urlParams = new URLSearchParams(window.location.search);
+                const redirect = urlParams.get('redirect') || 'dashboard.html';
+                window.location.href = redirect;
+            }
+
+            getLocation() {
+                const urlParams = new URLSearchParams(window.location.search);
+                return urlParams.get('location') || 'unknown';
+            }
+
+            handleForgotPassword() {
+                // Implement password reset flow
+                alert('Password reset functionality coming soon. Please contact an administrator.');
+            }
+
+            setLoading(button, loading) {
+                const btnText = button.querySelector('.btn-text');
+                if (loading) {
+                    button.disabled = true;
+                    btnText.innerHTML = '<span class="loading"></span>Signing In...';
+                } else {
+                    button.disabled = false;
+                    btnText.textContent = button.id.includes('passcode') ? 'Sign In with PIN' : 
+                                         button.id.includes('escalate') ? 'Upgrade Session' : 'Sign In';
+                }
+            }
+
+            showError(message) {
+                this.hideMessage();
+                const errorDiv = document.getElementById('errorMessage');
+                errorDiv.textContent = message;
+                errorDiv.style.display = 'block';
+            }
+
+            showSuccess(message) {
+                this.hideMessage();
+                const successDiv = document.getElementById('successMessage');
+                successDiv.textContent = message;
+                successDiv.style.display = 'block';
+            }
+
+            showInfo(message) {
+                this.hideMessage();
+                const successDiv = document.getElementById('successMessage');
+                successDiv.textContent = message;
+                successDiv.style.display = 'block';
+                successDiv.style.background = '#cce5ff';
+                successDiv.style.color = '#004085';
+                successDiv.style.borderColor = '#b6d7ff';
+            }
+
+            hideMessage() {
+                document.getElementById('errorMessage').style.display = 'none';
+                document.getElementById('successMessage').style.display = 'none';
+            }
+        }
+
+        // Initialize authentication when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new ZoeAuth();
+        });
+    </script>
+</body>
+</html>

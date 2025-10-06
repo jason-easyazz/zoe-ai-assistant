@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Zoe - Family Settings</title>
+    <style>
+        * { 
+            margin: 0; padding: 0; box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh; color: #333;
+            font-size: clamp(14px, 1.6vw, 16px);
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+            touch-action: manipulation;
+        }
+        
+        /* Navigation */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; 
+            font-size: 13px; font-weight: 400; line-height: 1.4;
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        /* Main Content */
+        .main-content {
+            padding-top: 80px; padding-bottom: 20px; min-height: 100vh;
+        }
+        
+        .settings-container {
+            max-width: 800px; margin: 0 auto; padding: 20px;
+        }
+        
+        .page-header {
+            margin-bottom: 30px;
+        }
+        
+        .page-title {
+            font-size: 28px; font-weight: 700; color: #1a1a1a;
+            display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
+        }
+        
+        .page-subtitle {
+            color: #666; font-size: 16px;
+        }
+        
+        .family-icon {
+            width: 32px; height: 32px; background: linear-gradient(135deg, #10B981 0%, #059669 100%);
+            border-radius: 8px; display: flex; align-items: center; justify-content: center;
+            color: white; font-size: 16px;
+        }
+        
+        /* Settings Sections */
+        .settings-section {
+            background: rgba(255, 255, 255, 0.8); border-radius: 16px;
+            padding: 24px; margin-bottom: 20px; border: 1px solid rgba(0, 0, 0, 0.05);
+        }
+        
+        .section-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .section-title {
+            font-size: 20px; font-weight: 600; color: #1a1a1a;
+        }
+        
+        .section-description {
+            color: #666; font-size: 14px; margin-bottom: 20px;
+        }
+        
+        /* Family List */
+        .family-list {
+            display: grid; gap: 16px;
+        }
+        
+        .family-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 16px; background: rgba(255, 255, 255, 0.5);
+            border-radius: 12px; border: 1px solid rgba(0, 0, 0, 0.05);
+            transition: all 0.3s ease;
+        }
+        
+        .family-item:hover {
+            background: rgba(255, 255, 255, 0.8);
+            transform: translateY(-1px);
+        }
+        
+        .family-info {
+            display: flex; align-items: center; gap: 12px;
+        }
+        
+        .family-avatar {
+            width: 40px; height: 40px; border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex; align-items: center; justify-content: center;
+            color: white; font-weight: bold; font-size: 16px;
+        }
+        
+        .family-details h3 {
+            font-size: 16px; font-weight: 600; color: #1a1a1a;
+            margin-bottom: 2px;
+        }
+        
+        .family-details p {
+            font-size: 12px; color: #666;
+        }
+        
+        .family-actions {
+            display: flex; gap: 8px;
+        }
+        
+        .btn {
+            padding: 8px 16px; border-radius: 8px; border: none;
+            font-size: 12px; font-weight: 500; cursor: pointer;
+            transition: all 0.3s ease; min-height: 36px;
+            display: flex; align-items: center; gap: 6px;
+        }
+        
+        .btn-primary {
+            background: #7B61FF; color: white;
+        }
+        .btn-primary:hover { background: #6B51EF; }
+        
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.8); color: #666;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+        }
+        .btn-secondary:hover { background: rgba(255, 255, 255, 1); }
+        
+        .btn-danger {
+            background: #EF4444; color: white;
+        }
+        .btn-danger:hover { background: #DC2626; }
+        
+        /* Member List */
+        .member-list {
+            display: grid; gap: 12px;
+        }
+        
+        .member-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 12px; background: rgba(255, 255, 255, 0.5);
+            border-radius: 8px; border: 1px solid rgba(0, 0, 0, 0.05);
+        }
+        
+        .member-info {
+            display: flex; align-items: center; gap: 10px;
+        }
+        
+        .member-avatar {
+            width: 32px; height: 32px; border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex; align-items: center; justify-content: center;
+            color: white; font-weight: bold; font-size: 12px;
+        }
+        
+        .member-details h4 {
+            font-size: 14px; font-weight: 500; color: #1a1a1a;
+            margin-bottom: 2px;
+        }
+        
+        .member-details p {
+            font-size: 11px; color: #666;
+        }
+        
+        .role-badge {
+            padding: 2px 8px; border-radius: 4px; font-size: 10px;
+            font-weight: 500; text-transform: uppercase;
+        }
+        
+        .role-badge.admin { background: #FEF3C7; color: #D97706; }
+        .role-badge.member { background: #E5E7EB; color: #6B7280; }
+        .role-badge.child { background: #DBEAFE; color: #2563EB; }
+        
+        /* Invite Section */
+        .invite-form {
+            display: flex; gap: 12px; align-items: end;
+        }
+        
+        .form-group {
+            flex: 1;
+        }
+        
+        .form-label {
+            display: block; font-size: 12px; font-weight: 500;
+            color: #374151; margin-bottom: 4px;
+        }
+        
+        .form-input, .form-select {
+            width: 100%; padding: 8px 12px; border: 1px solid #D1D5DB;
+            border-radius: 6px; font-size: 14px; transition: all 0.3s ease;
+        }
+        
+        .form-input:focus, .form-select:focus {
+            outline: none; border-color: #7B61FF; box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+        
+        /* Empty States */
+        .empty-state {
+            text-align: center; padding: 40px 20px; color: #666;
+        }
+        
+        .empty-icon {
+            font-size: 48px; margin-bottom: 16px;
+        }
+        
+        .empty-title {
+            font-size: 18px; font-weight: 600; margin-bottom: 8px;
+        }
+        
+        .empty-description {
+            font-size: 14px; margin-bottom: 20px;
+        }
+        
+        /* Loading States */
+        .loading {
+            display: flex; align-items: center; justify-content: center;
+            padding: 20px; color: #666;
+        }
+        
+        .spinner {
+            width: 16px; height: 16px; border: 2px solid #E5E7EB;
+            border-top: 2px solid #7B61FF; border-radius: 50%;
+            animation: spin 1s linear infinite; margin-right: 8px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .nav-menu { display: none; }
+            .invite-form { flex-direction: column; }
+            .family-actions { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="goHome()"></div>
+            <div class="nav-menu">
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="calendar_family.html" class="nav-item">Family Calendar</a>
+                <a href="lists.html" class="nav-item">Lists</a>
+                <a href="memories.html" class="nav-item">Memories</a>
+                <a href="family_settings.html" class="nav-item active">Family Settings</a>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="user-menu" onclick="showUserMenu()">
+                <div class="user-avatar" id="userAvatar">U</div>
+                <div class="user-info">
+                    <div class="username" id="username">User</div>
+                    <div class="user-role" id="userRole">Member</div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <div class="settings-container">
+            <!-- Page Header -->
+            <div class="page-header">
+                <h1 class="page-title">
+                    <div class="family-icon">👨‍👩‍👧‍👦</div>
+                    Family Settings
+                </h1>
+                <p class="page-subtitle">Manage your families, groups, and member permissions</p>
+            </div>
+
+            <!-- My Families Section -->
+            <div class="settings-section">
+                <div class="section-header">
+                    <h2 class="section-title">My Families & Groups</h2>
+                    <button class="btn btn-primary" onclick="openCreateFamilyModal()">
+                        <span>+</span> Create New
+                    </button>
+                </div>
+                <p class="section-description">
+                    Manage your families and groups. Create new ones or manage existing members.
+                </p>
+                <div class="family-list" id="familyList">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        Loading families...
+                    </div>
+                </div>
+            </div>
+
+            <!-- Family Management Modal -->
+            <div class="modal" id="familyModal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3 class="modal-title" id="familyModalTitle">Family Details</h3>
+                        <button class="close-btn" onclick="closeFamilyModal()">&times;</button>
+                    </div>
+                    <div id="familyModalContent">
+                        <!-- Content will be loaded dynamically -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Create Family Modal -->
+            <div class="modal" id="createFamilyModal">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3 class="modal-title">Create Family/Group</h3>
+                        <button class="close-btn" onclick="closeCreateFamilyModal()">&times;</button>
+                    </div>
+                    <form id="createFamilyForm">
+                        <div class="form-group">
+                            <label class="form-label">Name</label>
+                            <input type="text" class="form-input" id="familyName" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Description</label>
+                            <textarea class="form-input" id="familyDescription" rows="3"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Type</label>
+                            <select class="form-select" id="familyType">
+                                <option value="family">Family</option>
+                                <option value="household">Household</option>
+                                <option value="group">Group</option>
+                            </select>
+                        </div>
+                        <div class="action-buttons" style="margin-top: 20px;">
+                            <button type="submit" class="btn btn-primary">Create</button>
+                            <button type="button" class="btn btn-secondary" onclick="closeCreateFamilyModal()">Cancel</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // Global state
+        let currentUser = null;
+        let families = [];
+        let selectedFamily = null;
+
+        // Initialize the page
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeAuth();
+            loadFamilies();
+            setupEventListeners();
+        });
+
+        // Authentication
+        async function initializeAuth() {
+            try {
+                const response = await fetch('/api/auth/user', {
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+                    }
+                });
+                
+                if (response.ok) {
+                    currentUser = await response.json();
+                    updateUserDisplay();
+                } else {
+                    window.location.href = 'auth.html';
+                }
+            } catch (error) {
+                console.error('Auth error:', error);
+                window.location.href = 'auth.html';
+            }
+        }
+
+        function updateUserDisplay() {
+            if (currentUser) {
+                document.getElementById('username').textContent = currentUser.username || 'User';
+                document.getElementById('userRole').textContent = currentUser.role || 'Member';
+                document.getElementById('userAvatar').textContent = (currentUser.username || 'U').charAt(0).toUpperCase();
+            }
+        }
+
+        // Load families
+        async function loadFamilies() {
+            try {
+                const response = await fetch('/api/family/my-families', {
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+                    }
+                });
+                
+                if (response.ok) {
+                    families = await response.json();
+                    renderFamilies();
+                }
+            } catch (error) {
+                console.error('Error loading families:', error);
+                document.getElementById('familyList').innerHTML = '<div class="loading">Error loading families</div>';
+            }
+        }
+
+        function renderFamilies() {
+            const container = document.getElementById('familyList');
+            
+            if (families.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">👨‍👩‍👧‍👦</div>
+                        <div class="empty-title">No Families Yet</div>
+                        <div class="empty-description">Create your first family or group to get started</div>
+                        <button class="btn btn-primary" onclick="openCreateFamilyModal()">Create Family</button>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = families.map(family => `
+                <div class="family-item">
+                    <div class="family-info">
+                        <div class="family-avatar">${family.name.charAt(0).toUpperCase()}</div>
+                        <div class="family-details">
+                            <h3>${family.name}</h3>
+                            <p>${family.member_count} member${family.member_count !== 1 ? 's' : ''} • ${family.family_type} • Your role: ${family.user_role}</p>
+                        </div>
+                    </div>
+                    <div class="family-actions">
+                        <button class="btn btn-secondary" onclick="viewFamily('${family.family_id}')">View</button>
+                        <button class="btn btn-primary" onclick="manageFamily('${family.family_id}')">Manage</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Family management
+        async function viewFamily(familyId) {
+            selectedFamily = families.find(f => f.family_id === familyId);
+            if (!selectedFamily) return;
+
+            try {
+                const response = await fetch(`/api/family/${familyId}/members`, {
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+                    }
+                });
+                
+                if (response.ok) {
+                    const members = await response.json();
+                    showFamilyDetails(selectedFamily, members);
+                }
+            } catch (error) {
+                console.error('Error loading family members:', error);
+            }
+        }
+
+        function showFamilyDetails(family, members) {
+            document.getElementById('familyModalTitle').textContent = family.name;
+            document.getElementById('familyModalContent').innerHTML = `
+                <div class="section-header">
+                    <h3>Family Members</h3>
+                    <button class="btn btn-primary" onclick="inviteMember('${family.family_id}')">Invite Member</button>
+                </div>
+                <div class="member-list">
+                    ${members.map(member => `
+                        <div class="member-item">
+                            <div class="member-info">
+                                <div class="member-avatar">${(member.display_name || member.username).charAt(0).toUpperCase()}</div>
+                                <div class="member-details">
+                                    <h4>${member.display_name || member.username}</h4>
+                                    <p>Joined ${new Date(member.joined_at).toLocaleDateString()}</p>
+                                </div>
+                            </div>
+                            <div class="role-badge ${member.role}">${member.role}</div>
+                        </div>
+                    `).join('')}
+                </div>
+                <div class="section-header" style="margin-top: 20px;">
+                    <h3>Family Events</h3>
+                    <button class="btn btn-secondary" onclick="viewFamilyEvents('${family.family_id}')">View Events</button>
+                </div>
+            `;
+            document.getElementById('familyModal').classList.add('active');
+        }
+
+        async function manageFamily(familyId) {
+            // For now, just show family details
+            // In a full implementation, this would show management options
+            viewFamily(familyId);
+        }
+
+        async function inviteMember(familyId) {
+            const email = prompt('Enter email address to invite:');
+            if (!email) return;
+
+            try {
+                const response = await fetch(`/api/family/${familyId}/invite`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+                    },
+                    body: JSON.stringify({
+                        email: email,
+                        role: 'member',
+                        message: `You've been invited to join the family!`
+                    })
+                });
+
+                if (response.ok) {
+                    alert('Invitation sent successfully!');
+                } else {
+                    alert('Error sending invitation');
+                }
+            } catch (error) {
+                console.error('Error sending invitation:', error);
+                alert('Error sending invitation');
+            }
+        }
+
+        function viewFamilyEvents(familyId) {
+            window.location.href = `family_events.html?family=${familyId}`;
+        }
+
+        // Modal functions
+        function closeFamilyModal() {
+            document.getElementById('familyModal').classList.remove('active');
+        }
+
+        function openCreateFamilyModal() {
+            document.getElementById('createFamilyModal').classList.add('active');
+        }
+
+        function closeCreateFamilyModal() {
+            document.getElementById('createFamilyModal').classList.remove('active');
+            document.getElementById('createFamilyForm').reset();
+        }
+
+        // Event listeners
+        function setupEventListeners() {
+            document.getElementById('createFamilyForm').addEventListener('submit', handleCreateFamily);
+        }
+
+        async function handleCreateFamily(e) {
+            e.preventDefault();
+            
+            const formData = {
+                name: document.getElementById('familyName').value,
+                description: document.getElementById('familyDescription').value,
+                family_type: document.getElementById('familyType').value
+            };
+
+            try {
+                const response = await fetch('/api/family/create', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+                    },
+                    body: JSON.stringify(formData)
+                });
+
+                if (response.ok) {
+                    closeCreateFamilyModal();
+                    loadFamilies();
+                } else {
+                    alert('Error creating family');
+                }
+            } catch (error) {
+                console.error('Error creating family:', error);
+                alert('Error creating family');
+            }
+        }
+
+        // Utility functions
+        function goHome() {
+            window.location.href = 'dashboard.html';
+        }
+
+        function showUserMenu() {
+            // Show user menu (implement as needed)
+            console.log('Show user menu');
+        }
+    </script>
+
+    <style>
+        /* Modal styles */
+        .modal {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.5); z-index: 1000;
+            display: none; align-items: center; justify-content: center;
+            padding: 20px;
+        }
+        
+        .modal.active {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: white; border-radius: 16px; padding: 24px;
+            width: 100%; max-width: 600px; max-height: 90vh;
+            overflow-y: auto;
+        }
+        
+        .modal-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .modal-title {
+            font-size: 20px; font-weight: 600; color: #1a1a1a;
+        }
+        
+        .close-btn {
+            width: 32px; height: 32px; border-radius: 50%;
+            background: #F3F4F6; border: none; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px; color: #666;
+        }
+        
+        .action-buttons {
+            display: flex; gap: 12px; margin-top: 20px;
+        }
+    </style>
+</body>
+</html>
+
+

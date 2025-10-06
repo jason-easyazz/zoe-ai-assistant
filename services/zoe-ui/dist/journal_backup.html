@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Zoe - Journal</title>
+    <style>
+        * { 
+            margin: 0; padding: 0; box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh; color: #333;
+            font-size: clamp(14px, 1.6vw, 16px);
+        }
+        
+        /* Navigation */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.warning::before { background: #ea580c; }
+        
+        /* Time/Date Display in Top Right */
+        .time-date-display {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time {
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        .current-date {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.2;
+        }
+        
+        /* Notifications button */
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold; position: relative;
+            font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+            animation: notificationDotPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 8px rgba(123, 97, 255, 0);
+            }
+        }
+        
+        @keyframes notificationDotPulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.2);
+                opacity: 0.7;
+            }
+        }
+        
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .notifications-title {
+            font-size: 18px; font-weight: 600; color: #333; margin: 0;
+        }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content {
+            padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title {
+            font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px;
+        }
+        .notification-meta {
+            font-size: 12px; color: #666; display: flex; gap: 10px;
+        }
+        .notification-time {
+            color: #7B61FF; font-weight: 500;
+        }
+        .notification-priority {
+            padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600;
+        }
+        .no-notifications {
+            text-align: center; color: #666; font-size: 14px; padding: 40px 20px;
+        }
+
+        /* User Menu Styles */
+        .user-menu {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .user-menu:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .user-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .username {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+        }
+        
+        .user-role {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .user-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 8px 0;
+            min-width: 200px;
+            z-index: 1000;
+            display: none;
+            border: 1px solid #e1e5e9;
+        }
+        
+        .user-dropdown.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 8px 16px;
+            color: #333;
+            text-decoration: none;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .dropdown-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .dropdown-divider {
+            height: 1px;
+            background: #e1e5e9;
+            margin: 4px 0;
+        }
+
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+        
+        .top-actions { display: flex; align-items: center; gap: 15px; }
+        .search-btn { background: rgba(255,255,255,0.8); border: 1px solid rgba(255,255,255,0.3); border-radius: 8px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666; font-size: 16px; }
+        .search-btn:hover { background: rgba(255,255,255,0.9); color: #333; }
+        .top-bar { position: sticky; top: 0; z-index: 10; background: #f4f6f8; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; }
+        .title { font-weight: 600; letter-spacing: 0.2px; }
+        .search { display: flex; align-items: center; gap: 8px; }
+        .search input { border: 1px solid #e5e7eb; background: white; padding: 10px 12px; border-radius: 8px; width: 220px; }
+
+        .strip { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(280px, 360px); gap: 14px; overflow-x: auto; padding: 12px 16px 24px; scroll-snap-type: x mandatory; }
+        .tile { scroll-snap-align: start; background: rgba(255,255,255,0.85); backdrop-filter: blur(20px); border: 1px solid rgba(0,0,0,0.06); border-radius: 16px; padding: 14px; min-height: 420px; display: flex; flex-direction: column; box-shadow: 0 8px 24px rgba(0,0,0,0.06); }
+        .tile-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; color: #666; font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; }
+        .tile-content { flex: 1; display: flex; flex-direction: column; gap: 12px; }
+        .composer-text { width: 100%; max-width: 100%; box-sizing: border-box; min-height: 200px; resize: vertical; border: 1px solid #e5e7eb; background: linear-gradient(180deg, #fff, #fafafa); border-radius: 12px; padding: 12px 14px; font-size: 14px; outline: none; box-shadow: inset 0 1px 2px rgba(0,0,0,0.03); font-family: inherit; }
+        .composer-text:focus { border-color: #c7d2fe; box-shadow: 0 0 0 3px rgba(99,102,241,0.15), inset 0 1px 2px rgba(0,0,0,0.03); }
+        .composer-input { width: 100%; max-width: 100%; box-sizing: border-box; border: 1px solid #e5e7eb; background: linear-gradient(180deg, #fff, #fafafa); border-radius: 12px; padding: 12px 14px; font-size: 15px; outline: none; box-shadow: inset 0 1px 2px rgba(0,0,0,0.03); font-family: inherit; }
+        .composer-input:focus { border-color: #c7d2fe; box-shadow: 0 0 0 3px rgba(99,102,241,0.15), inset 0 1px 2px rgba(0,0,0,0.03); }
+        .composer-input::placeholder, .composer-text::placeholder { color: #9aa2b1; font-weight: 400; }
+        .chipbar { display: flex; gap: 8px; flex-wrap: wrap; }
+        .chip { font-size: 11px; padding: 6px 8px; background: #eff6ff; color: #2563eb; border-radius: 999px; }
+        .thumbs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+        .thumb { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; cursor: pointer; }
+        /* Hero photo that can fill the tile if space permits */
+        .hero { width: 100%; height: 200px; border-radius: 12px; object-fit: cover; }
+
+        .toolbar { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+        .left-tools, .right-tools { display: flex; gap: 8px; align-items: center; }
+        .btn { border: 1px solid #e5e7eb; background: white; padding: 10px 12px; border-radius: 12px; cursor: pointer; min-height: 44px; display: inline-flex; align-items: center; gap: 8px; transition: transform 0.05s ease, box-shadow 0.2s ease; box-shadow: 0 2px 6px rgba(0,0,0,0.05); }
+        .btn:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        .btn:active { transform: translateY(1px); }
+        .btn.primary { background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); color: white; border: none; }
+        .icon { font-size: 16px; }
+        /* Ensure composer actions share equal visual size */
+        .action-btn { min-width: 120px; justify-content: center; }
+
+        .meta { font-size: 12px; color: #6b7280; }
+
+        .empty { color: #9ca3af; font-size: 14px; text-align: center; padding: 24px; border: 1px dashed #e5e7eb; border-radius: 10px; }
+
+        .hidden { display: none; }
+        /* Use visually-hidden for inputs that must still receive user-gesture clicks (iOS/Safari compat) */
+        /* Make file input invisible but still clickable via label on all mobile browsers */
+        .visually-hidden { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; z-index: -1; }
+
+        /* Overlay modals */
+        .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 50; }
+        .overlay.active { display: flex; }
+        .modal { background: #fff; border-radius: 16px; padding: 16px; width: min(640px, 92vw); max-height: 90vh; overflow: auto; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+
+        /* Gallery */
+        .gallery { position: fixed; inset: 0; background: rgba(0,0,0,0.92); display: none; align-items: center; justify-content: center; z-index: 60; }
+        .gallery.active { display: flex; }
+        .gallery img { max-width: 92vw; max-height: 92vh; border-radius: 12px; }
+        .gallery-nav { position: fixed; inset: 0; display: flex; align-items: center; justify-content: space-between; pointer-events: none; }
+        .gallery-btn { pointer-events: auto; background: rgba(255,255,255,0.2); color: #fff; border: none; width: 44px; height: 44px; border-radius: 999px; font-size: 20px; cursor: pointer; margin: 16px; }
+    </style>
+</head>
+<body>
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="toggleUserDropdown()"></div>
+            <div class="nav-menu">
+                <a href="chat.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="lists.html" class="nav-item">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item active">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- Time/Date Display -->
+            <div class="time-date-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+            
+            <!-- User Menu (hidden, accessible via mini-orb click) -->
+            <div class="user-menu" onclick="toggleUserDropdown()" style="display: none;">
+                <div class="user-avatar" id="userAvatar">?</div>
+                <div class="user-info">
+                    <div class="username" id="username">User</div>
+                    <div class="user-role" id="userRole">Member</div>
+                </div>
+                <div class="user-dropdown" id="userDropdown">
+                    <a href="#" class="dropdown-item" onclick="showUserProfile()">Profile</a>
+                    <a href="#" class="dropdown-item" onclick="showSecuritySettings()">Security</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" class="dropdown-item" onclick="switchUser()">Switch User</a>
+                    <a href="#" class="dropdown-item" onclick="upgradeSession()" id="upgradeSessionItem" style="display: none;">Upgrade Session</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="admin.html" class="dropdown-item" id="adminLink" style="display: none;">Admin Dashboard</a>
+                    <div class="dropdown-divider" id="adminDivider" style="display: none;"></div>
+                    <a href="#" class="dropdown-item" onclick="logout()">Logout</a>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+
+    <!-- Top Actions -->
+    <div class="top-actions" style="margin: 10px 16px;">
+        <button class="search-btn" id="searchIconBtn" title="Search entries">🔍</button>
+    </div>
+
+    <div class="strip" id="tileStrip">
+        <!-- Composer Tile -->
+        <div class="tile" id="composerTile">
+            <div class="tile-header"><span>New entry</span><span class="meta" id="composerDate"></span></div>
+            <div class="tile-content">
+                <input id="composerTitle" class="composer-input" placeholder="Title..." maxlength="120" style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" />
+                <textarea id="composerBody" class="composer-text" placeholder="Write your thoughts..."></textarea>
+                <div class="thumbs" id="composerThumbs"></div>
+                <div class="toolbar" style="margin-top:auto;">
+                    <div class="left-tools">
+                        <label class="btn action-btn" id="attachBtn"><span class="icon">📎</span>Attach<input type="file" id="composerFiles" accept="image/*" multiple class="visually-hidden"></label>
+                    </div>
+                    <div class="right-tools">
+                        <button type="button" class="btn action-btn" id="deleteBtn">Delete</button>
+                        <button type="button" class="btn action-btn primary" id="saveBtn">Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Day tiles will be injected here -->
+    </div>
+
+    <!-- Edit Modal -->
+    <div class="overlay" id="editOverlay">
+        <div class="modal">
+            <div class="modal-header"><div style="font-weight:600;">Edit Entry</div><button class="btn" onclick="closeEdit()">✖</button></div>
+            <input id="editTitle" class="composer-text" placeholder="Title" />
+            <textarea id="editBody" class="composer-text" placeholder="Content" style="min-height:200px;"></textarea>
+            <div class="modal-actions">
+                <button class="btn" onclick="deleteCurrent()">Delete</button>
+                <button class="btn primary" onclick="saveEdit()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Gallery -->
+    <div class="gallery" id="gallery">
+        <div class="gallery-nav">
+            <button class="gallery-btn" onclick="prevPhoto()">‹</button>
+            <button class="gallery-btn" onclick="nextPhoto()">›</button>
+        </div>
+        <img id="galleryImg" src="" alt="photo" onclick="closeGallery()" />
+    </div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications yet</div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="window.location.href='memories.html'">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="window.location.href='workflows.html'">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="window.location.href='settings.html'">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="window.location.href='dashboard_family.html'">
+                    <div class="more-item-icon">👨‍👩‍👧‍👦</div>
+                    <div class="more-item-label">Family</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/common.js?v=1.5"></script>
+    <script>
+        let allEntries = [];
+        let uploadedPhotos = [];
+        let weatherCache = null;
+
+        // Time/Date Update Functions
+        function updateTimeDate() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            const timeElement = document.getElementById('currentTime');
+            const dateElement = document.getElementById('currentDate');
+            
+            if (timeElement) timeElement.textContent = timeString;
+            if (dateElement) dateElement.textContent = dateString;
+        }
+
+        // User Menu Functions
+        function toggleUserDropdown() {
+            const userMenu = document.querySelector('.user-menu');
+            const dropdown = document.getElementById('userDropdown');
+            
+            if (userMenu && dropdown) {
+                // Show the user menu if it's hidden
+                if (userMenu.style.display === 'none') {
+                    userMenu.style.display = 'flex';
+                    dropdown.classList.add('show');
+                } else {
+                    // Hide the user menu
+                    userMenu.style.display = 'none';
+                    dropdown.classList.remove('show');
+                }
+            }
+        }
+
+        function showUserProfile() {
+            console.log('Show user profile');
+            // Implementation for user profile
+        }
+
+        function showSecuritySettings() {
+            console.log('Show security settings');
+            // Implementation for security settings
+        }
+
+        function switchUser() {
+            console.log('Switch user');
+            // Implementation for switching users
+        }
+
+        function upgradeSession() {
+            console.log('Upgrade session');
+            // Implementation for session upgrade
+        }
+
+        function logout() {
+            console.log('Logout');
+            // Implementation for logout
+        }
+
+        // Notifications Functions
+        function openNotifications() {
+            const panel = document.getElementById('notificationsPanel');
+            if (panel) {
+                panel.classList.add('open');
+            }
+        }
+
+        function closeNotifications() {
+            const panel = document.getElementById('notificationsPanel');
+            if (panel) {
+                panel.classList.remove('open');
+            }
+        }
+
+        // More Overlay Functions
+        function openMoreOverlay() {
+            const overlay = document.getElementById('moreOverlay');
+            if (overlay) {
+                overlay.classList.add('active');
+            }
+        }
+
+        function closeMoreOverlay() {
+            const overlay = document.getElementById('moreOverlay');
+            if (overlay) {
+                overlay.classList.remove('active');
+            }
+        }
+
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            document.getElementById('composerDate').textContent = new Date().toDateString();
+            
+            // Update time/date immediately and every minute
+            updateTimeDate();
+            setInterval(updateTimeDate, 60000);
+            
+            // Attach uses label[for] which is most compatible across mobile browsers
+            document.getElementById('composerFiles').addEventListener('change', handleComposerFiles);
+            document.getElementById('saveBtn').addEventListener('click', saveComposerEntry);
+            document.getElementById('deleteBtn').addEventListener('click', clearComposer);
+            // Tick/cross removed per request
+            const searchBtn = document.getElementById('searchBtn');
+            const searchInput = document.getElementById('searchInput');
+            if (searchBtn && searchInput) {
+                searchBtn.addEventListener('click', () => filterTiles((searchInput.value||'').trim()));
+            }
+
+            await loadEntries();
+            renderTiles(allEntries);
+            updateTime();
+            setInterval(updateTime, 1000);
+            setWeather();
+            enableSwipe();
+            restoreDraft();
+        });
+
+        async function loadEntries() {
+            try {
+                const res = await apiRequest('/journal/');
+                allEntries = res.entries || [];
+            } catch (e) {
+                console.error('Failed to load entries', e);
+                allEntries = [];
+            }
+        }
+
+        async function generateDemoPosts(){
+            const samplePhotos = [
+                'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1200',
+                'https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?w=1200',
+                'https://images.unsplash.com/photo-1501785888041-af3ef285b470?w=1200',
+                'https://images.unsplash.com/photo-1500534314209-a25ddb2bd429?w=1200',
+                'https://images.unsplash.com/photo-1500534314209-a25ddb2bd429?w=1200'
+            ];
+            const titles = ['Morning swim','Hike to the ridge','Coffee with friends','Sunset walk','Market day','Quiet reading','Beach picnic','City lights'];
+            const bodies = [
+                'A lovely time by the water. The breeze was perfect.',
+                'Steep climb but the view was absolutely worth it!',
+                'We chatted about travel and books. Great vibes.',
+                'The sky exploded with colors just after 6pm.',
+                'Fresh fruit, music, and friendly faces everywhere.',
+                'Finished a few chapters of a great novel.',
+                'Sand, snacks, and lots of laughter.',
+                'The skyline looked surreal from the bridge.'
+            ];
+            const count = 10;
+            for(let i=0;i<count;i++){
+                const title = titles[i%titles.length];
+                const content = bodies[i%bodies.length];
+                const photos = [samplePhotos[i%samplePhotos.length]];
+                try{
+                    const res = await apiRequest('/journal/', { method:'POST', body: JSON.stringify({ title, content, photos, isPrivate:false }) });
+                    allEntries.unshift(res.entry);
+                }catch(e){ console.error('Demo post failed', e); }
+            }
+            renderTiles(allEntries);
+            showNotification('Demo posts generated', 'success');
+        }
+
+        function updateTime(){
+            const now = new Date();
+            const timeEl = document.getElementById('currentTime');
+            const dateEl = document.getElementById('currentDate');
+            if(timeEl) timeEl.textContent = now.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit'});
+            if(dateEl) dateEl.textContent = now.toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric'});
+        }
+
+        async function setWeather(){
+            const tempEl = document.getElementById('weatherTemp');
+            try{
+                if(!navigator.geolocation){ return; }
+                navigator.geolocation.getCurrentPosition(async (pos)=>{
+                    const { latitude, longitude } = pos.coords;
+                    const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true`;
+                    const r = await fetch(url); const j = await r.json();
+                    const t = Math.round(j.current_weather?.temperature ?? 23);
+                    if(tempEl) tempEl.textContent = `${t}°`;
+                });
+            }catch(e){ /* leave default */ }
+        }
+
+        function renderTiles(entries) {
+            const strip = document.getElementById('tileStrip');
+            // remove old day tiles (keep composer at index 0)
+            Array.from(strip.querySelectorAll('.tile.day')).forEach(n => n.remove());
+
+            const byDate = groupByDate(entries);
+            Object.keys(byDate).sort((a,b)=> new Date(b)-new Date(a)).forEach(dateStr => {
+                const dayEntries = byDate[dateStr];
+                const tile = document.createElement('div');
+                tile.className = 'tile day';
+                tile.innerHTML = `
+                    <div class="tile-header"><span>${formatDateLabel(dateStr)}</span><span class="meta">${dayEntries.length} item${dayEntries.length>1?'s':''}</span></div>
+                    <div class="tile-content" id="content-${dateStr}">
+                        ${dayEntries.map(e => renderEntryCard(e)).join('') || `<div class='empty'>No entries</div>`}
+                    </div>
+                `;
+                strip.appendChild(tile);
+            });
+        }
+
+        function renderEntryCard(entry) {
+            const photos = entry.photos||[];
+            const hero = photos.length ? `<img class='hero' src='${photos[0]}' alt='photo'>` : '';
+            const thumbs = photos.slice(1,4).map(p=>`<img class='thumb' src='${p}' alt='photo'>`).join('');
+            const thumbGrid = thumbs ? `<div class='thumbs' style='margin-top:8px;'>${thumbs}</div>` : '';
+            return `
+                <div class="card" onclick="openEdit(${entry.id})">
+                    <div class="meta" style="margin-bottom:6px;">${new Date(entry.created_at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}</div>
+                    <div style="font-weight:600; margin-bottom:6px;">${escapeHtml(entry.title||'Untitled')}</div>
+                    ${hero}
+                    <div style="font-size:13px;color:#555; margin-top:8px;">${escapeHtml((entry.content||'').slice(0,140))}${(entry.content||'').length>140?'...':''}</div>
+                    ${thumbGrid}
+                </div>
+            `;
+        }
+
+        // Swipe for horizontal scroll
+        function enableSwipe(){
+            const el = document.getElementById('tileStrip');
+            let startX=0, scrollLeft=0, isDown=false;
+            el.addEventListener('pointerdown', (e)=>{ isDown=true; startX=e.clientX; scrollLeft=el.scrollLeft; el.setPointerCapture(e.pointerId);});
+            el.addEventListener('pointermove', (e)=>{ if(!isDown) return; const dx=e.clientX-startX; el.scrollLeft = scrollLeft - dx;});
+            ['pointerup','pointercancel','mouseleave'].forEach(ev=> el.addEventListener(ev, ()=>{ isDown=false; }));
+        }
+
+        // Edit modal
+        let editingId = null;
+        function openEdit(id){
+            const entry = allEntries.find(e=>e.id===id); if(!entry) return;
+            editingId = id;
+            document.getElementById('editTitle').value = entry.title||'';
+            document.getElementById('editBody').value = entry.content||'';
+            document.getElementById('editOverlay').classList.add('active');
+        }
+        function closeEdit(){ document.getElementById('editOverlay').classList.remove('active'); editingId=null; }
+        async function saveEdit(){
+            if(!editingId) return; 
+            const payload = { title: document.getElementById('editTitle').value, content: document.getElementById('editBody').value };
+            try{ await apiRequest(`/journal/${editingId}/`, { method:'PUT', body: JSON.stringify(payload)});
+                const idx = allEntries.findIndex(e=>e.id===editingId);
+                if(idx>=0){ allEntries[idx] = { ...allEntries[idx], ...payload }; }
+                renderTiles(allEntries); closeEdit();
+            }catch(e){ console.error('Save failed', e); }
+        }
+        async function deleteCurrent(){
+            if(!editingId) return; 
+            try{ await apiRequest(`/journal/${editingId}/`, { method:'DELETE'});
+                allEntries = allEntries.filter(e=>e.id!==editingId);
+                renderTiles(allEntries); closeEdit();
+            }catch(e){ console.error('Delete failed', e); }
+        }
+
+        // Gallery
+        let galleryPhotos=[], galleryIndex=0;
+        window.addEventListener('click', (e)=>{
+            const t = e.target;
+            if(t.classList && (t.classList.contains('thumb') || t.classList.contains('hero'))){
+                // Gather sibling images
+                const parent = t.closest('.card');
+                const imgs = Array.from(parent.querySelectorAll('img')).map(i=>i.src);
+                galleryPhotos = imgs; galleryIndex = imgs.indexOf(t.src);
+                openGallery();
+            }
+        });
+        function openGallery(){ document.getElementById('gallery').classList.add('active'); updateGallery(); }
+        function closeGallery(){ document.getElementById('gallery').classList.remove('active'); }
+        function updateGallery(){ document.getElementById('galleryImg').src = galleryPhotos[galleryIndex]; }
+        function prevPhoto(){ if(!galleryPhotos.length) return; galleryIndex=(galleryIndex-1+galleryPhotos.length)%galleryPhotos.length; updateGallery(); }
+        function nextPhoto(){ if(!galleryPhotos.length) return; galleryIndex=(galleryIndex+1)%galleryPhotos.length; updateGallery(); }
+
+        // Autosave draft
+        function restoreDraft(){
+            const draft = JSON.parse(localStorage.getItem('journal_draft')||'null');
+            if(!draft) return; 
+            document.getElementById('composerTitle').value = draft.title||'';
+            document.getElementById('composerBody').value = draft.content||'';
+            (draft.photos||[]).forEach(p=>{
+                uploadedPhotos.push(p);
+                const img=document.createElement('img'); img.src=p; img.className='thumb';
+                document.getElementById('composerThumbs').appendChild(img);
+            });
+        }
+        function persistDraft(){
+            const draft = { title: document.getElementById('composerTitle').value, content: document.getElementById('composerBody').value, photos: uploadedPhotos };
+            localStorage.setItem('journal_draft', JSON.stringify(draft));
+        }
+        ['composerTitle','composerBody'].forEach(id=>{
+            document.addEventListener('input', (e)=>{ if(e.target && e.target.id===id) persistDraft(); }, { passive:true });
+        });
+
+        function groupByDate(entries){
+            const map = {};
+            entries.forEach(e=>{
+                const d = new Date(e.created_at);
+                const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+                (map[key]||(map[key]=[])).push(e);
+            });
+            return map;
+        }
+
+        function formatDateLabel(dateStr){
+            const d = new Date(dateStr);
+            return d.toLocaleDateString(undefined, { weekday:'short', day:'numeric', month:'short', year:'numeric' });
+        }
+
+        function filterTiles(query){
+            const q = (query||'').toLowerCase();
+            const entries = !q ? allEntries : allEntries.filter(e =>
+                (e.title||'').toLowerCase().includes(q) || (e.content||'').toLowerCase().includes(q)
+            );
+            renderTiles(entries);
+        }
+
+        function clearComposer(){
+            document.getElementById('composerTitle').value = '';
+            document.getElementById('composerBody').value = '';
+            uploadedPhotos = [];
+            document.getElementById('composerThumbs').innerHTML = '';
+        }
+
+        function handleComposerFiles(ev){
+            const input = document.getElementById('composerFiles');
+            const files = Array.from((ev?.target||input)?.files||[]);
+            files.forEach(file => {
+                if (!file.type.startsWith('image/')) return;
+                const reader = new FileReader();
+                reader.onload = () => {
+                    uploadedPhotos.push(reader.result);
+                    const img = document.createElement('img');
+                    img.src = reader.result; img.className = 'thumb';
+                    document.getElementById('composerThumbs').appendChild(img);
+                    persistDraft();
+                };
+                reader.readAsDataURL(file);
+            });
+            if(ev.target) ev.target.value = '';
+        }
+
+        async function saveComposerEntry(){
+            const title = document.getElementById('composerTitle').value.trim();
+            const content = document.getElementById('composerBody').value.trim();
+            if (!title && !content && uploadedPhotos.length===0) return;
+            try{
+                const payload = { title, content, photos: uploadedPhotos, mood: null, category: null, isPrivate: false };
+                const res = await apiRequest('/journal/', { method:'POST', body: JSON.stringify(payload) });
+                allEntries.unshift(res.entry);
+                clearComposer();
+                localStorage.removeItem('journal_draft');
+                renderTiles(allEntries);
+            }catch(err){
+                console.error('Failed to save', err);
+            }
+        }
+
+        // Helpers
+        function escapeHtml(str){
+            return String(str||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+        }
+    </script>
+</body>
+</html>
+
+

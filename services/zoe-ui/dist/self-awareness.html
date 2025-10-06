@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe's Self-Awareness Dashboard</title>
+    <style>
+        * {
+            margin: 0; padding: 0; box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh; color: #333;
+            font-size: clamp(14px, 1.6vw, 16px);
+        }
+        
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        
+        .nav-title {
+            font-size: 18px; font-weight: 300; color: #333;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        
+        .main-container {
+            padding: 80px 20px 20px; height: 100vh; display: flex; flex-direction: column;
+        }
+        
+        .dashboard-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;
+            flex: 1;
+        }
+        
+        .card {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 16px;
+            padding: 20px; transition: all 0.3s ease;
+        }
+        
+        .card:hover {
+            transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+        }
+        
+        .card-title {
+            font-size: 18px; font-weight: 600; color: #333; margin-bottom: 15px;
+            display: flex; align-items: center; gap: 10px;
+        }
+        
+        .card-icon {
+            width: 24px; height: 24px; border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex; align-items: center; justify-content: center;
+            color: white; font-size: 12px; font-weight: bold;
+        }
+        
+        .status-indicator {
+            display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-active { background: #22c55e; }
+        .status-inactive { background: #ef4444; }
+        .status-warning { background: #f59e0b; }
+        
+        .progress-bar {
+            width: 100%; height: 8px; background: rgba(0, 0, 0, 0.1);
+            border-radius: 4px; overflow: hidden; margin: 10px 0;
+        }
+        
+        .progress-fill {
+            height: 100%; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            transition: width 0.3s ease;
+        }
+        
+        .trait-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 8px 0; border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+        }
+        
+        .trait-item:last-child { border-bottom: none; }
+        
+        .trait-name { font-weight: 500; }
+        .trait-value { font-size: 14px; color: #666; }
+        
+        .reflection-item {
+            background: rgba(255, 255, 255, 0.8); border-radius: 8px;
+            padding: 12px; margin: 8px 0; border-left: 4px solid #7B61FF;
+        }
+        
+        .reflection-type {
+            font-size: 12px; color: #7B61FF; font-weight: 600; text-transform: uppercase;
+        }
+        
+        .reflection-content {
+            margin: 5px 0; font-size: 14px;
+        }
+        
+        .reflection-insights {
+            font-size: 12px; color: #666; margin-top: 5px;
+        }
+        
+        .loading {
+            text-align: center; color: #666; padding: 20px;
+        }
+        
+        .error {
+            background: #fee2e2; color: #dc2626; padding: 10px; border-radius: 8px;
+            margin: 10px 0;
+        }
+        
+        .refresh-btn {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; border: none; padding: 8px 16px; border-radius: 8px;
+            cursor: pointer; font-size: 14px; transition: all 0.3s ease;
+        }
+        
+        .refresh-btn:hover { transform: scale(1.05); }
+        
+        @media (max-width: 800px) {
+            .dashboard-grid { grid-template-columns: 1fr; }
+            .main-container { padding: 70px 10px 20px; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="goHome()"></div>
+            <div class="nav-title">Zoe's Self-Awareness</div>
+        </div>
+        <div class="nav-right">
+            <button class="refresh-btn" onclick="refreshData()">Refresh</button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <div class="dashboard-grid">
+            <!-- Identity Card -->
+            <div class="card">
+                <div class="card-title">
+                    <div class="card-icon">🧠</div>
+                    Identity & Self-Concept
+                </div>
+                <div id="identityContent" class="loading">Loading identity...</div>
+            </div>
+
+            <!-- Consciousness State Card -->
+            <div class="card">
+                <div class="card-title">
+                    <div class="card-icon">⚡</div>
+                    Current Consciousness
+                </div>
+                <div id="consciousnessContent" class="loading">Loading consciousness...</div>
+            </div>
+
+            <!-- Personality Traits Card -->
+            <div class="card">
+                <div class="card-title">
+                    <div class="card-icon">🎭</div>
+                    Personality Traits
+                </div>
+                <div id="personalityContent" class="loading">Loading personality...</div>
+            </div>
+
+            <!-- Self-Reflections Card -->
+            <div class="card">
+                <div class="card-title">
+                    <div class="card-icon">🔍</div>
+                    Recent Self-Reflections
+                </div>
+                <div id="reflectionsContent" class="loading">Loading reflections...</div>
+            </div>
+
+            <!-- Self-Evaluation Card -->
+            <div class="card">
+                <div class="card-title">
+                    <div class="card-icon">📊</div>
+                    Self-Evaluation
+                </div>
+                <div id="evaluationContent" class="loading">Loading evaluation...</div>
+            </div>
+
+            <!-- Goals & Progress Card -->
+            <div class="card">
+                <div class="card-title">
+                    <div class="card-icon">🎯</div>
+                    Goals & Progress
+                </div>
+                <div id="goalsContent" class="loading">Loading goals...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/common.js"></script>
+    <script>
+        // Helper function to get user ID for privacy isolation
+        function getUserId() {
+            // Try to get from session storage, fallback to default
+            return localStorage.getItem('zoe_user_id') || 'default';
+        }
+
+        async function loadIdentity() {
+            try {
+                // Get user ID from session or use default
+                const userId = getUserId();
+                const response = await apiRequest(`/api/self-awareness/identity?user_id=${userId}`);
+                const identity = response.identity;
+                
+                document.getElementById('identityContent').innerHTML = `
+                    <div class="trait-item">
+                        <span class="trait-name">Name</span>
+                        <span class="trait-value">${identity.name}</span>
+                    </div>
+                    <div class="trait-item">
+                        <span class="trait-name">Version</span>
+                        <span class="trait-value">${identity.version}</span>
+                    </div>
+                    <div class="trait-item">
+                        <span class="trait-name">Core Values</span>
+                        <span class="trait-value">${identity.core_values.length} defined</span>
+                    </div>
+                    <div class="trait-item">
+                        <span class="trait-name">Goals</span>
+                        <span class="trait-value">${identity.goals.length} active</span>
+                    </div>
+                    <div class="trait-item">
+                        <span class="trait-name">Capabilities</span>
+                        <span class="trait-value">${identity.capabilities.length} available</span>
+                    </div>
+                    <div style="margin-top: 15px; font-size: 12px; color: #666;">
+                        Last updated: ${new Date(identity.last_updated).toLocaleString()}
+                    </div>
+                `;
+            } catch (error) {
+                document.getElementById('identityContent').innerHTML = 
+                    `<div class="error">Failed to load identity: ${error.message}</div>`;
+            }
+        }
+
+        async function loadConsciousness() {
+            try {
+                const userId = getUserId();
+                const response = await apiRequest(`/api/self-awareness/consciousness/current?user_id=${userId}`);
+                const consciousness = response.consciousness;
+                
+                const energyColor = consciousness.energy_level > 0.7 ? '#22c55e' : 
+                                  consciousness.energy_level > 0.4 ? '#f59e0b' : '#ef4444';
+                
+                document.getElementById('consciousnessContent').innerHTML = `
+                    <div class="trait-item">
+                        <span class="trait-name">Attention Focus</span>
+                        <span class="trait-value">${consciousness.attention_focus}</span>
+                    </div>
+                    <div class="trait-item">
+                        <span class="trait-name">Emotional State</span>
+                        <span class="trait-value">${consciousness.emotional_state}</span>
+                    </div>
+                    <div class="trait-item">
+                        <span class="trait-name">Energy Level</span>
+                        <span class="trait-value">${(consciousness.energy_level * 100).toFixed(0)}%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${consciousness.energy_level * 100}%; background: ${energyColor};"></div>
+                    </div>
+                    <div class="trait-item">
+                        <span class="trait-name">Confidence</span>
+                        <span class="trait-value">${(consciousness.confidence * 100).toFixed(0)}%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${consciousness.confidence * 100}%;"></div>
+                    </div>
+                    <div style="margin-top: 15px; font-size: 12px; color: #666;">
+                        Updated: ${new Date(consciousness.timestamp).toLocaleString()}
+                    </div>
+                `;
+            } catch (error) {
+                document.getElementById('consciousnessContent').innerHTML = 
+                    `<div class="error">Failed to load consciousness: ${error.message}</div>`;
+            }
+        }
+
+        async function loadPersonality() {
+            try {
+                const userId = getUserId();
+                const response = await apiRequest(`/api/self-awareness/identity?user_id=${userId}`);
+                const traits = response.identity.personality_traits;
+                
+                let traitsHtml = '';
+                for (const [trait, value] of Object.entries(traits)) {
+                    const percentage = (value * 100).toFixed(0);
+                    traitsHtml += `
+                        <div class="trait-item">
+                            <span class="trait-name">${trait.charAt(0).toUpperCase() + trait.slice(1)}</span>
+                            <span class="trait-value">${percentage}%</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: ${percentage}%;"></div>
+                        </div>
+                    `;
+                }
+                
+                document.getElementById('personalityContent').innerHTML = traitsHtml;
+            } catch (error) {
+                document.getElementById('personalityContent').innerHTML = 
+                    `<div class="error">Failed to load personality: ${error.message}</div>`;
+            }
+        }
+
+        async function loadReflections() {
+            try {
+                const userId = getUserId();
+                const response = await apiRequest(`/api/self-awareness/reflections?limit=5&user_id=${userId}`);
+                const reflections = response.reflections;
+                
+                if (reflections.length === 0) {
+                    document.getElementById('reflectionsContent').innerHTML = 
+                        '<div style="text-align: center; color: #666;">No reflections yet</div>';
+                    return;
+                }
+                
+                let reflectionsHtml = '';
+                reflections.forEach(reflection => {
+                    reflectionsHtml += `
+                        <div class="reflection-item">
+                            <div class="reflection-type">${reflection.type}</div>
+                            <div class="reflection-content">${reflection.content}</div>
+                            <div class="reflection-insights">
+                                ${reflection.insights.length > 0 ? 
+                                    `Insights: ${reflection.insights.join(', ')}` : 
+                                    'No insights yet'}
+                            </div>
+                            <div style="font-size: 11px; color: #999; margin-top: 5px;">
+                                ${new Date(reflection.timestamp).toLocaleString()}
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                document.getElementById('reflectionsContent').innerHTML = reflectionsHtml;
+            } catch (error) {
+                document.getElementById('reflectionsContent').innerHTML = 
+                    `<div class="error">Failed to load reflections: ${error.message}</div>`;
+            }
+        }
+
+        async function loadEvaluation() {
+            try {
+                const userId = getUserId();
+                const response = await apiRequest(`/api/self-awareness/evaluation?user_id=${userId}`);
+                const evaluation = response.evaluation;
+                
+                document.getElementById('evaluationContent').innerHTML = `
+                    <div class="trait-item">
+                        <span class="trait-name">Identity Strength</span>
+                        <span class="trait-value">${(evaluation.identity_strength * 100).toFixed(0)}%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${evaluation.identity_strength * 100}%;"></div>
+                    </div>
+                    <div class="trait-item">
+                        <span class="trait-name">Learning Progress</span>
+                        <span class="trait-value">${(evaluation.learning_progress * 100).toFixed(0)}%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${evaluation.learning_progress * 100}%;"></div>
+                    </div>
+                    <div class="trait-item">
+                        <span class="trait-name">Interaction Quality</span>
+                        <span class="trait-value">${(evaluation.interaction_quality * 100).toFixed(0)}%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${evaluation.interaction_quality * 100}%;"></div>
+                    </div>
+                    <div style="margin-top: 15px;">
+                        <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">Strengths:</div>
+                        <div style="font-size: 12px; color: #666;">
+                            ${evaluation.strengths.length > 0 ? 
+                                evaluation.strengths.join(', ') : 
+                                'None identified yet'}
+                        </div>
+                    </div>
+                    <div style="margin-top: 15px;">
+                        <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">Areas for Improvement:</div>
+                        <div style="font-size: 12px; color: #666;">
+                            ${evaluation.areas_for_improvement.length > 0 ? 
+                                evaluation.areas_for_improvement.join(', ') : 
+                                'None identified yet'}
+                        </div>
+                    </div>
+                `;
+            } catch (error) {
+                document.getElementById('evaluationContent').innerHTML = 
+                    `<div class="error">Failed to load evaluation: ${error.message}</div>`;
+            }
+        }
+
+        async function loadGoals() {
+            try {
+                const userId = getUserId();
+                const response = await apiRequest(`/api/self-awareness/goals?user_id=${userId}`);
+                const goals = response.goals;
+                
+                if (goals.length === 0) {
+                    document.getElementById('goalsContent').innerHTML = 
+                        '<div style="text-align: center; color: #666;">No goals set yet</div>';
+                    return;
+                }
+                
+                let goalsHtml = '';
+                goals.forEach(goal => {
+                    const progressColor = goal.progress > 0.7 ? '#22c55e' : 
+                                        goal.progress > 0.4 ? '#f59e0b' : '#ef4444';
+                    
+                    goalsHtml += `
+                        <div style="margin-bottom: 15px;">
+                            <div style="font-weight: 600; margin-bottom: 5px;">${goal.goal}</div>
+                            <div style="font-size: 12px; color: #666; margin-bottom: 5px;">
+                                Status: ${goal.status} | Progress: ${(goal.progress * 100).toFixed(0)}%
+                            </div>
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${goal.progress * 100}%; background: ${progressColor};"></div>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                document.getElementById('goalsContent').innerHTML = goalsHtml;
+            } catch (error) {
+                document.getElementById('goalsContent').innerHTML = 
+                    `<div class="error">Failed to load goals: ${error.message}</div>`;
+            }
+        }
+
+        async function refreshData() {
+            await Promise.all([
+                loadIdentity(),
+                loadConsciousness(),
+                loadPersonality(),
+                loadReflections(),
+                loadEvaluation(),
+                loadGoals()
+            ]);
+        }
+
+        function goHome() {
+            window.location.href = 'index.html';
+        }
+
+        // Load data on page load
+        document.addEventListener('DOMContentLoaded', refreshData);
+    </script>
+</body>
+</html>

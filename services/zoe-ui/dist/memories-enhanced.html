@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Enhanced Memories</title>
+    
+    <!-- vis.js for graph visualization -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css" rel="stylesheet">
+    
+    <link rel="stylesheet" href="css/memories-enhanced.css">
+</head>
+<body>
+    <!-- Navigation -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="location.href='index.html'"></div>
+            <h1 class="page-title">Memories</h1>
+        </div>
+        <div class="nav-right">
+            <button class="icon-btn" onclick="memorySearch.openSearch()" title="Search">
+                🔍
+            </button>
+            <button class="icon-btn" onclick="location.href='settings.html'" title="Settings">
+                ⚙️
+            </button>
+        </div>
+    </div>
+
+    <!-- Tab Navigation -->
+    <div class="tabs-container">
+        <button class="tab-btn active" data-tab="list" onclick="switchView('list')">
+            <span>📋</span><span>List</span>
+        </button>
+        <button class="tab-btn" data-tab="graph" onclick="switchView('graph')">
+            <span>🕸️</span><span>Graph</span>
+        </button>
+        <button class="tab-btn" data-tab="timeline" onclick="switchView('timeline')">
+            <span>📅</span><span>Timeline</span>
+        </button>
+    </div>
+
+    <!-- Memory Type Filters (for list view) -->
+    <div class="type-filters" id="typeFilters">
+        <button class="type-filter active" data-type="all" onclick="filterMemories('all')">All</button>
+        <button class="type-filter" data-type="people" onclick="filterMemories('people')">👤 People</button>
+        <button class="type-filter" data-type="projects" onclick="filterMemories('projects')">📁 Projects</button>
+        <button class="type-filter" data-type="notes" onclick="filterMemories('notes')">📝 Notes</button>
+    </div>
+
+    <!-- List View -->
+    <div class="view-container active" id="listView">
+        <div class="memories-grid" id="memoriesGrid">
+            <!-- Memory cards will be inserted here -->
+        </div>
+    </div>
+
+    <!-- Graph View -->
+    <div class="view-container" id="graphView">
+        <div class="graph-controls">
+            <button onclick="memoryGraph.resetView()">Reset View</button>
+            <button onclick="memoryGraph.togglePhysics()">Toggle Physics</button>
+            <select onchange="memoryGraph.filterByType(this.value)">
+                <option value="all">All Types</option>
+                <option value="people">People Only</option>
+                <option value="projects">Projects Only</option>
+                <option value="notes">Notes Only</option>
+            </select>
+        </div>
+        <div id="memoryGraphContainer" class="graph-container"></div>
+        <div class="graph-legend">
+            <div class="legend-item"><div class="legend-dot people"></div>People</div>
+            <div class="legend-item"><div class="legend-dot projects"></div>Projects</div>
+            <div class="legend-item"><div class="legend-dot notes"></div>Notes</div>
+        </div>
+    </div>
+
+    <!-- Timeline View -->
+    <div class="view-container" id="timelineView">
+        <div class="timeline-controls">
+            <input type="text" placeholder="Search timeline..." 
+                   oninput="memoryTimeline.search(this.value)" class="timeline-search">
+            <select onchange="memoryTimeline.filterByType(this.value)">
+                <option value="all">All Types</option>
+                <option value="people">People</option>
+                <option value="projects">Projects</option>
+                <option value="notes">Notes</option>
+            </select>
+        </div>
+        <div id="memoryTimelineContainer" class="timeline-container"></div>
+    </div>
+
+    <!-- Detail Panels -->
+    <div id="graphDetailPanel" class="detail-panel"></div>
+    <div id="wikilinkDetailModal" class="wikilink-modal"></div>
+
+    <!-- Search Panel -->
+    <div id="searchPanel" class="search-panel">
+        <div class="search-panel-content">
+            <button onclick="memorySearch.closeSearch()" class="search-close">×</button>
+            <input type="text" id="searchInput" placeholder="Search memories..." 
+                   oninput="handleSearch(this.value)" class="search-input">
+            <div id="searchResultsContainer" class="search-results-container"></div>
+        </div>
+    </div>
+
+    <!-- Add Memory Button -->
+    <button class="add-memory-btn" onclick="openAddModal()" title="Add Memory">+</button>
+
+    <!-- Add/Edit Modal -->
+    <div id="addModal" class="modal">
+        <div class="modal-content">
+            <button class="modal-close" onclick="closeAddModal()">×</button>
+            <h2 id="modalTitle">Add Memory</h2>
+            <form id="memoryForm" onsubmit="saveMemory(event)">
+                <div class="form-group">
+                    <label>Type</label>
+                    <select id="memoryType" onchange="updateFormFields()" class="form-select">
+                        <option value="people">Person</option>
+                        <option value="projects">Project</option>
+                        <option value="notes">Note</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Name/Title</label>
+                    <input type="text" id="memoryName" required class="form-input">
+                </div>
+                <div class="form-group" id="relationshipGroup">
+                    <label>Relationship</label>
+                    <input type="text" id="memoryRelationship" class="form-input">
+                </div>
+                <div class="form-group">
+                    <label>Notes/Description</label>
+                    <textarea id="memoryNotes" class="form-textarea" 
+                              placeholder="Use [[name]] to link to other memories..."></textarea>
+                </div>
+                <div class="form-actions">
+                    <button type="button" onclick="closeAddModal()" class="btn secondary">Cancel</button>
+                    <button type="submit" class="btn primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/common.js"></script>
+    <script src="js/memory-graph.js"></script>
+    <script src="js/wikilink-parser.js"></script>
+    <script src="js/memory-timeline.js"></script>
+    <script src="js/memory-search.js"></script>
+    
+    <script>
+        let currentView = 'list';
+        let currentFilter = 'all';
+        let allMemories = { people: [], projects: [], notes: [] };
+
+        // Switch between views
+        function switchView(view) {
+            currentView = view;
+            
+            // Update tabs
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.tab === view);
+            });
+            
+            // Update view containers
+            document.querySelectorAll('.view-container').forEach(container => {
+                container.classList.remove('active');
+            });
+            document.getElementById(view + 'View').classList.add('active');
+            
+            // Show/hide type filters (only for list view)
+            document.getElementById('typeFilters').style.display = 
+                view === 'list' ? 'flex' : 'none';
+            
+            // Initialize view data
+            if (view === 'graph' && !memoryGraph) {
+                initializeGraph();
+            } else if (view === 'timeline' && !memoryTimeline) {
+                initializeTimeline();
+            }
+        }
+
+        // Filter memories by type
+        function filterMemories(type) {
+            currentFilter = type;
+            
+            document.querySelectorAll('.type-filter').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.type === type);
+            });
+            
+            renderMemories();
+        }
+
+        // Load all memories
+        async function loadAllMemories() {
+            try {
+                const [peopleResp, projectsResp, notesResp] = await Promise.all([
+                    apiRequest('/memories/?type=people'),
+                    apiRequest('/memories/?type=projects'),
+                    apiRequest('/memories/?type=notes')
+                ]);
+
+                allMemories = {
+                    people: peopleResp.memories || [],
+                    projects: projectsResp.memories || [],
+                    notes: notesResp.memories || []
+                };
+
+                renderMemories();
+                memorySearch.buildIndex();
+            } catch (error) {
+                console.error('Failed to load memories:', error);
+            }
+        }
+
+        // Render memories
+        function renderMemories() {
+            const grid = document.getElementById('memoriesGrid');
+            let html = '';
+
+            const typesToShow = currentFilter === 'all' ? 
+                ['people', 'projects', 'notes'] : [currentFilter];
+
+            typesToShow.forEach(type => {
+                allMemories[type].forEach(memory => {
+                    html += renderMemoryCard(memory, type);
+                });
+            });
+
+            if (!html) {
+                html = '<div class="empty-state">No memories found</div>';
+            }
+
+            grid.innerHTML = html;
+        }
+
+        // Render individual memory card
+        function renderMemoryCard(memory, type) {
+            const icon = { people: '👤', projects: '📁', notes: '📝' }[type];
+            const title = memory.name || memory.title || 'Untitled';
+            const subtitle = type === 'people' ? memory.relationship : 
+                           type === 'projects' ? memory.status : memory.category;
+            const content = wikilinkParser.parseWikilinks(
+                memory.notes || memory.description || memory.content || ''
+            );
+
+            return `
+                <div class="memory-card" data-id="${memory.id}" data-type="${type}">
+                    <div class="card-header">
+                        <span class="card-icon">${icon}</span>
+                        <h3 class="card-title">${title}</h3>
+                    </div>
+                    ${subtitle ? `<p class="card-subtitle">${subtitle}</p>` : ''}
+                    ${content ? `<p class="card-content">${content.substring(0, 150)}...</p>` : ''}
+                    <div class="card-actions">
+                        <button onclick="editMemory(${memory.id}, '${type}')">Edit</button>
+                        <button onclick="deleteMemory(${memory.id}, '${type}')">Delete</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Modal functions
+        function openAddModal() {
+            document.getElementById('addModal').classList.add('active');
+            document.getElementById('modalTitle').textContent = 'Add Memory';
+            document.getElementById('memoryForm').reset();
+        }
+
+        function closeAddModal() {
+            document.getElementById('addModal').classList.remove('active');
+        }
+
+        async function saveMemory(event) {
+            event.preventDefault();
+            
+            const type = document.getElementById('memoryType').value;
+            const name = document.getElementById('memoryName').value;
+            const notes = document.getElementById('memoryNotes').value;
+            const relationship = document.getElementById('memoryRelationship').value;
+
+            const payload = {
+                [type === 'people' ? 'person' : type === 'projects' ? 'project' : 'note']: {
+                    name: type !== 'notes' ? name : undefined,
+                    title: type === 'notes' ? name : undefined,
+                    notes: type === 'people' ? notes : undefined,
+                    description: type === 'projects' ? notes : undefined,
+                    content: type === 'notes' ? notes : undefined,
+                    relationship: type === 'people' ? relationship : undefined
+                }
+            };
+
+            try {
+                await apiRequest(`/memories/?type=${type}`, {
+                    method: 'POST',
+                    body: JSON.stringify(payload)
+                });
+
+                closeAddModal();
+                loadAllMemories();
+            } catch (error) {
+                alert('Failed to save memory: ' + error.message);
+            }
+        }
+
+        async function deleteMemory(id, type) {
+            if (!confirm('Delete this memory?')) return;
+
+            try {
+                await apiRequest(`/memories/item/${id}?type=${type}`, {
+                    method: 'DELETE'
+                });
+                loadAllMemories();
+            } catch (error) {
+                alert('Failed to delete memory: ' + error.message);
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            loadAllMemories();
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === '/' && !e.target.matches('input, textarea')) {
+                e.preventDefault();
+                memorySearch.openSearch();
+            }
+            if (e.key === 'Escape') {
+                memorySearch.closeSearch();
+                wikilinkParser.close();
+            }
+        });
+    </script>
+</body>
+</html>

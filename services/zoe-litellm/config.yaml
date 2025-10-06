@@ -1,0 +1,46 @@
+model_list:
+  # Ultra-fast responses (Tier 1)
+  - model_name: llama-ultra-fast
+    litellm_params:
+      model: ollama/llama3.2:1b
+      api_base: http://zoe-ollama:11434
+  # Balanced performance (Tier 2) 
+  - model_name: qwen-balanced
+    litellm_params:
+      model: ollama/qwen2.5:3b
+      api_base: http://zoe-ollama:11434
+  # Code generation (Tier 3)
+  - model_name: phi-code
+    litellm_params:
+      model: ollama/phi3:mini
+      api_base: http://zoe-ollama:11434
+  # Complex reasoning (Tier 4)
+  - model_name: mistral-complex
+    litellm_params:
+      model: ollama/mistral:latest
+      api_base: http://zoe-ollama:11434
+  # Cloud models for heavy tasks
+  - model_name: gpt-3.5
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: claude-instant
+    litellm_params:
+      model: claude-3-haiku-20240307
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-sonnet
+    litellm_params:
+      model: claude-3-sonnet-20240229
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+router_settings:
+  routing_strategy: "usage-based-routing-v2"
+  num_retries: 3
+  timeout: 60
+  # Pre-load models for faster response
+  prewarm: true
+  prewarm_models: ["llama-ultra-fast", "qwen-balanced"]
+
+general_settings:
+  master_key: "sk-1234"  # Change this to a secure key
+  disable_database_usage: true

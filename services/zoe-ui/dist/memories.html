@@ -1,0 +1,1253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Zoe - Memories</title>
+    <style>
+        * { 
+            margin: 0; padding: 0; box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh; color: #333;
+            font-size: clamp(14px, 1.6vw, 16px);
+        }
+        
+        /* Navigation */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        /* Authentication Integration */
+        .user-menu {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .user-menu:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .user-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .user-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        
+        .user-role {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.2;
+        }
+        
+        .user-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 8px 0;
+            min-width: 200px;
+            z-index: 1000;
+            display: none;
+            border: 1px solid #e1e5e9;
+        }
+        
+        .user-dropdown.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 8px 16px;
+            color: #333;
+            text-decoration: none;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .dropdown-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .dropdown-divider {
+            height: 1px;
+            background: #e1e5e9;
+            margin: 4px 0;
+        }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold; position: relative;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+            animation: notificationDotPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 8px rgba(123, 97, 255, 0);
+            }
+        }
+        
+        @keyframes notificationDotPulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.2);
+                opacity: 0.7;
+            }
+        }
+        
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .notifications-title {
+            font-size: 18px; font-weight: 600; color: #333; margin: 0;
+        }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content {
+            padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title {
+            font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px;
+        }
+        .notification-meta {
+            font-size: 12px; color: #666; display: flex; gap: 10px;
+        }
+        .notification-time {
+            color: #7B61FF; font-weight: 500;
+        }
+        .notification-priority {
+            padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600;
+        }
+        .no-notifications {
+            text-align: center; color: #666; font-size: 14px; padding: 40px 20px;
+        }
+        
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.warning::before { background: #ea580c; }
+
+        /* Main Layout */
+        .main-container { padding: 70px 20px 20px; }
+
+        /* Memory Tabs */
+        .memory-tabs {
+            display: flex; gap: 8px; margin-bottom: 20px; justify-content: center;
+        }
+        .tab-btn {
+            padding: 12px 24px; border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 24px; background: rgba(255, 255, 255, 0.8);
+            font-size: 14px; cursor: pointer; transition: all 0.3s ease;
+            color: #666; font-weight: 500; min-height: 48px; display: flex;
+            align-items: center; gap: 8px;
+        }
+        .tab-btn.active {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; border-color: transparent;
+        }
+
+        /* Memory Content */
+        .memory-content {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 16px;
+            padding: 20px; min-height: 500px;
+        }
+
+        /* People Cards */
+        .people-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px;
+        }
+        .person-card {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 20px; transition: all 0.3s ease;
+            cursor: pointer; min-height: 200px;
+        }
+        .person-card:hover {
+            transform: translateY(-4px); background: rgba(255, 255, 255, 0.9);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+        }
+        .person-avatar {
+            width: 60px; height: 60px; border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 24px; color: white; margin-bottom: 16px;
+        }
+        .person-name {
+            font-size: 18px; font-weight: 600; color: #333; margin-bottom: 8px;
+        }
+        .person-relationship {
+            font-size: 14px; color: #666; margin-bottom: 12px;
+        }
+        .person-details {
+            font-size: 13px; color: #888; line-height: 1.4;
+        }
+        .person-birthday {
+            background: rgba(123, 97, 255, 0.1); color: #7B61FF;
+            padding: 4px 8px; border-radius: 8px; font-size: 12px;
+            display: inline-block; margin-top: 8px;
+        }
+
+        /* Projects Grid */
+        .projects-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px;
+        }
+        .project-card {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 20px; transition: all 0.3s ease;
+            cursor: pointer; min-height: 180px;
+        }
+        .project-card:hover {
+            transform: translateY(-4px); background: rgba(255, 255, 255, 0.9);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+        }
+        .project-icon {
+            width: 50px; height: 50px; border-radius: 12px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 20px; color: white; margin-bottom: 16px;
+        }
+        .project-name {
+            font-size: 16px; font-weight: 600; color: #333; margin-bottom: 8px;
+        }
+        .project-description {
+            font-size: 14px; color: #666; margin-bottom: 12px; line-height: 1.4;
+        }
+        .project-status {
+            display: inline-block; padding: 4px 12px; border-radius: 12px;
+            font-size: 12px; font-weight: 500; margin-bottom: 8px;
+        }
+        .status-active { background: rgba(34, 197, 94, 0.2); color: #16a34a; }
+        .status-paused { background: rgba(251, 146, 60, 0.2); color: #ea580c; }
+        .status-completed { background: rgba(59, 130, 246, 0.2); color: #2563eb; }
+
+        /* Notes List */
+        .notes-list {
+            display: flex; flex-direction: column; gap: 12px;
+        }
+        .note-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 12px; padding: 16px; transition: all 0.3s ease;
+            cursor: pointer; min-height: 80px;
+        }
+        .note-item:hover {
+            background: rgba(255, 255, 255, 0.9); transform: translateX(4px);
+        }
+        .note-title {
+            font-size: 16px; font-weight: 600; color: #333; margin-bottom: 8px;
+        }
+        .note-content {
+            font-size: 14px; color: #666; line-height: 1.4; margin-bottom: 8px;
+        }
+        .note-date {
+            font-size: 12px; color: #888;
+        }
+
+        /* AI Memories Styles */
+        .ai-memories-container {
+            display: flex; flex-direction: column; gap: 16px;
+        }
+        .ai-memory-category {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 20px; margin-bottom: 20px;
+        }
+        .ai-memory-category-title {
+            font-family: var(--font-family-display);
+            font-size: 16px; 
+            font-weight: 600; 
+            line-height: 1.4;
+            color: #333; 
+            margin-bottom: 16px;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .ai-memory-category-icon {
+            width: 32px; height: 32px; border-radius: 8px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 16px; color: white;
+        }
+        .ai-memory-list {
+            display: flex; flex-direction: column; gap: 12px;
+        }
+        .ai-memory-item {
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 12px; padding: 16px; transition: all 0.3s ease;
+            cursor: pointer; position: relative;
+        }
+        .ai-memory-item:hover {
+            background: rgba(255, 255, 255, 0.8); transform: translateX(4px);
+        }
+        .ai-memory-text {
+            font-size: 14px; color: #333; line-height: 1.4; margin-bottom: 8px;
+        }
+        .ai-memory-meta {
+            display: flex; justify-content: space-between; align-items: center;
+            font-size: 12px; color: #888;
+        }
+        .ai-memory-timestamp {
+            font-style: italic;
+        }
+        .ai-memory-delete {
+            background: rgba(239, 68, 68, 0.1); color: #ef4444; border: none;
+            border-radius: 6px; padding: 4px 8px; font-size: 11px;
+            cursor: pointer; transition: all 0.3s ease;
+        }
+        .ai-memory-delete:hover {
+            background: rgba(239, 68, 68, 0.2);
+        }
+        .ai-memory-empty {
+            text-align: center; padding: 40px 20px; color: #666;
+        }
+        .ai-memory-empty-icon {
+            font-size: 48px; margin-bottom: 16px; opacity: 0.5;
+        }
+        .ai-memory-empty-title {
+            font-size: 16px; font-weight: 500; margin-bottom: 8px;
+        }
+        .ai-memory-empty-subtitle {
+            font-size: 14px; opacity: 0.8;
+        }
+
+        /* Add Button */
+        .add-memory-btn {
+            position: fixed; bottom: 30px; right: 30px; width: 64px; height: 64px;
+            border-radius: 50%; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: none; color: white; cursor: pointer; display: flex; align-items: center;
+            justify-content: center; font-size: 28px; transition: all 0.3s ease;
+            z-index: 1000; box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+        .add-memory-btn:hover { transform: scale(1.1); box-shadow: 0 6px 16px rgba(123, 97, 255, 0.4); }
+
+        /* Add Memory Modal */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 2000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .modal-overlay.active { display: flex; opacity: 1; }
+        .modal-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 30px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .modal-overlay.active .modal-content { transform: scale(1); }
+        .modal-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 20px; padding-bottom: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        .modal-title {
+            font-size: 20px; font-weight: 500; color: #333;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .modal-close {
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-label {
+            display: block; font-size: 13px; font-weight: 500; color: #666;
+            margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .form-input, .form-select, .form-textarea {
+            width: 100%; padding: 16px 20px; border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 12px; background: rgba(255, 255, 255, 0.9);
+            font-size: 16px; outline: none; transition: all 0.3s ease; min-height: 56px;
+        }
+        .form-textarea {
+            min-height: 120px; resize: vertical;
+        }
+        .form-input:focus, .form-select:focus, .form-textarea:focus {
+            border-color: #7B61FF; box-shadow: 0 0 0 2px rgba(123, 97, 255, 0.1);
+        }
+        .form-actions {
+            display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px;
+        }
+        .form-btn {
+            padding: 16px 24px; border: none; border-radius: 12px; font-size: 16px;
+            font-weight: 500; cursor: pointer; transition: all 0.3s ease; min-height: 56px;
+            min-width: 120px;
+        }
+        .form-btn.primary {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+        }
+        .form-btn.secondary {
+            background: rgba(255, 255, 255, 0.8); color: #666;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center; padding: 60px 20px; color: #666;
+        }
+        .empty-icon { font-size: 48px; margin-bottom: 16px; }
+        .empty-title { font-size: 18px; font-weight: 500; margin-bottom: 8px; }
+        .empty-subtitle { font-size: 14px; }
+
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+
+        /* Mobile Responsive */
+        @media (max-width: 900px) {
+            .nav-menu { display: none; }
+            .people-grid, .projects-grid { grid-template-columns: 1fr; }
+            .memory-tabs { flex-wrap: wrap; }
+            .add-memory-btn { bottom: 20px; right: 20px; width: 56px; height: 56px; font-size: 24px; }
+            .more-grid { grid-template-columns: 1fr; }
+        }
+        
+        /* Pi 7" Display Optimizations */
+        @media (max-width: 1024px) and (min-width: 769px) {
+            .main-container { padding: 70px 15px 40px; }
+            .people-grid, .projects-grid { grid-template-columns: repeat(2, 1fr); gap: 15px; }
+            .memory-tabs { gap: 10px; }
+            .add-memory-btn { bottom: 25px; right: 25px; width: 60px; height: 60px; font-size: 26px; }
+            .person-card, .project-card { padding: 15px; }
+            .person-avatar { width: 50px; height: 50px; font-size: 20px; }
+        }
+        
+        /* Touch-friendly interactions */
+        @media (hover: none) and (pointer: coarse) {
+            .person-card, .project-card, .add-memory-btn, .memory-tab {
+                min-height: 44px;
+                min-width: 44px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            
+            .person-card, .project-card {
+                cursor: pointer;
+                transition: all 0.2s ease;
+            }
+            
+            .person-card:active, .project-card:active {
+                transform: scale(0.98);
+                background: rgba(123, 97, 255, 0.1);
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
+            <div class="nav-menu">
+                <a href="index.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="lists.html" class="nav-item">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- User Menu -->
+            <div class="user-menu" onclick="toggleUserDropdown()">
+                <div class="user-avatar" id="userAvatar">?</div>
+                
+                <div class="user-dropdown" id="userDropdown">
+                    <a href="#" class="dropdown-item" onclick="showUserProfile()">Profile</a>
+                    <a href="#" class="dropdown-item" onclick="showSecuritySettings()">Security</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" class="dropdown-item" onclick="switchUser()">Switch User</a>
+                    <a href="#" class="dropdown-item" onclick="upgradeSession()" id="upgradeSessionItem" style="display: none;">Upgrade Session</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="admin.html" class="dropdown-item" id="adminLink" style="display: none;">Admin Dashboard</a>
+                    <div class="dropdown-divider" id="adminDivider" style="display: none;"></div>
+                    <a href="#" class="dropdown-item" onclick="logout()">Logout</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-container">
+
+        <!-- Memory Tabs -->
+        <div class="memory-tabs">
+            <button class="tab-btn active" onclick="switchTab('people')">
+                <span>👥</span><span>People</span>
+            </button>
+            <button class="tab-btn" onclick="switchTab('projects')">
+                <span>📁</span><span>Projects</span>
+            </button>
+            <button class="tab-btn" onclick="switchTab('notes')">
+                <span>📝</span><span>Notes</span>
+            </button>
+            <button class="tab-btn" onclick="switchTab('ai-memories')">
+                <span>🧠</span><span>AI Memories</span>
+            </button>
+        </div>
+
+        <!-- Memory Content -->
+        <div class="memory-content">
+            <!-- People Tab -->
+            <div id="peopleTab" class="tab-content">
+                <div class="people-grid" id="peopleGrid">
+                    <!-- People cards will be populated here -->
+                </div>
+            </div>
+
+            <!-- Projects Tab -->
+            <div id="projectsTab" class="tab-content" style="display: none;">
+                <div class="projects-grid" id="projectsGrid">
+                    <!-- Project cards will be populated here -->
+                </div>
+            </div>
+
+            <!-- Notes Tab -->
+            <div id="notesTab" class="tab-content" style="display: none;">
+                <div class="notes-list" id="notesList">
+                    <!-- Notes will be populated here -->
+                </div>
+            </div>
+
+            <!-- AI Memories Tab -->
+            <div id="ai-memoriesTab" class="tab-content" style="display: none;">
+                <div class="ai-memories-container" id="aiMemoriesContainer">
+                    <!-- AI memories will be populated here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Memory Modal -->
+    <div class="modal-overlay" id="addMemoryModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title" id="modalTitle">Add Person</h2>
+                <button class="modal-close" onclick="closeAddModal()">×</button>
+            </div>
+            
+            <form id="memoryForm">
+                <div class="form-group">
+                    <label class="form-label">Name</label>
+                    <input type="text" class="form-input" id="memoryName" placeholder="Enter name" required>
+                </div>
+                
+                <div class="form-group" id="relationshipGroup">
+                    <label class="form-label">Relationship</label>
+                    <input type="text" class="form-input" id="memoryRelationship" placeholder="e.g., Friend, Family, Colleague">
+                </div>
+                
+                <div class="form-group" id="birthdayGroup">
+                    <label class="form-label">Birthday (Optional)</label>
+                    <input type="date" class="form-input" id="memoryBirthday">
+                </div>
+                
+                <div class="form-group" id="statusGroup" style="display: none;">
+                    <label class="form-label">Status</label>
+                    <select class="form-select" id="memoryStatus">
+                        <option value="active">Active</option>
+                        <option value="paused">Paused</option>
+                        <option value="completed">Completed</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-textarea" id="memoryDescription" placeholder="Add notes or description..."></textarea>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="button" class="form-btn secondary" onclick="closeAddModal()">Cancel</button>
+                    <button type="submit" class="form-btn primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="alert('Coming soon!')">
+                    <div class="more-item-icon">📊</div>
+                    <div class="more-item-label">Analytics</div>
+                </div>
+                <div class="more-item" onclick="alert('Coming soon!')">
+                    <div class="more-item-icon">🔍</div>
+                    <div class="more-item-label">Search</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Memory Button -->
+    <button class="add-memory-btn" onclick="openAddModal()" title="Add Memory">+</button>
+
+    <script src="js/common.js"></script>
+    <script src="js/ai-processor.js"></script>
+    <script>
+        let currentTab = 'people';
+        let currentMemoryType = 'people';
+        let allMemories = { people: [], projects: [], notes: [] };
+        let aiMemories = { people: {}, general: [] };
+
+        // Switch between tabs
+        function switchTab(tab) {
+            currentTab = tab;
+            currentMemoryType = tab;
+            
+            // Update tab buttons
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.closest('.tab-btn').classList.add('active');
+            
+            // Show/hide tab content
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.style.display = 'none';
+            });
+            document.getElementById(`${tab}Tab`).style.display = 'block';
+            
+            // Load data for the tab
+            loadMemories(tab);
+        }
+
+        // Load memories for specific type
+        async function loadMemories(type) {
+            if (type === 'ai-memories') {
+                loadAIMemories();
+                return;
+            }
+            
+            try {
+                const response = await apiRequest(`/memories/?type=${type}`);
+                allMemories[type] = response.memories || [];
+                displayMemories(type);
+            } catch (error) {
+                console.error(`Failed to load ${type}:`, error);
+                allMemories[type] = [];
+                displayMemories(type);
+            }
+        }
+
+        // Load AI memories from API
+        async function loadAIMemories() {
+            try {
+                // Load people and notes from API
+                const [peopleResponse, notesResponse] = await Promise.all([
+                    fetch(`${API_BASE}/memories/?type=people`),
+                    fetch(`${API_BASE}/memories/?type=notes`)
+                ]);
+                
+                const peopleData = await peopleResponse.json();
+                const notesData = await notesResponse.json();
+                
+                // Organize AI memories
+                aiMemories = {
+                    people: {},
+                    general: notesData.memories.filter(note => note.category === 'ai_memory') || []
+                };
+                
+                // Group people memories
+                peopleData.memories.forEach(person => {
+                    if (person.notes && person.notes.includes('AI learned:')) {
+                        const personName = person.name.toLowerCase();
+                        if (!aiMemories.people[personName]) {
+                            aiMemories.people[personName] = [];
+                        }
+                        aiMemories.people[personName].push({
+                            memory: person.notes.replace('AI learned: ', ''),
+                            timestamp: person.created_at
+                        });
+                    }
+                });
+                
+                displayAIMemories();
+            } catch (error) {
+                console.error('Error loading AI memories:', error);
+                aiMemories = { people: {}, general: [] };
+                displayAIMemories();
+            }
+        }
+
+        // Display AI memories
+        function displayAIMemories() {
+            const container = document.getElementById('aiMemoriesContainer');
+            if (!container) return;
+
+            const hasMemories = Object.keys(aiMemories.people).length > 0 || aiMemories.general.length > 0;
+
+            if (!hasMemories) {
+                container.innerHTML = `
+                    <div class="ai-memory-empty">
+                        <div class="ai-memory-empty-icon">🧠</div>
+                        <div class="ai-memory-empty-title">No AI memories yet</div>
+                        <div class="ai-memory-empty-subtitle">Start talking to Zoe and she'll remember things about you and your loved ones</div>
+                    </div>
+                `;
+                return;
+            }
+
+            let html = '';
+
+            // Display people memories
+            for (let [person, memories] of Object.entries(aiMemories.people)) {
+                if (memories.length > 0) {
+                    html += `
+                        <div class="ai-memory-category">
+                            <div class="ai-memory-category-title">
+                                <div class="ai-memory-category-icon">👤</div>
+                                <span>${person.charAt(0).toUpperCase() + person.slice(1)}</span>
+                            </div>
+                            <div class="ai-memory-list">
+                                ${memories.map(memory => `
+                                    <div class="ai-memory-item">
+                                        <div class="ai-memory-text">${memory.memory}</div>
+                                        <div class="ai-memory-meta">
+                                            <span class="ai-memory-timestamp">${formatAIDate(memory.timestamp)}</span>
+                                            <button class="ai-memory-delete" onclick="deleteAIMemory('${person}', '${memory.memory}')">Delete</button>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            // Display general memories
+            if (aiMemories.general.length > 0) {
+                html += `
+                    <div class="ai-memory-category">
+                        <div class="ai-memory-category-title">
+                            <div class="ai-memory-category-icon">📝</div>
+                            <span>General</span>
+                        </div>
+                        <div class="ai-memory-list">
+                            ${aiMemories.general.map(memory => `
+                                <div class="ai-memory-item">
+                                    <div class="ai-memory-text">${memory.memory}</div>
+                                    <div class="ai-memory-meta">
+                                        <span class="ai-memory-timestamp">${formatAIDate(memory.timestamp)}</span>
+                                        <button class="ai-memory-delete" onclick="deleteAIMemory('general', '${memory.memory}')">Delete</button>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+
+            container.innerHTML = html;
+        }
+
+        // Delete AI memory
+        async function deleteAIMemory(category, memoryText) {
+            if (confirm('Are you sure you want to delete this memory?')) {
+                try {
+                    if (category === 'general') {
+                        // Find and delete the note
+                        const note = aiMemories.general.find(m => m.content === memoryText);
+                        if (note) {
+                            await fetch(`${API_BASE}/memories/${note.id}?type=notes`, {
+                                method: 'DELETE'
+                            });
+                        }
+                    } else {
+                        // Find and update the person's notes
+                        const person = aiMemories.people[category];
+                        if (person) {
+                            const memory = person.find(m => m.memory === memoryText);
+                            if (memory) {
+                                // This would require updating the person's notes field
+                                // For now, just remove from local display
+                                aiMemories.people[category] = aiMemories.people[category].filter(m => m.memory !== memoryText);
+                            }
+                        }
+                    }
+                    
+                    displayAIMemories();
+                    showNotification('Memory deleted', 'success');
+                } catch (error) {
+                    console.error('Error deleting memory:', error);
+                    showNotification('Failed to delete memory', 'error');
+                }
+            }
+        }
+
+        // Format AI memory date
+        function formatAIDate(timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diffMs = now - date;
+            const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+            
+            if (diffDays === 0) {
+                return 'Today';
+            } else if (diffDays === 1) {
+                return 'Yesterday';
+            } else if (diffDays < 7) {
+                return `${diffDays} days ago`;
+            } else {
+                return date.toLocaleDateString();
+            }
+        }
+
+        // Display memories based on type
+        function displayMemories(type) {
+            const container = document.getElementById(`${type}Grid`) || document.getElementById(`${type}List`);
+            if (!container) return;
+            
+            const memories = allMemories[type];
+            
+            if (memories.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">${type === 'people' ? '👥' : type === 'projects' ? '📁' : '📝'}</div>
+                        <div class="empty-title">No ${type} yet</div>
+                        <div class="empty-subtitle">Add your first ${type.slice(0, -1)} to get started</div>
+                    </div>
+                `;
+                return;
+            }
+            
+            if (type === 'people') {
+                container.innerHTML = memories.map(person => `
+                    <div class="person-card" onclick="editMemory('people', ${person.id})">
+                        <div class="person-avatar">${person.name.charAt(0).toUpperCase()}</div>
+                        <div class="person-name">${person.name}</div>
+                        <div class="person-relationship">${person.relationship || 'No relationship set'}</div>
+                        <div class="person-details">${person.notes || 'No description'}</div>
+                        ${person.birthday ? `<div class="person-birthday">🎂 ${formatDate(person.birthday)}</div>` : ''}
+                    </div>
+                `).join('');
+            } else if (type === 'projects') {
+                container.innerHTML = memories.map(project => `
+                    <div class="project-card" onclick="editMemory('projects', ${project.id})">
+                        <div class="project-icon">${project.icon || '📁'}</div>
+                        <div class="project-name">${project.name}</div>
+                        <div class="project-description">${project.description || 'No description'}</div>
+                        <div class="project-status status-${project.status || 'active'}">${(project.status || 'active').toUpperCase()}</div>
+                    </div>
+                `).join('');
+            } else if (type === 'notes') {
+                container.innerHTML = memories.map(note => `
+                    <div class="note-item" onclick="editMemory('notes', ${note.id})">
+                        <div class="note-title">${note.title}</div>
+                        <div class="note-content">${note.content || 'No content'}</div>
+                        <div class="note-date">${formatDate(note.created_at)}</div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        // Open add modal
+        function openAddModal() {
+            document.getElementById('addMemoryModal').classList.add('active');
+            updateModalForType(currentMemoryType);
+            document.getElementById('memoryName').focus();
+        }
+
+        // Close add modal
+        function closeAddModal() {
+            document.getElementById('addMemoryModal').classList.remove('active');
+            document.getElementById('memoryForm').reset();
+        }
+
+        // Update modal based on memory type
+        function updateModalForType(type) {
+            const title = document.getElementById('modalTitle');
+            const relationshipGroup = document.getElementById('relationshipGroup');
+            const birthdayGroup = document.getElementById('birthdayGroup');
+            const statusGroup = document.getElementById('statusGroup');
+            
+            if (type === 'people') {
+                title.textContent = 'Add Person';
+                relationshipGroup.style.display = 'block';
+                birthdayGroup.style.display = 'block';
+                statusGroup.style.display = 'none';
+            } else if (type === 'projects') {
+                title.textContent = 'Add Project';
+                relationshipGroup.style.display = 'none';
+                birthdayGroup.style.display = 'none';
+                statusGroup.style.display = 'block';
+            } else if (type === 'notes') {
+                title.textContent = 'Add Note';
+                relationshipGroup.style.display = 'none';
+                birthdayGroup.style.display = 'none';
+                statusGroup.style.display = 'none';
+            }
+        }
+
+        // Handle form submission
+        document.getElementById('memoryForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = {
+                name: document.getElementById('memoryName').value.trim(),
+                description: document.getElementById('memoryDescription').value.trim()
+            };
+            
+            if (currentMemoryType === 'people') {
+                formData.relationship = document.getElementById('memoryRelationship').value.trim();
+                formData.birthday = document.getElementById('memoryBirthday').value;
+                formData.notes = document.getElementById('memoryDescription').value.trim();
+            } else if (currentMemoryType === 'projects') {
+                formData.status = document.getElementById('memoryStatus').value;
+            } else if (currentMemoryType === 'notes') {
+                formData.title = document.getElementById('memoryName').value.trim();
+                formData.content = document.getElementById('memoryDescription').value.trim();
+            }
+            
+            try {
+                // Create the correct API payload structure
+                const apiPayload = {};
+                if (currentMemoryType === 'people') {
+                    apiPayload.person = formData;
+                } else if (currentMemoryType === 'projects') {
+                    apiPayload.project = formData;
+                } else if (currentMemoryType === 'notes') {
+                    apiPayload.note = formData;
+                }
+                
+                const response = await apiRequest(`/memories/?type=${currentMemoryType}`, {
+                    method: 'POST',
+                    body: JSON.stringify(apiPayload)
+                });
+                
+                // Reload the memories to get the full data
+                await loadMemories(currentMemoryType);
+                closeAddModal();
+                showNotification('Memory added!', 'success');
+            } catch (error) {
+                console.error('Failed to add memory:', error);
+                showNotification('Failed to add memory', 'error');
+            }
+        });
+
+        // Edit memory
+        function editMemory(type, id) {
+            const memory = allMemories[type].find(m => m.id === id);
+            if (!memory) return;
+            
+            // For now, just show details in an alert
+            // In a full implementation, you'd open an edit modal
+            let details = `Name: ${memory.name}\n`;
+            if (type === 'people') {
+                details += `Relationship: ${memory.relationship || 'Not set'}\n`;
+                details += `Birthday: ${memory.birthday ? formatDate(memory.birthday) : 'Not set'}\n`;
+            } else if (type === 'projects') {
+                details += `Status: ${memory.status || 'Active'}\n`;
+            }
+            details += `Description: ${memory.description || 'No description'}`;
+            
+            alert(details);
+        }
+
+        function navigateToPage(page) {
+            window.location.href = page;
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            loadMemories('people');
+            
+            // Load notifications on page load
+            loadNotifications();
+        });
+
+        // Notifications system
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+            
+            // Clear notification indicator when panel is opened
+            const notificationBtn = document.querySelector('.notifications-btn');
+            notificationBtn.classList.remove('has-notifications');
+        }
+
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+
+        async function loadNotifications() {
+            try {
+                const response = await apiRequest('/reminders/notifications/pending');
+                const notifications = response.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            // Update notification button indicator
+            if (notifications.length > 0) {
+                notificationBtn.classList.add('has-notifications');
+            } else {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
+                     onclick="handleNotificationClick(${notification.id})">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${new Date(notification.created_at).toLocaleTimeString()}</span>
+                        ${notification.priority ? `<span class="notification-priority" style="background: ${getPriorityColor(notification.priority)}; color: white;">${notification.priority}</span>` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function getPriorityColor(priority) {
+            switch(priority.toLowerCase()) {
+                case 'high': return '#ef4444';
+                case 'medium': return '#f59e0b';
+                case 'low': return '#10b981';
+                default: return '#6b7280';
+            }
+        }
+
+        function handleNotificationClick(notificationId) {
+            // Mark notification as acknowledged
+            acknowledgeNotification(notificationId);
+            closeNotifications();
+        }
+
+        async function acknowledgeNotification(notificationId) {
+            try {
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
+                    method: 'POST'
+                });
+                // Reload notifications
+                loadNotifications();
+            } catch (error) {
+                console.error('Failed to acknowledge notification:', error);
+            }
+        }
+
+        // User menu functions
+        function toggleUserDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function showUserProfile() {
+            // Implement user profile modal
+            alert('User profile coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function showSecuritySettings() {
+            // Implement security settings
+            alert('Security settings coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function switchUser() {
+            localStorage.removeItem('zoe_session');
+            window.location.href = 'auth.html?redirect=' + encodeURIComponent(window.location.pathname);
+        }
+
+        function upgradeSession() {
+            // Implement session upgrade
+            alert('Session upgrade coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function logout() {
+            localStorage.removeItem('zoe_session');
+            window.location.href = 'auth.html';
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const userMenu = document.querySelector('.user-menu');
+            const dropdown = document.getElementById('userDropdown');
+            
+            if (userMenu && !userMenu.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+    </script>
+</body>
+</html>
