@@ -186,8 +186,12 @@ async def create_task(task: DevelopmentTask):
         conn = sqlite3.connect("/app/data/zoe.db")
         cursor = conn.cursor()
         
-        # Ensure table exists
-        cursor.execute(f"""
+        # Ensure table exists - using safe column name validation
+        if type_column not in ['type', 'task_type']:
+            raise ValueError(f"Invalid column name: {type_column}")
+            
+        # Use parameterized query with safe column name
+        create_table_sql = f"""
             CREATE TABLE IF NOT EXISTS tasks (
                 task_id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
@@ -197,13 +201,15 @@ async def create_task(task: DevelopmentTask):
                 status TEXT DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        cursor.execute(create_table_sql)
         
-        # Insert with correct column name
-        cursor.execute(f"""
+        # Insert with correct column name - validated above
+        insert_sql = f"""
             INSERT INTO tasks (task_id, title, description, {type_column}, priority, status)
             VALUES (?, ?, ?, ?, ?, 'pending')
-        """, (task_id, task.title, task.description, task.type, task.priority))
+        """
+        cursor.execute(insert_sql, (task_id, task.title, task.description, task.type, task.priority))
         
         conn.commit()
         conn.close()
