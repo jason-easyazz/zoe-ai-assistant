@@ -74,3 +74,4 @@ Thumbs.db
 data/api_keys.json
 data/backups/
 *.pyc
+.env
