@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Home Control</title>
+    <link rel="stylesheet" href="css/glass.css">
+    <style>
+        .room-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .room-card {
+            cursor: pointer;
+            position: relative;
+            min-height: 180px;
+        }
+        
+        .room-card:hover {
+            transform: translateY(-3px);
+        }
+        
+        .room-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+        
+        .room-title {
+            font-size: 20px;
+            font-weight: 600;
+        }
+        
+        .room-temp {
+            font-size: 24px;
+            color: var(--primary-purple);
+        }
+        
+        .device-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        .device-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px;
+            background: var(--glass-bg-light);
+            border-radius: 8px;
+        }
+        
+        .device-toggle {
+            width: 48px;
+            height: 26px;
+            background: #ccc;
+            border-radius: 13px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+        
+        .device-toggle.active {
+            background: var(--primary-gradient);
+        }
+        
+        .device-toggle::after {
+            content: '';
+            position: absolute;
+            width: 22px;
+            height: 22px;
+            background: white;
+            border-radius: 50%;
+            top: 2px;
+            left: 2px;
+            transition: transform 0.3s ease;
+        }
+        
+        .device-toggle.active::after {
+            transform: translateX(22px);
+        }
+        
+        .scene-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .scene-btn {
+            flex: 1;
+            min-width: 120px;
+            padding: 15px;
+            text-align: center;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .scene-btn:hover {
+            background: var(--primary-gradient);
+            color: white;
+        }
+        
+        .scene-icon {
+            font-size: 32px;
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="nav-bar">
+        <div class="nav-left">
+            <a href="index.html" class="nav-logo">
+                <span>🤖</span>
+                <span>Zoe</span>
+            </a>
+            <div class="nav-menu">
+                <a href="index.html">Chat</a>
+                <a href="dashboard.html">Dashboard</a>
+                <a href="calendar.html">Calendar</a>
+                <a href="lists.html">Lists</a>
+                <a href="memories.html">Memories</a>
+                <a href="workflows.html">Workflows</a>
+                <a href="home.html" class="active">Home</a>
+                <a href="settings.html">Settings</a>
+                <a href="javascript:void(0)" onclick="openMoreOverlay()">More...</a>
+            </div>
+        </div>
+        <div class="nav-right">
+            <span style="margin-right: 15px;">🏠 All Systems Normal</span>
+        </div>
+    </nav>
+
+    <div class="main-container">
+        <h1>🏠 Home Control</h1>
+        <p>Manage your smart home devices and scenes</p>
+        
+        <!-- Quick Scenes -->
+        <div class="glass-card mb-3">
+            <h2>Quick Scenes</h2>
+            <div class="scene-buttons mt-2">
+                <div class="scene-btn" onclick="activateScene('morning')">
+                    <div class="scene-icon">🌅</div>
+                    <div>Morning</div>
+                </div>
+                <div class="scene-btn" onclick="activateScene('work')">
+                    <div class="scene-icon">💼</div>
+                    <div>Work</div>
+                </div>
+                <div class="scene-btn" onclick="activateScene('relax')">
+                    <div class="scene-icon">🛋️</div>
+                    <div>Relax</div>
+                </div>
+                <div class="scene-btn" onclick="activateScene('movie')">
+                    <div class="scene-icon">🎬</div>
+                    <div>Movie</div>
+                </div>
+                <div class="scene-btn" onclick="activateScene('sleep')">
+                    <div class="scene-icon">😴</div>
+                    <div>Sleep</div>
+                </div>
+                <div class="scene-btn" onclick="activateScene('away')">
+                    <div class="scene-icon">🚗</div>
+                    <div>Away</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Rooms -->
+        <h2>Rooms</h2>
+        <div class="room-grid">
+            <div class="glass-card room-card">
+                <div class="room-header">
+                    <div class="room-title">🛋️ Living Room</div>
+                    <div class="room-temp">22°C</div>
+                </div>
+                <div class="device-list">
+                    <div class="device-item">
+                        <span>Main Lights</span>
+                        <div class="device-toggle active" onclick="toggleDevice(this)"></div>
+                    </div>
+                    <div class="device-item">
+                        <span>TV</span>
+                        <div class="device-toggle" onclick="toggleDevice(this)"></div>
+                    </div>
+                    <div class="device-item">
+                        <span>AC</span>
+                        <div class="device-toggle active" onclick="toggleDevice(this)"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="glass-card room-card">
+                <div class="room-header">
+                    <div class="room-title">🛏️ Bedroom</div>
+                    <div class="room-temp">20°C</div>
+                </div>
+                <div class="device-list">
+                    <div class="device-item">
+                        <span>Ceiling Light</span>
+                        <div class="device-toggle" onclick="toggleDevice(this)"></div>
+                    </div>
+                    <div class="device-item">
+                        <span>Bedside Lamp</span>
+                        <div class="device-toggle active" onclick="toggleDevice(this)"></div>
+                    </div>
+                    <div class="device-item">
+                        <span>Fan</span>
+                        <div class="device-toggle" onclick="toggleDevice(this)"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="glass-card room-card">
+                <div class="room-header">
+                    <div class="room-title">🍳 Kitchen</div>
+                    <div class="room-temp">23°C</div>
+                </div>
+                <div class="device-list">
+                    <div class="device-item">
+                        <span>Main Lights</span>
+                        <div class="device-toggle active" onclick="toggleDevice(this)"></div>
+                    </div>
+                    <div class="device-item">
+                        <span>Under Cabinet</span>
+                        <div class="device-toggle" onclick="toggleDevice(this)"></div>
+                    </div>
+                    <div class="device-item">
+                        <span>Coffee Maker</span>
+                        <div class="device-toggle" onclick="toggleDevice(this)"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="glass-card room-card">
+                <div class="room-header">
+                    <div class="room-title">🚿 Bathroom</div>
+                    <div class="room-temp">24°C</div>
+                </div>
+                <div class="device-list">
+                    <div class="device-item">
+                        <span>Lights</span>
+                        <div class="device-toggle" onclick="toggleDevice(this)"></div>
+                    </div>
+                    <div class="device-item">
+                        <span>Exhaust Fan</span>
+                        <div class="device-toggle" onclick="toggleDevice(this)"></div>
+                    </div>
+                    <div class="device-item">
+                        <span>Heated Floor</span>
+                        <div class="device-toggle" onclick="toggleDevice(this)"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Security -->
+        <div class="glass-card">
+            <h2>🔒 Security</h2>
+            <div class="grid grid-3 mt-2">
+                <div class="text-center">
+                    <div style="font-size: 48px;">🚪</div>
+                    <div>Front Door</div>
+                    <div style="color: #22c55e;">Locked</div>
+                </div>
+                <div class="text-center">
+                    <div style="font-size: 48px;">📹</div>
+                    <div>Cameras</div>
+                    <div style="color: #22c55e;">Recording</div>
+                </div>
+                <div class="text-center">
+                    <div style="font-size: 48px;">🚨</div>
+                    <div>Alarm</div>
+                    <div style="color: #f59e0b;">Armed (Home)</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div id="moreOverlay" class="more-overlay" onclick="if(event.target.id==='moreOverlay') closeMoreOverlay()">
+        <div class="more-menu">
+            <h2>All Features</h2>
+            <div class="grid grid-3 mt-3">
+                <button class="glass-card" onclick="navigateToPage('journal.html')">
+                    <span style="font-size: 32px;">📔</span>
+                    <h3>Journal</h3>
+                </button>
+                <button class="glass-card" onclick="navigateToPage('developer/index.html')">
+                    <span style="font-size: 32px;">👨‍💻</span>
+                    <h3>Developer</h3>
+                </button>
+            </div>
+            <button class="btn btn-secondary mt-3" onclick="closeMoreOverlay()">Close</button>
+        </div>
+    </div>
+
+    <button class="fab" onclick="openQuickChat()">💬</button>
+    
+    <script src="js/common.js"></script>
+    <script>
+        function toggleDevice(element) {
+            element.classList.toggle('active');
+            const deviceName = element.parentElement.querySelector('span').textContent;
+            const state = element.classList.contains('active') ? 'on' : 'off';
+            showNotification(`${deviceName} turned ${state}`, 'success');
+        }
+        
+        function activateScene(scene) {
+            showNotification(`Activating ${scene} scene...`, 'info');
+            // Implement scene activation
+            setTimeout(() => {
+                showNotification(`${scene} scene activated!`, 'success');
+            }, 1000);
+        }
+    </script>
+</body>
+</html>

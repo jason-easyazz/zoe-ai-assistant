@@ -1,0 +1,1363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Zoe - Lists</title>
+    <style>
+        * { 
+            margin: 0; padding: 0; box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh; color: #333;
+            font-size: clamp(14px, 1.6vw, 16px);
+        }
+        
+        /* Navigation - exact copy from dashboard */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        /* Authentication Integration */
+        .user-menu {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .user-menu:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .user-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .user-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        
+        .user-role {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.2;
+        }
+        
+        .user-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 8px 0;
+            min-width: 200px;
+            z-index: 1000;
+            display: none;
+            border: 1px solid #e1e5e9;
+        }
+        
+        .user-dropdown.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 8px 16px;
+            color: #333;
+            text-decoration: none;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .dropdown-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .dropdown-divider {
+            height: 1px;
+            background: #e1e5e9;
+            margin: 4px 0;
+        }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold; position: relative;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+            animation: notificationDotPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 8px rgba(123, 97, 255, 0);
+            }
+        }
+        
+        @keyframes notificationDotPulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.2);
+                opacity: 0.7;
+            }
+        }
+        
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .notifications-title {
+            font-size: 18px; font-weight: 600; color: #333; margin: 0;
+        }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content {
+            padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title {
+            font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px;
+        }
+        .notification-meta {
+            font-size: 12px; color: #666; display: flex; gap: 10px;
+        }
+        .notification-time {
+            color: #7B61FF; font-weight: 500;
+        }
+        .notification-priority {
+            padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600;
+        }
+        .no-notifications {
+            text-align: center; color: #666; font-size: 14px; padding: 40px 20px;
+        }
+        
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.warning::before { background: #ea580c; }
+
+        /* Time/Date Display in Top Right */
+        .time-date-display {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time {
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        .current-date {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.2;
+        }
+
+        /* Main Layout - exact copy from dashboard */
+        .main-container { padding: 70px 20px 20px; }
+
+        /* Lists Layout - horizontal scroll with column flow (single row of tiles) */
+        .lists-grid {
+            display: grid;
+            grid-auto-flow: column;
+            grid-auto-columns: minmax(280px, 360px);
+            grid-template-rows: 1fr;
+            gap: 15px;
+            align-items: stretch;
+            overflow-x: auto;
+            overflow-y: hidden;
+            padding-bottom: 6px;
+            scroll-snap-type: x mandatory;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .lists-grid > .list-card { scroll-snap-align: start; }
+
+        /* Dynamic list card (for additional lists) */
+        .dynamic-list-card { min-width: 280px; }
+
+        /* List Card - condensed design */
+        .list-card {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px;
+            padding: 15px;
+            min-height: 300px;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        /* List Header */
+        .list-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .list-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .list-count {
+            background: rgba(123, 97, 255, 0.1);
+            color: #7B61FF;
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-weight: 500;
+        }
+
+        /* List Items Container */
+        .list-items {
+            flex: 1;
+            overflow-y: auto;
+            margin-bottom: 10px;
+        }
+
+        /* When space is tight (e.g., 7" displays), allow a list to flow into two columns */
+        .list-items.two-columns {
+            column-count: 2;
+            column-gap: 12px;
+        }
+        .list-items.two-columns .list-item {
+            break-inside: avoid;
+            -webkit-column-break-inside: avoid;
+            page-break-inside: avoid;
+        }
+
+        .list-header-btn {
+            border: none;
+            background: rgba(255, 255, 255, 0.7);
+            border: 1px solid rgba(0,0,0,0.08);
+            border-radius: 8px;
+            width: 32px; height: 32px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; color: #666; font-size: 14px;
+            transition: all 0.2s ease;
+        }
+        .list-header-btn:hover { background: rgba(255,255,255,0.9); color: #333; }
+        .list-header-btn.danger { color: #dc2626; border-color: rgba(220,38,38,0.2); }
+        .list-header-btn.danger:hover { background: rgba(220,38,38,0.08); }
+
+        /* Individual List Item */
+        .list-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            min-height: 40px;
+        }
+
+        .list-item:last-child {
+            border-bottom: none;
+        }
+
+        /* Checkbox */
+        .item-checkbox {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #7B61FF;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            background: white;
+        }
+
+        .item-checkbox.checked {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border-color: transparent;
+        }
+
+        .item-checkbox.checked::after {
+            content: "✓";
+            color: white;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        /* Item Text */
+        .item-text {
+            flex: 1;
+            font-size: 13px;
+            color: #333;
+            transition: all 0.2s ease;
+        }
+
+        .item-text.completed {
+            text-decoration: line-through;
+            opacity: 0.5;
+            color: #666;
+        }
+
+        /* Delete Button */
+        .item-delete {
+            width: 24px;
+            height: 24px;
+            border: none;
+            background: rgba(244, 67, 54, 0.1);
+            color: #f44336;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            opacity: 0;
+        }
+
+        .list-item:hover .item-delete {
+            opacity: 1;
+        }
+
+        .item-delete:active {
+            background: #f44336;
+            color: white;
+            transform: scale(0.9);
+        }
+
+        /* Add Item Input */
+        .add-item-input {
+            width: 100%;
+            border: 1px solid rgba(123, 97, 255, 0.3);
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 13px;
+            background: rgba(255, 255, 255, 0.5);
+            transition: all 0.2s ease;
+            margin-bottom: 8px;
+        }
+
+        .add-item-input:focus {
+            outline: none;
+            border-color: #7B61FF;
+            background: white;
+        }
+
+        /* Complete List Button - bottom right */
+        .complete-list-btn {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            width: 32px;
+            height: 32px;
+            border: 2px solid #7B61FF;
+            border-radius: 50%;
+            background: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            color: #7B61FF;
+        }
+
+        .complete-list-btn:hover {
+            background: rgba(123, 97, 255, 0.1);
+            transform: scale(1.1);
+        }
+
+        .complete-list-btn.completed {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            border-color: transparent;
+        }
+
+        .complete-list-btn.completed::after {
+            content: "✓";
+            font-weight: bold;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 20px 10px;
+            color: #666;
+            font-size: 12px;
+        }
+
+        /* Floating Add Button */
+        .fab {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 56px;
+            height: 56px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: none;
+            border-radius: 50%;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            z-index: 100;
+            box-shadow: 0 8px 32px rgba(123, 97, 255, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .fab:active {
+            transform: scale(0.9);
+        }
+
+        .fab:hover {
+            transform: scale(1.1);
+            box-shadow: 0 12px 40px rgba(123, 97, 255, 0.5);
+        }
+
+        /* Responsive Design for 7" touch screen */
+        @media (max-width: 768px) {
+            .main-container {
+                padding: 100px 15px 20px;
+            }
+
+            .lists-grid {
+                grid-auto-columns: minmax(240px, 80%);
+                gap: 12px;
+            }
+
+            .nav-menu {
+                display: none;
+            }
+
+            .list-card {
+                min-height: 250px;
+            }
+
+            /* Allow tiles to scroll internally on mobile */
+            .list-items { overflow-y: auto; }
+
+            .item-delete {
+                opacity: 1; /* Always visible on touch */
+            }
+        }
+
+        /* Single row remains on all heights; items scroll inside their tiles */
+
+        /* More Overlay - from dashboard */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; 
+            -webkit-text-fill-color: transparent; color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+    </style>
+    <script src="js/auth.js"></script>
+</head>
+<body>
+    <!-- Navigation - exact copy from dashboard -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="handleLogout()"></div>
+            <div class="nav-menu">
+                <a href="chat.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="lists.html" class="nav-item active">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- Time/Date Display -->
+            <div class="time-date-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+            
+            <!-- User Menu (moved to mini-orb click) -->
+            <div class="user-menu" onclick="toggleUserDropdown()" style="display: none;">
+                <div class="user-avatar" id="userAvatar">?</div>
+                
+                <div class="user-dropdown" id="userDropdown">
+                    <a href="#" class="dropdown-item" onclick="showUserProfile()">Profile</a>
+                    <a href="#" class="dropdown-item" onclick="showSecuritySettings()">Security</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" class="dropdown-item" onclick="switchUser()">Switch User</a>
+                    <a href="#" class="dropdown-item" onclick="upgradeSession()" id="upgradeSessionItem" style="display: none;">Upgrade Session</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="admin.html" class="dropdown-item" id="adminLink" style="display: none;">Admin Dashboard</a>
+                    <div class="dropdown-divider" id="adminDivider" style="display: none;"></div>
+                    <a href="#" class="dropdown-item" onclick="logout()">Logout</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+
+    <!-- Main Container -->
+    <div class="main-container">
+
+        <!-- Lists Grid -->
+        <div class="lists-grid">
+            <!-- Shopping List -->
+            <div class="list-card">
+                <div class="list-header">
+                    <div class="list-title">
+                        🛒 Shopping
+                        <span class="list-count" id="shoppingCount">0</span>
+                    </div>
+                    <button id="colBtn_shopping" class="list-header-btn" title="Toggle 2 columns" onclick="toggleListColumns('shopping')">l</button>
+                </div>
+                <div class="list-items" id="shoppingItems">
+                    <!-- Items will be rendered here -->
+                </div>
+                <div class="complete-list-btn" onclick="completeList('shopping')" title="Complete List"></div>
+            </div>
+
+            <!-- Personal Todos -->
+            <div class="list-card">
+                <div class="list-header">
+                    <div class="list-title">
+                        📝 Personal
+                        <span class="list-count" id="personalCount">0</span>
+                    </div>
+                    <button id="colBtn_personal" class="list-header-btn" title="Toggle 2 columns" onclick="toggleListColumns('personal')">l</button>
+                </div>
+                <div class="list-items" id="personalItems">
+                    <!-- Items will be rendered here -->
+                </div>
+                <div class="complete-list-btn" onclick="completeList('personal')" title="Complete List"></div>
+            </div>
+
+            <!-- Work Todos -->
+            <div class="list-card">
+                <div class="list-header">
+                    <div class="list-title">
+                        💼 Work
+                        <span class="list-count" id="workCount">0</span>
+                    </div>
+                    <button id="colBtn_work" class="list-header-btn" title="Toggle 2 columns" onclick="toggleListColumns('work')">l</button>
+                </div>
+                <div class="list-items" id="workItems">
+                    <!-- Items will be rendered here -->
+                </div>
+                <div class="complete-list-btn" onclick="completeList('work')" title="Complete List"></div>
+            </div>
+
+            <!-- Bucket List -->
+            <div class="list-card">
+                <div class="list-header">
+                    <div class="list-title">
+                        🎯 Bucket
+                        <span class="list-count" id="bucketCount">0</span>
+                    </div>
+                    <button id="colBtn_bucket" class="list-header-btn" title="Toggle 2 columns" onclick="toggleListColumns('bucket')">l</button>
+                </div>
+                <div class="list-items" id="bucketItems">
+                    <!-- Items will be rendered here -->
+                </div>
+                <div class="complete-list-btn" onclick="completeList('bucket')" title="Complete List"></div>
+            </div>
+            <!-- Dynamic lists will be appended here, after the 4 static tiles -->
+            <div id="dynamicListsContainer" style="display:contents;"></div>
+        </div>
+    </div>
+
+    <!-- Floating Add Button -->
+    <button class="fab" onclick="openCreateListModal()" title="Create List">+</button>
+
+    <!-- Create List Modal -->
+    <div id="createListModal" class="more-overlay" onclick="if(event.target.id==='createListModal') closeCreateListModal()">
+        <div class="more-content" style="max-width: 480px;">
+            <div class="more-close" onclick="closeCreateListModal()">×</div>
+            <div class="more-header">
+                <div class="more-title">Create New List</div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:12px;">
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#666; margin-bottom:6px;">Name</label>
+                    <input id="newListName" type="text" placeholder="e.g., Errands" style="width:100%; padding:10px; border:1px solid rgba(123,97,255,0.3); border-radius:8px; background:rgba(255,255,255,0.6);">
+                </div>
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#666; margin-bottom:6px;">Type</label>
+                    <select id="newListType" style="width:100%; padding:10px; border:1px solid rgba(123,97,255,0.3); border-radius:8px; background:rgba(255,255,255,0.6);">
+                        <option value="personal_todos">Personal Todos</option>
+                        <option value="work_todos">Work Todos</option>
+                        <option value="shopping">Shopping</option>
+                        <option value="bucket">Bucket</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#666; margin-bottom:6px;">Category</label>
+                    <select id="newListCategory" style="width:100%; padding:10px; border:1px solid rgba(123,97,255,0.3); border-radius:8px; background:rgba(255,255,255,0.6);">
+                        <option value="personal">Personal</option>
+                        <option value="work">Work</option>
+                    </select>
+                </div>
+                <label style="display:flex; align-items:center; gap:8px; font-size:14px; color:#333;">
+                    <input id="newListIsTask" type="checkbox" style="width:16px; height:16px; accent-color:#7B61FF;">
+                    Show in Calendar as task list
+                </label>
+                <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:8px;">
+                    <button onclick="closeCreateListModal()" style="padding:10px 16px; border:1px solid rgba(123,97,255,0.3); background:white; border-radius:8px; cursor:pointer;">Cancel</button>
+                    <button onclick="createList()" style="padding:10px 16px; border:none; background:linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); color:white; border-radius:8px; cursor:pointer;">Create</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div id="moreOverlay" class="more-overlay" onclick="if(event.target.id==='moreOverlay') closeMoreOverlay()">
+        <div class="more-content">
+            <div class="more-close" onclick="closeMoreOverlay()">×</div>
+            <div class="more-header">
+                <div class="more-title">All Features</div>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">💭</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('home.html')">
+                    <div class="more-item-icon">🏠</div>
+                    <div class="more-item-label">Home</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/common.js"></script>
+    <script>
+        // Global variables
+        let lists = {
+            shopping: [],
+            personal: [],
+            work: [],
+            bucket: []
+        };
+        
+        let listCompletionStates = {
+            shopping: false,
+            personal: false,
+            work: false,
+            bucket: false
+        };
+
+        // Time/Date Update Functions
+        function updateTimeDate() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            const timeElement = document.getElementById('currentTime');
+            const dateElement = document.getElementById('currentDate');
+            
+            if (timeElement) timeElement.textContent = timeString;
+            if (dateElement) dateElement.textContent = dateString;
+        }
+
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Lists page loaded');
+            loadLists();
+            
+            // Update time/date immediately and every minute
+            updateTimeDate();
+            setInterval(updateTimeDate, 60000);
+            // Re-evaluate column layout on resize/orientation changes
+            window.addEventListener('resize', () => {
+                ['shopping','personal','work','bucket'].forEach(renderList);
+            });
+            // Apply persisted column preferences
+            applyPersistedColumns();
+        });
+
+        // Manual toggle for list columns from header button
+        function toggleListColumns(category) {
+            const container = document.getElementById(`${category}Items`);
+            if (!container) return;
+            const enabled = container.classList.toggle('two-columns');
+            // Mark manual override so auto logic does not flip it back
+            container.dataset.manualColumns = enabled ? '1' : '';
+            // Persist to localStorage
+            try {
+                const key = `zoe:list:${category}:twoColumns`;
+                if (enabled) localStorage.setItem(key, '1'); else localStorage.removeItem(key);
+                updateColumnButtonIcon(category, enabled);
+            } catch (e) {}
+        }
+
+        function applyPersistedColumns() {
+            ['shopping','personal','work','bucket'].forEach(category => {
+                try {
+                    const key = `zoe:list:${category}:twoColumns`;
+                    const persisted = localStorage.getItem(key) === '1';
+                    const container = document.getElementById(`${category}Items`);
+                    if (!container) return;
+                    if (persisted) {
+                        container.classList.add('two-columns');
+                        container.dataset.manualColumns = '1';
+                    } else {
+                        container.classList.remove('two-columns');
+                    }
+                    updateColumnButtonIcon(category, persisted);
+                } catch (e) {}
+            });
+        }
+
+        function updateColumnButtonIcon(category, isTwoColumns) {
+            const btn = document.getElementById(`colBtn_${category}`);
+            if (!btn) return;
+            // Use "l" for single column and "ll" for two columns as requested
+            btn.textContent = isTwoColumns ? 'll' : 'l';
+        }
+
+        // Delete a user-created list (non-static)
+        async function deleteUserList(type, listId) {
+            if (!type || !listId) return;
+            if (!confirm('Delete this list? This cannot be undone.')) return;
+            try {
+                // Per-type delete endpoint mirrors save API style
+                await apiRequest(`/lists/${type}/${listId}`, { method: 'DELETE' });
+                showNotification('List deleted', 'success');
+                // Reload lists to reflect the change
+                await loadLists();
+            } catch (e) {
+                console.error('Failed to delete list', e);
+                showNotification('Failed to delete list', 'error');
+            }
+        }
+
+        // Load lists from backend
+        async function loadLists() {
+            try {
+                // Initialize empty lists
+                lists = { shopping: [], personal: [], work: [], bucket: [] };
+                
+                // Load in parallel with caching
+                const [shoppingRes, personalRes, workRes, bucketRes] = await Promise.all([
+                    apiGetCached('/lists/shopping', 15000),
+                    apiGetCached('/lists/personal_todos', 15000),
+                    apiGetCached('/lists/work_todos', 15000),
+                    apiGetCached('/lists/bucket', 15000)
+                ]);
+                
+                const getLists = (res) => (res && Array.isArray(res.lists)) ? res.lists : [];
+                const firstItems = (res) => (getLists(res)[0] && getLists(res)[0].items) ? getLists(res)[0].items : [];
+
+                lists.shopping = firstItems(shoppingRes);
+                lists.personal = firstItems(personalRes);
+                lists.work = firstItems(workRes);
+                lists.bucket = firstItems(bucketRes);
+
+                // Do not surface backend names on static tiles; keep static labels only
+
+                // Gather additional lists (beyond the primary) from each type
+                const extra = [];
+                const mapWithType = (arr, type) => (arr || []).map(l => ({ ...l, type }));
+                const shoppingLists = getLists(shoppingRes);
+                const personalLists = getLists(personalRes);
+                const workLists = getLists(workRes);
+                const bucketLists = getLists(bucketRes);
+                if (shoppingLists.length > 1) extra.push(...mapWithType(shoppingLists.slice(1), 'shopping'));
+                if (personalLists.length > 1) extra.push(...mapWithType(personalLists.slice(1), 'personal_todos'));
+                if (workLists.length > 1) extra.push(...mapWithType(workLists.slice(1), 'work_todos'));
+                if (bucketLists.length > 1) extra.push(...mapWithType(bucketLists.slice(1), 'bucket'));
+
+                renderDynamicLists(extra);
+                
+                renderAllLists();
+            } catch (error) {
+                console.error('Failed to load lists:', error);
+                lists = { shopping: [], personal: [], work: [], bucket: [] };
+                renderAllLists();
+            }
+        }
+
+        // Render all lists
+        function renderAllLists() {
+            renderList('shopping');
+            renderList('personal');
+            renderList('work');
+            renderList('bucket');
+        }
+
+        // Render dynamic additional lists (task-labeled)
+        function renderDynamicLists(extraLists) {
+            const container = document.getElementById('dynamicListsContainer');
+            if (!container) return;
+            container.innerHTML = '';
+            extraLists.forEach(list => {
+                    const card = document.createElement('div');
+                    card.className = 'list-card dynamic-list-card';
+                    card.innerHTML = `
+                        <div class="list-header">
+                            <div class="list-title">🗂️ ${list.name || 'List'}
+                                <span class="list-count">${(list.items || []).length}</span>
+                            </div>
+                            <div style="display:flex; gap:8px;">
+                                <button class="list-header-btn danger" title="Delete list" onclick="deleteUserList('${list.type}','${list.id}')">×</button>
+                            </div>
+                        </div>
+                        <div class="list-items" id="dyn_${list.id}"></div>
+                    `;
+                    container.appendChild(card);
+                    // Render items
+                    const itemsContainer = card.querySelector(`#dyn_${list.id}`);
+                    const items = Array.isArray(list.items) ? list.items : [];
+                    itemsContainer.innerHTML = items.length === 0 ? '<div class="empty-state">No items yet</div>' : items.map(item => `
+                        <div class="list-item" data-id="${item.id}">
+                            <div class="item-checkbox ${item.completed ? 'checked' : ''}"></div>
+                            <div class="item-text ${item.completed ? 'completed' : ''}">${item.text || ''}</div>
+                        </div>
+                    `).join('');
+                });
+        }
+
+        // Render individual list
+        function renderList(category) {
+            const container = document.getElementById(`${category}Items`);
+            const countElement = document.getElementById(`${category}Count`);
+            const items = lists[category] || [];
+
+            // Update count
+            countElement.textContent = items.length;
+
+            const itemsHtml = items.map(item => `
+                <div class="list-item" data-id="${item.id}">
+                    <div class="item-checkbox ${item.completed ? 'checked' : ''}" 
+                         onclick="toggleItem('${category}', ${item.id})"></div>
+                    <div class="item-text ${item.completed ? 'completed' : ''}">${item.text}</div>
+                    <button class="item-delete" onclick="deleteItem('${category}', ${item.id})" title="Delete">×</button>
+                </div>
+            `).join('');
+
+            const inputHtml = `
+                <input type="text" class="add-item-input" placeholder="Add ${category === 'shopping' ? 'item' : category === 'bucket' ? 'goal' : 'task'}..." 
+                       onkeypress="handleAddItem(event, '${category}')" id="${category}Input">
+            `;
+
+            container.innerHTML = inputHtml + (items.length === 0 ? `
+                <div class="empty-state">No items yet</div>
+            ` : itemsHtml);
+
+            // Keep auto detection light, but allow manual override via header button
+            try {
+                if (!container.dataset.manualColumns) {
+                    const isSmallHeight = window.innerHeight <= 800; // 7" class devices
+                    const tile = container.closest('.list-card');
+                    if (isSmallHeight && tile) {
+                        const available = tile.clientHeight - 80; // header + padding approx
+                        const contentHeight = container.scrollHeight;
+                        if (contentHeight > available * 1.1) {
+                            container.classList.add('two-columns');
+                        } else {
+                            container.classList.remove('two-columns');
+                        }
+                    } else {
+                        container.classList.remove('two-columns');
+                    }
+                }
+            } catch (e) {}
+
+            // Update completion button state
+            const completionBtn = document.querySelector(`[onclick="completeList('${category}')"]`);
+            if (completionBtn) {
+                completionBtn.classList.toggle('completed', listCompletionStates[category]);
+            }
+        }
+
+        // Handle add item on Enter key
+        function handleAddItem(event, category) {
+            if (event.key === 'Enter') {
+                const input = event.target;
+                const text = input.value.trim();
+                if (text) {
+                    addItem(category, text);
+                    input.value = '';
+                    // Keep focus so you can add multiple items quickly
+                    setTimeout(() => { input.focus(); }, 0);
+                }
+            }
+        }
+
+        // Add new item
+        async function addItem(category, text) {
+            if (!text || !text.trim()) return;
+
+            const newItem = {
+                id: Date.now(),
+                text: text.trim(),
+                completed: false,
+                category: category
+            };
+
+            try {
+                // Add to local list first
+                lists[category].push(newItem);
+                renderList(category);
+
+                // Save to backend
+                await saveListToBackend(category);
+            } catch (error) {
+                console.error('Failed to add item:', error);
+            }
+        }
+
+        // Save list to backend
+        async function saveListToBackend(category) {
+            try {
+                const listTypeMap = {
+                    'shopping': 'shopping',
+                    'personal': 'personal_todos',
+                    'work': 'work_todos',
+                    'bucket': 'bucket'
+                };
+                
+                const listType = listTypeMap[category];
+                if (!listType) return;
+
+                // Check if list exists
+                const response = await apiRequest(`/lists/${listType}`);
+                const existingLists = response.lists || [];
+                
+                if (existingLists.length > 0) {
+                    // Update existing list
+                    const listId = existingLists[0].id;
+                    await apiRequest(`/lists/${listType}/${listId}`, {
+                        method: 'PUT',
+                        body: JSON.stringify({
+                            items: lists[category]
+                        })
+                    });
+                } else {
+                    // Create new list
+                    await apiRequest(`/lists/${listType}`, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            list_type: listType,
+                            category: 'personal',
+                            name: `${category.charAt(0).toUpperCase() + category.slice(1)} List`,
+                            items: lists[category]
+                        })
+                    });
+                }
+            } catch (error) {
+                console.warn('Failed to save to backend:', error);
+            }
+        }
+
+        // Toggle item completion
+        async function toggleItem(category, itemId) {
+            const item = lists[category].find(item => item.id === itemId);
+            if (!item) return;
+
+            item.completed = !item.completed;
+            renderList(category);
+            await saveListToBackend(category);
+        }
+
+        // Delete item (no prompt)
+        async function deleteItem(category, itemId) {
+            lists[category] = lists[category].filter(item => item.id !== itemId);
+            renderList(category);
+            await saveListToBackend(category);
+        }
+
+        // Complete list (archive for Zoe)
+        async function completeList(category) {
+            if (listCompletionStates[category]) {
+                // Uncomplete list
+                listCompletionStates[category] = false;
+                renderList(category);
+                return;
+            }
+
+            try {
+                // Mark all items as completed
+                lists[category].forEach(item => {
+                    item.completed = true;
+                });
+
+                // Save completed items to backend
+                await saveListToBackend(category);
+
+                // Archive the list (don't delete, just mark as completed)
+                listCompletionStates[category] = true;
+                renderList(category);
+                
+                // Show notification
+                showNotification(`${category} list completed and archived!`, 'success');
+            } catch (error) {
+                console.error('Failed to complete list:', error);
+            }
+        }
+
+        // Create List Modal controls
+        function openCreateListModal() {
+            document.getElementById('createListModal').classList.add('active');
+            setTimeout(() => document.getElementById('newListName').focus(), 50);
+        }
+        function closeCreateListModal() {
+            document.getElementById('createListModal').classList.remove('active');
+        }
+        // Create new list via API
+        async function createList() {
+            const name = (document.getElementById('newListName').value || '').trim();
+            const type = document.getElementById('newListType').value;
+            const category = document.getElementById('newListCategory').value;
+            const isTask = document.getElementById('newListIsTask').checked;
+            if (!name) { alert('Please enter a list name'); return; }
+            try {
+                // Use per-type endpoint to match existing API contract (e.g., /lists/personal_todos)
+                await apiRequest(`/lists/${type}`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        list_type: type,
+                        name,
+                        category,
+                        is_task_list: isTask
+                    })
+                });
+                closeCreateListModal();
+                await loadLists();
+                showNotification('List created', 'success');
+            } catch (e) {
+                console.error('Failed to create list', e);
+                showNotification('Failed to create list', 'error');
+            }
+        }
+
+        // More overlay functions
+        function openMoreOverlay() {
+            document.getElementById('moreOverlay').classList.add('active');
+        }
+
+        function closeMoreOverlay() {
+            document.getElementById('moreOverlay').classList.remove('active');
+        }
+
+        function navigateToPage(url) {
+            window.location.href = url;
+        }
+
+        // Lightweight GET cache
+        const __listsApiGetCache = new Map();
+        const __listsApiInFlight = new Map();
+        function apiGetCached(path, ttlMs = 30000) {
+            const key = path;
+            const now = Date.now();
+            const cached = __listsApiGetCache.get(key);
+            if (cached && (now - cached.timestamp) < cached.ttl) {
+                return Promise.resolve(cached.data);
+            }
+            if (__listsApiInFlight.has(key)) {
+                return __listsApiInFlight.get(key);
+            }
+            const p = apiRequest(path)
+                .then(data => {
+                    __listsApiGetCache.set(key, { timestamp: Date.now(), ttl: ttlMs, data });
+                    __listsApiInFlight.delete(key);
+                    return data;
+                })
+                .catch(err => {
+                    __listsApiInFlight.delete(key);
+                    throw err;
+                });
+            __listsApiInFlight.set(key, p);
+            return p;
+        }
+
+        // Notifications system
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+            
+            // Clear notification indicator when panel is opened
+            const notificationBtn = document.querySelector('.notifications-btn');
+            notificationBtn.classList.remove('has-notifications');
+        }
+
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+
+        async function loadNotifications() {
+            try {
+                const response = await apiRequest('/reminders/notifications/pending');
+                const notifications = response.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            // Update notification button indicator
+            if (notifications.length > 0) {
+                notificationBtn.classList.add('has-notifications');
+            } else {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
+                     onclick="handleNotificationClick(${notification.id})">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${new Date(notification.created_at).toLocaleTimeString()}</span>
+                        ${notification.priority ? `<span class="notification-priority" style="background: ${getPriorityColor(notification.priority)}; color: white;">${notification.priority}</span>` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function getPriorityColor(priority) {
+            switch(priority.toLowerCase()) {
+                case 'high': return '#ef4444';
+                case 'medium': return '#f59e0b';
+                case 'low': return '#10b981';
+                default: return '#6b7280';
+            }
+        }
+
+        function handleNotificationClick(notificationId) {
+            // Mark notification as acknowledged
+            acknowledgeNotification(notificationId);
+            closeNotifications();
+        }
+
+        async function acknowledgeNotification(notificationId) {
+            try {
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
+                    method: 'POST'
+                });
+                // Reload notifications
+                loadNotifications();
+            } catch (error) {
+                console.error('Failed to acknowledge notification:', error);
+            }
+        }
+
+        // User menu functions
+        function toggleUserDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function showUserProfile() {
+            // Implement user profile modal
+            alert('User profile coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function showSecuritySettings() {
+            // Implement security settings
+            alert('Security settings coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function switchUser() {
+            localStorage.removeItem('zoe_session');
+            window.location.href = 'auth.html?redirect=' + encodeURIComponent(window.location.pathname);
+        }
+
+        function upgradeSession() {
+            // Implement session upgrade
+            alert('Session upgrade coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function logout() {
+            localStorage.removeItem('zoe_session');
+            window.location.href = 'auth.html';
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const userMenu = document.querySelector('.user-menu');
+            const dropdown = document.getElementById('userDropdown');
+            
+            if (userMenu && !userMenu.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+
+        // Load notifications on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadNotifications();
+        });
+    </script>
+</body>
+</html>

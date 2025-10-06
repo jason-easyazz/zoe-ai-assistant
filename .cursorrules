@@ -1,0 +1,72 @@
+# Zoe AI Assistant Development Rules
+# These rules ensure safe, maintainable, and efficient code
+
+## Security Rules
+- Never hardcode API keys, passwords, or secrets
+- Always use environment variables for sensitive data
+- Validate all user inputs before processing
+- Use parameterized queries for database operations
+- Never execute user input directly as code
+
+## File System Safety
+- Don't use os.remove() without confirmation
+- Don't use shutil.rmtree() without backup verification
+- Always check file existence before operations
+- Use safe file paths (no ../ or absolute paths from user input)
+- Don't overwrite critical system files
+
+## Docker & Container Safety
+- Don't run `docker rm -f` without explicit confirmation
+- Don't run `docker system prune` or `docker prune -f`
+- Always backup before destructive operations
+- Don't modify running containers without stopping them first
+- Don't delete volumes without backup
+
+## Database Safety
+- Don't use DROP TABLE without confirmation
+- Don't use DELETE without WHERE clause
+- Always backup before schema changes
+- Use transactions for multi-step operations
+- Don't truncate tables without backup
+
+## Code Quality
+- Add error handling for all risky operations
+- Use type hints for function parameters
+- Add docstrings to functions and classes
+- Keep functions under 50 lines when possible
+- Use meaningful variable names
+
+## Performance
+- Don't run blocking operations in main thread
+- Use async/await for I/O operations
+- Don't load large files into memory at once
+- Use generators for large data processing
+- Cache expensive operations
+
+## Testing
+- Test all new functionality
+- Add unit tests for critical functions
+- Test error conditions and edge cases
+- Verify rollback procedures work
+- Test with different user permissions
+
+## Documentation
+- Update README for new features
+- Document API changes
+- Add inline comments for complex logic
+- Keep architecture diagrams current
+- Document configuration options
+
+## Error Handling
+- Always handle exceptions gracefully
+- Log errors with sufficient context
+- Provide helpful error messages to users
+- Don't expose internal system details
+- Implement proper rollback mechanisms
+
+## Memory Management
+- Don't create memory leaks
+- Clean up resources properly
+- Use context managers for file operations
+- Don't store large objects in global scope
+- Monitor memory usage in long-running processes

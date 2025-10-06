@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Zoe AI - Aider Code Assistant</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            height: 100vh;
+            overflow: hidden;
+            color: #333;
+        }
+
+        .header {
+            height: 56px;
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+        }
+
+        .nav {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            color: #333;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 4px;
+        }
+
+        .nav-link {
+            padding: 8px 16px;
+            border-radius: 8px;
+            text-decoration: none;
+            color: #666;
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+
+        .nav-link.active {
+            background: rgba(123, 97, 255, 0.1);
+            color: #7B61FF;
+        }
+
+        .nav-link:hover:not(.active) {
+            background: rgba(0, 0, 0, 0.05);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .content {
+            height: calc(100vh - 56px);
+            display: flex;
+        }
+
+        .sidebar {
+            width: 320px;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(10px);
+            border-right: 1px solid rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .sidebar h2 {
+            margin-bottom: 20px;
+            font-size: 1.2rem;
+            color: #333;
+        }
+
+        .session-controls {
+            margin-bottom: 24px;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+            color: white;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+            width: 100%;
+            margin-bottom: 8px;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+
+        .btn-secondary {
+            background: rgba(0, 0, 0, 0.05);
+            color: #666;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(0, 0, 0, 0.1);
+            transform: none;
+            box-shadow: none;
+        }
+
+        .sessions-list {
+            margin-bottom: 24px;
+        }
+
+        .session-item {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+        }
+
+        .session-item:hover {
+            background: rgba(123, 97, 255, 0.05);
+            border-color: rgba(123, 97, 255, 0.2);
+        }
+
+        .session-item.active {
+            background: rgba(123, 97, 255, 0.1);
+            border-color: #7B61FF;
+        }
+
+        .session-title {
+            font-weight: 500;
+            margin-bottom: 4px;
+            color: #333;
+        }
+
+        .session-time {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .file-context {
+            margin-bottom: 24px;
+        }
+
+        .file-item {
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.03);
+            border-radius: 6px;
+            margin-bottom: 4px;
+            font-size: 13px;
+            color: #666;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .file-remove {
+            color: #ff4757;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: rgba(255, 255, 255, 0.6);
+            backdrop-filter: blur(10px);
+        }
+
+        .chat-header {
+            padding: 20px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+            background: rgba(255, 255, 255, 0.8);
+        }
+
+        .chat-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 4px;
+        }
+
+        .chat-subtitle {
+            font-size: 14px;
+            color: #666;
+        }
+
+        .messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .message {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .message.user {
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+            color: white;
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.aider {
+            background: rgba(255, 255, 255, 0.9);
+            color: #333;
+            align-self: flex-start;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-bottom-left-radius: 4px;
+        }
+
+        .message.status-thinking {
+            background: rgba(123, 97, 255, 0.1);
+            color: #7B61FF;
+            align-self: center;
+            text-align: center;
+            font-style: italic;
+        }
+
+        .input-area {
+            padding: 20px;
+            border-top: 1px solid rgba(0, 0, 0, 0.1);
+            background: rgba(255, 255, 255, 0.8);
+        }
+
+        .input-container {
+            display: flex;
+            gap: 12px;
+            align-items: flex-end;
+        }
+
+        .message-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            font-size: 14px;
+            resize: none;
+            min-height: 44px;
+            max-height: 120px;
+            font-family: inherit;
+        }
+
+        .message-input:focus {
+            outline: none;
+            border-color: #7B61FF;
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+
+        .send-btn {
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+            min-width: 80px;
+        }
+
+        .send-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+
+        .send-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-online {
+            background: #4CAF50;
+        }
+
+        .status-offline {
+            background: #f44336;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #666;
+            padding: 40px 20px;
+        }
+
+        .empty-state h3 {
+            margin-bottom: 8px;
+            color: #333;
+        }
+
+        .empty-state p {
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .code-block {
+            background: rgba(0, 0, 0, 0.05);
+            border-radius: 6px;
+            padding: 12px;
+            margin: 8px 0;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 13px;
+            overflow-x: auto;
+        }
+
+        .file-drop-zone {
+            border: 2px dashed rgba(123, 97, 255, 0.3);
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            color: #666;
+            margin-bottom: 16px;
+            transition: all 0.2s;
+        }
+
+        .file-drop-zone:hover {
+            border-color: #7B61FF;
+            background: rgba(123, 97, 255, 0.05);
+        }
+
+        .file-drop-zone.dragover {
+            border-color: #7B61FF;
+            background: rgba(123, 97, 255, 0.1);
+        }
+
+        .task-context {
+            margin-bottom: 24px;
+        }
+
+        .task-controls {
+            margin-bottom: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .task-search {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            width: 100%;
+        }
+
+        .task-search:focus {
+            outline: none;
+            border-color: #7B61FF;
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+
+        .task-list-container {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.6);
+        }
+
+        .task-item {
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 8px;
+            margin-bottom: 8px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+            transition: all 0.2s;
+            border-left: 3px solid transparent;
+        }
+
+        .task-item:hover {
+            background: rgba(123, 97, 255, 0.05);
+            border-color: rgba(123, 97, 255, 0.3);
+            border-left-color: #7B61FF;
+            transform: translateX(2px);
+        }
+
+        .task-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .task-title {
+            font-weight: 500;
+            margin-bottom: 4px;
+            color: #333;
+            font-size: 14px;
+        }
+
+        .task-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            color: #666;
+        }
+
+        .task-priority {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 500;
+        }
+
+        .priority-high {
+            background: rgba(255, 99, 99, 0.2);
+            color: #d63031;
+        }
+
+        .priority-medium {
+            background: rgba(255, 193, 7, 0.2);
+            color: #f39c12;
+        }
+
+        .priority-low {
+            background: rgba(46, 204, 113, 0.2);
+            color: #27ae60;
+        }
+
+        .task-execute-btn {
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+            color: white;
+            border: none;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .task-execute-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(123, 97, 255, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="nav">
+            <a href="index.html" class="logo">
+                <div class="logo-icon">Z</div>
+                <span>Developer</span>
+            </a>
+            <div class="nav-links">
+                <a href="index.html" class="nav-link">📊 Dashboard</a>
+                <a href="chat.html" class="nav-link">💬 Chat</a>
+                <a href="aider.html" class="nav-link active">🤖 Aider</a>
+                <a href="tasks.html" class="nav-link">📋 Tasks</a>
+                <a href="tools.html" class="nav-link">🔧 Tools</a>
+                <a href="monitor.html" class="nav-link">📈 Monitor</a>
+                <a href="backups.html" class="nav-link">💾 Backups</a>
+                <a href="settings.html" class="nav-link">⚙️ Settings</a>
+            </div>
+        </div>
+        <div class="header-right">
+            <span id="currentTime"></span>
+        </div>
+    </div>
+
+    <div class="content">
+        <div class="sidebar">
+            <h2>🤖 Aider Sessions</h2>
+            
+            <div class="session-controls">
+                <button class="btn" onclick="createNewSession()">+ New Session</button>
+                <button class="btn btn-secondary" onclick="loadSessions()">🔄 Refresh</button>
+            </div>
+
+            <div class="sessions-list" id="sessionsList">
+                <div class="empty-state">
+                    <h3>No Sessions</h3>
+                    <p>Create a new session to start coding with Aider</p>
+                </div>
+            </div>
+
+            <div class="file-context">
+                <h3>📁 File Context</h3>
+                <div class="file-drop-zone" id="fileDropZone">
+                    <p>Drop files here or click to add</p>
+                    <input type="file" id="fileInput" multiple style="display: none;" onchange="handleFileSelect(event)">
+                </div>
+                <div id="fileList"></div>
+            </div>
+
+            <div class="task-context">
+                <h3>📋 Active Tasks</h3>
+                <div class="task-controls">
+                    <input type="text" id="taskSearch" placeholder="Search tasks..." class="task-search" oninput="filterTasks()">
+                    <button class="btn btn-secondary" onclick="loadTasks()">🔄 Refresh</button>
+                </div>
+                <div class="task-list-container">
+                    <div id="taskList"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="chat-area">
+            <div class="chat-header">
+                <div class="chat-title">
+                    <span class="status-indicator status-online"></span>
+                    Aider Code Assistant
+                </div>
+                <div class="chat-subtitle">AI-powered pair programming companion</div>
+            </div>
+
+            <div class="messages" id="messages">
+                <div class="empty-state">
+                    <h3>Welcome to Aider!</h3>
+                    <p>Start a new session and begin coding with your AI assistant. I can help you write, debug, and refactor code.</p>
+                </div>
+            </div>
+
+            <div class="input-area">
+                <div class="input-container">
+                    <textarea 
+                        class="message-input" 
+                        id="messageInput" 
+                        placeholder="Ask me to help with your code..."
+                        rows="1"
+                        onkeydown="handleKeyDown(event)"
+                        oninput="autoResize(this)"
+                    ></textarea>
+                    <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>
+                        Send
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentSessionId = null;
+        let sessions = [];
+        let tasks = [];
+
+        // API discovery (match Tasks page robustness)
+        // This dynamically discovers the API based on the current hostname
+        // Works for localhost, LAN IPs, domain names, etc. - no hardcoded IPs!
+        const PROTOCOL = window.location.protocol;
+        const HOSTNAME = window.location.hostname;
+        const CUR_PORT = window.location.port;
+
+        function getConfiguredApiBase() {
+            try {
+                const urlParam = new URLSearchParams(window.location.search).get('api');
+                if (urlParam) localStorage.setItem('developerApiBase', urlParam);
+            } catch(_) {}
+            return (window.DEVELOPER_API_BASE || localStorage.getItem('developerApiBase') || '').trim();
+        }
+
+        const API_BASE_CANDIDATES = (() => {
+            const bases = [];
+            const configured = getConfiguredApiBase();
+            // Prefer explicitly configured base first
+            if (configured) bases.push(configured);
+            // Then same-origin only (reduces noisy connection attempts)
+            bases.push(`${PROTOCOL}//${HOSTNAME}${CUR_PORT ? `:${CUR_PORT}` : ''}`);
+            return bases;
+        })();
+
+        async function apiFetch(path, options = {}) {
+            const merged = Object.assign({ mode: 'cors' }, options);
+            let lastResponse = null;
+            let lastError = null;
+            
+            for (const base of API_BASE_CANDIDATES) {
+                const normalizedBase = base ? String(base).replace(/\/$/, '') : '';
+                const normalizedPath = String(path).startsWith('/') ? path : `/${path}`;
+                const url = normalizedBase ? `${normalizedBase}${normalizedPath}` : normalizedPath;
+                
+                try {
+                    const res = await fetch(url, merged);
+                    lastResponse = res;
+                    
+                    // If we get a successful response or a specific error we want to handle
+                    if (res.status < 500 && res.status !== 404) {
+                        return res;
+                    }
+                    
+                    // For 404s, continue trying other bases
+                    if (res.status === 404) {
+                        continue;
+                    }
+                    
+                    // For server errors, continue trying other bases
+                    if (res.status >= 500) {
+                        continue;
+                    }
+                    
+                    return res;
+                } catch (e) {
+                    lastError = e;
+                    // Continue to next base
+                }
+            }
+            
+            // Return the last response we got, or create a 404 if we never got any response
+            return lastResponse || new Response(null, { status: 404 });
+        }
+
+        // Track Aider API availability to avoid repeated failing calls
+        let AIDER_API_AVAILABLE = null; // null=unknown, true=available, false=missing
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            updateTime();
+            setInterval(updateTime, 1000);
+            loadSessions();
+            loadTasks();
+            setupFileDrop();
+            handleTaskContext();
+        });
+
+        function updateTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('en-US', { 
+                hour12: false,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            document.getElementById('currentTime').textContent = timeString;
+        }
+
+        function setupFileDrop() {
+            const dropZone = document.getElementById('fileDropZone');
+            const fileInput = document.getElementById('fileInput');
+
+            dropZone.addEventListener('click', () => fileInput.click());
+            
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('dragover');
+            });
+
+            dropZone.addEventListener('dragleave', () => {
+                dropZone.classList.remove('dragover');
+            });
+
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('dragover');
+                handleFileSelect({ target: { files: e.dataTransfer.files } });
+            });
+        }
+
+        function handleFileSelect(event) {
+            const files = Array.from(event.target.files);
+            const fileList = document.getElementById('fileList');
+            
+            files.forEach(file => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.innerHTML = `
+                    <span>${file.name}</span>
+                    <span class="file-remove" onclick="removeFile(this)">×</span>
+                `;
+                fileList.appendChild(fileItem);
+            });
+        }
+
+        function removeFile(element) {
+            element.parentElement.remove();
+        }
+
+        async function createNewSession() {
+            try {
+                if (AIDER_API_AVAILABLE === false) {
+                    throw new Error('aider-missing');
+                }
+                const response = await apiFetch(`/api/aider/session`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        name: `Session ${new Date().toLocaleString()}`,
+                        description: 'New Aider coding session'
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    currentSessionId = data.session_id || data.id || data.sessionId || `session_${Date.now()}`;
+                    AIDER_API_AVAILABLE = true;
+                    addMessage('New Aider session created! Ready to help with your code.', 'aider');
+                    loadSessions();
+                } else if (response.status === 404) {
+                    // Aider API not available, create local session
+                    AIDER_API_AVAILABLE = false;
+                    currentSessionId = `local_session_${Date.now()}`;
+                    addMessage('Aider API not available. Using local session for demo purposes.', 'aider');
+                    loadSessions();
+                } else {
+                    throw new Error('Failed to create session');
+                }
+            } catch (error) {
+                console.error('Error creating session:', error);
+                // Fallback to local session
+                AIDER_API_AVAILABLE = false;
+                currentSessionId = `local_session_${Date.now()}`;
+                addMessage('Aider API not available. Using local session for demo purposes.', 'aider');
+                loadSessions();
+            }
+        }
+
+        async function loadSessions() {
+            try {
+                if (AIDER_API_AVAILABLE === false) {
+                    throw new Error('aider-missing');
+                }
+                const response = await apiFetch(`/api/aider/sessions`);
+                
+                if (response.ok) {
+                    const raw = await response.json();
+                    const rawList = Array.isArray(raw) ? raw : (raw.sessions || []);
+                    sessions = rawList.map(s => ({
+                        id: s.id || s.session_id || s.sessionId,
+                        name: s.name || s.session_id || s.sessionId || 'Session',
+                        created_at: s.created_at || s.createdAt || new Date().toISOString(),
+                        status: s.status || 'active',
+                        task_id: s.task_id || s.taskId || null
+                    }));
+                    AIDER_API_AVAILABLE = true;
+                    displaySessions();
+                } else if (response.status === 404) {
+                    // Aider API not available, show local session if exists
+                    console.log('Aider API not available, using local session management');
+                    AIDER_API_AVAILABLE = false;
+                    if (currentSessionId) {
+                        sessions = [{
+                            id: currentSessionId,
+                            name: 'Local Session',
+                            created_at: new Date().toISOString()
+                        }];
+                    } else {
+                        sessions = [];
+                    }
+                    displaySessions();
+                } else {
+                    throw new Error('Failed to load sessions');
+                }
+            } catch (error) {
+                console.error('Error loading sessions:', error);
+                // Show local session if exists
+                if (String(error).includes('aider-missing')) {
+                    AIDER_API_AVAILABLE = false;
+                }
+                if (currentSessionId) {
+                    sessions = [{
+                        id: currentSessionId,
+                        name: 'Local Session',
+                        created_at: new Date().toISOString()
+                    }];
+                    displaySessions();
+                } else {
+                    const sessionsList = document.getElementById('sessionsList');
+                    sessionsList.innerHTML = '<div class="empty-state"><h3>No Sessions</h3><p>Create a new session to start coding with Aider</p></div>';
+                }
+            }
+        }
+
+        function displaySessions() {
+            const sessionsList = document.getElementById('sessionsList');
+            
+            if (sessions.length === 0) {
+                sessionsList.innerHTML = '<div class="empty-state"><h3>No Sessions</h3><p>Create a new session to start coding with Aider</p></div>';
+                return;
+            }
+
+            sessionsList.innerHTML = sessions.map(session => `
+                <div class="session-item ${session.id === currentSessionId ? 'active' : ''}" 
+                     onclick="selectSession('${session.id}')">
+                    <div class="session-title">${session.name || 'Untitled Session'}</div>
+                    <div class="session-time">${new Date(session.created_at).toLocaleString()}</div>
+                </div>
+            `).join('');
+        }
+
+        function selectSession(sessionId) {
+            currentSessionId = sessionId;
+            displaySessions();
+            clearMessages();
+            addMessage('Session loaded. Ready to continue coding!', 'aider');
+        }
+
+        function clearMessages() {
+            document.getElementById('messages').innerHTML = '';
+        }
+
+        function addMessage(text, type) {
+            const messages = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            messageDiv.innerHTML = formatMessage(text);
+            messages.appendChild(messageDiv);
+            messages.scrollTop = messages.scrollHeight;
+            return messageDiv;
+        }
+
+        function formatMessage(text) {
+            // Simple markdown-like formatting
+            return text
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                .replace(/`(.*?)`/g, '<code>$1</code>')
+                .replace(/```([\s\S]*?)```/g, '<div class="code-block">$1</div>')
+                .replace(/\n/g, '<br>');
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (!message) return;
+            if (!currentSessionId) {
+                addMessage('Please create or select a session first.', 'aider');
+                return;
+            }
+
+            // Add user message
+            addMessage(message, 'user');
+            input.value = '';
+            autoResize(input);
+
+            // Disable send button
+            const sendBtn = document.getElementById('sendBtn');
+            sendBtn.disabled = true;
+            sendBtn.textContent = 'Sending...';
+
+            // Add thinking message
+            const thinkingMsg = addMessage('Thinking...', 'aider');
+            thinkingMsg.classList.add('status-thinking');
+
+            try {
+                if (AIDER_API_AVAILABLE === false) {
+                    throw new Error('aider-missing');
+                }
+                const response = await apiFetch(`/api/aider/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        message: message,
+                        context: getFileContext()
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    AIDER_API_AVAILABLE = true;
+                    thinkingMsg.remove();
+                    addAiderResponse(data.response);
+                } else if (response.status === 404) {
+                    // Aider API not available, show demo response
+                    AIDER_API_AVAILABLE = false;
+                    thinkingMsg.remove();
+                    addAiderResponse(`I understand you want help with: "${message}"\n\nUnfortunately, the Aider API is not currently available. This is a demo response. In a real implementation, I would help you with your coding tasks using AI assistance.\n\nFile context: ${getFileContext().join(', ') || 'None'}`);
+                } else {
+                    throw new Error('Failed to get response from Aider');
+                }
+            } catch (error) {
+                console.error('Error sending message:', error);
+                thinkingMsg.remove();
+                // Show demo response instead of error
+                if (String(error).includes('aider-missing')) {
+                    AIDER_API_AVAILABLE = false;
+                }
+                addAiderResponse(`I understand you want help with: "${message}"\n\nUnfortunately, the Aider API is not currently available. This is a demo response. In a real implementation, I would help you with your coding tasks using AI assistance.\n\nFile context: ${getFileContext().join(', ') || 'None'}`);
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.textContent = 'Send';
+            }
+        }
+
+        function addAiderResponse(response) {
+            addMessage(response, 'aider');
+        }
+
+        function getFileContext() {
+            const fileItems = document.querySelectorAll('.file-item');
+            return Array.from(fileItems).map(item => item.querySelector('span').textContent);
+        }
+
+        function handleKeyDown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        function autoResize(textarea) {
+            textarea.style.height = 'auto';
+            textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+        }
+
+        // Enable send button when there's text
+        document.getElementById('messageInput').addEventListener('input', function() {
+            const sendBtn = document.getElementById('sendBtn');
+            sendBtn.disabled = !this.value.trim() || !currentSessionId;
+        });
+
+        // Task Management Functions
+        async function loadTasks() {
+            try {
+                const response = await apiFetch(`/api/developer/tasks/list`);
+                
+                if (response.ok) {
+                    const raw = await response.json();
+                    tasks = Array.isArray(raw) ? raw : (raw.tasks || []);
+                    displayTasks(tasks);
+                } else {
+                    throw new Error('Failed to load tasks');
+                }
+            } catch (error) {
+                console.error('Error loading tasks:', error);
+                const taskList = document.getElementById('taskList');
+                taskList.innerHTML = '<div class="empty-state"><h3>No Tasks Available</h3><p>Tasks API not available or no tasks found</p></div>';
+            }
+        }
+
+        function displayTasks(tasks) {
+            const taskList = document.getElementById('taskList');
+            
+            if (tasks.length === 0) {
+                taskList.innerHTML = '<div class="empty-state"><h3>No Tasks</h3><p>Create tasks in the Tasks page</p></div>';
+                return;
+            }
+
+            // Filter to show only active/pending tasks
+            const activeTasks = tasks.filter(task => 
+                task.status === 'pending' || 
+                task.status === 'in_progress' || 
+                !task.status
+            );
+
+            // Store all tasks for filtering
+            window.allTasks = activeTasks;
+            
+            // Display all tasks initially
+            renderTasks(activeTasks);
+        }
+
+        function renderTasks(tasks) {
+            const taskList = document.getElementById('taskList');
+            
+            if (tasks.length === 0) {
+                taskList.innerHTML = '<div class="empty-state"><h3>No Tasks Found</h3><p>Try adjusting your search</p></div>';
+                return;
+            }
+
+            taskList.innerHTML = tasks.map(task => `
+                <div class="task-item" onclick="selectTask('${task.id}')">
+                    <div class="task-title">${task.title || 'Untitled Task'}</div>
+                    <div class="task-meta">
+                        <span class="task-priority priority-${task.priority || 'medium'}">${task.priority || 'medium'}</span>
+                        <button class="task-execute-btn" onclick="executeTaskWithAider('${task.id}', event)">Execute</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function filterTasks() {
+            const searchTerm = document.getElementById('taskSearch').value.toLowerCase();
+            const allTasks = window.allTasks || [];
+            
+            if (!searchTerm) {
+                renderTasks(allTasks);
+                return;
+            }
+            
+            const filteredTasks = allTasks.filter(task => 
+                (task.title || '').toLowerCase().includes(searchTerm) ||
+                (task.description || '').toLowerCase().includes(searchTerm) ||
+                (task.objective || '').toLowerCase().includes(searchTerm) ||
+                (task.priority || '').toLowerCase().includes(searchTerm)
+            );
+            
+            renderTasks(filteredTasks);
+        }
+
+        function selectTask(taskId) {
+            // Load task details and add to context
+            const task = tasks.find(t => t.id === taskId);
+            if (task) {
+                const message = `I want to work on this task: "${task.title}"\n\nObjective: ${task.objective || 'No objective'}\n\nPriority: ${task.priority || 'medium'}\n\nStatus: ${task.status || 'pending'}`;
+                
+                // Add to chat
+                addMessage(message, 'user');
+                
+                // Add to file context if there are files
+                if (task.files && task.files.length > 0) {
+                    const fileList = document.getElementById('fileList');
+                    task.files.forEach(file => {
+                        const fileItem = document.createElement('div');
+                        fileItem.className = 'file-item';
+                        fileItem.innerHTML = `
+                            <span>${file}</span>
+                            <span class="file-remove" onclick="removeFile(this)">×</span>
+                        `;
+                        fileList.appendChild(fileItem);
+                    });
+                }
+            }
+        }
+
+        async function executeTaskWithAider(taskId, event) {
+            event.stopPropagation();
+            
+            if (!currentSessionId) {
+                addMessage('Please create or select a session first.', 'aider');
+                return;
+            }
+
+            try {
+                // Get task details from the already loaded tasks
+                const task = tasks.find(t => t.id === taskId);
+                if (!task) {
+                    addMessage('Task not found in current task list.', 'aider');
+                    return;
+                }
+                
+                // Create execution message
+                const executionMessage = `Execute this task with Aider: "${task.title}"\n\nObjective: ${task.objective || 'No objective'}\n\nPriority: ${task.priority || 'medium'}\n\nStatus: ${task.status || 'pending'}`;
+                
+                // Add to chat
+                addMessage(executionMessage, 'user');
+                
+                // Send to Aider
+                if (AIDER_API_AVAILABLE === false) {
+                    throw new Error('aider-missing');
+                }
+                const aiderResponse = await apiFetch(`/api/aider/chat`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        message: executionMessage,
+                        context: getFileContext(),
+                        task_id: taskId
+                    })
+                });
+
+                if (aiderResponse.ok) {
+                    const data = await aiderResponse.json();
+                    AIDER_API_AVAILABLE = true;
+                    addAiderResponse(data.response);
+                } else if (aiderResponse.status === 404) {
+                    // Aider API not available, show demo response
+                    AIDER_API_AVAILABLE = false;
+                    addAiderResponse(`I understand you want to execute this task: "${task.title}"\n\nUnfortunately, the Aider API is not currently available. This is a demo response. In a real implementation, I would help you execute this task using AI assistance.\n\nTask details:\n- Objective: ${task.objective || 'No objective'}\n- Priority: ${task.priority || 'medium'}\n- Status: ${task.status || 'pending'}\n\nFile context: ${getFileContext().join(', ') || 'None'}`);
+                } else {
+                    throw new Error('Failed to execute task with Aider');
+                }
+            } catch (error) {
+                console.error('Error executing task with Aider:', error);
+                addMessage('Failed to execute task with Aider. Please try again.', 'aider');
+            }
+        }
+
+        // Handle task context from URL parameters
+        function handleTaskContext() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const taskId = urlParams.get('task');
+            const contextParam = urlParams.get('context');
+            
+            if (taskId && contextParam) {
+                try {
+                    const taskContext = JSON.parse(decodeURIComponent(contextParam));
+                    
+                    // Create a new session if none exists
+                    if (!currentSessionId) {
+                        createNewSession().then(() => {
+                            loadTaskContext(taskContext);
+                        });
+                    } else {
+                        loadTaskContext(taskContext);
+                    }
+                } catch (error) {
+                    console.error('Error parsing task context:', error);
+                }
+            }
+        }
+
+        function loadTaskContext(taskContext) {
+            // Create task message
+            const taskMessage = `I want to work on this task: "${taskContext.title}"\n\nDescription: ${taskContext.description}\n\nObjective: ${taskContext.objective}\n\nRequirements: ${taskContext.requirements.join(', ') || 'None specified'}\n\nConstraints: ${taskContext.constraints.join(', ') || 'None specified'}\n\nPriority: ${taskContext.priority}`;
+            
+            // Add to chat
+            addMessage(taskMessage, 'user');
+            
+            // Clear any existing messages and show welcome
+            const messages = document.getElementById('messages');
+            messages.innerHTML = '';
+            addMessage(taskMessage, 'user');
+        }
+    </script>
+</body>
+</html>

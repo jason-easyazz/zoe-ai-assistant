@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Developer Tools</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            height: 100vh;
+            overflow: hidden;
+            color: #333;
+        }
+
+        .header {
+            height: 56px;
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+        }
+
+        .nav {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            color: #333;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 4px;
+        }
+
+        .nav-link {
+            padding: 8px 16px;
+            border-radius: 8px;
+            text-decoration: none;
+            color: #666;
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+
+        .nav-link.active {
+            background: rgba(123, 97, 255, 0.1);
+            color: #7B61FF;
+        }
+
+        .nav-link:hover:not(.active) {
+            background: rgba(0, 0, 0, 0.05);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .content {
+            height: calc(100vh - 56px);
+            padding: 24px;
+            overflow-y: auto;
+        }
+
+        .tools-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+
+        .tool-card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            transition: transform 0.2s;
+        }
+
+        .tool-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+        }
+
+        .tool-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .tool-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+
+        .tool-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .tool-description {
+            color: #666;
+            margin-bottom: 16px;
+            line-height: 1.5;
+        }
+
+        .tool-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #7B61FF;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #6b51ef;
+        }
+
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+
+        .btn-success {
+            background: #22c55e;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #16a34a;
+        }
+
+        .btn-warning {
+            background: #f59e0b;
+            color: white;
+        }
+
+        .btn-warning:hover {
+            background: #d97706;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .output-area {
+            background: #1e1e1e;
+            color: #fff;
+            border-radius: 8px;
+            padding: 16px;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 16px;
+            display: none;
+        }
+
+        .output-area.show {
+            display: block;
+        }
+
+        .quick-commands {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+            margin-bottom: 20px;
+        }
+
+        .commands-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+
+        .command-btn {
+            padding: 12px;
+            background: #f8f9fa;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: left;
+            font-size: 14px;
+        }
+
+        .command-btn:hover {
+            background: rgba(123, 97, 255, 0.1);
+            border-color: #7B61FF;
+        }
+
+        .command-title {
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .command-desc {
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="nav">
+            <a href="index.html" class="logo">
+                <div class="logo-icon">D</div>
+                <span>Developer</span>
+            </a>
+            <div class="nav-links">
+                <a href="index.html" class="nav-link">📊 Dashboard</a>
+                <a href="chat.html" class="nav-link">💬 Chat</a>
+                <a href="aider.html" class="nav-link">🤖 Aider</a>
+                <a href="tasks.html" class="nav-link">📋 Tasks</a>
+                <a href="tools.html" class="nav-link active">🔧 Tools</a>
+                <a href="monitor.html" class="nav-link">📈 Monitor</a>
+                <a href="backups.html" class="nav-link">💾 Backups</a>
+                <a href="settings.html" class="nav-link">⚙️ Settings</a>
+            </div>
+        </div>
+        <div class="header-right">
+            <span id="currentTime"></span>
+        </div>
+    </div>
+
+    <div class="content">
+        <h2 style="margin-bottom: 20px;">Developer Tools</h2>
+        
+        <!-- Quick Commands -->
+        <div class="quick-commands">
+            <h3 style="margin-bottom: 16px;">Quick Commands</h3>
+            <div class="commands-grid">
+                <div class="command-btn" onclick="runCommand('docker ps')">
+                    <div class="command-title">🐳 Docker Status</div>
+                    <div class="command-desc">Show running containers</div>
+                </div>
+                <div class="command-btn" onclick="runCommand('docker logs zoe-core --tail 50')">
+                    <div class="command-title">📄 Core Logs</div>
+                    <div class="command-desc">View recent core logs</div>
+                </div>
+                <div class="command-btn" onclick="runCommand('df -h')">
+                    <div class="command-title">💾 Disk Usage</div>
+                    <div class="command-desc">Check disk space</div>
+                </div>
+                <div class="command-btn" onclick="runCommand('free -h')">
+                    <div class="command-title">🧠 Memory Usage</div>
+                    <div class="command-desc">Check memory usage</div>
+                </div>
+                <div class="command-btn" onclick="runCommand('ps aux | grep zoe')">
+                    <div class="command-title">⚡ Zoe Processes</div>
+                    <div class="command-desc">Show Zoe processes</div>
+                </div>
+                <div class="command-btn" onclick="runCommand('git status')">
+                    <div class="command-title">📝 Git Status</div>
+                    <div class="command-desc">Check git status</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tools Grid -->
+        <div class="tools-grid">
+            <!-- System Management -->
+            <div class="tool-card">
+                <div class="tool-header">
+                    <div class="tool-icon" style="background: linear-gradient(135deg, #667eea, #764ba2);">🐳</div>
+                    <div class="tool-title">Docker Management</div>
+                </div>
+                <div class="tool-description">
+                    Manage Docker containers, images, and networks. View logs, restart services, and monitor resource usage.
+                </div>
+                <div class="tool-actions">
+                    <button class="btn btn-primary" onclick="dockerAction('ps')">List Containers</button>
+                    <button class="btn btn-secondary" onclick="dockerAction('images')">List Images</button>
+                    <button class="btn btn-warning" onclick="dockerAction('restart-all')">Restart All</button>
+                    <button class="btn btn-danger" onclick="dockerAction('prune')">Cleanup</button>
+                </div>
+                <div class="output-area" id="docker-output"></div>
+            </div>
+
+            <!-- Database Tools -->
+            <div class="tool-card">
+                <div class="tool-header">
+                    <div class="tool-icon" style="background: linear-gradient(135deg, #f093fb, #f5576c);">🗄️</div>
+                    <div class="tool-title">Database Tools</div>
+                </div>
+                <div class="tool-description">
+                    Database management, backup, restore, and query tools. Access Redis cache and manage data.
+                </div>
+                <div class="tool-actions">
+                    <button class="btn btn-primary" onclick="dbAction('status')">DB Status</button>
+                    <button class="btn btn-secondary" onclick="dbAction('backup')">Backup DB</button>
+                    <button class="btn btn-success" onclick="dbAction('redis-info')">Redis Info</button>
+                    <button class="btn btn-warning" onclick="dbAction('clear-cache')">Clear Cache</button>
+                </div>
+                <div class="output-area" id="db-output"></div>
+            </div>
+
+            <!-- File Management -->
+            <div class="tool-card">
+                <div class="tool-header">
+                    <div class="tool-icon" style="background: linear-gradient(135deg, #4facfe, #00f2fe);">📁</div>
+                    <div class="tool-title">File Management</div>
+                </div>
+                <div class="tool-description">
+                    File operations, permissions, and cleanup tools. Manage logs, temporary files, and project structure.
+                </div>
+                <div class="tool-actions">
+                    <button class="btn btn-primary" onclick="fileAction('list-logs')">List Logs</button>
+                    <button class="btn btn-secondary" onclick="fileAction('cleanup-temp')">Cleanup Temp</button>
+                    <button class="btn btn-success" onclick="fileAction('check-permissions')">Check Perms</button>
+                    <button class="btn btn-warning" onclick="fileAction('disk-usage')">Disk Usage</button>
+                </div>
+                <div class="output-area" id="file-output"></div>
+            </div>
+
+            <!-- Network Tools -->
+            <div class="tool-card">
+                <div class="tool-header">
+                    <div class="tool-icon" style="background: linear-gradient(135deg, #fa709a, #fee140);">🌐</div>
+                    <div class="tool-title">Network Tools</div>
+                </div>
+                <div class="tool-description">
+                    Network diagnostics, port checking, and connectivity tests. Monitor network performance and troubleshoot issues.
+                </div>
+                <div class="tool-actions">
+                    <button class="btn btn-primary" onclick="networkAction('check-ports')">Check Ports</button>
+                    <button class="btn btn-secondary" onclick="networkAction('ping-test')">Ping Test</button>
+                    <button class="btn btn-success" onclick="networkAction('curl-test')">API Test</button>
+                    <button class="btn btn-warning" onclick="networkAction('netstat')">Netstat</button>
+                </div>
+                <div class="output-area" id="network-output"></div>
+            </div>
+
+            <!-- Development Tools -->
+            <div class="tool-card">
+                <div class="tool-header">
+                    <div class="tool-icon" style="background: linear-gradient(135deg, #a8edea, #fed6e3);">⚙️</div>
+                    <div class="tool-title">Development Tools</div>
+                </div>
+                <div class="tool-description">
+                    Code analysis, testing, and development utilities. Run tests, check code quality, and manage dependencies.
+                </div>
+                <div class="tool-actions">
+                    <button class="btn btn-primary" onclick="devAction('run-tests')">Run Tests</button>
+                    <button class="btn btn-secondary" onclick="devAction('check-syntax')">Check Syntax</button>
+                    <button class="btn btn-success" onclick="devAction('install-deps')">Install Deps</button>
+                    <button class="btn btn-warning" onclick="devAction('lint-code')">Lint Code</button>
+                </div>
+                <div class="output-area" id="dev-output"></div>
+            </div>
+
+            <!-- System Monitoring -->
+            <div class="tool-card">
+                <div class="tool-header">
+                    <div class="tool-icon" style="background: linear-gradient(135deg, #ffecd2, #fcb69f);">📊</div>
+                    <div class="tool-title">System Monitoring</div>
+                </div>
+                <div class="tool-description">
+                    Real-time system monitoring, performance metrics, and health checks. Monitor CPU, memory, and disk usage.
+                </div>
+                <div class="tool-actions">
+                    <button class="btn btn-primary" onclick="monitorAction('system-stats')">System Stats</button>
+                    <button class="btn btn-secondary" onclick="monitorAction('process-list')">Process List</button>
+                    <button class="btn btn-success" onclick="monitorAction('health-check')">Health Check</button>
+                    <button class="btn btn-warning" onclick="monitorAction('start-monitoring')">Start Monitor</button>
+                </div>
+                <div class="output-area" id="monitor-output"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.hostname === 'localhost' 
+            ? 'http://localhost:8000' 
+            : `http://${window.location.hostname}:8000`;
+
+        // Update time
+        function updateTime() {
+            document.getElementById('currentTime').textContent = 
+                new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+        updateTime();
+        setInterval(updateTime, 1000);
+
+        // Run command
+        async function runCommand(command) {
+            const output = document.createElement('div');
+            output.className = 'output-area show';
+            output.innerHTML = `<div style="color: #4ade80;">$ ${command}</div><div id="output-${Date.now()}">Running...</div>`;
+            document.body.appendChild(output);
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/developer/run-command`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command })
+                });
+                
+                const data = await response.json();
+                const outputDiv = output.querySelector(`#output-${Date.now()}`);
+                outputDiv.innerHTML = data.output || data.error || 'Command completed';
+                outputDiv.style.color = data.error ? '#ef4444' : '#ffffff';
+            } catch (error) {
+                const outputDiv = output.querySelector(`#output-${Date.now()}`);
+                outputDiv.innerHTML = `Error: ${error.message}`;
+                outputDiv.style.color = '#ef4444';
+            }
+        }
+
+        // Docker actions
+        async function dockerAction(action) {
+            const output = document.getElementById('docker-output');
+            output.classList.add('show');
+            output.innerHTML = 'Running...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/developer/docker/${action}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const data = await response.json();
+                output.innerHTML = data.output || data.message || 'Action completed';
+            } catch (error) {
+                output.innerHTML = `Error: ${error.message}`;
+            }
+        }
+
+        // Database actions
+        async function dbAction(action) {
+            const output = document.getElementById('db-output');
+            output.classList.add('show');
+            output.innerHTML = 'Running...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/developer/database/${action}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const data = await response.json();
+                output.innerHTML = data.output || data.message || 'Action completed';
+            } catch (error) {
+                output.innerHTML = `Error: ${error.message}`;
+            }
+        }
+
+        // File actions
+        async function fileAction(action) {
+            const output = document.getElementById('file-output');
+            output.classList.add('show');
+            output.innerHTML = 'Running...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/developer/files/${action}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const data = await response.json();
+                output.innerHTML = data.output || data.message || 'Action completed';
+            } catch (error) {
+                output.innerHTML = `Error: ${error.message}`;
+            }
+        }
+
+        // Network actions
+        async function networkAction(action) {
+            const output = document.getElementById('network-output');
+            output.classList.add('show');
+            output.innerHTML = 'Running...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/developer/network/${action}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const data = await response.json();
+                output.innerHTML = data.output || data.message || 'Action completed';
+            } catch (error) {
+                output.innerHTML = `Error: ${error.message}`;
+            }
+        }
+
+        // Development actions
+        async function devAction(action) {
+            const output = document.getElementById('dev-output');
+            output.classList.add('show');
+            output.innerHTML = 'Running...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/developer/dev/${action}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const data = await response.json();
+                output.innerHTML = data.output || data.message || 'Action completed';
+            } catch (error) {
+                output.innerHTML = `Error: ${error.message}`;
+            }
+        }
+
+        // Monitor actions
+        async function monitorAction(action) {
+            const output = document.getElementById('monitor-output');
+            output.classList.add('show');
+            output.innerHTML = 'Running...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/developer/monitor/${action}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                const data = await response.json();
+                output.innerHTML = data.output || data.message || 'Action completed';
+            } catch (error) {
+                output.innerHTML = `Error: ${error.message}`;
+            }
+        }
+    </script>
+</body>
+</html>

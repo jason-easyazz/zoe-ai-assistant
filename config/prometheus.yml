@@ -1,0 +1,15 @@
+# Prometheus configuration for Zoe
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'zoe-core'
+    static_configs:
+      - targets: ['localhost:8000']
+    metrics_path: '/metrics'
+    
+  - job_name: 'mem-agent'
+    static_configs:
+      - targets: ['localhost:11435']
+    metrics_path: '/metrics'

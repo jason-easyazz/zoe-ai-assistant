@@ -1,0 +1,39 @@
+# mem-agent service for Zoe
+# Add to main docker-compose.yml or run separately
+
+version: '3.8'
+
+services:
+  zoe-mem-agent:
+    container_name: zoe-mem-agent
+    image: python:3.11-slim
+    working_dir: /app
+    command: >
+      sh -c "pip install --no-cache-dir fastapi uvicorn sentence-transformers faiss-cpu numpy &&
+             python3 mem_agent_service.py"
+    ports:
+      - "11435:8000"
+    volumes:
+      - ./data/memory:/app/memory:ro
+      - ./services/mem-agent:/app
+    environment:
+      - MEMORY_DIR=/app/memory
+      - MAX_WORKERS=2
+      - TIMEOUT=2.0
+    restart: unless-stopped
+    networks:
+      - zoe-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+
+networks:
+  zoe-network:
+    external: true
