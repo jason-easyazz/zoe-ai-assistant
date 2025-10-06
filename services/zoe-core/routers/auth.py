@@ -11,7 +11,12 @@ from datetime import datetime, timedelta
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
 security = HTTPBearer(auto_error=False)  # Don't auto-raise, we'll handle it manually for 401
 
-SECRET_KEY = os.getenv("ZOE_AUTH_SECRET_KEY", "change-me-in-prod")
+SECRET_KEY = os.getenv("ZOE_AUTH_SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "ZOE_AUTH_SECRET_KEY environment variable must be set. "
+        "Generate a secure random key with: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+    )
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
 DB_PATH = "/app/data/zoe.db"
