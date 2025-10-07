@@ -1,0 +1,57 @@
+{
+  "total_tests": 7,
+  "successful_tests": 0,
+  "quality_responses": 0,
+  "enhancement_aware_responses": 0,
+  "scenario_results": [
+    {
+      "question": "What's the weather like today?",
+      "category": "weather",
+      "success": false,
+      "error": "argument of type 'coroutine' is not iterable"
+    },
+    {
+      "question": "Can you help me plan my schedule for tomorrow?",
+      "category": "scheduling",
+      "success": false,
+      "error": "argument of type 'coroutine' is not iterable"
+    },
+    {
+      "question": "Remember that I have a doctor's appointment next week",
+      "category": "memory",
+      "success": false,
+      "error": "argument of type 'coroutine' is not iterable"
+    },
+    {
+      "question": "What did we discuss about the project last time?",
+      "category": "memory",
+      "success": false,
+      "error": "argument of type 'coroutine' is not iterable"
+    },
+    {
+      "question": "How can your new enhancement systems help me be more productive?",
+      "category": "enhancement",
+      "success": false,
+      "error": "argument of type 'coroutine' is not iterable"
+    },
+    {
+      "question": "Hello! How are you today?",
+      "category": "greeting",
+      "success": false,
+      "error": "argument of type 'coroutine' is not iterable"
+    },
+    {
+      "question": "What are your capabilities?",
+      "category": "capabilities",
+      "success": false,
+      "error": "argument of type 'coroutine' is not iterable"
+    }
+  ],
+  "start_time": 1759847047.835882,
+  "total_time": 0.0014574527740478516,
+  "success_rate": 0.0,
+  "quality_rate": 0.0,
+  "enhancement_rate": 0.0,
+  "overall_score": 0.0,
+  "certification": "NEEDS_WORK"
+}
