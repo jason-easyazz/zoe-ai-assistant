@@ -3,20 +3,12 @@ function getApiBase() {
     const protocol = window.location.protocol;
     const host = window.location.host;
     
-    // Always use HTTPS for API calls
-    let apiBase = `https://${host}/api`;
+    // Use same origin to go through nginx proxy (avoids SSL issues)
+    let apiBase = `${protocol}//${host}/api`;
     
-    // If host is zoe.local and we're not on the server, use IP fallback
-    if (host === 'zoe.local' && window.location.href.includes('zoe.local')) {
-        // Try to detect if we're on the server itself
-        const isServer = window.location.href.includes('192.168.1.60') || 
-                        window.location.href.includes('localhost') ||
-                        window.location.href.includes('127.0.0.1');
-        
-        if (!isServer) {
-            // Use IP address for external access
-            apiBase = `https://192.168.1.60/api`;
-        }
+    // Only use direct IP connection for localhost development
+    if (host === 'localhost' || host === '127.0.0.1' || host.includes('192.168.1.60')) {
+        apiBase = `http://192.168.1.60:8000/api`;
     }
     
     console.log('Debug API_BASE:', {
@@ -35,56 +27,51 @@ const API_BASE = getApiBase();
 // Test API connectivity with both protocols
 async function testApiConnectivity() {
     const host = window.location.host;
-    const protocols = ['https:', 'http:'];
+    const protocol = window.location.protocol;
     
     console.log('Testing API connectivity...');
     
-    // Try the current host first
-    for (const protocol of protocols) {
-        const testUrl = `${protocol}//${host}/api/health`;
-        console.log(`Testing ${protocol}://${host}/api/health`);
+    // First try same origin (through nginx proxy)
+    const sameOriginUrl = `${protocol}//${host}/api/health`;
+    console.log(`Testing same origin: ${sameOriginUrl}`);
+    
+    try {
+        const response = await fetch(sameOriginUrl, { 
+            method: 'GET',
+            mode: 'cors',
+            cache: 'no-cache'
+        });
+        console.log(`Same origin response:`, response.status, response.statusText);
+        if (response.ok) {
+            console.log(`✅ Same origin is working!`);
+            return sameOriginUrl.replace('/health', '');
+        }
+    } catch (error) {
+        console.log(`❌ Same origin failed:`, error.message);
+    }
+    
+    // Only try direct IP for localhost development
+    if (host === 'localhost' || host === '127.0.0.1' || host.includes('192.168.1.60')) {
+        const directUrl = `http://192.168.1.60:8000/api/health`;
+        console.log(`Testing direct IP: ${directUrl}`);
         
         try {
-            const response = await fetch(testUrl, { 
+            const response = await fetch(directUrl, { 
                 method: 'GET',
                 mode: 'cors',
                 cache: 'no-cache'
             });
-            console.log(`${protocol} response:`, response.status, response.statusText);
+            console.log(`Direct IP response:`, response.status, response.statusText);
             if (response.ok) {
-                console.log(`✅ ${protocol} is working!`);
-                return testUrl.replace('/health', '');
+                console.log(`✅ Direct IP is working!`);
+                return directUrl.replace('/health', '');
             }
         } catch (error) {
-            console.log(`❌ ${protocol} failed:`, error.message);
+            console.log(`❌ Direct IP failed:`, error.message);
         }
     }
     
-    // If current host fails, try IP address fallback
-    const fallbackHosts = ['192.168.1.60', 'zoe.local'];
-    for (const fallbackHost of fallbackHosts) {
-        for (const protocol of protocols) {
-            const testUrl = `${protocol}//${fallbackHost}/api/health`;
-            console.log(`Testing fallback ${protocol}://${fallbackHost}/api/health`);
-            
-            try {
-                const response = await fetch(testUrl, { 
-                    method: 'GET',
-                    mode: 'cors',
-                    cache: 'no-cache'
-                });
-                console.log(`Fallback ${protocol} response:`, response.status, response.statusText);
-                if (response.ok) {
-                    console.log(`✅ Fallback ${protocol} is working!`);
-                    return testUrl.replace('/health', '');
-                }
-            } catch (error) {
-                console.log(`❌ Fallback ${protocol} failed:`, error.message);
-            }
-        }
-    }
-    
-    console.log('❌ No working protocol found');
+    console.log('❌ No working API endpoint found');
     return null;
 }
 

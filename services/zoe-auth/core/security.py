@@ -45,6 +45,8 @@ class RateLimiter:
         self.memory_store: Dict[str, List[float]] = defaultdict(list)
         self.blocked_until: Dict[str, float] = {}
         self.lock = threading.RLock()
+        self.last_cleanup = time.time()
+        self.cleanup_interval = 3600  # Clean up every hour
         
         # Default rate limit rules
         self.rules = {
@@ -121,6 +123,12 @@ class RateLimiter:
 
             # Record this attempt
             attempts.append(now)
+            
+            # Perform periodic cleanup to prevent memory leak
+            if now - self.last_cleanup > self.cleanup_interval:
+                self._cleanup_old_entries()
+                self.last_cleanup = now
+            
             return True, None
 
     def clear_rate_limit(self, action: str, identifier: str, user_id: Optional[str] = None):
@@ -139,6 +147,35 @@ class RateLimiter:
         with self.lock:
             self.memory_store.pop(key, None)
             self.blocked_until.pop(key, None)
+    
+    def _cleanup_old_entries(self):
+        """Clean up old entries to prevent memory leak"""
+        now = time.time()
+        
+        # Clean up memory store - remove keys with no recent attempts
+        keys_to_remove = []
+        for key, attempts in self.memory_store.items():
+            # Extract action from key to get the rule
+            action = key.split(':')[0]
+            rule = self.rules.get(action)
+            if rule:
+                window_start = now - rule.window_seconds
+                # Remove attempts older than the window
+                attempts[:] = [t for t in attempts if t > window_start]
+                # If no attempts left, mark key for removal
+                if not attempts:
+                    keys_to_remove.append(key)
+        
+        # Remove empty keys
+        for key in keys_to_remove:
+            del self.memory_store[key]
+        
+        # Clean up expired blocks
+        expired_blocks = [k for k, v in self.blocked_until.items() if v < now]
+        for key in expired_blocks:
+            del self.blocked_until[key]
+        
+        logger.debug(f"Rate limiter cleanup: removed {len(keys_to_remove)} empty keys and {len(expired_blocks)} expired blocks")
 
     def get_rate_limit_status(self, action: str, identifier: str, 
                             user_id: Optional[str] = None) -> Dict[str, Any]:

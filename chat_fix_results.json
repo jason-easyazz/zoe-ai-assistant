@@ -1,0 +1,44 @@
+{
+  "successful_scenarios": 4,
+  "good_quality_responses": 2,
+  "chat_status": "ADEQUATE",
+  "scenario_results": [
+    {
+      "question": "What's the weather like today?",
+      "response_time": 18.20699191093445,
+      "response_length": 57,
+      "is_detailed": true,
+      "is_conversational": true,
+      "quality_good": true
+    },
+    {
+      "question": "Can you help me plan my schedule for tomorrow?",
+      "response_time": 18.80650544166565,
+      "response_length": 79,
+      "is_detailed": true,
+      "is_conversational": true,
+      "quality_good": true
+    },
+    {
+      "question": "Remember that I have a doctor's appointment next week",
+      "response_time": 0.008716821670532227,
+      "response_length": 34,
+      "is_detailed": false,
+      "is_conversational": true,
+      "quality_good": false
+    },
+    {
+      "question": "What did we discuss about the project last time?",
+      "response_time": 0.004177093505859375,
+      "response_length": 34,
+      "is_detailed": false,
+      "is_conversational": true,
+      "quality_good": false
+    },
+    {
+      "question": "How can your new enhancement systems help me be more productive?",
+      "error": "HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=20)"
+    }
+  ],
+  "ready_for_100_percent": false
+}

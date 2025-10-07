@@ -1,0 +1,28 @@
+{
+  "basic_chat": {
+    "success": false,
+    "error": "HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=10)"
+  },
+  "memory_system": {
+    "success": false,
+    "error": "Add failed"
+  },
+  "calendar_system": {
+    "success": true,
+    "events_found": 1
+  },
+  "lists_system": {
+    "success": false,
+    "error": "Create failed"
+  },
+  "complex_request": {
+    "success": true,
+    "response_time": 0.45729589462280273,
+    "multi_task_mentions": 0
+  },
+  "self_awareness": {
+    "success": true,
+    "awareness_indicators": 1,
+    "response_length": 267
+  }
+}

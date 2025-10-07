@@ -24,6 +24,7 @@ LOCAL_MODEL_ULTRA_FAST = "llama3.2:1b"  # Ultra-fast responses
 LOCAL_MODEL_BALANCED = "qwen2.5:3b"     # Balanced performance  
 LOCAL_MODEL_CODE = "phi3:mini"          # Code generation
 LOCAL_MODEL_COMPLEX = "mistral:latest"  # Complex reasoning
+LOCAL_MODEL_SIMPLE = LOCAL_MODEL_ULTRA_FAST  # Define simple/default model
 
 # Usage tracking
 usage_file = "/app/data/ai_usage.json"
@@ -225,16 +226,17 @@ Your Approach:
             if result.returncode == 0 and result.stdout:
                 context["containers"] = "All containers running"
             
-            # System resources
-            context["disk_usage"] = subprocess.run(
+            # System resources: run df once and reuse the result
+            df_result = subprocess.run(
                 ["df", "-h", "/"],
                 capture_output=True,
                 text=True
-            ).stdout.split('\n')[1] if subprocess.run(
-                ["df", "-h", "/"],
-                capture_output=True,
-                text=True
-            ).returncode == 0 else "Unknown"
+            )
+            if df_result.returncode == 0 and df_result.stdout:
+                lines = df_result.stdout.split('\n')
+                context["disk_usage"] = lines[1] if len(lines) > 1 else df_result.stdout.strip()
+            else:
+                context["disk_usage"] = "Unknown"
             
         except Exception as e:
             logger.error(f"Error gathering context: {e}")

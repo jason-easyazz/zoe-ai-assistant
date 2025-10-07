@@ -18,60 +18,61 @@ app.add_middleware(
 
 # Import routers
 try:
-    from routers import chat
-    app.include_router(chat.router)
+    from routers.chat import router as chat_router
+    app.include_router(chat_router)
     print("✅ Chat router loaded")
 except Exception as e:
     print(f"❌ Chat router failed: {e}")
 
 try:
-    from routers import developer, developer_tasks
-    app.include_router(developer.router)
-    app.include_router(developer_tasks.router)
+    from routers.developer import router as developer_router
+    from routers.developer_tasks import router as developer_tasks_router
+    app.include_router(developer_router)
+    app.include_router(developer_tasks_router)
     print("✅ Developer routers loaded")
 except Exception as e:
     print(f"❌ Developer routers failed: {e}")
 
 try:
-    from routers import developer_enhanced
-    app.include_router(developer_enhanced.router)
+    from routers.developer_enhanced import router as developer_enhanced_router
+    app.include_router(developer_enhanced_router)
     print("✅ Developer enhanced router loaded")
 except Exception as e:
     print(f"❌ Developer enhanced failed: {e}")
 
 try:
-    from routers import calendar
-    app.include_router(calendar.router)
+    from routers.calendar import router as calendar_router
+    app.include_router(calendar_router)
     print("✅ Calendar router loaded")
 except Exception as e:
     print(f"❌ Calendar router failed: {e}")
 
 try:
-    from routers import lists
-    app.include_router(lists.router)
+    from routers.lists import router as lists_router
+    app.include_router(lists_router)
     print("✅ Lists router loaded")
 except Exception as e:
     print(f"❌ Lists router failed: {e}")
 
 try:
-    from routers import memory
-    app.include_router(memory.router)
+    from routers.memories import router as memories_router
+    app.include_router(memories_router)
     print("✅ Memory router loaded")
 except Exception as e:
     print(f"❌ Memory router failed: {e}")
 
 try:
-    from routers import settings
-from routers import simple_ai
-    app.include_router(settings.router)
-app.include_router(simple_ai.router)
+    from routers.settings import router as settings_router
+    from routers.simple_ai import router as simple_ai_router
+    app.include_router(settings_router)
+    app.include_router(simple_ai_router)
     print("✅ Settings router loaded")
 except Exception as e:
     print(f"❌ Settings router failed: {e}")
 
 try:
-    from routers import ai_task_integration
-    app.include_router(ai_task_integration.router)
+    from routers.ai_task_integration import router as ai_task_integration_router
+    app.include_router(ai_task_integration_router)
     print("✅ AI Task Integration loaded")
 except Exception as e:
     print(f"❌ AI Task Integration failed: {e}")

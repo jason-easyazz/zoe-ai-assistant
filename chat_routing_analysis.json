@@ -1,0 +1,61 @@
+{
+  "decision_points": [
+    {
+      "line_number": 1,
+      "condition": "\"\"\"Samantha-Level Chat Router for Zoe v2.0 with RouteLLM + LiteLLM + Enhanced MEM Agent\"\"\"",
+      "type": "mem_agent_path"
+    },
+    {
+      "line_number": 18,
+      "condition": "from mem_agent_client import MemAgentClient",
+      "type": "mem_agent_path"
+    },
+    {
+      "line_number": 19,
+      "condition": "from enhanced_mem_agent_client import EnhancedMemAgentClient",
+      "type": "mem_agent_path"
+    },
+    {
+      "line_number": 43,
+      "condition": "return {\"enhanced\": False, \"error\": \"Temporal memory not available\"}",
+      "type": "mem_agent_path"
+    },
+    {
+      "line_number": 50,
+      "condition": "mem_agent = MemAgentClient()",
+      "type": "mem_agent_path"
+    },
+    {
+      "line_number": 54,
+      "condition": "mem_agent = None",
+      "type": "mem_agent_path"
+    },
+    {
+      "line_number": 56,
+      "condition": "# Initialize enhanced mem-agent client for action execution",
+      "type": "mem_agent_path"
+    },
+    {
+      "line_number": 58,
+      "condition": "enhanced_mem_agent = EnhancedMemAgentClient()",
+      "type": "mem_agent_path"
+    },
+    {
+      "line_number": 59,
+      "condition": "logger.info(\"\u2705 enhanced mem-agent client initialized\")",
+      "type": "mem_agent_path"
+    },
+    {
+      "line_number": 61,
+      "condition": "logger.warning(f\"\u274c enhanced mem-agent initialization failed: {e}\")",
+      "type": "mem_agent_path"
+    },
+    {
+      "line_number": 62,
+      "condition": "enhanced_mem_agent = None",
+      "type": "mem_agent_path"
+    }
+  ],
+  "content_length": 3602,
+  "analysis_timestamp": "2025-10-06T22:00:00Z"
+}

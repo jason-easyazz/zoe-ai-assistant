@@ -137,9 +137,9 @@ def init_reminders_db():
     
     # Create indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_reminders_user_active ON reminders(user_id, is_active)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_reminders_due_date ON reminders(due_date, due_time)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_time ON notifications(notification_time, is_delivered)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_delivered)")
+    # cursor.execute("CREATE INDEX IF NOT EXISTS idx_reminders_due_date ON reminders(due_date, due_time)")  # Disabled - columns don't exist
+    # cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_time ON notifications(notification_time, is_delivered)")  # Disabled - columns don't exist
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read)")
     
     conn.commit()
     conn.close()
