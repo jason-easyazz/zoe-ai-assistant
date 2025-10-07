@@ -1,0 +1,119 @@
+{
+  "timestamp": 1759847807.4509883,
+  "total_time": 0.0003833770751953125,
+  "success_rate": 100.0,
+  "passed_tests": 5,
+  "total_tests": 5,
+  "file_structure": {
+    "total": 5,
+    "exists": 5,
+    "missing": 0,
+    "details": [
+      {
+        "file": "main.py",
+        "status": "exists"
+      },
+      {
+        "file": "chat.py",
+        "status": "exists"
+      },
+      {
+        "file": "requirements.txt",
+        "status": "exists"
+      },
+      {
+        "file": "ai_client.py",
+        "status": "exists"
+      },
+      {
+        "file": "route_llm.py",
+        "status": "exists"
+      }
+    ]
+  },
+  "chat_router": {
+    "success": true,
+    "feature_count": 6,
+    "total_features": 6,
+    "features": {
+      "enhancement_systems": true,
+      "ai_response_optimized": true,
+      "chat_status_endpoint": true,
+      "chat_capabilities_endpoint": true,
+      "enhanced_chat_endpoint": true,
+      "error_handling": true
+    }
+  },
+  "main_application": {
+    "success": true,
+    "feature_count": 8,
+    "total_features": 8,
+    "features": {
+      "enhanced_metadata": true,
+      "cors_middleware": true,
+      "health_endpoint": true,
+      "metrics_endpoint": true,
+      "error_handling": true,
+      "startup_event": true,
+      "shutdown_event": true,
+      "router_includes": true
+    }
+  },
+  "duplicate_cleanup": {
+    "removed": 7,
+    "kept": 2,
+    "details": [
+      {
+        "file": "chat_backup.py",
+        "status": "removed"
+      },
+      {
+        "file": "chat_enhanced.py",
+        "status": "removed"
+      },
+      {
+        "file": "chat_sessions.py",
+        "status": "removed"
+      },
+      {
+        "file": "chat_redirect.py",
+        "status": "removed"
+      },
+      {
+        "file": "chat_override.py",
+        "status": "removed"
+      },
+      {
+        "file": "chat_bypass.py",
+        "status": "removed"
+      },
+      {
+        "file": "chat_fixed.py",
+        "status": "removed"
+      },
+      {
+        "file": "chat.py",
+        "status": "kept"
+      },
+      {
+        "file": "chat_optimized.py",
+        "status": "kept"
+      }
+    ]
+  },
+  "requirements": {
+    "success": true,
+    "dependency_count": 8,
+    "total_dependencies": 8,
+    "dependencies": {
+      "fastapi": true,
+      "uvicorn": true,
+      "sqlalchemy": true,
+      "anthropic": true,
+      "ollama": true,
+      "litellm": true,
+      "sentence_transformers": true,
+      "torch": true
+    }
+  }
+}
