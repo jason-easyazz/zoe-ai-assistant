@@ -78,7 +78,7 @@ router_settings:
 
 general_settings:
   # Master key for auth (use env var in production)
-  master_key: ${LITELLM_MASTER_KEY:-sk-1234}
+  master_key: ${LITELLM_MASTER_KEY:-sk-litellm-$(openssl rand -hex 16)}
   
   # Database for tracking
   database_url: "sqlite:////app/data/litellm.db"
@@ -103,4 +103,4 @@ litellm_settings:
 environment_variables:
   REDIS_HOST: "zoe-redis"
   REDIS_PORT: "6379"
-  LITELLM_MASTER_KEY: "sk-1234"
+  LITELLM_MASTER_KEY: "sk-litellm-$(openssl rand -hex 16)"

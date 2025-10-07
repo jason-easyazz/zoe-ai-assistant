@@ -1,353 +1,132 @@
-"""Enhanced AI Client using existing dynamic_router system"""
-import os
-import json
-import asyncio
-from typing import Dict, Any, Optional, List
-from datetime import datetime
-import httpx
-from pydantic import BaseModel
-import sys
-sys.path.append('/app')
+# Enhanced AI Client with Life Orchestrator Integration
+# This file contains the enhanced functions to add to ai_client.py
 
-# Import your actual dynamic router
-from dynamic_router import dynamic_router
+# Add this import at the top of ai_client.py
+from life_orchestrator import life_orchestrator
 
-class AIClient:
-    def __init__(self):
-        self.openai_key = os.getenv("OPENAI_API_KEY")
-        self.anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-        self.ollama_url = "http://zoe-ollama:11434"
+# Add this function after the existing fetch_user_data_context function
+async def fetch_life_orchestrator_insights(message: str, context: Dict):
+    """Fetch comprehensive life insights and suggestions"""
+    try:
+        user_id = context.get("user_id", "default")
+        message_lower = message.lower()
         
-    async def generate_implementation(
-        self,
-        task_data: Dict[str, Any],
-        chat_context: Optional[List[Dict]] = None,
-        system_context: Optional[Dict] = None
-    ) -> Dict[str, Any]:
-        """Generate real implementation code based on requirements"""
-        
-        # Build prompt
-        prompt = self._build_implementation_prompt(task_data, chat_context, system_context)
-        
-        # Assess complexity for dynamic router
-        complexity = self._assess_complexity(task_data)
-        
-        # Get model from your dynamic router
-        provider, model = dynamic_router.get_best_model_for_complexity(complexity)
-        print(f"Dynamic router selected: {provider}/{model} for {complexity} task")
-        
-        # Call appropriate provider
-        if provider == "anthropic" and self.anthropic_key:
-            response = await self._call_anthropic(prompt, model)
-        elif provider == "openai" and self.openai_key:
-            response = await self._call_openai(prompt, model)
-        else:
-            # Use Ollama (local)
-            response = await self._call_ollama(prompt, model)
-        
-        # Parse response into implementation plan
-        return self._parse_implementation(response, task_data)
-    
-    def _assess_complexity(self, task_data: Dict) -> str:
-        """Assess task complexity for dynamic router"""
-        requirements = task_data.get('requirements', [])
-        all_text = ' '.join(requirements).lower()
-        
-        # Complex indicators
-        complex_indicators = [
-            'authentication', 'security', 'architecture',
-            'database migration', 'websocket', 'real-time',
-            'encryption', 'multi-user', 'integration'
-        ]
-        
-        # Count indicators
-        score = sum(1 for ind in complex_indicators if ind in all_text)
-        
-        # Determine complexity
-        if score >= 2 or len(requirements) > 5:
-            return "complex"
-        elif score >= 1 or len(requirements) > 3:
-            return "medium"
-        else:
-            return "simple"
-    
-    def _build_implementation_prompt(self, task_data, chat_context, system_context):
-        """Build comprehensive prompt for code generation"""
-        prompt = f"""You are an expert developer working on the Zoe AI Assistant system.
-        
-TASK REQUIREMENTS:
-Title: {task_data.get('title')}
-Objective: {task_data.get('objective')}
-Requirements: {json.dumps(task_data.get('requirements', []), indent=2)}
-Constraints: {json.dumps(task_data.get('constraints', []), indent=2)}
-Acceptance Criteria: {json.dumps(task_data.get('acceptance_criteria', []), indent=2)}
-
-System Architecture:
-- FastAPI backend on Raspberry Pi 5
-- SQLite database at /app/data/zoe.db
-- Docker containers with zoe- prefix
-- Frontend at services/zoe-ui/dist/
-
-Generate COMPLETE, WORKING implementation. No placeholders!
-
-Return JSON with this exact structure:
-{{
-    "files_to_create": [
-        {{
-            "path": "services/zoe-core/routers/feature.py",
-            "content": "# Complete file content\\nfrom fastapi import APIRouter\\n...",
-            "description": "What this file does"
-        }}
-    ],
-    "files_to_update": [
-        {{
-            "path": "services/zoe-core/main.py",
-            "find": "# Exact text to find",
-            "replace": "# Replacement text",
-            "description": "Why this change"
-        }}
-    ],
-    "commands": [
-        {{
-            "command": "docker compose restart zoe-core",
-            "description": "Restart service to load changes",
-            "critical": true
-        }}
-    ],
-    "tests": [
-        {{
-            "type": "api",
-            "command": "curl http://localhost:8000/api/feature",
-            "expected": "200 OK"
-        }}
-    ],
-    "rollback_plan": {{
-        "steps": ["Restore from backup"],
-        "commands": ["cp -r backups/latest/* services/"]
-    }}
-}}
-
-Ensure all code is production-ready and follows Zoe's patterns.
-"""
-        
-        # Add conversation context if available
-        if chat_context and len(chat_context) > 0:
-            context_str = "\n".join([
-                f"{msg.get('role', 'user')}: {msg.get('content', '')[:100]}..."
-                for msg in chat_context[-5:]
-            ])
-            prompt += f"\n\nCONVERSATION CONTEXT:\n{context_str}\n"
-        
-        # Add system context if available
-        if system_context:
-            prompt += f"\n\nSYSTEM STATE:\n"
-            prompt += f"- Files: {len(system_context.get('files', []))} files found\n"
-            prompt += f"- Endpoints: {len(system_context.get('endpoints', []))} API endpoints\n"
-            prompt += f"- Containers: {', '.join(system_context.get('containers', []))}\n"
-        
-        return prompt
-    
-    async def _call_ollama(self, prompt: str, model: str = None) -> str:
-        """Call local Ollama"""
-        if not model:
-            model = "llama3.2:3b"
-        
-        try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(
-                    f"{self.ollama_url}/api/generate",
-                    json={
-                        "model": model,
-                        "prompt": prompt,
-                        "temperature": 0.3,
-                        "stream": False
-                    }
-                )
-                if response.status_code == 200:
-                    return response.json().get('response', '')
-                else:
-                    print(f"Ollama error: {response.status_code}")
-                    return '{"error": "Ollama request failed"}'
-        except Exception as e:
-            print(f"Ollama exception: {e}")
-            return '{"error": "Ollama connection failed"}'
-    
-    async def _call_openai(self, prompt: str, model: str = None) -> str:
-        """Call OpenAI API"""
-        if not self.openai_key:
-            print("No OpenAI key, falling back to Ollama")
-            return await self._call_ollama(prompt, "codellama:7b")
-        
-        if not model:
-            model = "gpt-4"
-        
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.openai_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": model,
-                        "messages": [
-                            {"role": "system", "content": "You are an expert developer."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        "temperature": 0.3,
-                        "max_tokens": 4000
-                    }
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    return data['choices'][0]['message']['content']
-                else:
-                    print(f"OpenAI error: {response.status_code}")
-                    return await self._call_ollama(prompt, "codellama:7b")
-        except Exception as e:
-            print(f"OpenAI exception: {e}")
-            return await self._call_ollama(prompt, "codellama:7b")
-    
-    async def _call_anthropic(self, prompt: str, model: str = None) -> str:
-        """Call Anthropic API"""
-        if not self.anthropic_key:
-            print("No Anthropic key, falling back to Ollama")
-            return await self._call_ollama(prompt, "codellama:7b")
-        
-        if not model:
-            model = "claude-3-opus-20240229"
-        
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    "https://api.anthropic.com/v1/messages",
-                    headers={
-                        "x-api-key": self.anthropic_key,
-                        "anthropic-version": "2023-06-01",
-                        "content-type": "application/json"
-                    },
-                    json={
-                        "model": model,
-                        "max_tokens": 4000,
-                        "messages": [
-                            {"role": "user", "content": prompt}
-                        ],
-                        "temperature": 0.3
-                    }
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    return data['content'][0]['text']
-                else:
-                    print(f"Anthropic error: {response.status_code}")
-                    return await self._call_ollama(prompt, "codellama:7b")
-        except Exception as e:
-            print(f"Anthropic exception: {e}")
-            return await self._call_ollama(prompt, "codellama:7b")
-    
-    def _parse_implementation(self, response: str, task_data: Dict) -> Dict:
-        """Parse AI response into structured implementation plan"""
-        try:
-            # Find JSON in response
-            import re
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        # Check if this is a planning or suggestion request
+        if any(word in message_lower for word in [
+            'plan', 'suggest', 'recommend', 'free time', 'afternoon', 'morning', 
+            'evening', 'what should', 'what can', 'help me', 'options'
+        ]):
             
-            if json_match:
-                plan = json.loads(json_match.group())
-            else:
-                # Create minimal working plan
-                print("No JSON found in response, creating minimal plan")
-                plan = {
-                    "files_to_create": [],
-                    "files_to_update": [],
-                    "commands": [
-                        {
-                            "command": "echo 'Task ready for implementation'",
-                            "description": "Placeholder",
-                            "critical": False
-                        }
-                    ],
-                    "tests": [
-                        {
-                            "type": "health",
-                            "command": "curl http://localhost:8000/health",
-                            "expected": "healthy"
-                        }
-                    ]
-                }
+            # Get comprehensive life analysis
+            life_analysis = await life_orchestrator.analyze_everything(user_id, context)
             
-            # Ensure all required fields exist
-            plan.setdefault('files_to_create', [])
-            plan.setdefault('files_to_update', [])
-            plan.setdefault('commands', [])
-            plan.setdefault('tests', [])
-            plan.setdefault('rollback_plan', {
-                'steps': ['Restore from backup'],
-                'commands': [
-                    'cp -r backups/$(ls -t backups | head -1)/* services/',
-                    'docker compose restart zoe-core'
-                ]
-            })
+            # Add to context
+            context["life_insights"] = life_analysis
             
-            return plan
+            # Generate intelligent response suggestions
+            if life_analysis.get("urgent_actions"):
+                context["urgent_suggestions"] = life_analysis["urgent_actions"]
             
-        except json.JSONDecodeError as e:
-            print(f"JSON parse error: {e}")
-            return {
-                "error": f"Failed to parse implementation: {str(e)}",
-                "raw_response": response[:500],
-                "files_to_create": [],
-                "files_to_update": [],
-                "commands": [],
-                "tests": [],
-                "rollback_plan": {"steps": [], "commands": []}
+            if life_analysis.get("opportunity_actions"):
+                context["opportunity_suggestions"] = life_analysis["opportunity_actions"]
+                
+            if life_analysis.get("smart_suggestions"):
+                context["smart_suggestions"] = life_analysis["smart_suggestions"]
+                
+            if life_analysis.get("free_time_suggestions"):
+                context["free_time_suggestions"] = life_analysis["free_time_suggestions"]
+                
+            logger.info(f"Generated {len(life_analysis.get('urgent_actions', []))} urgent actions and {len(life_analysis.get('opportunity_actions', []))} opportunities")
+            
+    except Exception as e:
+        logger.warning(f"Failed to fetch life orchestrator insights: {e}")
+
+# Enhanced version of get_ai_response_streaming with life orchestrator
+async def get_ai_response_streaming_with_life_orchestrator(message: str, context: Dict = None) -> AsyncGenerator[Dict, None]:
+    """Enhanced streaming response with life orchestrator intelligence"""
+    context = context or {}
+    
+    try:
+        # Emit thinking event
+        yield {
+            'type': 'agent_thinking',
+            'message': 'Analyzing your request and your entire life context...',
+            'timestamp': time.time()
+        }
+        
+        # Check for calendar event creation requests (existing functionality)
+        if await handle_calendar_request(message, context):
+            yield {
+                'type': 'tool_call_start',
+                'tool': 'calendar',
+                'message': 'Creating calendar event...',
+                'timestamp': time.time()
             }
-        except Exception as e:
-            print(f"Parse exception: {e}")
-            return {
-                "error": f"Unexpected error: {str(e)}",
-                "files_to_create": [],
-                "files_to_update": [],
-                "commands": [],
-                "tests": [],
-                "rollback_plan": {"steps": [], "commands": []}
+            
+            yield {
+                'type': 'tool_result',
+                'tool': 'calendar',
+                'success': True,
+                'message': 'Event created successfully!',
+                'timestamp': time.time()
             }
-    
-    async def chat_with_developer(self, message: str, context: List[Dict] = None) -> str:
-        """Chat for developer mode using dynamic router"""
+            
+            yield {
+                'type': 'content_delta',
+                'content': "Perfect! I've created your birthday event for March 24th. It's now saved in your calendar as an all-day celebration! 🎉📅",
+                'timestamp': time.time()
+            }
+            return
         
-        # Assess complexity based on message
-        complexity = "simple"
-        if len(message) > 100 or any(word in message.lower() for word in 
-                                     ['implement', 'debug', 'architect', 'analyze']):
-            complexity = "medium"
-        if any(word in message.lower() for word in 
-               ['complex', 'architecture', 'security', 'integration']):
-            complexity = "complex"
+        # Fetch life orchestrator insights (NEW)
+        yield {
+            'type': 'agent_thinking',
+            'message': 'Gathering comprehensive life insights...',
+            'timestamp': time.time()
+        }
         
-        # Get model from dynamic router
-        provider, model = dynamic_router.get_best_model_for_complexity(complexity)
-        print(f"Developer chat using: {provider}/{model}")
+        await fetch_life_orchestrator_insights(message, context)
         
-        # Build prompt
-        prompt = f"""You are Zack, the developer assistant for Zoe AI.
-You're helpful, technical, and precise.
-
-User message: {message}
-
-Previous context: {len(context) if context else 0} messages
-
-Respond technically and helpfully. If discussing features, break them into clear requirements.
-Be concise but thorough."""
+        # Emit context gathering events (existing functionality)
+        yield {
+            'type': 'agent_thinking',
+            'message': 'Gathering context and user data...',
+            'timestamp': time.time()
+        }
         
-        # Route to appropriate provider
-        if provider == "anthropic" and self.anthropic_key:
-            return await self._call_anthropic(prompt, model)
-        elif provider == "openai" and self.openai_key:
-            return await self._call_openai(prompt, model)
+        # Update self-awareness consciousness
+        await update_self_awareness_context(message, context)
+        
+        # Fetch relevant user data with tool indicators (existing functionality)
+        async for event in fetch_user_data_context_streaming(message, context):
+            yield event
+        
+        # Emit routing decision
+        yield {
+            'type': 'agent_thinking',
+            'message': 'Determining best response approach...',
+            'timestamp': time.time()
+        }
+        
+        # Decide route using RouteLLM-backed router
+        routing_decision = route_llm_router.classify_query(message, context)
+        use_proxy = routing_decision.get("provider") == "litellm"
+        
+        # Stream the actual AI response
+        if use_proxy:
+            async for event in call_litellm_proxy_streaming(message, routing_decision, context):
+                yield event
         else:
-            return await self._call_ollama(prompt, model)
-
-# Global instance
-ai_client = AIClient()
+            async for event in call_ollama_direct_streaming(message, routing_decision.get("model", "llama3.2:3b"), context):
+                yield event
+        
+        # Reflect on the interaction
+        await reflect_on_interaction(message, "Response completed", context, routing_decision)
+        
+    except Exception as e:
+        logger.error(f"Streaming AI response failed: {e}")
+        yield {
+            'type': 'error',
+            'message': f"I apologize, but I'm having trouble processing your request right now: {str(e)}",
+            'timestamp': time.time()
+        }

@@ -10,7 +10,9 @@ import sys
 import os
 import logging
 import httpx
-from typing import Dict, Optional
+import time
+import asyncio
+from typing import Dict, Optional, AsyncGenerator
 
 sys.path.append('/app')
 logger = logging.getLogger(__name__)
@@ -51,6 +53,86 @@ async def handle_calendar_request(message: str, context: Dict) -> bool:
                     return False
     
     return False
+
+async def get_ai_response_streaming(message: str, context: Dict = None) -> AsyncGenerator[Dict, None]:
+    """Stream AI response with AG-UI Protocol events"""
+    context = context or {}
+    
+    try:
+        # Emit thinking event
+        yield {
+            'type': 'agent_thinking',
+            'message': 'Analyzing your request...',
+            'timestamp': time.time()
+        }
+        
+        # Check for calendar event creation requests
+        if await handle_calendar_request(message, context):
+            yield {
+                'type': 'tool_call_start',
+                'tool': 'calendar',
+                'message': 'Creating calendar event...',
+                'timestamp': time.time()
+            }
+            
+            yield {
+                'type': 'tool_result',
+                'tool': 'calendar',
+                'success': True,
+                'message': 'Event created successfully!',
+                'timestamp': time.time()
+            }
+            
+            yield {
+                'type': 'content_delta',
+                'content': "Perfect! I've created your birthday event for March 24th. It's now saved in your calendar as an all-day celebration! 🎉📅",
+                'timestamp': time.time()
+            }
+            return
+        
+        # Emit context gathering events
+        yield {
+            'type': 'agent_thinking',
+            'message': 'Gathering context and user data...',
+            'timestamp': time.time()
+        }
+        
+        # Update self-awareness consciousness
+        await update_self_awareness_context(message, context)
+        
+        # Fetch relevant user data with tool indicators
+        async for event in fetch_user_data_context_streaming(message, context):
+            yield event
+        
+        # Emit routing decision
+        yield {
+            'type': 'agent_thinking',
+            'message': 'Determining best response approach...',
+            'timestamp': time.time()
+        }
+        
+        # Decide route using RouteLLM-backed router
+        routing_decision = route_llm_router.classify_query(message, context)
+        use_proxy = routing_decision.get("provider") == "litellm"
+        
+        # Stream the actual AI response
+        if use_proxy:
+            async for event in call_litellm_proxy_streaming(message, routing_decision, context):
+                yield event
+        else:
+            async for event in call_ollama_direct_streaming(message, routing_decision.get("model", "llama3.2:3b"), context):
+                yield event
+        
+        # Reflect on the interaction
+        await reflect_on_interaction(message, "Response completed", context, routing_decision)
+        
+    except Exception as e:
+        logger.error(f"Streaming AI response failed: {e}")
+        yield {
+            'type': 'error',
+            'message': f"I apologize, but I'm having trouble processing your request right now: {str(e)}",
+            'timestamp': time.time()
+        }
 
 async def get_ai_response(message: str, context: Dict = None) -> str:
     """Direct self-aware response with user data access"""
@@ -152,7 +234,7 @@ async def call_litellm_proxy(message: str, routing_decision: Dict, context: Dict
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 "http://zoe-litellm:8001/v1/chat/completions",
-                headers={"Authorization": "Bearer sk-1234"},  # Using master key from config
+                headers={"Authorization": f"Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f"},  # Using master key from config
                 json={
                     "model": litellm_model,
                     "messages": messages,
@@ -228,7 +310,7 @@ async def call_ollama_direct(message: str, model: str, context: Dict) -> str:
     
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
-            "http://localhost:11434/api/generate",
+            "http://zoe-ollama:11434/api/generate",
             json={
                 "model": model,
                 "prompt": full_prompt,
@@ -304,7 +386,7 @@ async def call_ollama(message: str, model: str, context: Dict) -> str:
     
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
-            "http://localhost:11434/api/generate",
+            "http://zoe-ollama:11434/api/generate",
             json={
                 "model": model,
                 "prompt": f"{system}\n\nUser: {message}\nAssistant:",
@@ -442,6 +524,400 @@ async def reflect_on_interaction(message: str, response: str, context: Dict, rou
         await self_awareness.reflect_on_interaction(interaction_data)
     except Exception as e:
         logger.warning(f"Self-reflection failed: {e}")
+
+# Streaming functions for AG-UI Protocol
+async def fetch_user_data_context_streaming(message: str, context: Dict) -> AsyncGenerator[Dict, None]:
+    """Fetch relevant user data with streaming tool indicators"""
+    try:
+        user_id = context.get("user_id", "default")
+        message_lower = message.lower()
+        
+        # Initialize user data context
+        user_data = {
+            "calendar_events": [],
+            "lists": [],
+            "journal_entries": [],
+            "memories": []
+        }
+        
+        # Check if user is asking about calendar
+        if any(word in message_lower for word in ['calendar', 'schedule', 'events', 'meeting', 'appointment', 'tomorrow', 'today', 'this week']):
+            yield {
+                'type': 'tool_call_start',
+                'tool': 'calendar',
+                'message': 'Checking your calendar...',
+                'timestamp': time.time()
+            }
+            
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(f"http://localhost:8000/api/calendar/events?user_id={user_id}")
+                    if response.status_code == 200:
+                        events = response.json().get("events", [])
+                        user_data["calendar_events"] = events
+                        logger.info(f"Fetched {len(events)} calendar events for user {user_id}")
+                        
+                        yield {
+                            'type': 'tool_result',
+                            'tool': 'calendar',
+                            'success': True,
+                            'message': f'Found {len(events)} calendar events',
+                            'timestamp': time.time()
+                        }
+            except Exception as e:
+                logger.warning(f"Failed to fetch calendar events: {e}")
+                yield {
+                    'type': 'tool_result',
+                    'tool': 'calendar',
+                    'success': False,
+                    'message': f'Could not access calendar: {str(e)}',
+                    'timestamp': time.time()
+                }
+        
+        # Check if user is asking about lists
+        if any(word in message_lower for word in ['list', 'shopping', 'tasks', 'todo', 'items']):
+            yield {
+                'type': 'tool_call_start',
+                'tool': 'lists',
+                'message': 'Checking your lists...',
+                'timestamp': time.time()
+            }
+            
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(f"http://localhost:8000/api/lists?user_id={user_id}")
+                    if response.status_code == 200:
+                        lists = response.json().get("lists", [])
+                        user_data["lists"] = lists
+                        logger.info(f"Fetched {len(lists)} lists for user {user_id}")
+                        
+                        yield {
+                            'type': 'tool_result',
+                            'tool': 'lists',
+                            'success': True,
+                            'message': f'Found {len(lists)} lists',
+                            'timestamp': time.time()
+                        }
+            except Exception as e:
+                logger.warning(f"Failed to fetch lists: {e}")
+                yield {
+                    'type': 'tool_result',
+                    'tool': 'lists',
+                    'success': False,
+                    'message': f'Could not access lists: {str(e)}',
+                    'timestamp': time.time()
+                }
+        
+        # Check if user is asking about journal
+        if any(word in message_lower for word in ['journal', 'entry', 'notes', 'thoughts', 'reflection']):
+            yield {
+                'type': 'tool_call_start',
+                'tool': 'journal',
+                'message': 'Checking your journal...',
+                'timestamp': time.time()
+            }
+            
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(f"http://localhost:8000/api/journal/entries?user_id={user_id}")
+                    if response.status_code == 200:
+                        entries = response.json().get("entries", [])
+                        user_data["journal_entries"] = entries
+                        logger.info(f"Fetched {len(entries)} journal entries for user {user_id}")
+                        
+                        yield {
+                            'type': 'tool_result',
+                            'tool': 'journal',
+                            'success': True,
+                            'message': f'Found {len(entries)} journal entries',
+                            'timestamp': time.time()
+                        }
+            except Exception as e:
+                logger.warning(f"Failed to fetch journal entries: {e}")
+                yield {
+                    'type': 'tool_result',
+                    'tool': 'journal',
+                    'success': False,
+                    'message': f'Could not access journal: {str(e)}',
+                    'timestamp': time.time()
+                }
+        
+        # Always fetch recent memories for context
+        yield {
+            'type': 'tool_call_start',
+            'tool': 'memory',
+            'message': 'Retrieving relevant memories...',
+            'timestamp': time.time()
+        }
+        
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(f"http://localhost:8000/api/memories?user_id={user_id}&limit=5")
+                if response.status_code == 200:
+                    memories = response.json().get("memories", [])
+                    user_data["memories"] = memories
+                    logger.info(f"Fetched {len(memories)} memories for user {user_id}")
+                    
+                    yield {
+                        'type': 'tool_result',
+                        'tool': 'memory',
+                        'success': True,
+                        'message': f'Retrieved {len(memories)} relevant memories',
+                        'timestamp': time.time()
+                    }
+        except Exception as e:
+            logger.warning(f"Failed to fetch memories: {e}")
+            yield {
+                'type': 'tool_result',
+                'tool': 'memory',
+                'success': False,
+                'message': f'Could not access memories: {str(e)}',
+                'timestamp': time.time()
+            }
+        
+        # Add user data to context
+        context["user_data"] = user_data
+        
+    except Exception as e:
+        logger.warning(f"Failed to fetch user data context: {e}")
+        yield {
+            'type': 'error',
+            'message': f'Could not gather user context: {str(e)}',
+            'timestamp': time.time()
+        }
+
+async def call_litellm_proxy_streaming(message: str, routing_decision: Dict, context: Dict) -> AsyncGenerator[Dict, None]:
+    """Stream LiteLLM proxy response"""
+    try:
+        yield {
+            'type': 'model_call_start',
+            'model': routing_decision.get("model", "litellm"),
+            'message': 'Connecting to AI model...',
+            'timestamp': time.time()
+        }
+        
+        # Build system prompt (same as original)
+        mode = context.get("mode", "user")
+        system = "You are Zack, a technical AI developer." if mode == "developer" else "You are Zoe, a friendly assistant."
+        
+        # Add user data to system prompt if available
+        user_data = context.get("user_data", {})
+        if user_data and mode == "user":
+            system += "\n\nYou have access to the following user data:\n"
+            
+            # Add calendar events
+            if user_data.get("calendar_events"):
+                system += "\nCALENDAR EVENTS:\n"
+                for event in user_data["calendar_events"]:
+                    system += f"- {event.get('title')} on {event.get('start_date')} at {event.get('start_time')} ({event.get('category')})\n"
+            
+            # Add lists
+            if user_data.get("lists"):
+                system += "\nLISTS:\n"
+                for list_item in user_data["lists"]:
+                    system += f"- {list_item.get('name')} ({list_item.get('category')}): {list_item.get('description', 'No description')}\n"
+            
+            # Add journal entries
+            if user_data.get("journal_entries"):
+                system += "\nJOURNAL ENTRIES:\n"
+                for entry in user_data["journal_entries"][:3]:  # Show only recent 3
+                    system += f"- {entry.get('title', 'Untitled')}: {entry.get('content', '')[:100]}...\n"
+            
+            # Add memories
+            if user_data.get("memories"):
+                system += "\nRECENT MEMORIES:\n"
+                for memory in user_data["memories"][:3]:  # Show only recent 3
+                    system += f"- {memory.get('content', '')[:100]}...\n"
+            
+            system += "\nUse this data to provide specific, helpful responses about the user's schedule, tasks, and information."
+        
+        # Map RouteLLM model names to LiteLLM model names
+        model_mapping = {
+            "claude-3-sonnet": "claude-instant",
+            "gpt-4": "gpt-3.5",
+            "gpt-3.5-turbo": "gpt-3.5",
+            "llama-ultra-fast": "llama-local",
+            "qwen-balanced": "llama-local",
+            "phi-code": "llama-local",
+            "mistral-complex": "llama-local"
+        }
+        
+        litellm_model = model_mapping.get(routing_decision["model"], routing_decision["model"])
+        
+        # Build messages with conversation history
+        messages = [{"role": "system", "content": system}]
+        
+        # Add conversation history if available
+        conversation_history = context.get("conversation_history", [])
+        if conversation_history:
+            for msg in conversation_history[:-1]:  # Exclude the last message (current user message)
+                messages.append(msg)
+        
+        # Add current user message
+        messages.append({"role": "user", "content": message})
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "http://zoe-litellm:8001/v1/chat/completions",
+                headers={"Authorization": f"Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f"},
+                json={
+                    "model": litellm_model,
+                    "messages": messages,
+                    "temperature": routing_decision.get("temperature", 0.7),
+                    "max_tokens": 2000,
+                    "stream": True
+                }
+            )
+            
+            if response.status_code == 200:
+                yield {
+                    'type': 'content_start',
+                    'message': 'Generating response...',
+                    'timestamp': time.time()
+                }
+                
+                # Stream the response
+                async for line in response.aiter_lines():
+                    if line.startswith('data: '):
+                        data = line[6:]  # Remove 'data: ' prefix
+                        if data.strip() == '[DONE]':
+                            break
+                        try:
+                            import json
+                            chunk = json.loads(data)
+                            if 'choices' in chunk and len(chunk['choices']) > 0:
+                                delta = chunk['choices'][0].get('delta', {})
+                                content = delta.get('content', '')
+                                if content:
+                                    yield {
+                                        'type': 'content_delta',
+                                        'content': content,
+                                        'timestamp': time.time()
+                                    }
+                        except:
+                            continue
+            else:
+                logger.warning(f"LiteLLM proxy failed: {response.status_code}, falling back to Ollama")
+                async for event in call_ollama_direct_streaming(message, "llama3.2:3b", context):
+                    yield event
+                
+    except Exception as e:
+        logger.warning(f"LiteLLM proxy error: {e}, falling back to Ollama")
+        async for event in call_ollama_direct_streaming(message, "llama3.2:3b", context):
+            yield event
+
+async def call_ollama_direct_streaming(message: str, model: str, context: Dict) -> AsyncGenerator[Dict, None]:
+    """Stream Ollama direct response"""
+    try:
+        yield {
+            'type': 'model_call_start',
+            'model': model,
+            'message': 'Connecting to local AI model...',
+            'timestamp': time.time()
+        }
+        
+        # Build system prompt (same as original)
+        mode = context.get("mode", "user")
+        system = "You are Zack, a technical AI developer." if mode == "developer" else "You are Zoe, a friendly assistant."
+        
+        # Add user data to system prompt if available
+        user_data = context.get("user_data", {})
+        if user_data and mode == "user":
+            system += "\n\nYou have access to the following user data:\n"
+            
+            # Add calendar events
+            if user_data.get("calendar_events"):
+                system += "\nCALENDAR EVENTS:\n"
+                for event in user_data["calendar_events"]:
+                    system += f"- {event.get('title')} on {event.get('start_date')} at {event.get('start_time')} ({event.get('category')})\n"
+            
+            # Add lists
+            if user_data.get("lists"):
+                system += "\nLISTS:\n"
+                for list_item in user_data["lists"]:
+                    system += f"- {list_item.get('name')} ({list_item.get('category')}): {list_item.get('description', 'No description')}\n"
+            
+            # Add journal entries
+            if user_data.get("journal_entries"):
+                system += "\nJOURNAL ENTRIES:\n"
+                for entry in user_data["journal_entries"][:3]:  # Show only recent 3
+                    system += f"- {entry.get('title', 'Untitled')}: {entry.get('content', '')[:100]}...\n"
+            
+            # Add memories
+            if user_data.get("memories"):
+                system += "\nRECENT MEMORIES:\n"
+                for memory in user_data["memories"][:3]:  # Show only recent 3
+                    system += f"- {memory.get('content', '')[:100]}...\n"
+            
+            system += "\nUse this data to provide specific, helpful responses about the user's schedule, tasks, and information."
+        
+        # Build conversation context for Ollama
+        conversation_history = context.get("conversation_history", [])
+        prompt_parts = [system]
+        
+        # Add conversation history if available
+        if conversation_history:
+            for msg in conversation_history[:-1]:  # Exclude the last message (current user message)
+                if msg["role"] == "user":
+                    prompt_parts.append(f"User: {msg['content']}")
+                elif msg["role"] == "assistant":
+                    prompt_parts.append(f"Assistant: {msg['content']}")
+        
+        # Add current user message
+        prompt_parts.append(f"User: {message}")
+        prompt_parts.append("Assistant:")
+        
+        full_prompt = "\n\n".join(prompt_parts)
+        
+        yield {
+            'type': 'content_start',
+            'message': 'Generating response...',
+            'timestamp': time.time()
+        }
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                "http://zoe-ollama:11434/api/generate",
+                json={
+                    "model": model,
+                    "prompt": full_prompt,
+                    "temperature": 0.3 if mode == "developer" else 0.7,
+                    "stream": True
+                }
+            )
+            
+            if response.status_code == 200:
+                # Stream the response
+                async for line in response.aiter_lines():
+                    try:
+                        import json
+                        chunk = json.loads(line)
+                        if 'response' in chunk:
+                            content = chunk['response']
+                            if content:
+                                yield {
+                                    'type': 'content_delta',
+                                    'content': content,
+                                    'timestamp': time.time()
+                                }
+                        if chunk.get('done', False):
+                            break
+                    except:
+                        continue
+            else:
+                yield {
+                    'type': 'error',
+                    'message': 'AI service temporarily unavailable',
+                    'timestamp': time.time()
+                }
+                
+    except Exception as e:
+        logger.error(f"Ollama streaming error: {e}")
+        yield {
+            'type': 'error',
+            'message': f'AI service error: {str(e)}',
+            'timestamp': time.time()
+        }
 
 # Compatibility exports
 generate_response = get_ai_response

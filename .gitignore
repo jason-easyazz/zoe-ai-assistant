@@ -66,6 +66,9 @@ Thumbs.db
 
 # Logs
 *.log
+.config/gh/
+.ssh/
+.cloudflared/
 
 # Temporary files
 *.tmp

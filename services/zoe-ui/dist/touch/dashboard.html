@@ -676,12 +676,84 @@
         }
 
         .zoe-orb.processing {
-            animation: zoeProcessing 1s ease-in-out infinite;
-            background: linear-gradient(135deg, #4ecdc4 0%, #44a08d 100%);
-            box-shadow: 
-                0 0 80px rgba(78, 205, 196, 0.6),
-                0 0 160px rgba(68, 160, 141, 0.3),
-                inset 0 0 60px rgba(255, 255, 255, 0.2);
+            animation: processing-pulse 2s infinite;
+        }
+
+        .insights-panel {
+            display: none; /* Hidden by default */
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80vw;
+            max-width: 600px;
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            z-index: 2000;
+            padding: 20px;
+        }
+
+        .insights-panel.visible {
+            display: block;
+        }
+
+        .insights-title {
+            text-align: center;
+            font-size: 20px;
+            font-weight: 500;
+            margin-bottom: 20px;
+        }
+
+        .suggestions-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            max-height: 50vh;
+            overflow-y: auto;
+        }
+
+        .suggestion-card {
+            background: white;
+            padding: 15px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease-in-out;
+            border: 1px solid #eee;
+        }
+
+        .suggestion-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+
+        .close-insights {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: #ddd;
+            border: none;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            font-size: 18px;
+            cursor: pointer;
+        }
+
+        /* Streaming cursor for AG-UI Protocol */
+        .streaming-cursor {
+            display: inline-block;
+            width: 2px;
+            height: 1em;
+            background: #7B61FF;
+            margin-left: 2px;
+            animation: cursorBlink 1s infinite;
+        }
+
+        @keyframes cursorBlink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
         }
 
         @keyframes zoeBreathe {
@@ -1725,6 +1797,24 @@
                     <div class="zoe-message-time">Just now</div>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <div id="zoeModal" class="zoe-modal">
+        <div class="zoe-modal-content">
+            <span class="close-zoe-modal" onclick="hideZoeModal()">&times;</span>
+            <div id="zoeStatus">Listening...</div>
+            <div id="zoeTranscript"></div>
+            <div id="zoeMessages"></div>
+        </div>
+    </div>
+
+    <!-- Orb Insights Panel -->
+    <div id="orbInsightsPanel" class="insights-panel">
+        <button class="close-insights" onclick="closeInsightsPanel(true)">&times;</button>
+        <h2 class="insights-title">Zoe's Insights</h2>
+        <div id="suggestionsGrid" class="suggestions-grid">
+            <!-- Suggestions will be loaded here -->
         </div>
     </div>
 
@@ -4124,13 +4214,13 @@
 
         // Zoe Widget Functions
         function startZoeConversation() {
-            if (zoeChatOpen) {
-                closeZoeChat();
-                return;
+            const ENABLE_ORB_SUGGESTIONS = true;
+
+            if (ENABLE_ORB_SUGGESTIONS) {
+                showOrbSuggestions();
+            } else {
+                startListening();
             }
-            
-            openZoeChat();
-            startVoiceRecognition();
         }
 
         function openZoeChat() {
@@ -4397,39 +4487,83 @@
             const orb = document.getElementById('zoeOrb');
             orb.classList.add('processing');
             
-            // Show typing indicator
-            showTypingIndicator();
-            
             try {
-                // Send to Zoe API
-                const response = await fetch('/api/chat', {
+                // Use AG-UI Protocol streaming endpoint
+                const apiBase = window.API_BASE || '/api';
+                const streamUrl = `${apiBase}/chat/stream`;
+                
+                // Send the message via POST
+                const response = await fetch(streamUrl, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({
                         message: transcript,
-                        conversation_history: zoeConversationHistory.slice(-10) // Last 10 messages for context
+                        context: { 
+                            mode: 'main_chat',
+                            conversation_history: zoeConversationHistory.slice(-10)
+                        }
                     })
                 });
-                
+
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
                 }
-                
-                const data = await response.json();
-                
-                // Hide typing indicator
-                hideTypingIndicator();
-                
-                // Add Zoe's response
-                addZoeMessage(data.response || 'I understand, but I need more information to help you.', 'zoe');
-                
+
+                // Handle streaming response
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let currentMessageElement = null;
+                let streamingText = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const eventData = JSON.parse(line.slice(6));
+                                handleZoeAGUIEvent(eventData);
+                                
+                                // Update current message element reference
+                                if (eventData.type === 'content_start' && !currentMessageElement) {
+                                    currentMessageElement = addZoeMessage('', 'zoe');
+                                    streamingText = '';
+                                } else if (eventData.type === 'content_delta' && currentMessageElement) {
+                                    streamingText += eventData.content;
+                                    currentMessageElement.innerHTML = streamingText.replace(/\n/g, '<br>') + '<div class="streaming-cursor"></div>';
+                                } else if (eventData.type === 'session_end' && currentMessageElement && streamingText) {
+                                    // Remove streaming cursor
+                                    currentMessageElement.innerHTML = streamingText.replace(/\n/g, '<br>');
+                                    
+                                    // Add to conversation history
+                                    zoeConversationHistory.push(
+                                        { role: 'user', content: transcript },
+                                        { role: 'assistant', content: streamingText }
+                                    );
+                                    
+                                    // Keep only last 20 messages
+                                    if (zoeConversationHistory.length > 20) {
+                                        zoeConversationHistory = zoeConversationHistory.slice(-20);
+                                    }
+                                }
+                            } catch (e) {
+                                console.warn('Failed to parse event:', line);
+                            }
+                        }
+                    }
+                }
+
             } catch (error) {
                 console.error('Failed to process Zoe request:', error);
-                
-                // Hide typing indicator
-                hideTypingIndicator();
                 
                 // Fallback response
                 const fallbackResponses = [
@@ -4445,6 +4579,39 @@
             
             // Reset orb state
             resetZoeState();
+        }
+
+        // Handle AG-UI Protocol events for Zoe orb chat
+        function handleZoeAGUIEvent(event) {
+            switch (event.type) {
+                case 'agent_thinking':
+                    // Update orb status
+                    const status = document.getElementById('zoeStatus');
+                    if (status) {
+                        status.textContent = event.message;
+                    }
+                    break;
+
+                case 'tool_call_start':
+                    // Show tool activity in orb
+                    const orb = document.getElementById('zoeOrb');
+                    if (orb) {
+                        orb.classList.add('processing');
+                    }
+                    break;
+
+                case 'tool_result':
+                    // Tool completed
+                    break;
+
+                case 'error':
+                    console.error('Zoe error:', event.message);
+                    break;
+
+                default:
+                    // Other events are handled in the main loop
+                    break;
+            }
         }
 
         async function loadImportantTasksWidget(widget) {
@@ -4677,6 +4844,167 @@
                     badge.textContent = '0';
                 }
             }
+        }
+
+        async function showOrbSuggestions() {
+            const panel = document.getElementById('orbInsightsPanel');
+            panel.classList.add('visible');
+
+            const grid = document.getElementById('suggestionsGrid');
+            grid.innerHTML = '<p>Loading insights...</p>';
+
+            try {
+                const insights = await apiRequest('/orchestrator/insights');
+                renderOrbSuggestions(insights);
+            } catch (error) {
+                grid.innerHTML = '<p>Could not load suggestions.</p>';
+            }
+        }
+
+        function renderOrbSuggestions(insights) {
+            const grid = document.getElementById('suggestionsGrid');
+            let html = '';
+
+            const suggestions = [
+                ...(insights.urgent_actions || []),
+                ...(insights.opportunity_actions || []),
+                ...(insights.smart_suggestions || [])
+            ];
+
+            if (suggestions.length === 0) {
+                html = '<p>No specific suggestions right now. What\'s on your mind?</p>';
+            } else {
+                suggestions.forEach(s => {
+                    html += `<div class="suggestion-card" onclick="startConversationWithSuggestion('${s}')">${s}</div>`;
+                });
+            }
+            grid.innerHTML = html;
+        }
+
+        function startConversationWithSuggestion(suggestion) {
+            closeInsightsPanel(false); // don't start listening, process suggestion
+            showZoeModal();
+            addUserMessage(suggestion);
+            processZoeRequest(suggestion);
+        }
+
+        function closeInsightsPanel(shouldStartListening) {
+            const panel = document.getElementById('orbInsightsPanel');
+            panel.classList.remove('visible');
+            if (shouldStartListening) {
+                startListening();
+            }
+        }
+
+        function startListening() {
+            // E2E Smoke Test
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.get('test') === 'true') {
+                runOrbSmokeTest();
+                return; // Don't start actual listening
+            }
+
+            // Existing logic to start voice recognition
+            if (window.webkitSpeechRecognition) {
+                const SpeechRecognition = window.webkitSpeechRecognition;
+                const recognition = new SpeechRecognition();
+                recognition.continuous = false;
+                recognition.interimResults = false;
+                recognition.lang = 'en-US';
+                recognition.start();
+
+                recognition.onstart = function() {
+                    console.log('🎤 Voice recognition started');
+                };
+
+                recognition.onresult = function(event) {
+                    let interimText = '';
+                    let finalText = '';
+
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                        if (event.results[i].isFinal) {
+                            finalText += event.results[i][0].transcript;
+                        } else {
+                            interimText += event.results[i][0].transcript;
+                        }
+                    }
+
+                    if (finalText) {
+                        addZoeMessage(finalText, 'user');
+                        processZoeRequest(finalText);
+                    }
+
+                    if (interimText) {
+                        addZoeMessage(interimText, 'user');
+                    }
+                };
+
+                recognition.onend = function() {
+                    console.log('🎤 Voice recognition ended');
+                    resetZoeState();
+                };
+
+                recognition.onerror = function(event) {
+                    console.error('🎤 Speech recognition error:', event.error);
+                    addZoeMessage('Failed to start voice recognition. Please try again.', 'zoe');
+                    resetZoeState();
+                };
+            }
+        }
+
+        async function runOrbSmokeTest() {
+            console.log("Running smoke test for orb suggestions...");
+            
+            // Mock apiRequest for test
+            const originalApiRequest = window.apiRequest;
+            window.apiRequest = async (endpoint) => {
+                if (endpoint === '/orchestrator/insights') {
+                    return {
+                        urgent_actions: ["Check alarm status"],
+                        smart_suggestions: ["Play evening playlist"]
+                    };
+                }
+                return originalApiRequest(endpoint);
+            };
+
+            await showOrbSuggestions();
+            
+            // Wait for panel to become visible and suggestions to render
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            const panel = document.getElementById('orbInsightsPanel');
+            if (!panel.classList.contains('visible')) {
+                console.error("TEST FAILED: Orb insights panel is not visible.");
+                return;
+            }
+
+            const firstSuggestion = document.querySelector('#suggestionsGrid .suggestion-card');
+            if (!firstSuggestion) {
+                console.error("TEST FAILED: No orb suggestion cards found.");
+                return;
+            }
+
+            const suggestionText = firstSuggestion.innerText;
+            firstSuggestion.click();
+
+            // Check if modal appeared and suggestion is in messages
+            const modal = document.getElementById('zoeModal');
+            if (modal.style.display !== 'block') {
+                console.error("TEST FAILED: Zoe modal did not appear after suggestion click.");
+                return;
+            }
+
+            const lastMessage = document.querySelector('#zoeMessages .zoe-message-user');
+            if (!lastMessage || lastMessage.innerText !== suggestionText) {
+                console.error(`TEST FAILED: User message in modal "${lastMessage ? lastMessage.innerText : ''}" does not match suggestion "${suggestionText}".`);
+                return;
+            }
+
+            console.log("ORB SMOKE TEST PASSED!");
+            
+            // Clean up
+            window.apiRequest = originalApiRequest;
+            hideZoeModal();
         }
 
         console.log('🎯 Dashboard loaded with original Google Nest Hub styling!');
