@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  zoe-redis:
+    image: redis:7-alpine
+    container_name: zoe-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - zoe-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  zoe-ollama:
+    image: ollama/ollama:latest
+    container_name: zoe-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./models:/root/.ollama
+    networks:
+      - zoe-network
+    environment:
+      - OLLAMA_MODELS=/root/.ollama
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  zoe-core:
+    build: ./services/zoe-core
+    container_name: zoe-core
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    depends_on:
+      - zoe-redis
+      - zoe-ollama
+    volumes:
+      - ./data:/app/data
+      - ./services/zoe-core:/app
+    networks:
+      - zoe-network
+    environment:
+      - REDIS_URL=redis://zoe-redis:6379
+      - OLLAMA_URL=http://zoe-ollama:11434
+      - DATABASE_PATH=/app/data/zoe.db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  zoe-ui:
+    image: nginx:alpine
+    container_name: zoe-ui
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./services/zoe-ui/dist:/usr/share/nginx/html:ro
+      - ./services/zoe-ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - zoe-core
+    networks:
+      - zoe-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  zoe-network:
+    driver: bridge
+
+volumes:
+  zoe_redis_data:
+  zoe_ollama_models:

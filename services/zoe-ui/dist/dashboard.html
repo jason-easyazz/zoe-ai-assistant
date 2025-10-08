@@ -1,0 +1,1902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Zoe - Dashboard</title>
+    <style>
+        * { 
+            margin: 0; padding: 0; box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh; color: #333;
+            font-size: clamp(14px, 1.6vw, 16px);
+        }
+        
+        /* Navigation */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold; position: relative;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+            animation: notificationDotPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 8px rgba(123, 97, 255, 0);
+            }
+        }
+        
+        @keyframes notificationDotPulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.2);
+                opacity: 0.7;
+            }
+        }
+        
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .notifications-title {
+            font-size: 18px; font-weight: 600; color: #333; margin: 0;
+        }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content {
+            padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title {
+            font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px;
+        }
+        .notification-meta {
+            font-size: 12px; color: #666; display: flex; gap: 10px;
+        }
+        .notification-time {
+            color: #7B61FF; font-weight: 500;
+        }
+        .notification-priority {
+            padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600;
+        }
+        .no-notifications {
+            text-align: center; color: #666; font-size: 14px; padding: 40px 20px;
+        }
+        
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.warning::before { background: #ea580c; }
+
+        /* Time/Date Display in Top Right */
+        .time-date-display {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time {
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        .current-date {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.2;
+        }
+
+        /* User Menu Styles */
+        .user-menu {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .user-menu:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .user-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .username {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+        }
+        
+        .user-role {
+            font-size: 12px;
+            color: #666;
+        }
+        
+        .session-badge {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 500;
+            margin-left: 8px;
+        }
+        
+        .session-standard {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .session-passcode {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .user-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 8px 0;
+            min-width: 200px;
+            z-index: 1000;
+            display: none;
+            border: 1px solid #e1e5e9;
+        }
+        
+        .user-dropdown.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 8px 16px;
+            color: #333;
+            text-decoration: none;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .dropdown-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .dropdown-divider {
+            height: 1px;
+            background: #e1e5e9;
+            margin: 4px 0;
+        }
+
+        /* Main Layout */
+        .main-container { 
+            padding: 70px 20px 20px; 
+            min-height: calc(100vh - 90px);
+        }
+
+        /* Dashboard Layout */
+        .dashboard-layout { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr 1fr; 
+            gap: 24px; 
+            max-width: 1400px; 
+            margin: 0 auto;
+            height: calc(100vh - 120px);
+        }
+
+        /* Dashboard Cards */
+        .dashboard-card { 
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px); 
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 20px; 
+            padding: 24px; transition: all 0.3s ease; height: 100%;
+            display: flex; flex-direction: column;
+        }
+        .dashboard-card:hover { 
+            transform: translateY(-2px); background: rgba(255, 255, 255, 0.7); 
+        }
+
+        /* Card Headers */
+        .card-header { 
+            display: flex; justify-content: space-between; align-items: center; 
+            margin-bottom: 15px; padding-bottom: 10px; 
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        .card-title { 
+            font-size: 16px; font-weight: 600; color: #333;
+        }
+        .card-subtitle { 
+            font-size: 12px; color: #666; 
+            text-transform: uppercase; letter-spacing: 0.5px;
+        }
+
+        /* Home Assistant Card - Split Layout */
+        .home-card { 
+            display: flex; flex-direction: column; gap: 15px;
+        }
+        .room-controls { 
+            flex: 1; padding: 15px; background: rgba(255, 255, 255, 0.3);
+            border-radius: 12px; margin-bottom: 10px;
+        }
+        .house-stats { 
+            flex: 1; padding: 15px; background: rgba(255, 255, 255, 0.3);
+            border-radius: 12px;
+        }
+
+        /* Events & Tasks Lists */
+        .content-list { 
+            flex: 1; overflow-y: auto; 
+            max-height: calc(100vh - 300px);
+        }
+        .list-item { 
+            padding: 8px 12px; margin-bottom: 6px; background: rgba(255, 255, 255, 0.4);
+            border-radius: 8px; cursor: pointer; transition: all 0.2s ease;
+            min-height: 45px; display: flex; align-items: center; justify-content: space-between;
+        }
+        .list-item:hover { 
+            background: rgba(255, 255, 255, 0.6); transform: translateX(4px);
+        }
+        
+        .list-item .task-text, .list-item .event-text {
+            font-size: 14px;
+            line-height: 1.3;
+        }
+        
+        .list-item .task-time, .list-item .event-time {
+            font-size: 12px;
+            opacity: 0.7;
+        }
+
+
+        /* Home Stats Grid */
+        .stats-grid { 
+            display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;
+        }
+        .stat-item { 
+            text-align: center; padding: 12px; background: rgba(255, 255, 255, 0.4);
+            border-radius: 8px;
+        }
+        .stat-value { 
+            font-size: 18px; font-weight: 600; color: #7B61FF; margin-bottom: 4px;
+        }
+        .stat-label { 
+            font-size: 10px; color: #666; text-transform: uppercase;
+        }
+
+        /* Room Control Buttons */
+        .room-grid { 
+            display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px;
+        }
+        .room-btn { 
+            padding: 12px; border: none; border-radius: 8px; cursor: pointer;
+            background: rgba(123, 97, 255, 0.1); color: #7B61FF; font-size: 12px;
+            font-weight: 500; transition: all 0.2s ease; min-height: 44px;
+        }
+        .room-btn:hover { 
+            background: rgba(123, 97, 255, 0.2); transform: scale(1.02);
+        }
+        .room-btn.on { 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+        }
+
+        /* Quick Add Buttons */
+        .quick-add { 
+            padding: 10px 0; border-top: 1px solid rgba(255, 255, 255, 0.3);
+            margin-top: auto; display: flex; justify-content: center;
+        }
+        .add-btn { 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: none; border-radius: 20px; color: white; padding: 8px 16px;
+            font-size: 12px; font-weight: 500; cursor: pointer; 
+            transition: all 0.2s ease; min-height: 36px;
+        }
+        .add-btn:hover { 
+            transform: scale(1.05); box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+
+        /* Task Completion Styling */
+        .task-completed {
+            opacity: 0.6; text-decoration: line-through;
+        }
+        .task-checkbox {
+            margin-right: 8px; cursor: pointer; transform: scale(1.2);
+        }
+        .zoe-orb {
+            position: fixed; bottom: 24px; right: 24px; width: 70px; height: 70px;
+            border-radius: 50%; cursor: pointer; transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94); 
+            z-index: 1200; display: flex; align-items: center; justify-content: center; 
+            overflow: hidden;
+            /* Liquid animation base */
+            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
+            /* Zoe purple base with gradient overlay */
+            background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 50%, #A855F7 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
+        }
+        
+        /* Remove the white dot - create a subtle inner glow instead */
+        .zoe-orb::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 20px;
+            height: 20px;
+            background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            animation: orb-inner-glow 2s ease-in-out infinite alternate;
+        }
+        
+        .zoe-orb:hover { 
+            transform: scale(1.12); 
+            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.5), 0 0 50px rgba(123, 97, 255, 0.3);
+            animation-duration: 8s, 3s;
+        }
+        
+        .zoe-orb:active { transform: scale(0.95); }
+        
+        /* State-based colors - Zoe purple base with accent colors */
+        .zoe-orb.connecting { 
+            background: linear-gradient(135deg, #7B61FF 0%, #6366F1 50%, #8B5CF6 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
+        }
+        
+        .zoe-orb.connected { 
+            background: linear-gradient(135deg, #7B61FF 0%, #10B981 50%, #34D399 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(16, 185, 129, 0.2);
+        }
+        
+        .zoe-orb.thinking { 
+            background: linear-gradient(135deg, #7B61FF 0%, #F59E0B 50%, #FBBF24 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(245, 158, 11, 0.2);
+            animation: orb-thinking-gentle 3s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
+        }
+        
+        .zoe-orb.proactive { 
+            background: linear-gradient(135deg, #7B61FF 0%, #EC4899 50%, #F472B6 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(236, 72, 153, 0.2);
+            animation: orb-proactive-gentle 4s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
+        }
+        
+        .zoe-orb.error { 
+            background: linear-gradient(135deg, #7B61FF 0%, #EF4444 50%, #F87171 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(239, 68, 68, 0.2);
+            animation: orb-error-shake 0.5s ease-in-out infinite, orb-liquid-swirl 3s ease-in-out infinite;
+        }
+        
+        .zoe-orb.chatting {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 50%, #06B6D4 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.6), 0 0 60px rgba(123, 97, 255, 0.4);
+            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
+        }
+        
+        /* Badge indicator */
+        .zoe-orb.badge::after {
+            content: ''; position: absolute; top: 8px; right: 8px; width: 12px; height: 12px; 
+            background: #F59E0B; border-radius: 50%; border: 2px solid white; 
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.8);
+            animation: badge-pulse 2s ease-in-out infinite;
+        }
+        
+        /* Liquid swirl animation */
+        @keyframes orb-liquid-swirl {
+            0%, 100% { 
+                background-position: 0% 50%;
+                border-radius: 50% 45% 55% 50%;
+            }
+            25% { 
+                background-position: 100% 50%;
+                border-radius: 55% 50% 45% 55%;
+            }
+            50% { 
+                background-position: 100% 100%;
+                border-radius: 45% 55% 50% 45%;
+            }
+            75% { 
+                background-position: 0% 100%;
+                border-radius: 50% 45% 55% 50%;
+            }
+        }
+        
+        /* Gentle breathing animation */
+        @keyframes orb-breathe { 
+            0%, 100% { transform: scale(1); } 
+            50% { transform: scale(1.04); } 
+        }
+        
+        /* Gentle thinking animation */
+        @keyframes orb-thinking-gentle {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 6px 20px rgba(245, 158, 11, 0.4), 0 0 40px rgba(245, 158, 11, 0.2);
+            }
+            50% { 
+                transform: scale(1.02);
+                box-shadow: 0 7px 22px rgba(245, 158, 11, 0.5), 0 0 45px rgba(245, 158, 11, 0.3);
+            }
+        }
+        
+        /* Gentle proactive glow */
+        @keyframes orb-proactive-gentle {
+            0%, 100% { 
+                box-shadow: 0 6px 20px rgba(236, 72, 153, 0.4), 0 0 40px rgba(236, 72, 153, 0.2);
+            }
+            50% { 
+                box-shadow: 0 7px 25px rgba(236, 72, 153, 0.5), 0 0 50px rgba(236, 72, 153, 0.3);
+            }
+        }
+        
+        /* Error shake */
+        @keyframes orb-error-shake {
+            0%, 100% { transform: translateX(0) scale(1); }
+            25% { transform: translateX(-2px) scale(0.98); }
+            75% { transform: translateX(2px) scale(0.98); }
+        }
+        
+        /* Chat active */
+        @keyframes orb-chat-active {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 8px 25px rgba(123, 97, 255, 0.6), 0 0 60px rgba(123, 97, 255, 0.4);
+            }
+            50% { 
+                transform: scale(1.06);
+                box-shadow: 0 10px 35px rgba(123, 97, 255, 0.8), 0 0 80px rgba(123, 97, 255, 0.6);
+            }
+        }
+        
+        /* Badge pulse */
+        @keyframes badge-pulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.3);
+                opacity: 0.8;
+            }
+        }
+        
+        @keyframes orb-inner-glow {
+            0% { 
+                opacity: 0.3;
+                transform: translate(-50%, -50%) scale(1);
+            }
+            100% { 
+                opacity: 0.6;
+                transform: translate(-50%, -50%) scale(1.2);
+            }
+        }
+
+        .orb-toast {
+            position: fixed; bottom: 102px; right: 24px; background: rgba(255,255,255,0.95); color: #111;
+            border-radius: 12px; padding: 12px 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.15); z-index: 1300;
+            max-width: 320px; border: 1px solid rgba(0,0,0,0.06);
+        }
+        
+        /* Orb Chat Window - Elegant & Compact */
+        .orb-chat-window {
+            position: fixed; bottom: 102px; right: 24px; width: 320px; max-height: 420px;
+            background: rgba(255,255,255,0.98); backdrop-filter: blur(20px);
+            border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.12), 0 0 0 1px rgba(255,255,255,0.2); 
+            z-index: 1400; overflow: hidden;
+            transform: translateY(20px) scale(0.95); opacity: 0;
+            transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            display: flex; flex-direction: column;
+        }
+        
+        .orb-chat-window.open {
+            transform: translateY(0) scale(1); opacity: 1;
+        }
+        
+        .orb-chat-header {
+            padding: 8px 12px; background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 100%);
+            color: white; display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .orb-chat-title {
+            font-weight: 500; font-size: 12px; display: flex; align-items: center; gap: 5px;
+        }
+        
+        .orb-chat-title::before {
+            content: '';
+            width: 4px;
+            height: 4px;
+            background: rgba(255,255,255,0.9);
+            border-radius: 50%;
+            animation: chat-status-pulse 2s ease-in-out infinite;
+        }
+        
+        .orb-chat-close {
+            background: rgba(255,255,255,0.1); border: none; color: white; cursor: pointer; 
+            padding: 3px; border-radius: 50%; transition: all 0.2s;
+            width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
+            font-size: 10px; font-weight: 300;
+        }
+        
+        .orb-chat-close:hover { 
+            background: rgba(255,255,255,0.2); 
+            transform: scale(1.05);
+        }
+        
+        .orb-chat-messages {
+            flex: 1; padding: 16px 16px; overflow-y: auto; max-height: 300px;
+            display: flex; flex-direction: column; gap: 12px;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(123, 97, 255, 0.2) transparent;
+        }
+        
+        .orb-chat-messages::-webkit-scrollbar {
+            width: 3px;
+        }
+        
+        .orb-chat-messages::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        .orb-chat-messages::-webkit-scrollbar-thumb {
+            background: rgba(123, 97, 255, 0.2);
+            border-radius: 2px;
+        }
+        
+        .orb-chat-message {
+            padding: 12px 16px; border-radius: 16px; max-width: 85%;
+            word-wrap: break-word; line-height: 1.4; font-size: 13px;
+        }
+        
+        .orb-chat-message.user {
+            background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 100%);
+            color: white; align-self: flex-end; margin-left: auto;
+            box-shadow: 0 2px 8px rgba(123, 97, 255, 0.25);
+        }
+        
+        .orb-chat-message.assistant {
+            background: rgba(248, 250, 252, 0.9); color: #334155; align-self: flex-start;
+            border: 1px solid rgba(226, 232, 240, 0.6);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+        }
+        
+        .orb-chat-input-area {
+            padding: 12px 16px; border-top: 1px solid rgba(226, 232, 240, 0.3);
+            display: flex; gap: 8px; align-items: center;
+            background: rgba(248, 250, 252, 0.5);
+            position: relative;
+        }
+        
+        .orb-chat-input {
+            flex: 1; border: 1px solid rgba(226, 232, 240, 0.8); border-radius: 24px;
+            padding: 10px 16px; font-size: 12px; resize: none; min-height: 36px; max-height: 120px;
+            background: rgba(255,255,255,0.95); transition: all 0.3s ease;
+            font-family: inherit; line-height: 1.4; overflow: hidden;
+        }
+        
+        .orb-chat-input:focus {
+            outline: none; border-color: #7B61FF; background: white;
+            box-shadow: 0 0 0 2px rgba(123, 97, 255, 0.08);
+        }
+        
+        .orb-chat-input::placeholder {
+            color: rgba(107, 114, 128, 0.7);
+            font-size: 12px;
+        }
+        
+        .orb-chat-send {
+            background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 100%);
+            border: none; border-radius: 50%; width: 32px; height: 32px;
+            color: white; cursor: pointer; transition: all 0.2s;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 12px; font-weight: bold;
+            box-shadow: 0 2px 6px rgba(123, 97, 255, 0.2);
+            flex-shrink: 0;
+        }
+        
+        .orb-chat-send:hover { 
+            transform: scale(1.05); 
+            box-shadow: 0 3px 8px rgba(123, 97, 255, 0.3);
+        }
+        .orb-chat-send:disabled { 
+            opacity: 0.4; cursor: not-allowed; transform: none; 
+            box-shadow: 0 1px 3px rgba(123, 97, 255, 0.1);
+        }
+        
+        @keyframes chat-status-pulse {
+            0%, 100% { 
+                opacity: 0.8;
+                transform: scale(1);
+            }
+            50% { 
+                opacity: 1;
+                transform: scale(1.1);
+            }
+        }
+        
+        /* Chat typing indicator */
+        .orb-chat-typing {
+            display: flex; align-items: center; gap: 4px; padding: 8px 12px;
+            background: rgba(123, 97, 255, 0.1); border-radius: 12px;
+            color: #666; font-size: 12px; align-self: flex-start;
+        }
+        
+        .orb-chat-typing-dots {
+            display: flex; gap: 2px;
+        }
+        
+        .orb-chat-typing-dot {
+            width: 4px; height: 4px; background: #7B61FF; border-radius: 50%;
+            animation: typing-dot 1.4s ease-in-out infinite;
+        }
+        
+        .orb-chat-typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .orb-chat-typing-dot:nth-child(3) { animation-delay: 0.4s; }
+        
+        @keyframes typing-dot {
+            0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+            30% { transform: translateY(-8px); opacity: 1; }
+        }
+
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+
+        @media (max-width: 900px) {
+            .nav-menu { display: none; }
+            .dashboard-layout { grid-template-columns: 1fr; }
+        }
+        
+        @media (max-width: 420px) {
+            .main-container { padding: 80px 10px 20px; }
+            .dashboard-layout { gap: 15px; }
+            .room-grid { grid-template-columns: 1fr; }
+            .stats-grid { grid-template-columns: 1fr; }
+            .floating-add-btn { bottom: 20px; right: 20px; width: 64px; height: 64px; font-size: 28px; }
+        }
+    </style>
+    <script src="js/auth.js"></script>
+</head>
+<body>
+    <!-- Navigation -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="handleLogout()"></div>
+            <div class="nav-menu">
+                <a href="chat.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item active">Dashboard</a>
+                <a href="dashboard-widget.html" class="nav-item">Widgets</a>
+                <a href="lists.html" class="nav-item">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- Time/Date Display -->
+            <div class="time-date-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+            
+            <!-- User Menu (moved to mini-orb click) -->
+            <div class="user-menu" onclick="toggleUserDropdown()" style="display: none;">
+                <div class="user-avatar" id="userAvatar">?</div>
+                
+                <div class="user-dropdown" id="userDropdown">
+                    <a href="#" class="dropdown-item" onclick="showUserProfile()">Profile</a>
+                    <a href="#" class="dropdown-item" onclick="showSecuritySettings()">Security</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" class="dropdown-item" onclick="switchUser()">Switch User</a>
+                    <a href="#" class="dropdown-item" onclick="upgradeSession()" id="upgradeSessionItem" style="display: none;">Upgrade Session</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="admin.html" class="dropdown-item" id="adminLink" style="display: none;">Admin Dashboard</a>
+                    <div class="dropdown-divider" id="adminDivider" style="display: none;"></div>
+                    <a href="#" class="dropdown-item" onclick="logout()">Logout</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-container">
+
+        <!-- Dashboard Layout -->
+        <div class="dashboard-layout">
+            <!-- TILE 1: Events -->
+            <div class="dashboard-card">
+                <div class="card-header">
+                    <h2 class="card-title">📅 Events</h2>
+                    <span class="card-subtitle" id="eventCount">Loading...</span>
+                </div>
+                <div class="content-list" id="eventsList">
+                    <div class="list-item">
+                        <div>
+                            <div style="font-size: 12px; color: #7B61FF; font-weight: 600;">9:00 AM</div>
+                            <div style="font-size: 14px; color: #333;">Team Standup Meeting</div>
+                        </div>
+                        <div style="font-size: 12px; color: #666;">Work</div>
+                    </div>
+                    <div class="list-item">
+                        <div>
+                            <div style="font-size: 12px; color: #7B61FF; font-weight: 600;">2:30 PM</div>
+                            <div style="font-size: 14px; color: #333;">Dentist Appointment</div>
+                        </div>
+                        <div style="font-size: 12px; color: #666;">Health</div>
+                    </div>
+                    <div class="list-item">
+                        <div>
+                            <div style="font-size: 12px; color: #7B61FF; font-weight: 600;">6:00 PM</div>
+                            <div style="font-size: 14px; color: #333;">Dinner with Sarah</div>
+                        </div>
+                        <div style="font-size: 12px; color: #666;">Social</div>
+                    </div>
+                </div>
+                <div class="quick-add">
+                    <button class="add-btn" onclick="navigateToPage('calendar.html')">+ Add Event</button>
+                </div>
+            </div>
+
+            <!-- TILE 2: Tasks -->
+            <div class="dashboard-card">
+                <div class="card-header">
+                    <h2 class="card-title">✅ Tasks</h2>
+                    <span class="card-subtitle" id="taskCount">Loading...</span>
+                </div>
+                <div class="content-list" id="tasksList">
+                    <div class="list-item">
+                        <div style="display: flex; align-items: center; width: 100%;">
+                            <input type="checkbox" class="task-checkbox" onchange="toggleTask(this, 1)">
+                            <div style="flex: 1;">
+                                <div style="font-size: 14px; color: #333;">Review quarterly reports</div>
+                                <div style="font-size: 11px; color: #666;">Due: Today 5:00 PM</div>
+                            </div>
+                            <div style="font-size: 12px; color: #dc2626;">High</div>
+                        </div>
+                    </div>
+                    <div class="list-item">
+                        <div style="display: flex; align-items: center; width: 100%;">
+                            <input type="checkbox" class="task-checkbox" onchange="toggleTask(this, 2)">
+                            <div style="flex: 1;">
+                                <div style="font-size: 14px; color: #333;">Call insurance company</div>
+                                <div style="font-size: 11px; color: #666;">Due: Today</div>
+                            </div>
+                            <div style="font-size: 12px; color: #ea580c;">Medium</div>
+                        </div>
+                    </div>
+                    <div class="list-item">
+                        <div style="display: flex; align-items: center; width: 100%;">
+                            <input type="checkbox" class="task-checkbox" onchange="toggleTask(this, 3)" checked>
+                            <div style="flex: 1;" class="task-completed">
+                                <div style="font-size: 14px; color: #333;">Water plants</div>
+                                <div style="font-size: 11px; color: #666;">Daily task</div>
+                            </div>
+                            <div style="font-size: 12px; color: #22c55e;">Low</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="quick-add">
+                    <button class="add-btn" onclick="navigateToPage('lists.html')">+ Add Task</button>
+                </div>
+            </div>
+
+            <!-- TILE 3: Home -->
+            <div class="dashboard-card home-card">
+                <div class="card-header">
+                    <h2 class="card-title">🏠 Home</h2>
+                    <span class="card-subtitle" id="homeStatus">Loading...</span>
+                </div>
+                
+                <!-- Room Controls (Top Half) -->
+                <div class="room-controls">
+                    <h3 style="font-size: 14px; margin-bottom: 10px; color: #333;">Room Controls</h3>
+                    <div class="room-grid">
+                        <button class="room-btn" onclick="toggleRoom('living_room')">
+                            💡 Living Room
+                        </button>
+                        <button class="room-btn on" onclick="toggleRoom('kitchen')">
+                            🔆 Kitchen
+                        </button>
+                        <button class="room-btn" onclick="toggleRoom('bedroom')">
+                            🛏️ Bedroom
+                        </button>
+                        <button class="room-btn" onclick="toggleRoom('office')">
+                            💻 Office
+                        </button>
+                        <button class="room-btn on" onclick="toggleRoom('outdoor')">
+                            🌿 Outdoor
+                        </button>
+                        <button class="room-btn" onclick="toggleRoom('garage')">
+                            🚗 Garage
+                        </button>
+                    </div>
+                </div>
+
+                <!-- House Stats (Bottom Half) -->
+                <div class="house-stats">
+                    <h3 style="font-size: 14px; margin-bottom: 10px; color: #333;">House Stats</h3>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-value">⚡ 2.4kW</div>
+                            <div class="stat-label">Solar Output</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">🔋 85%</div>
+                            <div class="stat-label">Battery</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">🔒 Secure</div>
+                            <div class="stat-label">Security</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">🌡️ 22°C</div>
+                            <div class="stat-label">Inside Temp</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="alert('Coming soon!')">
+                    <div class="more-item-icon">📊</div>
+                    <div class="more-item-label">Analytics</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Zoe Orb (replaces + button) -->
+    <div class="zoe-orb" id="zoeOrb" title="Click to chat with Zoe" onclick="toggleOrbChat()">
+    </div>
+    <div class="orb-toast" id="orbToast" style="display:none;"></div>
+    
+    <!-- Orb Chat Window -->
+    <div class="orb-chat-window" id="orbChatWindow">
+        <div class="orb-chat-header">
+            <div class="orb-chat-title">
+                Chat with Zoe
+            </div>
+            <button class="orb-chat-close" onclick="closeOrbChat()">×</button>
+        </div>
+        <div class="orb-chat-messages" id="orbChatMessages">
+            <div class="orb-chat-message assistant">
+                Hi! I'm Zoe, your AI assistant. I can help you explore ideas, discuss suggestions, or just chat about anything. What's on your mind?
+            </div>
+        </div>
+        <div class="orb-chat-input-area">
+            <textarea class="orb-chat-input" id="orbChatInput" placeholder="Type your message..." rows="1"></textarea>
+            <button class="orb-chat-send" id="orbChatSend" onclick="sendOrbMessage()">→</button>
+        </div>
+    </div>
+
+    <script src="js/common.js"></script>
+    <script>
+        let apiConnected = false;
+        
+        async function loadDashboardData() {
+            try {
+                // Check API connectivity
+                const healthResponse = await fetch(`${API_BASE}/health`);
+                apiConnected = healthResponse.ok;
+                
+                if (apiConnected) {
+                    document.getElementById('apiStatus').className = 'api-indicator online';
+                    document.getElementById('apiStatus').textContent = 'Online';
+                    
+                    // Load real data
+                    await Promise.all([
+                        loadTodaysEvents(),
+                        loadTodaysTasks(),
+                        loadHomeStatus()
+                    ]);
+                } else {
+                    throw new Error('API not available');
+                }
+            } catch (error) {
+                console.error('API connection failed:', error);
+                document.getElementById('apiStatus').className = 'api-indicator offline';
+                document.getElementById('apiStatus').textContent = 'Offline';
+                
+                // Keep demo data
+                document.getElementById('eventCount').textContent = '3 events today';
+                updateTaskCount();
+                document.getElementById('homeStatus').textContent = 'All systems normal';
+            }
+        }
+
+        async function loadTodaysEvents() {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const response = await apiRequest('/calendar/events', {
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                const events = Array.isArray(response) ? response : response.events || [];
+                
+                // Filter for today's events
+                const today = new Date().toISOString().split('T')[0];
+                const todaysEvents = events.filter(event => {
+                    const eventDate = event.start_date || event.date;
+                    return eventDate === today;
+                });
+                
+                displayEvents(todaysEvents);
+                document.getElementById('eventCount').textContent = `${todaysEvents.length} events today`;
+            } catch (error) {
+                console.error('Failed to load events:', error);
+                document.getElementById('eventCount').textContent = '3 events today';
+            }
+        }
+
+        async function loadTodaysTasks() {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const response = await apiRequest('/lists/tasks', {
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                const lists = Array.isArray(response) ? response : response.lists || [];
+                
+                // Get all tasks from all task lists
+                let allTasks = [];
+                lists.forEach(list => {
+                    if (list.items && Array.isArray(list.items)) {
+                        list.items.forEach(item => {
+                            allTasks.push({
+                                ...item,
+                                list_id: list.id,
+                                list_name: list.name,
+                                category: list.category
+                            });
+                        });
+                    }
+                });
+                
+                // Filter for today's tasks or tasks without due date
+                const today = new Date().toISOString().split('T')[0];
+                const todaysTasks = allTasks.filter(task => 
+                    !task.due_date || task.due_date === today
+                );
+                
+                displayTasks(todaysTasks);
+                updateTaskCountFromAPI(todaysTasks);
+            } catch (error) {
+                console.error('Failed to load tasks:', error);
+            }
+        }
+
+
+        async function loadHomeStatus() {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const response = await apiRequest('/homeassistant/states', {
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                updateHomeControls(response);
+                document.getElementById('homeStatus').textContent = 'Connected';
+            } catch (error) {
+                console.error('Failed to load home status:', error);
+                document.getElementById('homeStatus').textContent = 'Offline';
+            }
+        }
+
+        function displayEvents(events) {
+            const eventsList = document.getElementById('eventsList');
+            if (events.length === 0) {
+                eventsList.innerHTML = '<div class="list-item" style="justify-content: center; color: #666; font-style: italic;">No events today</div>';
+                return;
+            }
+            
+            eventsList.innerHTML = events.map(event => `
+                <div class="list-item">
+                    <div>
+                        <div style="font-size: 12px; color: #7B61FF; font-weight: 600;">${formatTime(event.start_time || event.time)}</div>
+                        <div style="font-size: 14px; color: #333;">${event.title}</div>
+                    </div>
+                    <div style="font-size: 12px; color: #666;">${event.category || 'Personal'}</div>
+                </div>
+            `).join('');
+        }
+
+        function displayTasks(tasks) {
+            const tasksList = document.getElementById('tasksList');
+            if (tasks.length === 0) {
+                tasksList.innerHTML = '<div class="list-item" style="justify-content: center; color: #666; font-style: italic;">No tasks today</div>';
+                return;
+            }
+            
+            tasksList.innerHTML = tasks.map(task => `
+                <div class="list-item" data-list-id="${task.list_id}" data-task-id="${task.id}">
+                    <div style="display: flex; align-items: center; width: 100%;">
+                        <input type="checkbox" class="task-checkbox" ${task.completed ? 'checked' : ''} 
+                               onchange="toggleTask(this, ${task.id})">
+                        <div style="flex: 1;" class="${task.completed ? 'task-completed' : ''}">
+                            <div style="font-size: 14px; color: #333;">${task.text || task.title}</div>
+                            <div style="font-size: 11px; color: #666;">${task.due_date ? 'Due: ' + formatDate(task.due_date) : 'No due date'}</div>
+                        </div>
+                        <div style="font-size: 12px; color: ${getPriorityColor(task.priority)}">${task.priority || 'Medium'}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function updateHomeControls(homeData) {
+            if (homeData.states && homeData.states.lights) {
+                homeData.states.lights.forEach(light => {
+                    const roomName = light.entity_id.split('.')[1].replace('_', ' ');
+                    const isOn = light.state === 'on';
+                    updateRoomButton(roomName, isOn);
+                });
+            }
+        }
+
+        function updateRoomButton(roomName, isOn) {
+            const buttons = document.querySelectorAll('.room-btn');
+            buttons.forEach(btn => {
+                if (btn.textContent.toLowerCase().includes(roomName.toLowerCase())) {
+                    if (isOn) {
+                        btn.classList.add('on');
+                    } else {
+                        btn.classList.remove('on');
+                    }
+                }
+            });
+        }
+
+        function formatTime(timeStr) {
+            if (!timeStr) return '';
+            const [hours, minutes] = timeStr.split(':');
+            const hour12 = hours % 12 || 12;
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            return `${hour12}:${minutes} ${ampm}`;
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '';
+            const date = new Date(dateStr);
+            return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        }
+
+        function getPriorityColor(priority) {
+            switch(priority?.toLowerCase()) {
+                case 'high': return '#dc2626';
+                case 'medium': return '#ea580c';
+                case 'low': return '#22c55e';
+                default: return '#666';
+            }
+        }
+
+        function toggleTask(checkbox, taskId) {
+            const isCompleted = checkbox.checked;
+            const taskContent = checkbox.parentElement.querySelector('div[style*="flex: 1"]');
+            
+            if (isCompleted) {
+                taskContent.classList.add('task-completed');
+            } else {
+                taskContent.classList.remove('task-completed');
+            }
+            
+            if (apiConnected) {
+                // Find the task's list and update it
+                const taskElement = checkbox.closest('.list-item');
+                const taskData = taskElement.dataset;
+                
+                if (taskData.listId && taskData.taskId) {
+                    // Update the task in the specific list
+                    updateTaskInList(taskData.listId, taskData.taskId, {
+                        completed: isCompleted
+                    }).catch(error => {
+                        console.error('Task update error:', error);
+                        checkbox.checked = !isCompleted;
+                        taskContent.classList.toggle('task-completed');
+                    });
+                }
+            }
+            
+            updateTaskCount();
+        }
+
+        function toggleRoom(room) {
+            const btn = event.target;
+            const isCurrentlyOn = btn.classList.contains('on');
+            
+            btn.classList.toggle('on');
+            
+            if (apiConnected) {
+                const service = isCurrentlyOn ? 'light.turn_off' : 'light.turn_on';
+                const entityId = `light.${room}`;
+                const session = window.zoeAuth?.getCurrentSession();
+                
+                apiRequest('/homeassistant/service', {
+                    method: 'POST',
+                    headers: session ? { 'X-Session-ID': session.session_id } : {},
+                    body: JSON.stringify({
+                        service: service,
+                        entity_id: entityId
+                    })
+                }).catch(error => {
+                    console.error('Home control error:', error);
+                    btn.classList.toggle('on');
+                });
+            }
+            
+            console.log(`Toggling ${room}`);
+        }
+
+        function updateTaskCount() {
+            const checkboxes = document.querySelectorAll('#tasksList .task-checkbox');
+            const completed = document.querySelectorAll('#tasksList .task-checkbox:checked').length;
+            const pending = checkboxes.length - completed;
+            document.getElementById('taskCount').textContent = `${pending} pending`;
+        }
+
+        function updateTaskCountFromAPI(tasks) {
+            const pending = tasks.filter(task => !task.completed).length;
+            document.getElementById('taskCount').textContent = `${pending} pending`;
+        }
+
+        async function updateTaskInList(listId, taskId, updates) {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                // First get the current list
+                const listResponse = await apiRequest(`/lists/tasks/${listId}`, {
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                const list = listResponse.list || listResponse;
+                
+                // Update the specific task in the items array
+                const updatedItems = list.items.map(item => {
+                    if (item.id === parseInt(taskId)) {
+                        return { ...item, ...updates };
+                    }
+                    return item;
+                });
+                
+                // Update the list with the modified items
+                await apiRequest(`/lists/tasks/${listId}`, {
+                    method: 'PUT',
+                    headers: session ? { 'X-Session-ID': session.session_id } : {},
+                    body: JSON.stringify({
+                        items: updatedItems
+                    })
+                });
+            } catch (error) {
+                console.error('Failed to update task in list:', error);
+                throw error;
+            }
+        }
+
+        function navigateToPage(page) {
+            window.location.href = page;
+        }
+
+        // Time/Date Update Functions
+        function updateTimeDate() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            const timeElement = document.getElementById('currentTime');
+            const dateElement = document.getElementById('currentDate');
+            
+            if (timeElement) timeElement.textContent = timeString;
+            if (dateElement) dateElement.textContent = dateString;
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            loadDashboardData();
+            
+            // Update time/date immediately and every minute
+            updateTimeDate();
+            setInterval(updateTimeDate, 60000);
+            
+            // Refresh dashboard every 5 minutes
+            setInterval(loadDashboardData, 5 * 60 * 1000);
+            
+            // Load notifications on page load
+            loadNotifications();
+
+            // Initialize intelligence WebSocket
+            initIntelligenceWS();
+            
+            // Initialize orb chat functionality
+            initOrbChat();
+        });
+
+        // Notifications system
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+            
+            // Clear notification indicator when panel is opened
+            const notificationBtn = document.querySelector('.notifications-btn');
+            notificationBtn.classList.remove('has-notifications');
+        }
+
+        // Intelligence WebSocket client
+        let intelligenceWS;
+        let wsCandidateIdx = 0;
+        let wsFailures = 0;
+        function wsCandidates() {
+            const isSecure = location.protocol === 'https:';
+            const wss = isSecure ? 'wss://' : 'ws://';
+            const pageHost = location.host; // e.g., zoe.local
+            const list = [];
+            try {
+                if (typeof API_BASE !== 'undefined' && API_BASE) {
+                    const api = new URL(API_BASE);
+                    const apiHost = api.host; // e.g., 192.168.1.60
+                    const basePath = api.pathname.replace(/\/$/, ''); // e.g., /api
+                    // Prefer same host as page for TLS/SNI with both basePath and root
+                    list.push(`${wss}${pageHost}${basePath}/ws/intelligence`);
+                    list.push(`${wss}${pageHost}/ws/intelligence`);
+                    // Fallback to API host variants
+                    list.push(`${wss}${apiHost}${basePath}/ws/intelligence`);
+                    list.push(`${wss}${apiHost}/ws/intelligence`);
+                } else {
+                    list.push(`${wss}${pageHost}/api/ws/intelligence`);
+                    list.push(`${wss}${pageHost}/ws/intelligence`);
+                }
+            } catch (e) {
+                list.push(`${wss}${pageHost}/ws/intelligence`);
+            }
+            // Deduplicate while preserving order
+            return [...new Set(list)];
+        }
+        function initIntelligenceWS() {
+            const candidates = wsCandidates();
+            const orb = document.getElementById('zoeOrb');
+            // If API host differs from page host, proxies often block WS. Prefer SSE immediately.
+            try {
+                if (typeof API_BASE !== 'undefined' && API_BASE) {
+                    const api = new URL(API_BASE);
+                    if (api.host !== location.host) {
+                        return initIntelligenceSSE();
+                    }
+                }
+            } catch(e) {}
+            const tryConnect = () => {
+                if (wsFailures >= 2) {
+                    // Switch to SSE fallback under the same API base
+                    initIntelligenceSSE();
+                    return;
+                }
+                if (wsCandidateIdx >= candidates.length) {
+                    wsCandidateIdx = 0;
+                }
+                const url = candidates[wsCandidateIdx++];
+                try {
+                    intelligenceWS = new WebSocket(url);
+                } catch (e) {
+                    wsFailures++;
+                    orb.classList.add('error');
+                    orb.title = 'WS init failed';
+                    return setTimeout(tryConnect, 2500);
+                }
+                intelligenceWS.onopen = () => {
+                    wsFailures = 0;
+                    orb.classList.remove('error', 'connecting');
+                    orb.classList.add('connected');
+                    orb.title = 'Connected';
+                };
+                intelligenceWS.onmessage = (evt) => {
+                    try { const msg = JSON.parse(evt.data); handleIntelligenceEvent(msg); } catch(e) {}
+                };
+                intelligenceWS.onerror = () => {
+                    wsFailures++;
+                    orb.classList.remove('connected', 'connecting');
+                    orb.classList.add('error');
+                    orb.title = 'Connection error';
+                };
+                intelligenceWS.onclose = () => {
+                    wsFailures++;
+                    orb.classList.remove('connected', 'error');
+                    orb.classList.add('connecting');
+                    orb.title = 'Reconnecting...';
+                    setTimeout(tryConnect, 2000);
+                };
+            };
+            tryConnect();
+        }
+
+        function initIntelligenceSSE(){
+            const orb = document.getElementById('zoeOrb');
+            let url;
+            try {
+                if (typeof API_BASE !== 'undefined' && API_BASE) {
+                    const api = new URL(API_BASE);
+                    const basePath = api.pathname.replace(/\/$/, '');
+                    url = `${api.origin}${basePath}/intelligence/stream`;
+                } else {
+                    url = `${location.origin}/api/intelligence/stream`;
+                }
+            } catch(e) {
+                url = `${location.origin}/api/intelligence/stream`;
+            }
+            try {
+                const es = new EventSource(url);
+                es.onopen = () => { 
+                    orb.classList.remove('error', 'connecting'); 
+                    orb.classList.add('connected');
+                    orb.title = 'Connected (SSE)'; 
+                };
+                es.onmessage = (evt) => {
+                    try { const msg = JSON.parse(evt.data); handleIntelligenceEvent(msg); } catch(e) {}
+                };
+                es.onerror = () => { orb.classList.add('error'); orb.title = 'SSE error'; };
+            } catch(e) { orb.classList.add('error'); orb.title = 'No realtime channel'; }
+        }
+
+        function handleIntelligenceEvent(event) {
+            const orb = document.getElementById('zoeOrb');
+            if (event.type === 'status') {
+                orb.classList.remove('error');
+                return;
+            }
+            if (event.type === 'heartbeat') return;
+            if (event.type === 'memory_update') {
+                orb.classList.add('thinking');
+                showOrbToast(`Context updated • events: ${event.data?.context?.events ?? 0}`, false, false);
+                setTimeout(()=>{ orb.classList.remove('thinking'); }, 1200);
+                return;
+            }
+            if (event.type === 'proactive_suggestion' || event.type === 'ambient_notification') {
+                orb.classList.add('badge', 'proactive');
+                const n = event.data;
+                window.__lastSuggestion = n;
+                const html = `
+                  <div style="font-weight:600; margin-bottom:6px;">${n.title ? n.title : 'Suggestion'}</div>
+                  <div style="margin-bottom:10px; color:#374151;">${n.message}</div>
+                  <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <button class="btn" style="padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#10b981; color:white;" onclick="suggestionAction(${n.id}, 'accept')">Yes</button>
+                    <button class="btn" style="padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:white;" onclick="suggestionAction(${n.id}, 'dismiss')">Not now</button>
+                    <button class="btn" style="padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:white;" onclick="suggestionAction(${n.id}, 'never')">Don't show again</button>
+                    <button class="btn" style="padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#7B61FF; color:white;" onclick="handleSuggestionWithChat(window.__lastSuggestion)">💬 Discuss</button>
+                  </div>`;
+                showOrbToast(html, true, true); // Persistent until dismissed
+                // Also refresh panel list
+                loadNotificationsFromCore();
+            }
+        }
+
+        async function loadNotificationsFromCore() {
+            try {
+                const res = await fetch('/api/notifications/');
+                if (res.ok) {
+                    const data = await res.json();
+                    const mapped = (data.notifications||[]).map(n=>({
+                        id: n.id,
+                        message: n.title ? `${n.title} — ${n.message}` : n.message,
+                        created_at: n.created_at,
+                        priority: n.priority
+                    }));
+                    displayNotifications(mapped);
+                }
+            } catch (e) { }
+        }
+
+        function showOrbToast(text, isHtml=false, persistent=false) {
+            const el = document.getElementById('orbToast');
+            if (isHtml) { el.innerHTML = text; } else { el.textContent = text; }
+            el.style.display = 'block';
+            clearTimeout(window.__orbToastTimer);
+            // Only auto-dismiss if not persistent (e.g., for simple status messages)
+            if (!persistent) {
+                window.__orbToastTimer = setTimeout(()=>{ el.style.display = 'none'; }, 6000);
+            }
+        }
+
+        async function suggestionAction(notificationId, action){
+            try{
+                // If accepted, create a reminder from suggestion metadata
+                if (action === 'accept'){
+                    const sug = window.__lastSuggestion || {};
+                    const meta = sug.metadata || {};
+                    const personName = (sug.title||'').replace('Reconnect Opportunity','').trim() || (sug.message||'').match(/talked to (.+?) in/i)?.[1] || 'contact';
+                    const now = new Date();
+                    const tomorrow = new Date(now.getTime() + 24*60*60*1000);
+                    const dueDate = tomorrow.toISOString().slice(0,10);
+                    const body = {
+                        title: `Reconnect with ${personName}`,
+                        description: sug.message || 'Reconnect reminder',
+                        reminder_type: 'once',
+                        category: 'personal',
+                        priority: 'medium',
+                        due_date: dueDate,
+                        due_time: '09:00:00'
+                    };
+                    // Use API_BASE if available
+                    let res;
+                    // Prefer centralized API helper if available to avoid mixed content
+                    if (typeof apiRequest === 'function'){
+                        res = await apiRequest('/reminders', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+                        // apiRequest returns parsed JSON; mock a fetch-like ok
+                        if (res && (res.reminder_id || res.reminder || res.message)){
+                            showOrbToast('Reminder added for tomorrow 9:00am', false, false);
+                        }
+                    } else {
+                        let base = '/api';
+                        try {
+                            if (typeof API_BASE === 'string' && API_BASE) base = API_BASE;
+                            else if (typeof API_BASE === 'object' && API_BASE.apiBase) base = API_BASE.apiBase;
+                            const u = new URL(base, window.location.origin);
+                            if (window.location.protocol === 'https:') u.protocol = 'https:';
+                            base = u.toString().replace(/\/$/, '');
+                        } catch(e) {}
+                        res = await fetch(`${base}/reminders`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+                        if (res.ok){
+                            showOrbToast('Reminder added for tomorrow 9:00am', false, false);
+                        }
+                    }
+                }
+
+                await fetch(`/api/notifications/${notificationId}/interaction?action=${encodeURIComponent(action)}`, { method:'POST' });
+                const el = document.getElementById('orbToast');
+                el.style.display = 'none';
+                // If accepted, we could trigger follow-up (e.g., open reminders). For now just refresh list
+                await loadNotificationsFromCore();
+            }catch(e){ console.warn('Suggestion action failed', e); }
+        }
+
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+
+        // Orb Chat System
+        let orbChatOpen = false;
+        let orbChatContext = null; // Store context for deep conversations
+
+        function initOrbChat() {
+            const input = document.getElementById('orbChatInput');
+            const sendBtn = document.getElementById('orbChatSend');
+            
+            // Auto-resize textarea like Chatlio
+            input.addEventListener('input', function() {
+                this.style.height = 'auto';
+                const newHeight = Math.min(this.scrollHeight, 120);
+                this.style.height = newHeight + 'px';
+                
+                // Smoothly adjust the chat window height
+                const chatWindow = document.getElementById('orbChatWindow');
+                const messagesArea = document.getElementById('orbChatMessages');
+                const inputArea = this.closest('.orb-chat-input-area');
+                
+                // Calculate new total height
+                const headerHeight = 40; // Approximate header height
+                const inputHeight = newHeight + 24; // Input height + padding
+                const availableHeight = Math.max(300, 400 - headerHeight - inputHeight);
+                
+                messagesArea.style.maxHeight = availableHeight + 'px';
+            });
+            
+            // Send on Enter (but allow Shift+Enter for new lines)
+            input.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendOrbMessage();
+                }
+            });
+            
+            // Focus input when chat opens
+            input.addEventListener('focus', function() {
+                this.style.height = 'auto';
+                this.style.height = '36px'; // Start with proper height
+            });
+        }
+
+        function toggleOrbChat() {
+            const orb = document.getElementById('zoeOrb');
+            const chatWindow = document.getElementById('orbChatWindow');
+            const input = document.getElementById('orbChatInput');
+            
+            if (orbChatOpen) {
+                closeOrbChat();
+            } else {
+                openOrbChat();
+            }
+        }
+
+        function openOrbChat() {
+            const orb = document.getElementById('zoeOrb');
+            const chatWindow = document.getElementById('orbChatWindow');
+            const input = document.getElementById('orbChatInput');
+            
+            orbChatOpen = true;
+            orb.classList.add('chatting');
+            chatWindow.classList.add('open');
+            
+            // Reset and focus input after animation
+            setTimeout(() => {
+                input.style.height = 'auto';
+                input.style.height = '36px';
+                input.focus();
+            }, 300);
+            
+            // Hide any existing toast
+            const toast = document.getElementById('orbToast');
+            toast.style.display = 'none';
+        }
+
+        function closeOrbChat() {
+            const orb = document.getElementById('zoeOrb');
+            const chatWindow = document.getElementById('orbChatWindow');
+            
+            orbChatOpen = false;
+            orb.classList.remove('chatting');
+            chatWindow.classList.remove('open');
+        }
+
+        async function sendOrbMessage() {
+            const input = document.getElementById('orbChatInput');
+            const messages = document.getElementById('orbChatMessages');
+            const sendBtn = document.getElementById('orbChatSend');
+            const message = input.value.trim();
+            
+            if (!message) return;
+            
+            // Add user message
+            addOrbMessage(message, 'user');
+            input.value = '';
+            
+            // Reset input to auto-sizing
+            input.style.height = 'auto';
+            input.style.height = '36px';
+            
+            // Reset messages area height
+            const messagesArea = document.getElementById('orbChatMessages');
+            messagesArea.style.maxHeight = '300px';
+            
+            // Disable send button and show typing
+            sendBtn.disabled = true;
+            showOrbTyping();
+            
+            try {
+                // Send to chat API
+                const response = await apiRequest('/chat/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: message,
+                        context: orbChatContext,
+                        mode: 'orb_chat' // Special mode for orb conversations
+                    })
+                });
+                
+                // Remove typing indicator
+                hideOrbTyping();
+                
+                if (response && response.response) {
+                    addOrbMessage(response.response, 'assistant');
+                    orbChatContext = response.context || orbChatContext;
+                } else {
+                    addOrbMessage('Sorry, I had trouble processing that. Could you try again?', 'assistant');
+                }
+            } catch (error) {
+                console.error('Orb chat error:', error);
+                hideOrbTyping();
+                addOrbMessage('I\'m having connection issues. Please try again in a moment.', 'assistant');
+            } finally {
+                sendBtn.disabled = false;
+            }
+        }
+
+        function addOrbMessage(text, sender) {
+            const messages = document.getElementById('orbChatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `orb-chat-message ${sender}`;
+            messageDiv.textContent = text;
+            
+            messages.appendChild(messageDiv);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function showOrbTyping() {
+            const messages = document.getElementById('orbChatMessages');
+            const typingDiv = document.createElement('div');
+            typingDiv.className = 'orb-chat-typing';
+            typingDiv.id = 'orbTypingIndicator';
+            typingDiv.innerHTML = `
+                Zoe is thinking
+                <div class="orb-chat-typing-dots">
+                    <div class="orb-chat-typing-dot"></div>
+                    <div class="orb-chat-typing-dot"></div>
+                    <div class="orb-chat-typing-dot"></div>
+                </div>
+            `;
+            
+            messages.appendChild(typingDiv);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function hideOrbTyping() {
+            const typing = document.getElementById('orbTypingIndicator');
+            if (typing) {
+                typing.remove();
+            }
+        }
+
+
+        // Enhanced suggestion handling - now opens chat for discussion
+        function handleSuggestionWithChat(suggestion) {
+            // Set suggestion context
+            orbChatContext = {
+                suggestion: suggestion,
+                discussion_mode: true
+            };
+            
+            // Add suggestion message to chat
+            const messages = document.getElementById('orbChatMessages');
+            const suggestionDiv = document.createElement('div');
+            suggestionDiv.className = 'orb-chat-message assistant';
+            suggestionDiv.innerHTML = `
+                <strong>💡 Suggestion:</strong><br/>
+                ${suggestion.title}<br/><br/>
+                ${suggestion.message}<br/><br/>
+                <em>Would you like to discuss this further?</em>
+            `;
+            messages.appendChild(suggestionDiv);
+            messages.scrollTop = messages.scrollHeight;
+            
+            // Open chat and focus input
+            if (!orbChatOpen) {
+                openOrbChat();
+            }
+        }
+
+        async function loadNotifications() {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const response = await apiRequest('/reminders/notifications/pending', {
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                const notifications = response.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            // Update notification button indicator
+            if (notifications.length > 0) {
+                notificationBtn.classList.add('has-notifications');
+            } else {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
+                     onclick="handleNotificationClick(${notification.id})">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${new Date(notification.created_at).toLocaleTimeString()}</span>
+                        ${notification.priority ? `<span class="notification-priority" style="background: ${getPriorityColor(notification.priority)}; color: white;">${notification.priority}</span>` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function getPriorityColor(priority) {
+            switch(priority.toLowerCase()) {
+                case 'high': return '#ef4444';
+                case 'medium': return '#f59e0b';
+                case 'low': return '#10b981';
+                default: return '#6b7280';
+            }
+        }
+
+        function handleNotificationClick(notificationId) {
+            // Mark notification as acknowledged
+            acknowledgeNotification(notificationId);
+            closeNotifications();
+        }
+
+        async function acknowledgeNotification(notificationId) {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
+                    method: 'POST',
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                // Reload notifications
+                loadNotifications();
+            } catch (error) {
+                console.error('Failed to acknowledge notification:', error);
+            }
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const userMenu = document.querySelector('.user-menu');
+            const dropdown = document.getElementById('userDropdown');
+            
+            if (userMenu && !userMenu.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+    </script>
+</body>
+</html>

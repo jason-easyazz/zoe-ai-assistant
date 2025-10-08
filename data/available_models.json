@@ -1,0 +1,15 @@
+{
+  "anthropic": [],
+  "openai": [],
+  "google": [],
+  "ollama": [
+    "qwen2.5:3b",
+    "codellama:7b",
+    "gemma:2b",
+    "phi3:mini",
+    "mistral:latest",
+    "llama3.2:1b",
+    "llama3.2:3b"
+  ],
+  "last_updated": "2025-10-04T06:51:37.237265"
+}

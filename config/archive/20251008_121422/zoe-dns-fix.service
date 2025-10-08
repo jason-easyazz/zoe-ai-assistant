@@ -1,0 +1,12 @@
+[Unit]
+Description=Zoe DNS Fix - Ensure zoe.local resolves correctly
+After=network.target avahi-daemon.service
+Wants=avahi-daemon.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/pi/fix-zoe-dns.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

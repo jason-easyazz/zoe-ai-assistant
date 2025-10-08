@@ -1,0 +1,60 @@
+# Zoe Project File Tagging System
+# This file contains tags for important files that should be preserved during cleanup
+# Format: <file_path> | <tag1,tag2,tag3> | <description>
+# 
+# Tags:
+# CORE - Essential files for the system to function
+# CONFIG - Configuration files
+# DOCS - Documentation files
+# SCRIPTS - Important scripts (maintenance, deployment)
+# DATA - Data files and databases
+# SERVICES - Service files and APIs
+# UI - User interface files
+# SECURITY - Security-related files
+# DEPLOYMENT - Deployment and infrastructure files
+# TEMP - Temporary files (can be cleaned up)
+# OLD - Old versions (can be moved to backup)
+# DEV - Development files (can be moved to backup)
+
+# Core system files
+services/zoe-ui/index.html | CORE,UI | Main UI entry point
+requirements.txt | CORE,DEPLOYMENT | Python dependencies
+README.md | CORE,DOCS | Project documentation
+
+# Configuration files
+nginx.conf | CONFIG | Web server configuration
+ssl/ | CONFIG,SECURITY | SSL certificates directory
+
+# Important scripts
+scripts/permanent/ | SCRIPTS,CORE | Permanent maintenance scripts
+scripts/maintenance/ | SCRIPTS | Core maintenance scripts
+scripts/permanent/maintenance/tag-files.sh | SCRIPTS,CORE | Core tagging utility
+scripts/permanent/maintenance/smart-cleanup.sh | SCRIPTS,CORE | Core cleanup utility
+
+# Data directories
+checkpoints/ | DATA | Model checkpoints
+
+# Documentation
+documentation/ | DOCS | Project documentation
+*.md | DOCS | Markdown documentation files
+
+# Services
+services/ | SERVICES,CORE | All service directories
+templates/ | SERVICES | Template files
+
+# Security
+.gitignore | SECURITY,CORE | Git ignore rules
+ssl/ | SECURITY | SSL certificates
+
+# Development files (marked for backup)
+*.sh | DEV | Shell scripts (move to backup)
+*.backup | OLD | Backup files (move to backup)
+*.old | OLD | Old versions (move to backup)
+*.tmp | TEMP | Temporary files (can be deleted)
+*.cache | TEMP | Cache files (can be deleted)
+*.log | TEMP | Log files (can be deleted)
+services/zoe-core/main.py | CORE | Main application entry point
+services/zoe-auth/main.py | CORE | Authentication service
+docker-compose.yml | CORE | Docker configuration
+.env.example | CONFIG | Environment configuration
+data/ | DATA | Application data directory

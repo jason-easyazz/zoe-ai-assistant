@@ -1,0 +1,162 @@
+{
+  "backup_id": "user_default_20250829_120045",
+  "user_id": "default",
+  "timestamp": "20250829_120045",
+  "tables": {
+    "conversations": {
+      "columns": [
+        "id",
+        "user_message",
+        "assistant_response",
+        "timestamp"
+      ],
+      "rows": [
+        [
+          1,
+          "hi there",
+          "I received: hi there",
+          "2025-08-20 12:55:02"
+        ],
+        [
+          2,
+          "hi",
+          "I received: hi",
+          "2025-08-20 12:57:36"
+        ],
+        [
+          3,
+          "Hello Zoe! Tell me a joke",
+          "Hello there, friend! I'm so glad you asked for a joke! Here's one that made me smile on the Pi:\n\nWhy did the Raspberry Pi go to therapy?\n\n(wait for it...)\n\nBecause it was feeling a little \"crashy\"!\n\nHope that made you giggle! Do you want another one?",
+          "2025-08-20 13:09:05"
+        ],
+        [
+          4,
+          "Quick test - say hi!",
+          "Hello! It's great to meet you! I'm so happy to be here and help with any questions or tasks you might have. How can I assist you today?",
+          "2025-08-20 13:11:29"
+        ],
+        [
+          5,
+          "Schedule birthday party for Sarah on March 15th",
+          "I'd be happy to help you plan Sarah's birthday party!\n\nSo, just to confirm, I've got the basics right - it's a birthday party for Sarah on... March 15th? And would you like me to suggest some ideas or decorations for the party, or is there something else specific you'd like me to do?\n\n(By the way, I'll make sure to keep an eye on my calendar and mark down that special date!)",
+          "2025-08-20 13:59:24"
+        ]
+      ]
+    },
+    "memories": {
+      "columns": [
+        "id",
+        "type",
+        "name",
+        "data",
+        "created_at"
+      ],
+      "rows": []
+    },
+    "events": {
+      "columns": [
+        "id",
+        "title",
+        "start_date",
+        "start_time",
+        "cluster_id",
+        "created_at"
+      ],
+      "rows": [
+        [
+          1,
+          "Team Meeting",
+          "2025-08-20",
+          "10:00",
+          null,
+          "2025-08-20 15:00:12"
+        ],
+        [
+          2,
+          "Lunch with Alice",
+          "2025-08-21",
+          "12:30",
+          null,
+          "2025-08-20 15:00:12"
+        ],
+        [
+          3,
+          "Project Review",
+          "2025-08-22",
+          "15:00",
+          null,
+          "2025-08-20 15:00:12"
+        ],
+        [
+          4,
+          "Zoe Development",
+          "2025-08-23",
+          "14:00",
+          null,
+          "2025-08-20 15:00:12"
+        ]
+      ]
+    },
+    "tasks": {
+      "columns": [
+        "id",
+        "title",
+        "completed",
+        "created_at"
+      ],
+      "rows": []
+    },
+    "lists": {
+      "columns": [
+        "id",
+        "user_id",
+        "list_type",
+        "list_category",
+        "name",
+        "items",
+        "metadata",
+        "shared_with",
+        "created_at",
+        "updated_at"
+      ],
+      "rows": [
+        [
+          1,
+          "default",
+          "shopping",
+          "personal",
+          "Groceries",
+          "[{\"id\": null, \"text\": \"Milk\", \"completed\": false, \"priority\": \"medium\", \"category\": \"personal\", \"metadata\": {}}]",
+          null,
+          null,
+          "2025-08-23 02:20:21",
+          "2025-08-23 02:20:21"
+        ],
+        [
+          2,
+          "default",
+          "shopping",
+          "personal",
+          "Groceries",
+          "[{\"id\": null, \"text\": \"Milk\", \"completed\": false, \"priority\": \"medium\", \"category\": \"personal\", \"metadata\": {}}]",
+          null,
+          null,
+          "2025-08-23 02:27:27",
+          "2025-08-23 02:27:27"
+        ],
+        [
+          3,
+          "default",
+          "shopping",
+          "personal",
+          "Groceries",
+          "[{\"id\": null, \"text\": \"Milk\", \"completed\": false, \"priority\": \"medium\", \"category\": \"personal\", \"metadata\": {}}, {\"id\": null, \"text\": \"Bread\", \"completed\": false, \"priority\": \"medium\", \"category\": \"personal\", \"metadata\": {}}]",
+          null,
+          null,
+          "2025-08-23 02:28:20",
+          "2025-08-23 02:28:20"
+        ]
+      ]
+    }
+  }
+}

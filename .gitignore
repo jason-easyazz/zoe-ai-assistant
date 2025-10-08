@@ -1,0 +1,125 @@
+# Data and databases
+data/*.db
+data/*.sqlite
+data/billing/
+data/logs/
+
+# Docker volumes
+volumes/
+
+# Environment files with secrets
+.env
+config/.env
+*.key
+*.pem
+
+# Temporary files
+*.tmp
+*.backup_*
+scripts/temporary/*
+!scripts/temporary/.gitkeep
+
+# Backup directories
+backups/
+**/backups/
+
+# zoe-ui backup and development files
+services/zoe-ui/dist/*.backup
+services/zoe-ui/dist/*_backup_*
+services/zoe-ui/dist/*.old
+services/zoe-ui/dist/*.sh
+services/zoe-ui/*.backup
+
+# Project-wide exclusions
+# Large directories (moved to backups/)
+models/
+tools/
+aider_env/
+
+# Development and backup files
+*.backup
+*_backup_*
+*.old
+*.bak
+*.tmp
+*.cache
+*.log
+
+# Shell scripts (moved to backups/)
+*.sh
+!scripts/maintenance/*.sh
+!scripts/permanent/*.sh
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Security - SSH Keys and Credentials
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+*.pub
+ssh_keys/
+credentials/
+
+# Cloudflare and Tunnel credentials
+*cloudflare*
+*tunnel*
+*.json
+!package.json
+!tsconfig.json
+!*.config.json
+
+# API Keys and Secrets
+*.env
+.env.*
+secrets/
+api_keys/
+**/api_keys.json
+**/credentials.json
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+env/
+aider_env/
+tools/aider_env/
+tools/aider-env/
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Keep structure files
+!.gitkeep
+!README.md
+
+# Ollama model data (too large)
+models/blobs/
+models/manifests/
+models/.ollama/
+models/*.bin
+models/*.safetensors
+
+.ssh/
+.config/
+
+# Security ignores
+.config/
+.ssh/
+homeassistant/.storage/

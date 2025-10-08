@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat Stream Test</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #1a1a1a; color: #0f0; }
+        #output { white-space: pre-wrap; background: #000; padding: 20px; border-radius: 8px; }
+        #input { width: 100%; padding: 10px; font-size: 16px; margin-bottom: 10px; }
+        button { padding: 10px 20px; font-size: 16px; }
+    </style>
+</head>
+<body>
+    <h1>LangGraph Stream Test</h1>
+    <input id="input" type="text" placeholder="Enter message" value="what's on my calendar today?">
+    <button onclick="test()">Test Stream</button>
+    <div id="output"></div>
+
+    <script src="js/common.js?v=7"></script>
+    <script>
+        async function test() {
+            const message = document.getElementById('input').value;
+            const output = document.getElementById('output');
+            output.textContent = 'Starting stream...\n\n';
+
+            try {
+                const apiBase = window.API_BASE || API_BASE || '/api';
+                const response = await fetch(`${apiBase}/chat/langgraph`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: message,
+                        enable_agents: false,
+                        enable_visualization: false
+                    })
+                });
+
+                output.textContent += `Status: ${response.status} ${response.statusText}\n\n`;
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let eventCount = 0;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                        output.textContent += `\n\nStream complete! Received ${eventCount} events.`;
+                        break;
+                    }
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            eventCount++;
+                            try {
+                                const event = JSON.parse(line.slice(6));
+                                output.textContent += `Event ${eventCount}: ${event.type}\n`;
+                                if (event.content) {
+                                    output.textContent += `  Content: ${event.content}\n`;
+                                }
+                                if (event.message) {
+                                    output.textContent += `  Message: ${event.message}\n`;
+                                }
+                                output.textContent += '\n';
+                            } catch (e) {
+                                output.textContent += `Parse error: ${e.message}\n`;
+                            }
+                        }
+                    }
+                }
+
+            } catch (error) {
+                output.textContent += `\n\nERROR: ${error.message}\n${error.stack}`;
+            }
+        }
+    </script>
+</body>
+</html>
+

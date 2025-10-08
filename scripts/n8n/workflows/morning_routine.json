@@ -1,0 +1,82 @@
+{
+  "name": "Zoe Morning Routine",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 24,
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      },
+      "name": "Morning Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://zoe-core:8000/api/calendar/today",
+        "responseFormat": "json"
+      },
+      "name": "Get Today's Events",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://zoe-core:8000/api/tasks/today",
+        "responseFormat": "json"
+      },
+      "name": "Get Today's Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 450]
+    },
+    {
+      "parameters": {
+        "functionCode": "const events = $node['Get Today''s Events'].json;\nconst tasks = $node['Get Today''s Tasks'].json;\n\nconst briefing = {\n  greeting: 'Good morning!',\n  date: new Date().toLocaleDateString(),\n  events: events.length,\n  tasks: tasks.length,\n  priority_items: [...events.slice(0,3), ...tasks.slice(0,3)]\n};\n\nreturn [{json: briefing}];"
+      },
+      "name": "Prepare Briefing",
+      "type": "n8n-nodes-base.functionItem",
+      "position": [650, 375]
+    },
+    {
+      "parameters": {
+        "url": "http://zoe-tts:9002/synthesize",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{$json['greeting']}} Today is {{$json['date']}}. You have {{$json['events']}} events and {{$json['tasks']}} tasks scheduled."
+            }
+          ]
+        }
+      },
+      "name": "Generate Voice Briefing",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [850, 300]
+    }
+  ],
+  "connections": {
+    "Morning Trigger": {
+      "main": [[
+        {"node": "Get Today's Events", "type": "main", "index": 0},
+        {"node": "Get Today's Tasks", "type": "main", "index": 0}
+      ]]
+    },
+    "Get Today's Events": {
+      "main": [[{"node": "Prepare Briefing", "type": "main", "index": 0}]]
+    },
+    "Get Today's Tasks": {
+      "main": [[{"node": "Prepare Briefing", "type": "main", "index": 0}]]
+    },
+    "Prepare Briefing": {
+      "main": [[{"node": "Generate Voice Briefing", "type": "main", "index": 0}]]
+    }
+  }
+}

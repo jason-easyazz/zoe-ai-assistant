@@ -1,0 +1,57 @@
+{
+  "name": "Email to Task Converter",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [{"mode": "everyMinute"}]
+        }
+      },
+      "name": "Email Trigger",
+      "type": "n8n-nodes-base.emailReadImap",
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json['subject']}}",
+              "operation": "contains",
+              "value2": "[TASK]"
+            }
+          ]
+        }
+      },
+      "name": "Is Task Email?",
+      "type": "n8n-nodes-base.if",
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://zoe-core:8000/api/tasks/create",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "={{$json['subject'].replace('[TASK]', '').trim()}}"
+            },
+            {
+              "name": "description",
+              "value": "={{$json['text']}}"
+            },
+            {
+              "name": "source",
+              "value": "email"
+            }
+          ]
+        }
+      },
+      "name": "Create Task",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [650, 250]
+    }
+  ]
+}

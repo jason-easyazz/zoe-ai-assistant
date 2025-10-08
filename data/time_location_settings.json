@@ -1,0 +1,12 @@
+{
+  "timezone": "America/New_York",
+  "auto_detect_timezone": true,
+  "location": {
+    "latitude": 40.7128,
+    "longitude": -74.006,
+    "city": "New York",
+    "country": "United States"
+  },
+  "weather_api_key": null,
+  "auto_location_detection": false
+}

@@ -1,0 +1,54 @@
+{
+  "vip_senders": [
+    "ceo@yourcompany.com",
+    "finance@yourcompany.com",
+    "it@yourcompany.com"
+  ],
+  "company_domains": [
+    "yourcompany.com",
+    "marketcreations.com.au"
+  ],
+  "high_priority_keywords": [
+    "urgent",
+    "outage",
+    "payment",
+    "invoice",
+    "contract",
+    "approval",
+    "meeting today",
+    "action required"
+  ],
+  "medium_priority_keywords": [
+    "follow up",
+    "reminder",
+    "deadline",
+    "schedule",
+    "status"
+  ],
+  "low_signal_keywords": [
+    "newsletter",
+    "promo",
+    "sale",
+    "unsubscribe"
+  ],
+  "weights": {
+    "vip_sender": 40,
+    "company_domain": 20,
+    "recent_reply": 10,
+    "sole_recipient": 20,
+    "few_recipients": 10,
+    "keyword_high": 25,
+    "keyword_medium": 10,
+    "keyword_low": -10,
+    "active_thread": 10,
+    "reply_to_you": 10,
+    "time_sensitive": 15,
+    "has_attachment": 10,
+    "flagged": 10,
+    "bulk": -15
+  },
+  "thresholds": {
+    "notify": 60,
+    "digest": 40
+  }
+}

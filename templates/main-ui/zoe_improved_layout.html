@@ -1,0 +1,883 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh;
+            color: #333;
+            overflow: hidden;
+        }
+
+        /* Orb Mode - Default State */
+        .orb-mode {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            z-index: 1000;
+            transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .orb-mode.hidden {
+            opacity: 0;
+            pointer-events: none;
+            transform: scale(0.8);
+        }
+
+        /* Fluid Orb */
+        .fluid-orb {
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            position: relative;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 20px 60px rgba(123, 97, 255, 0.2);
+        }
+
+        .fluid-orb:hover {
+            transform: scale(1.05);
+            box-shadow: 0 25px 80px rgba(123, 97, 255, 0.3);
+        }
+
+        /* Fluid layers for organic movement */
+        .fluid-layer {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            opacity: 0.7;
+        }
+
+        .fluid-layer:nth-child(1) {
+            background: radial-gradient(circle at 30% 20%, #7B61FF 0%, transparent 50%);
+            animation: fluid1 4s ease-in-out infinite;
+        }
+
+        .fluid-layer:nth-child(2) {
+            background: radial-gradient(circle at 70% 80%, #5AE0E0 0%, transparent 50%);
+            animation: fluid2 3.5s ease-in-out infinite reverse;
+        }
+
+        .fluid-layer:nth-child(3) {
+            background: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.3) 0%, transparent 60%);
+            animation: fluid3 5s ease-in-out infinite;
+        }
+
+        /* Idle breathing animation */
+        .fluid-orb.idle {
+            animation: breathe 3s ease-in-out infinite;
+        }
+
+        /* Listening state */
+        .fluid-orb.listening {
+            animation: listen-pulse 1.5s ease-in-out infinite;
+            box-shadow: 0 20px 60px rgba(123, 97, 255, 0.4);
+        }
+
+        /* Speaking state - more active fluid movement */
+        .fluid-orb.speaking {
+            animation: speak-vibrate 0.3s ease-in-out infinite;
+            box-shadow: 0 20px 60px rgba(123, 97, 255, 0.6);
+        }
+
+        .fluid-orb.speaking .fluid-layer:nth-child(1) {
+            animation: fluid-speak1 0.4s ease-in-out infinite;
+        }
+
+        .fluid-orb.speaking .fluid-layer:nth-child(2) {
+            animation: fluid-speak2 0.3s ease-in-out infinite reverse;
+        }
+
+        .fluid-orb.speaking .fluid-layer:nth-child(3) {
+            animation: fluid-speak3 0.5s ease-in-out infinite;
+        }
+
+        /* Fluid animations */
+        @keyframes fluid1 {
+            0%, 100% { transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(180deg) scale(1.1); }
+        }
+
+        @keyframes fluid2 {
+            0%, 100% { transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(-120deg) scale(0.9); }
+        }
+
+        @keyframes fluid3 {
+            0%, 100% { transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(90deg) scale(1.05); }
+        }
+
+        @keyframes fluid-speak1 {
+            0%, 100% { transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(60deg) scale(1.2); }
+        }
+
+        @keyframes fluid-speak2 {
+            0%, 100% { transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(-45deg) scale(0.8); }
+        }
+
+        @keyframes fluid-speak3 {
+            0%, 100% { transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(30deg) scale(1.1); }
+        }
+
+        @keyframes breathe {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+        }
+
+        @keyframes listen-pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.9; }
+        }
+
+        @keyframes speak-vibrate {
+            0%, 100% { transform: scale(1) rotate(0deg); }
+            25% { transform: scale(1.03) rotate(0.5deg); }
+            75% { transform: scale(1.03) rotate(-0.5deg); }
+        }
+
+        .orb-hint {
+            margin-top: 40px;
+            text-align: center;
+            color: #666;
+            font-size: 16px;
+            font-weight: 300;
+            opacity: 0.8;
+        }
+
+        /* Main Interface */
+        .main-interface {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            opacity: 0;
+            pointer-events: none;
+            transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+            overflow-y: auto;
+        }
+
+        .main-interface.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+
+        /* Navigation */
+        .nav-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 15px 20px;
+            z-index: 100;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .nav-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .mini-orb {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .mini-orb:hover {
+            transform: scale(1.1);
+        }
+
+        .mini-orb .fluid-layer {
+            animation: fluid1 2s ease-in-out infinite;
+        }
+
+        .nav-menu {
+            display: flex;
+            gap: 25px;
+        }
+
+        .nav-item {
+            color: #666;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 400;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .nav-item:hover, .nav-item.active {
+            color: #7B61FF;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 18px;
+            color: #666;
+            cursor: pointer;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+        }
+
+        .close-btn:hover {
+            background: rgba(255, 255, 255, 0.5);
+            color: #333;
+        }
+
+        /* Main Content */
+        .main-container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 100px 40px 60px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            gap: 30px;
+        }
+
+        /* Time Display - Top left under nav */
+        .time-display {
+            position: fixed;
+            top: 80px;
+            left: 20px;
+            z-index: 90;
+        }
+
+        .current-time {
+            font-size: 24px;
+            font-weight: 300;
+            color: #333;
+            margin-bottom: 2px;
+        }
+
+        .current-date {
+            font-size: 14px;
+            color: #666;
+        }
+
+        /* Weather Widget - Top right under nav, minimalistic */
+        .weather-widget {
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            z-index: 90;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .weather-icon {
+            font-size: 24px;
+        }
+
+        .weather-temp {
+            font-size: 24px;
+            font-weight: 300;
+            color: #333;
+        }
+
+        /* Zoe Greeting */
+        .zoe-greeting {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .zoe-greeting h1 {
+            font-size: 32px;
+            font-weight: 300;
+            color: #333;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .zoe-greeting p {
+            font-size: 18px;
+            color: #666;
+            font-weight: 300;
+        }
+
+        /* Chat Interface */
+        .chat-container {
+            background: rgba(255, 255, 255, 0.6);
+            backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 25px;
+            padding: 25px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.05);
+            transition: all 0.3s ease;
+        }
+
+        .chat-container:hover {
+            background: rgba(255, 255, 255, 0.7);
+            box-shadow: 0 25px 80px rgba(0, 0, 0, 0.08);
+        }
+
+        .chat-input-group {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .chat-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            font-size: 18px;
+            color: #333;
+            outline: none;
+            padding: 8px 0;
+        }
+
+        .chat-input::placeholder {
+            color: #999;
+            font-weight: 300;
+        }
+
+        .voice-btn {
+            width: 44px;
+            height: 44px;
+            border: none;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 20px rgba(123, 97, 255, 0.25);
+        }
+
+        .voice-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 6px 25px rgba(123, 97, 255, 0.35);
+        }
+
+        /* Quick Actions */
+        .quick-actions {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-top: 20px;
+        }
+
+        .quick-action {
+            background: rgba(255, 255, 255, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 15px;
+            padding: 12px 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+            font-size: 14px;
+            color: #555;
+            font-weight: 400;
+        }
+
+        .quick-action:hover {
+            background: rgba(255, 255, 255, 0.6);
+            transform: translateY(-1px);
+        }
+
+        /* Content Sections */
+        .content-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+        }
+
+        .content-section {
+            background: rgba(255, 255, 255, 0.4);
+            backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 20px;
+            padding: 25px;
+            transition: all 0.3s ease;
+        }
+
+        .content-section:hover {
+            background: rgba(255, 255, 255, 0.55);
+            transform: translateY(-2px);
+        }
+
+        .section-title {
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Task Items */
+        .task-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .task-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 0;
+        }
+
+        .task-checkbox {
+            width: 16px;
+            height: 16px;
+            border: 2px solid #ddd;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            flex-shrink: 0;
+        }
+
+        .task-checkbox:hover {
+            border-color: #7B61FF;
+        }
+
+        .task-checkbox.completed {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border-color: #7B61FF;
+            position: relative;
+        }
+
+        .task-checkbox.completed::after {
+            content: '✓';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 10px;
+            font-weight: bold;
+        }
+
+        .task-text {
+            flex: 1;
+            font-size: 14px;
+            color: #444;
+            line-height: 1.3;
+        }
+
+        .task-time {
+            font-size: 12px;
+            color: #888;
+            font-weight: 400;
+        }
+
+        /* Event Items */
+        .event-list {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .event-item {
+            padding: 12px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.5);
+        }
+
+        .event-item:last-child {
+            border-bottom: none;
+        }
+
+        .event-time {
+            font-size: 12px;
+            color: #7B61FF;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .event-title {
+            font-size: 14px;
+            color: #333;
+            font-weight: 400;
+            margin-bottom: 2px;
+        }
+
+        .event-location {
+            font-size: 12px;
+            color: #888;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .main-container {
+                padding: 160px 20px 40px;
+                gap: 30px;
+            }
+
+            .time-display {
+                top: 75px;
+                left: 15px;
+            }
+
+            .weather-widget {
+                top: 75px;
+                right: 15px;
+            }
+
+            .current-time, .weather-temp {
+                font-size: 20px;
+            }
+
+            .current-date {
+                font-size: 12px;
+            }
+
+            .weather-icon {
+                font-size: 20px;
+            }
+
+            .zoe-greeting h1 {
+                font-size: 28px;
+            }
+
+            .zoe-greeting p {
+                font-size: 16px;
+            }
+
+            .content-row {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+
+            .quick-actions {
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+            }
+
+            .nav-menu {
+                display: none;
+            }
+
+            .fluid-orb {
+                width: 150px;
+                height: 150px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Orb Mode (Default State) -->
+    <div class="orb-mode" id="orbMode">
+        <div class="fluid-orb idle" id="fluidOrb" onclick="enterInterface()">
+            <div class="fluid-layer"></div>
+            <div class="fluid-layer"></div>
+            <div class="fluid-layer"></div>
+        </div>
+        <div class="orb-hint">Touch to interact or just start talking</div>
+    </div>
+
+    <!-- Main Interface -->
+    <div class="main-interface" id="mainInterface">
+        <!-- Navigation -->
+        <div class="nav-bar">
+            <div class="nav-left">
+                <div class="mini-orb" onclick="exitToOrb()">
+                    <div class="fluid-layer"></div>
+                </div>
+                <div class="nav-menu">
+                    <div class="nav-item active">Dashboard</div>
+                    <div class="nav-item">Tasks</div>
+                    <div class="nav-item">Calendar</div>
+                    <div class="nav-item">Journal</div>
+                    <div class="nav-item">Settings</div>
+                </div>
+            </div>
+            <button class="close-btn" onclick="exitToOrb()">×</button>
+        </div>
+
+        <div class="main-container">
+            <!-- Time Display - Fixed top left -->
+            <div class="time-display">
+                <div class="current-time" id="currentTime">2:47 PM</div>
+                <div class="current-date" id="currentDate">Thursday, August 7</div>
+            </div>
+
+            <!-- Weather Widget - Fixed top right -->
+            <div class="weather-widget">
+                <div class="weather-icon">☀️</div>
+                <div class="weather-temp">23°</div>
+            </div>
+
+            <!-- Zoe Greeting -->
+            <div class="zoe-greeting">
+                <h1>Hi, I'm Zoe</h1>
+                <p>Your personal AI companion. How can I help you today?</p>
+            </div>
+
+            <!-- Chat Interface -->
+            <div class="chat-container">
+                <div class="chat-input-group">
+                    <input 
+                        type="text" 
+                        class="chat-input" 
+                        placeholder="Ask me anything..."
+                        id="chatInput"
+                    >
+                    <button class="voice-btn" id="voiceBtn">🎤</button>
+                </div>
+                
+                <div class="quick-actions">
+                    <div class="quick-action" onclick="quickPrompt('Add task: ')">✅ Add Task</div>
+                    <div class="quick-action" onclick="quickPrompt('Schedule: ')">📅 Schedule</div>
+                    <div class="quick-action" onclick="quickPrompt('How am I doing today?')">📊 Check In</div>
+                    <div class="quick-action" onclick="quickPrompt('Journal entry: ')">📝 Journal</div>
+                </div>
+            </div>
+
+            <!-- Content Row -->
+            <div class="content-row">
+                <!-- Today's Tasks -->
+                <div class="content-section">
+                    <div class="section-title">
+                        <span>✅</span> Today
+                    </div>
+                    
+                    <div class="task-list">
+                        <div class="task-item">
+                            <div class="task-checkbox completed"></div>
+                            <div class="task-text">Morning workout</div>
+                            <div class="task-time">7:30</div>
+                        </div>
+                        
+                        <div class="task-item">
+                            <div class="task-checkbox"></div>
+                            <div class="task-text">Finish quarterly report</div>
+                            <div class="task-time">5:00 PM</div>
+                        </div>
+                        
+                        <div class="task-item">
+                            <div class="task-checkbox"></div>
+                            <div class="task-text">Call dentist</div>
+                            <div class="task-time">--</div>
+                        </div>
+                        
+                        <div class="task-item">
+                            <div class="task-checkbox"></div>
+                            <div class="task-text">Review pull requests</div>
+                            <div class="task-time">3:00 PM</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Upcoming Events -->
+                <div class="content-section">
+                    <div class="section-title">
+                        <span>📅</span> Upcoming
+                    </div>
+                    
+                    <div class="event-list">
+                        <div class="event-item">
+                            <div class="event-time">2:00 PM Today</div>
+                            <div class="event-title">Product planning meeting</div>
+                            <div class="event-location">Conference Room B</div>
+                        </div>
+                        
+                        <div class="task-item">
+                            <div class="event-time">Tomorrow 3:00 PM</div>
+                            <div class="event-title">Doctor appointment</div>
+                            <div class="event-location">Downtown clinic</div>
+                        </div>
+                        
+                        <div class="event-item">
+                            <div class="event-time">Friday 7:00 PM</div>
+                            <div class="event-title">Dinner with friends</div>
+                            <div class="event-location">Bella Italia</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State management
+        const orbMode = document.getElementById('orbMode');
+        const mainInterface = document.getElementById('mainInterface');
+        const fluidOrb = document.getElementById('fluidOrb');
+        const chatInput = document.getElementById('chatInput');
+
+        // Update time display
+        function updateTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { 
+                hour: 'numeric', 
+                minute: '2-digit',
+                hour12: true 
+            });
+            const dateString = now.toLocaleDateString([], { 
+                weekday: 'long', 
+                month: 'long', 
+                day: 'numeric' 
+            });
+            
+            document.getElementById('currentTime').textContent = timeString;
+            document.getElementById('currentDate').textContent = dateString;
+        }
+
+        // Initialize time and update every minute
+        updateTime();
+        setInterval(updateTime, 60000);
+
+        // Enter main interface
+        function enterInterface() {
+            orbMode.classList.add('hidden');
+            mainInterface.classList.add('active');
+            setTimeout(() => {
+                chatInput.focus();
+            }, 300);
+        }
+
+        // Exit to orb mode
+        function exitToOrb() {
+            mainInterface.classList.remove('active');
+            orbMode.classList.remove('hidden');
+        }
+
+        // Quick prompt function
+        function quickPrompt(text) {
+            chatInput.value = text;
+            chatInput.focus();
+        }
+
+        // Orb state management
+        function setOrbState(state) {
+            fluidOrb.className = `fluid-orb ${state}`;
+        }
+
+        // Handle chat input
+        chatInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                const message = this.value.trim();
+                if (message) {
+                    console.log('Sending to Zoe:', message);
+                    
+                    // Simulate Zoe speaking
+                    setOrbState('speaking');
+                    setTimeout(() => {
+                        setOrbState('idle');
+                    }, 3000);
+                    
+                    this.value = '';
+                }
+            }
+        });
+
+        // Voice button
+        document.getElementById('voiceBtn').addEventListener('click', function() {
+            setOrbState('listening');
+            
+            // Simulate voice recording and response
+            setTimeout(() => {
+                setOrbState('speaking');
+                setTimeout(() => {
+                    setOrbState('idle');
+                }, 2000);
+            }, 2000);
+        });
+
+        // Task checkbox interactions
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('task-checkbox')) {
+                e.target.classList.toggle('completed');
+            }
+        });
+
+        // Navigation
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('nav-item')) {
+                document.querySelectorAll('.nav-item').forEach(item => {
+                    item.classList.remove('active');
+                });
+                e.target.classList.add('active');
+            }
+        });
+
+        // Voice activation from orb mode
+        let isListening = false;
+        
+        document.addEventListener('keydown', function(e) {
+            if (e.code === 'Space' && !mainInterface.classList.contains('active')) {
+                e.preventDefault();
+                if (!isListening) {
+                    isListening = true;
+                    setOrbState('listening');
+                }
+            }
+        });
+
+        document.addEventListener('keyup', function(e) {
+            if (e.code === 'Space' && isListening) {
+                isListening = false;
+                setOrbState('speaking');
+                setTimeout(() => {
+                    setOrbState('idle');
+                }, 2000);
+            }
+        });
+
+        // Auto-return to orb mode after inactivity (optional)
+        let inactivityTimer;
+        function resetInactivityTimer() {
+            clearTimeout(inactivityTimer);
+            inactivityTimer = setTimeout(() => {
+                if (mainInterface.classList.contains('active')) {
+                    exitToOrb();
+                }
+            }, 300000); // 5 minutes
+        }
+
+        document.addEventListener('mousemove', resetInactivityTimer);
+        document.addEventListener('keypress', resetInactivityTimer);
+        document.addEventListener('click', resetInactivityTimer);
+    </script>
+</body>
+</html>

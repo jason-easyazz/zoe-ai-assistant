@@ -1,0 +1,3159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Memories Intelligence</title>
+    <style>
+        :root {
+            --font-display: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+            --font-text: 'SF Pro Text', -apple-system, BlinkMacSystemFont, sans-serif;
+            --bg-primary: #fafbfc;
+            --bg-secondary: #f1f3f6;
+            --glass-bg: rgba(255, 255, 255, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.5);
+            --text-primary: #1f2937;
+            --text-secondary: #6b7280;
+            --text-tertiary: #9ca3af;
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+            --purple: #7c3aed;
+            --rose: #ec4899;
+            --teal: #14b8a6;
+            --amber: #f59e0b;
+            --green: #10b981;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: var(--font-text);
+            background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+            color: var(--text-primary);
+            overflow: hidden;
+            height: 100vh;
+        }
+        @keyframes breathe {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.02); opacity: 0.95; }
+        }
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0;
+            background: var(--glass-bg); backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--glass-border);
+            padding: 12px 24px; z-index: 100;
+            display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 20px; }
+        .mini-orb {
+            width: 36px; height: 36px; border-radius: 50%;
+            background: linear-gradient(135deg, #7c3aed 0%, #0891b2 100%);
+            cursor: pointer; transition: transform 0.2s;
+            animation: breathe 4s ease-in-out infinite;
+        }
+        .mini-orb:hover { transform: scale(1.1); animation: none; }
+        .nav-menu { display: flex; gap: 8px; }
+        .nav-item {
+            color: var(--text-secondary); text-decoration: none;
+            font-size: 14px; font-weight: 500; padding: 8px 16px;
+            border-radius: 8px; transition: all 0.2s;
+            background: none; border: none; cursor: pointer;
+        }
+        .nav-item:hover { color: var(--purple); background: rgba(124, 58, 237, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: var(--text-secondary); text-decoration: none;
+            font-size: 14px; font-weight: 500; padding: 8px 16px;
+            border-radius: 8px; transition: all 0.2s;
+            background: none; border: none; cursor: pointer;
+        }
+        .more-nav-btn:hover { color: var(--purple); background: rgba(124, 58, 237, 0.1); }
+        
+        /* Authentication Integration */
+        .user-menu {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .user-menu:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--purple), #0891b2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .user-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .user-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary);
+            line-height: 1.2;
+        }
+        
+        .user-role {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.2;
+        }
+        
+        .user-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 8px 0;
+            min-width: 200px;
+            z-index: 1000;
+            display: none;
+            border: 1px solid #e1e5e9;
+        }
+        
+        .user-dropdown.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 8px 16px;
+            color: var(--text-primary);
+            text-decoration: none;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .dropdown-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .dropdown-divider {
+            height: 1px;
+            background: #e1e5e9;
+            margin: 4px 0;
+        }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: var(--text-secondary);
+            font-size: 16px; font-weight: bold; position: relative;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: var(--text-primary); }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+            animation: notificationDotPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.4);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 8px rgba(124, 58, 237, 0);
+            }
+        }
+        
+        @keyframes notificationDotPulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.2);
+                opacity: 0.7;
+            }
+        }
+        
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: var(--glass-bg); backdrop-filter: blur(20px);
+            border-left: 1px solid var(--glass-border); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid var(--glass-border);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .notifications-title {
+            font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0;
+        }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: var(--text-secondary); font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content {
+            padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+        .notification-item.unread { border-left: 4px solid var(--purple); }
+        .notification-title {
+            font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 5px;
+        }
+        .notification-meta {
+            font-size: 12px; color: var(--text-secondary); display: flex; gap: 10px;
+        }
+        .notification-time {
+            color: var(--purple); font-weight: 500;
+        }
+        .notification-priority {
+            padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600;
+        }
+        .no-notifications {
+            text-align: center; color: var(--text-secondary); font-size: 14px; padding: 40px 20px;
+        }
+        
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator.connecting { background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.warning::before { background: #ea580c; }
+
+        /* Time/Date Display in Top Right */
+        .time-date-display {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time {
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        .current-date {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.2;
+        }
+
+        /* Floating Add Button */
+        .floating-add-btn { 
+            position: fixed; bottom: 30px; right: 30px; width: 72px; height: 72px; 
+            border-radius: 50%; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            border: none; color: white; cursor: pointer; display: flex; align-items: center; 
+            justify-content: center; font-size: 32px; transition: all 0.3s ease; 
+            z-index: 1000; box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+        .floating-add-btn:hover { transform: scale(1.1); box-shadow: 0 6px 16px rgba(123, 97, 255, 0.4); }
+        .api-indicator.connecting::before { background: #3b82f6; }
+        .main-layout { display: flex; height: calc(100vh - 60px); margin-top: 60px; }
+        .insights-sidebar {
+            width: 360px; background: var(--glass-bg);
+            backdrop-filter: blur(40px);
+            border-right: 1px solid var(--glass-border);
+            padding: 24px; overflow-y: auto;
+        }
+        .insights-header {
+            display: flex; justify-content: space-between;
+            align-items: center; margin-bottom: 24px;
+        }
+        .insights-title { font-size: 18px; font-weight: 600; font-family: var(--font-display); }
+        .view-toggle {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid var(--glass-border);
+            border-radius: 8px; padding: 3px; display: flex; gap: 3px;
+        }
+        .view-btn {
+            padding: 6px 12px; border: none; background: transparent;
+            border-radius: 6px; font-size: 12px; font-weight: 500;
+            cursor: pointer; transition: all 0.2s; color: var(--text-secondary);
+        }
+        .view-btn.active {
+            background: linear-gradient(135deg, var(--purple), #0891b2);
+            color: white; box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3);
+        }
+        .search-box {
+            margin-bottom: 16px; position: relative;
+        }
+        .search-input {
+            width: 100%; padding: 12px 40px 12px 16px;
+            border: 1px solid var(--glass-border);
+            border-radius: 10px; background: rgba(255, 255, 255, 0.9);
+            font-size: 14px; outline: none; transition: all 0.2s;
+        }
+        .search-input:focus {
+            border-color: var(--purple);
+            box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+        }
+        .search-icon {
+            position: absolute; right: 12px; top: 50%;
+            transform: translateY(-50%); color: var(--text-tertiary);
+            pointer-events: none; font-size: 16px;
+        }
+        .filter-chips {
+            display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px;
+        }
+        .filter-chip {
+            padding: 6px 12px; border-radius: 16px;
+            font-size: 12px; font-weight: 500;
+            cursor: pointer; transition: all 0.2s;
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid var(--glass-border);
+            color: var(--text-secondary);
+        }
+        .filter-chip.active {
+            background: var(--purple);
+            color: white; border-color: var(--purple);
+        }
+        .breadcrumb {
+            display: flex; align-items: center; gap: 8px;
+            margin-bottom: 16px; font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .breadcrumb-link {
+            cursor: pointer; transition: color 0.2s;
+        }
+        .breadcrumb-link:hover { color: var(--purple); }
+        .breadcrumb-separator { color: var(--text-tertiary); }
+        .insight-card {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px; padding: 16px;
+            margin-bottom: 12px; transition: all 0.2s; cursor: pointer;
+        }
+        .insight-card:hover { transform: translateX(4px); box-shadow: var(--shadow-md); }
+        .insight-card.urgent { border-left: 3px solid var(--amber); }
+        .insight-card.positive { border-left: 3px solid var(--green); }
+        .insight-label {
+            font-size: 11px; text-transform: uppercase;
+            letter-spacing: 0.5px; color: var(--text-tertiary); margin-bottom: 6px;
+        }
+        .insight-text { font-size: 14px; color: var(--text-primary); line-height: 1.5; }
+        .insight-action { margin-top: 8px; font-size: 13px; color: var(--purple); font-weight: 500; }
+        .canvas-container { flex: 1; position: relative; overflow: hidden; }
+        #memoryCanvas { width: 100%; height: 100%; cursor: grab; }
+        #memoryCanvas.dragging { cursor: grabbing; }
+        .canvas-legend {
+            position: absolute; bottom: 24px; left: 24px;
+            background: var(--glass-bg); backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border); border-radius: 12px;
+            padding: 16px; box-shadow: var(--shadow-md);
+        }
+        .legend-title {
+            font-size: 12px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.5px; color: var(--text-tertiary); margin-bottom: 12px;
+        }
+        .legend-item { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; font-size: 13px; }
+        .legend-circle { width: 16px; height: 16px; border-radius: 50%; border: 2px solid; }
+        .canvas-controls { position: absolute; top: 24px; right: 24px; display: flex; gap: 8px; }
+        .control-btn {
+            width: 40px; height: 40px; background: var(--glass-bg);
+            backdrop-filter: blur(20px); border: 1px solid var(--glass-border);
+            border-radius: 10px; display: flex; align-items: center;
+            justify-content: center; cursor: pointer; transition: all 0.2s;
+            font-size: 18px; color: var(--text-primary);
+        }
+        .control-btn:hover {
+            background: rgba(255, 255, 255, 0.9);
+            transform: translateY(-2px); box-shadow: var(--shadow-md);
+        }
+        
+        .tile {
+            position: absolute;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            border: 1px solid rgba(0,0,0,0.06);
+            overflow: hidden;
+            transition: all 0.2s;
+            display: none;
+            z-index: 95;
+            min-width: 280px;
+            max-width: 800px;
+        }
+        .tile.show { display: block; }
+        .tile.dragging { cursor: move; }
+        .tile:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.12); }
+        .tile.photo-tile {
+            min-width: 400px;
+        }
+        .tile-header {
+            padding: 16px;
+            border-bottom: 1px solid rgba(0,0,0,0.06);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            cursor: move;
+        }
+        .tile-header.photo-header {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
+            border-bottom: none;
+            z-index: 1;
+        }
+        .tile-title {
+            flex: 1;
+            font-size: 16px;
+            font-weight: 600;
+            border: none;
+            background: none;
+            outline: none;
+            color: var(--text-primary);
+        }
+        .tile-header.photo-header .tile-title {
+            color: white;
+        }
+        .tile-header.photo-header .tile-title::placeholder {
+            color: rgba(255,255,255,0.7);
+        }
+        .tile-title::placeholder { color: var(--text-tertiary); }
+        .tile-close {
+            width: 24px; height: 24px;
+            border: none; background: rgba(0,0,0,0.05);
+            border-radius: 6px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: all 0.2s;
+            font-size: 16px;
+            color: var(--text-secondary);
+        }
+        .tile-header.photo-header .tile-close {
+            background: rgba(255,255,255,0.2);
+            color: white;
+        }
+        .tile-close:hover { background: rgba(0,0,0,0.1); }
+        .tile-header.photo-header .tile-close:hover { background: rgba(255,255,255,0.3); }
+        .tile-content {
+            padding: 16px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .tile-content.photo-content {
+            padding: 0;
+            max-height: none;
+        }
+        .tile-editor {
+            min-height: 120px;
+            border: none;
+            outline: none;
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+            resize: none;
+            font-family: var(--font-text);
+            width: 100%;
+        }
+        .tile-editor::placeholder { color: var(--text-tertiary); }
+        .tile-editor.photo-notes {
+            min-height: 20px;
+            max-height: 200px;
+            padding: 12px 16px;
+            background: rgba(0,0,0,0.02);
+            border-top: 1px solid rgba(0,0,0,0.06);
+            overflow-y: auto;
+            resize: none;
+        }
+        .tile-preview {
+            margin-top: 12px;
+            padding: 12px;
+            background: rgba(0,0,0,0.02);
+            border-radius: 8px;
+            border: 1px solid rgba(0,0,0,0.06);
+        }
+        .tile-preview-image {
+            width: 100%;
+            height: 160px;
+            background: linear-gradient(135deg, #f3f4f6, #e5e7eb);
+            border-radius: 6px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 48px;
+            position: relative;
+        }
+        .tile-preview-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 6px;
+        }
+        .tile-photo-main {
+            width: 100%;
+            position: relative;
+            background: #000;
+        }
+        .tile-photo-main img {
+            width: 100%;
+            height: auto;
+            display: block;
+            max-height: 600px;
+            object-fit: contain;
+        }
+        .tile-resize-handle {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            width: 28px;
+            height: 28px;
+            cursor: nwse-resize;
+            background: rgba(124, 58, 237, 0.9);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 14px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+        .tile-resize-handle:hover {
+            background: rgba(124, 58, 237, 1);
+            transform: scale(1.1);
+        }
+        .tile-preview-title {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 6px;
+            color: var(--text-primary);
+        }
+        .tile-preview-description {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+        .tile-preview-url {
+            font-size: 11px;
+            color: var(--text-tertiary);
+            margin-top: 6px;
+        }
+        .tile-toolbar {
+            padding: 8px 16px;
+            border-top: 1px solid rgba(0,0,0,0.06);
+            display: flex;
+            gap: 8px;
+        }
+        .tile-tool-btn {
+            padding: 6px 12px;
+            border: 1px solid var(--glass-border);
+            background: white;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--text-secondary);
+        }
+        .tile-tool-btn:hover {
+            background: rgba(124, 58, 237, 0.1);
+            border-color: var(--purple);
+            color: var(--purple);
+        }
+        .tile-tool-btn.delete:hover {
+            background: rgba(239, 68, 68, 0.1);
+            border-color: #ef4444;
+            color: #ef4444;
+        }
+        
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(4px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .modal-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+        .modal-field {
+            margin-bottom: 16px;
+        }
+        .modal-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            display: block;
+        }
+        .modal-input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--glass-border);
+            border-radius: 8px;
+            font-size: 14px;
+            outline: none;
+            transition: all 0.2s;
+        }
+        .modal-input:focus {
+            border-color: var(--purple);
+            box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+        }
+        .color-picker {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
+        }
+        .color-option {
+            width: 48px;
+            height: 48px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 2px solid transparent;
+        }
+        .color-option:hover { transform: scale(1.1); }
+        .color-option.selected {
+            border-color: var(--text-primary);
+            transform: scale(1.1);
+        }
+        .modal-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+        }
+        .modal-btn {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .modal-btn-primary {
+            background: linear-gradient(135deg, var(--purple), #0891b2);
+            color: white;
+        }
+        .modal-btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
+        }
+        .modal-btn-secondary {
+            background: rgba(0,0,0,0.05);
+            color: var(--text-secondary);
+        }
+        .modal-btn-secondary:hover { background: rgba(0,0,0,0.1); }
+        
+        .detail-panel {
+            position: fixed; top: 60px; right: -600px; width: 600px;
+            height: calc(100vh - 60px); background: var(--glass-bg);
+            backdrop-filter: blur(40px); border-left: 1px solid var(--glass-border);
+            z-index: 90; transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            overflow-y: auto; box-shadow: -4px 0 24px rgba(0, 0, 0, 0.1);
+        }
+        .detail-panel.open { right: 0; }
+        .detail-header {
+            background: linear-gradient(135deg, var(--purple) 0%, #0891b2 100%);
+            padding: 24px; color: white; position: relative;
+        }
+        .detail-close {
+            position: absolute; top: 12px; right: 12px;
+            width: 32px; height: 32px; border: none;
+            background: rgba(255, 255, 255, 0.2); border-radius: 50%;
+            color: white; font-size: 18px; cursor: pointer; transition: all 0.2s;
+        }
+        .detail-close:hover { background: rgba(255, 255, 255, 0.3); transform: rotate(90deg); }
+        .detail-avatar {
+            width: 64px; height: 64px; border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            border: 3px solid rgba(255, 255, 255, 0.5);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 28px; margin-bottom: 12px;
+        }
+        .detail-name {
+            font-size: 24px; font-weight: 300;
+            margin-bottom: 4px; font-family: var(--font-display);
+        }
+        .detail-subtitle { font-size: 13px; opacity: 0.9; }
+        .detail-content { padding: 20px; }
+        .detail-section { margin-bottom: 24px; }
+        .section-title {
+            font-size: 12px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.5px; color: var(--text-tertiary); margin-bottom: 10px;
+        }
+        .connection-health, .memory-details, .info-grid {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid var(--glass-border);
+            border-radius: 10px; padding: 14px;
+        }
+        .health-bar {
+            height: 6px; background: #e5e7eb;
+            border-radius: 3px; overflow: hidden; margin: 10px 0;
+        }
+        .health-fill {
+            height: 100%; background: linear-gradient(90deg, var(--purple), #0891b2);
+            transition: width 0.3s;
+        }
+        .health-stats {
+            display: grid; grid-template-columns: repeat(3, 1fr);
+            gap: 10px; margin-top: 10px;
+        }
+        .stat-box { background: rgba(0, 0, 0, 0.02); padding: 10px; border-radius: 6px; }
+        .stat-label { font-size: 10px; color: var(--text-tertiary); margin-bottom: 3px; }
+        .stat-value { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+        .tags-container { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+        .tag {
+            padding: 3px 10px; background: rgba(124, 58, 237, 0.1);
+            color: var(--purple); border-radius: 10px;
+            font-size: 11px; font-weight: 500;
+        }
+        .quick-actions {
+            display: grid; grid-template-columns: repeat(4, 1fr);
+            gap: 8px; margin-top: 12px;
+        }
+        .quick-action-btn {
+            padding: 10px; background: rgba(255,255,255,0.9);
+            border: 1px solid var(--glass-border); border-radius: 8px;
+            text-align: center; cursor: pointer; transition: all 0.2s;
+        }
+        .quick-action-btn:hover {
+            background: rgba(124, 58, 237, 0.1);
+            border-color: var(--purple);
+        }
+        .quick-action-icon { font-size: 18px; margin-bottom: 3px; }
+        .quick-action-label { font-size: 10px; font-weight: 500; color: var(--text-secondary); }
+        
+        /* Edit mode styles */
+        .detail-panel.editing .quick-action-btn:not([onclick*="editPerson"]) {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+        .edit-field {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--glass-border);
+            border-radius: 6px;
+            background: rgba(255,255,255,0.9);
+            font-size: 14px;
+            color: var(--text-primary);
+            transition: all 0.2s ease;
+        }
+        .edit-field:focus {
+            outline: none;
+            border-color: var(--purple);
+            background: white;
+            box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+        }
+        .edit-field::placeholder {
+            color: var(--text-secondary);
+            opacity: 0.7;
+        }
+        .notes-textarea {
+            min-height: 80px;
+            resize: vertical;
+            font-family: inherit;
+        }
+        .info-item .edit-field {
+            margin-top: 4px;
+        }
+        .timeline-item, .activity-item, .note-item, .gift-item {
+            padding: 10px; background: rgba(255,255,255,0.9);
+            border-radius: 8px; margin-bottom: 6px;
+            display: flex; gap: 10px; align-items: start;
+        }
+        .timeline-icon {
+            width: 28px; height: 28px; border-radius: 50%;
+            background: rgba(124, 58, 237, 0.1);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px; flex-shrink: 0;
+        }
+        .timeline-content { flex: 1; }
+        .timeline-title { font-size: 13px; font-weight: 500; margin-bottom: 3px; }
+        .timeline-meta { font-size: 11px; color: var(--text-tertiary); }
+        .info-grid {
+            display: grid; grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+        .info-item {
+            padding: 10px; background: rgba(0,0,0,0.02); border-radius: 6px;
+        }
+        .info-label { font-size: 10px; color: var(--text-tertiary); margin-bottom: 4px; }
+        .info-value { font-size: 13px; font-weight: 500; }
+        .shared-goals {
+            display: flex; flex-direction: column; gap: 8px;
+        }
+        .goal-item {
+            padding: 10px; background: rgba(255,255,255,0.9);
+            border-radius: 8px; display: flex; justify-content: space-between;
+            align-items: center;
+        }
+        .goal-text { font-size: 13px; }
+        .goal-status {
+            padding: 3px 8px; border-radius: 6px;
+            font-size: 10px; font-weight: 500;
+        }
+        .goal-status.planned { background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
+        .tooltip {
+            position: absolute; background: rgba(0, 0, 0, 0.9);
+            color: white; padding: 8px 12px; border-radius: 6px;
+            font-size: 12px; pointer-events: none; z-index: 1000;
+            white-space: nowrap; opacity: 0; transition: opacity 0.2s;
+        }
+        .tooltip.show { opacity: 1; }
+        .fab {
+            position: fixed; bottom: 40px; right: 40px;
+            width: 56px; height: 56px; border-radius: 50%;
+            background: linear-gradient(135deg, var(--purple), #0891b2);
+            display: none; align-items: center; justify-content: center;
+            font-size: 28px; color: white; cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 4px 16px rgba(124, 58, 237, 0.3);
+            z-index: 80;
+        }
+        .fab.show { display: flex; }
+        .fab:hover {
+            transform: scale(1.1);
+            box-shadow: 0 8px 24px rgba(124, 58, 237, 0.5);
+        }
+        
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid var(--glass-border); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: var(--text-primary); margin-bottom: 10px;
+            background: linear-gradient(135deg, var(--purple), #0891b2);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: var(--text-secondary);
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid var(--glass-border);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, var(--purple), #0891b2);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+    </style>
+        <!-- Zoe Orb Styles -->
+        <style>
+        .zoe-orb {
+            position: fixed; bottom: 24px; right: 24px; width: 70px; height: 70px;
+            border-radius: 50%; cursor: pointer; transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            z-index: 1200; display: flex; align-items: center; justify-content: center;
+            overflow: hidden;
+            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
+            background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 50%, #A855F7 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
+        }
+        .zoe-orb::before {
+            content: ""; position: absolute; top: 50%; left: 50%; width: 20px; height: 20px;
+            background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+            border-radius: 50%; transform: translate(-50%, -50%);
+            animation: orb-inner-glow 2s ease-in-out infinite alternate;
+        }
+        .zoe-orb:hover {
+            transform: scale(1.12);
+            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.5), 0 0 50px rgba(123, 97, 255, 0.3);
+            animation-duration: 8s, 3s;
+        }
+        .zoe-orb:active { transform: scale(0.95); }
+        .zoe-orb.connecting {
+            background: linear-gradient(135deg, #7B61FF 0%, #6366F1 50%, #8B5CF6 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
+        }
+        .zoe-orb.connected {
+            background: linear-gradient(135deg, #7B61FF 0%, #10B981 50%, #34D399 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(16, 185, 129, 0.2);
+        }
+        .zoe-orb.thinking {
+            background: linear-gradient(135deg, #7B61FF 0%, #F59E0B 50%, #FBBF24 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(245, 158, 11, 0.2);
+            animation: orb-thinking-gentle 3s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
+        }
+        .zoe-orb.proactive {
+            background: linear-gradient(135deg, #7B61FF 0%, #EC4899 50%, #F472B6 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(236, 72, 153, 0.2);
+            animation: orb-proactive-gentle 4s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
+        }
+        .zoe-orb.error {
+            background: linear-gradient(135deg, #7B61FF 0%, #EF4444 50%, #F87171 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(239, 68, 68, 0.2);
+            animation: orb-error-shake 0.5s ease-in-out infinite, orb-liquid-swirl 3s ease-in-out infinite;
+        }
+        .zoe-orb.chatting {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 50%, #06B6D4 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.6), 0 0 60px rgba(123, 97, 255, 0.4);
+            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
+        }
+        .zoe-orb.badge::after {
+            content: ""; position: absolute; top: 8px; right: 8px; width: 12px; height: 12px;
+            background: #F59E0B; border-radius: 50%; border: 2px solid white;
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.8);
+            animation: badge-pulse 2s ease-in-out infinite;
+        }
+        @keyframes orb-liquid-swirl {
+            0%, 100% { background-position: 0% 50%; border-radius: 50% 45% 55% 50%; }
+            25% { background-position: 100% 50%; border-radius: 55% 50% 45% 55%; }
+            50% { background-position: 100% 100%; border-radius: 45% 55% 50% 45%; }
+            75% { background-position: 0% 100%; border-radius: 50% 45% 55% 50%; }
+        }
+        @keyframes orb-breathe {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        @keyframes orb-inner-glow {
+            0% { opacity: 0.3; transform: translate(-50%, -50%) scale(1); }
+            100% { opacity: 0.6; transform: translate(-50%, -50%) scale(1.1); }
+        }
+        @keyframes orb-thinking-gentle {
+            0%, 100% { transform: rotate(0deg); }
+            25% { transform: rotate(5deg); }
+            75% { transform: rotate(-5deg); }
+        }
+        @keyframes orb-proactive-gentle {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.08); }
+        }
+        @keyframes orb-error-shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-2px); }
+            75% { transform: translateX(2px); }
+        }
+        @keyframes badge-pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.2); }
+        }
+        </style>
+</head>
+<body>
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
+            <div class="nav-menu">
+                <a href="index.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="lists.html" class="nav-item">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- Time/Date Display -->
+            <div class="time-date-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+        </div>
+    </div>
+    <div class="main-layout">
+        <div class="insights-sidebar">
+            <div class="insights-header">
+                <h2 class="insights-title">Memory Intelligence</h2>
+                <div class="view-toggle">
+                    <button class="view-btn active" onclick="switchView('people')">👥</button>
+                    <button class="view-btn" onclick="switchView('collections')">📁</button>
+                </div>
+            </div>
+            
+            <div class="search-box">
+                <input type="text" class="search-input" placeholder="Search memories..." oninput="searchMemories(this.value)">
+                <span class="search-icon">🔍</span>
+            </div>
+            
+            <div id="filterChips" class="filter-chips"></div>
+            <div id="breadcrumb" class="breadcrumb" style="display: none;"></div>
+            <div id="insightsList"></div>
+        </div>
+        <div class="canvas-container">
+            <canvas id="memoryCanvas"></canvas>
+            
+            <div class="canvas-controls">
+                <div class="control-btn" id="backBtn" onclick="navigateBack()" style="display: none;" title="Back">←</div>
+                <div class="control-btn" onclick="resetView()" title="Reset View">⟲</div>
+                <div class="control-btn" onclick="zoomIn()" title="Zoom In">+</div>
+                <div class="control-btn" onclick="zoomOut()" title="Zoom Out">−</div>
+            </div>
+            <div class="canvas-legend" id="canvasLegend"></div>
+            <button class="fab" id="fabButton" onclick="showNewItemDialog()">+</button>
+        </div>
+    </div>
+    
+    <div id="tilesContainer"></div>
+    
+    <div class="modal-overlay" id="newCollectionModal">
+        <div class="modal">
+            <div class="modal-title">New Collection</div>
+            <div class="modal-field">
+                <label class="modal-label">Name</label>
+                <input type="text" class="modal-input" id="collectionName" placeholder="Enter collection name">
+            </div>
+            <div class="modal-field">
+                <label class="modal-label">Color</label>
+                <div class="color-picker">
+                    <div class="color-option selected" style="background: #3b82f6;" onclick="selectColor('#3b82f6')"></div>
+                    <div class="color-option" style="background: #10b981;" onclick="selectColor('#10b981')"></div>
+                    <div class="color-option" style="background: #8b5cf6;" onclick="selectColor('#8b5cf6')"></div>
+                    <div class="color-option" style="background: #06b6d4;" onclick="selectColor('#06b6d4')"></div>
+                    <div class="color-option" style="background: #f59e0b;" onclick="selectColor('#f59e0b')"></div>
+                    <div class="color-option" style="background: #ef4444;" onclick="selectColor('#ef4444')"></div>
+                    <div class="color-option" style="background: #ec4899;" onclick="selectColor('#ec4899')"></div>
+                    <div class="color-option" style="background: #6366f1;" onclick="selectColor('#6366f1')"></div>
+                    <div class="color-option" style="background: #14b8a6;" onclick="selectColor('#14b8a6')"></div>
+                    <div class="color-option" style="background: #a855f7;" onclick="selectColor('#a855f7')"></div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="modal-btn modal-btn-secondary" onclick="closeNewCollectionModal()">Cancel</button>
+                <button class="modal-btn modal-btn-primary" onclick="createCollection()">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Person Modal -->
+    <div class="modal-overlay" id="addPersonModal">
+        <div class="modal">
+            <div class="modal-title">Add Person</div>
+            <div class="modal-field">
+                <label class="modal-label">Name</label>
+                <input type="text" class="modal-input" id="personName" placeholder="Enter person's name">
+            </div>
+            <div class="modal-field">
+                <label class="modal-label">Category</label>
+                <select class="modal-input" id="personCategory">
+                    <option value="inner">Inner Circle</option>
+                    <option value="circle">Circle</option>
+                    <option value="acquaintance">Acquaintances</option>
+                    <option value="professional">Professional</option>
+                    <option value="archive">Archive</option>
+                </select>
+            </div>
+            <div class="modal-field">
+                <label class="modal-label">Notes (Optional)</label>
+                <textarea class="modal-input" id="personNotes" placeholder="Add any notes about this person" rows="3"></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="modal-btn modal-btn-secondary" onclick="closeAddPersonModal()">Cancel</button>
+                <button class="modal-btn modal-btn-primary" onclick="createPerson()">Add Person</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="detail-panel" id="detailPanel">
+        <div class="detail-header">
+            <button class="detail-close" onclick="closeDetail()">×</button>
+            <div class="detail-avatar" id="detailIcon"></div>
+            <h1 class="detail-name" id="detailName"></h1>
+            <div class="detail-subtitle" id="detailSubtitle"></div>
+        </div>
+        <div class="detail-content" id="detailContent"></div>
+    </div>
+    
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="alert('Coming soon!')">
+                    <div class="more-item-icon">📊</div>
+                    <div class="more-item-label">Analytics</div>
+                </div>
+                <div class="more-item" onclick="alert('Coming soon!')">
+                    <div class="more-item-icon">🔍</div>
+                    <div class="more-item-label">Search</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="tooltip" id="tooltip"></div>
+    
+    <script src="js/auth.js"></script>
+    <script src="js/common.js"></script>
+    <script src="js/ai-processor.js"></script>
+    <script>
+        const canvas = document.getElementById('memoryCanvas');
+        const ctx = canvas.getContext('2d');
+        let width, height, centerX, centerY;
+        let scale = 1, offsetX = 0, offsetY = 0;
+        let isDragging = false, dragStartX = 0, dragStartY = 0;
+        let draggedItem = null, hoveredItem = null;
+        let currentView = 'people';
+        let currentCollection = null;
+        let navigationPath = [];
+        let animationFrame;
+        let breathePhase = 0;
+        let activeFilters = ['inner', 'circle', 'acquaintance', 'professional'];
+        let mouseDownTime = 0;
+        let mouseDownItem = null;
+        let selectedColor = '#3b82f6';
+        let openTiles = [];
+        const DRAG_THRESHOLD = 200;
+        
+        let people = [];
+        let collections = [];
+        let currentUser = null;
+        
+        // Paste event listener
+        document.addEventListener('paste', async (e) => {
+            console.log('Paste event triggered, currentCollection:', currentCollection);
+            if (!currentCollection) {
+                console.log('No current collection, paste ignored');
+                return;
+            }
+            
+            e.preventDefault();
+            
+            // Check for images first
+            const items = e.clipboardData.items;
+            let imageHandled = false;
+            
+            console.log('Clipboard items:', items.length);
+            for (let i = 0; i < items.length; i++) {
+                console.log('Item type:', items[i].type);
+                if (items[i].type.indexOf('image') !== -1) {
+                    console.log('Image detected, processing...');
+                    const blob = items[i].getAsFile();
+                    const reader = new FileReader();
+                    
+                    reader.onload = async (event) => {
+                        try {
+                            const col = collections.find(c => c.id === currentCollection);
+                            if (!col) return;
+                            
+                            const session = window.zoeAuth?.getCurrentSession();
+                            const collectionId = col.id.replace('c', '');
+                            console.log("Making API request to collections-service:", `http://localhost:8011/collections/${collectionId}/tiles`);
+                const response = await fetch(`http://localhost:8011/collections/${collectionId}/tiles`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                                },
+                                body: JSON.stringify({
+                                    collection_id: parseInt(collectionId),
+                                    name: "",
+                                    x: Math.random() * 300 - 150,
+                                    y: Math.random() * 300 - 150,
+                                    size: 50,
+                                    content: "",
+                                    preview_type: 'image',
+                                    preview_data: {
+                                        type: 'image',
+                                        image: event.target.result,
+                                        title: "Pasted Image",
+                                        description: "Image from clipboard"
+                                    }
+                                })
+                            });
+                            
+                            const newTile = {
+                                id: `t${response.tile.id}`,
+                                type: 'tile',
+                                name: "",
+                                x: Math.random() * 300 - 150,
+                                y: Math.random() * 300 - 150,
+                                size: 50,
+                                content: "",
+                                preview: {
+                                    type: 'image',
+                                    image: event.target.result,
+                                    title: "Pasted Image",
+                                    description: "Image from clipboard"
+                                },
+                                dbId: response.tile.id // Store the actual database ID
+                            };
+                            
+                            col.items.push(newTile);
+                            setTimeout(() => openTile(newTile), 100);
+                        } catch (error) {
+                console.error("Error loading people:", error);
+                            console.error('Failed to create tile from image paste:', error);
+                        }
+                    };
+                    
+                    reader.readAsDataURL(blob);
+                    imageHandled = true;
+                    break;
+                }
+            }
+            
+            // If no image, handle text
+            if (!imageHandled) {
+                console.log('No image found, checking for text...');
+                const text = e.clipboardData.getData('text');
+                console.log('Text data:', text);
+                
+                if (text.trim()) {
+                    console.log('Text paste detected, creating tile...');
+                    // Create tile in database first
+                    try {
+                        const col = collections.find(c => c.id === currentCollection);
+                        if (!col) return;
+                        
+                        const session = window.zoeAuth?.getCurrentSession();
+                        const collectionId = col.id.replace('c', '');
+                        console.log("Making API request to collections-service:", `http://localhost:8011/collections/${collectionId}/tiles`);
+                const response = await fetch(`http://localhost:8011/collections/${collectionId}/tiles`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                            },
+                            body: JSON.stringify({
+                                collection_id: parseInt(collectionId),
+                                name: "",
+                                x: Math.random() * 300 - 150,
+                                y: Math.random() * 300 - 150,
+                                size: 50,
+                                content: text
+                            })
+                        });
+                        
+                        const newTile = {
+                            id: `t${response.tile.id}`,
+                            type: 'tile',
+                            name: "",
+                            x: Math.random() * 300 - 150,
+                            y: Math.random() * 300 - 150,
+                            size: 50,
+                            content: text,
+                            preview: null,
+                            dbId: response.tile.id // Store the actual database ID
+                        };
+                        
+                        // Auto-detect URLs and fetch preview
+                        const urlRegex = /(https?:\/\/[^\s]+)/g;
+                        const urls = text.match(urlRegex);
+                        if (urls && urls.length > 0) {
+                            newTile.preview = await fetchLinkPreview(urls[0]);
+                        }
+                        
+                        col.items.push(newTile);
+                        setTimeout(() => openTile(newTile), 100);
+                    } catch (error) {
+                console.error("Error loading people:", error);
+                        console.error('Failed to create tile from paste:', error);
+                    }
+                }
+            }
+        });
+        
+        async function fetchLinkPreview(url) {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                console.log("Making API request to zoe-core:", "http://localhost:8000/api/memories/link-preview");
+                const response = await fetch('http://localhost:8000/api/memories/link-preview', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                    },
+                    body: JSON.stringify({ url: url })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                return await response.json();
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to fetch link preview:', error);
+                const urlObj = new URL(url);
+                return {
+                    url: url,
+                    title: `${urlObj.hostname.replace('www.', '')} Preview`,
+                    description: "This is a preview of the pasted link. In production, this would fetch real metadata.",
+                    image: "🔗"
+                };
+            }
+        }
+        
+        // Load data from API
+        async function loadPeople() {
+            console.log("=== Loading People ===");
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                console.log("Making API request to people-service:", "http://localhost:8010/people");
+                const response = await fetch('http://localhost:8010/people', {
+                    headers: session ? { 'Authorization': `Bearer ${session.token}` } : {}
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                console.log("API Response:", data);
+                console.log("Number of people:", data.people ? data.people.length : 0);
+                people = data.people.map(person => ({
+                    id: `p${person.id}`,
+                    type: 'person',
+                    category: person.relationship || person.metadata?.category || 'inner',
+                    name: person.name,
+                    angle: person.metadata?.angle || Math.random() * 360,
+                    distance: person.metadata?.distance || 100 + Math.random() * 100,
+                    lastContact: person.metadata?.lastContact || 7,
+                    frequency: person.metadata?.frequency || 14,
+                    strength: person.metadata?.strength || 0.5,
+                    birthday: person.birthday,
+                    relationshipType: person.relationship,
+                    phone: person.phone,
+                    email: person.email,
+                    notes: person.notes,
+                    relationships: person.metadata?.relationships || []
+                }));
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to load people:', error);
+                people = [];
+            }
+        }
+        
+        async function loadCollections() {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                console.log("Making API request to collections-service:", "http://localhost:8011/collections");
+                const response = await fetch('http://localhost:8011/collections', {
+                    headers: session ? { 'Authorization': `Bearer ${session.token}` } : {}
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                collections = data.collections.map(collection => ({
+                    id: `c${collection.id}`,
+                    type: 'collection',
+                    name: collection.name,
+                    icon: collection.icon,
+                    x: collection.x,
+                    y: collection.y,
+                    size: collection.size,
+                    color: collection.color,
+                    items: []
+                }));
+                
+                // Load tiles for each collection
+                for (let collection of collections) {
+                    const collectionId = collection.id.replace('c', '');
+                    try {
+                        const tilesResponse = await fetch(`http://localhost:8011/collections/${collectionId}/tiles`, {
+                            headers: session ? { 'Authorization': `Bearer ${session.token}` } : {}
+                        });
+                        
+                        if (!tilesResponse.ok) {
+                            throw new Error(`HTTP error! status: ${tilesResponse.status}`);
+                        }
+                        
+                        const tilesData = await tilesResponse.json();
+                        
+                        collection.items = tilesData.tiles.map(tile => ({
+                            id: `t${tile.id}`,
+                            type: 'tile',
+                            name: tile.name,
+                            x: tile.x,
+                            y: tile.y,
+                            size: tile.size,
+                            content: tile.content,
+                            preview: tile.preview_data,
+                            tileX: tile.tile_x,
+                            tileY: tile.tile_y,
+                            tileWidth: tile.tile_width,
+                            dbId: tile.id // Store the actual database ID
+                        }));
+                    } catch (error) {
+                console.error("Error loading people:", error);
+                        console.error(`Failed to load tiles for collection ${collectionId}:`, error);
+                        collection.items = [];
+                    }
+                }
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to load collections:', error);
+                collections = [];
+            }
+        }
+        
+        async function loadEnhancedPerson(personId) {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                console.log("Making API request to people-service:", `http://localhost:8010/people/${personId}/analysis`);
+                const response = await fetch(`http://localhost:8010/people/${personId}/analysis`, {
+                    headers: session ? { 'Authorization': `Bearer ${session.token}` } : {}
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                const person = data.person;
+                return {
+                    id: `p${person.id}`,
+                    type: 'person',
+                    category: person.metadata?.category || 'inner',
+                    name: person.name,
+                    angle: person.metadata?.angle || Math.random() * 360,
+                    distance: person.metadata?.distance || 100 + Math.random() * 100,
+                    lastContact: person.metadata?.lastContact || 7,
+                    frequency: person.metadata?.frequency || 14,
+                    strength: person.metadata?.strength || 0.5,
+                    birthday: person.birthday,
+                    relationshipType: person.relationship,
+                    phone: person.phone,
+                    email: person.email,
+                    notes: person.notes,
+                    timeline: person.timeline,
+                    activities: person.activities,
+                    conversations: person.conversations,
+                    gifts: person.gifts,
+                    importantDates: person.important_dates,
+                    relationships: person.relationships.map(r => `p${r.person_id}`)
+                };
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to load enhanced person:', error);
+                return null;
+            }
+        }
+        
+        function resizeCanvas() {
+            width = canvas.parentElement.clientWidth;
+            height = canvas.parentElement.clientHeight;
+            canvas.width = width * window.devicePixelRatio;
+            canvas.height = height * window.devicePixelRatio;
+            canvas.style.width = width + 'px';
+            canvas.style.height = height + 'px';
+            ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+            centerX = width / 2;
+            centerY = height / 2;
+            updateFabVisibility();
+        }
+        
+        function updateFabVisibility() {
+            const fab = document.getElementById('fabButton');
+            if (currentView === 'collections' || currentCollection) {
+                fab.classList.add('show');
+            } else {
+                fab.classList.remove('show');
+            }
+        }
+        
+        function showNewItemDialog() {
+            if (currentCollection) {
+                createNewTile();
+            } else {
+                document.getElementById('newCollectionModal').classList.add('show');
+            }
+        }
+        
+        function selectColor(color) {
+            selectedColor = color;
+            document.querySelectorAll('.color-option').forEach(opt => {
+                opt.classList.remove('selected');
+            });
+            event.target.classList.add('selected');
+        }
+        
+        function closeNewCollectionModal() {
+            document.getElementById('newCollectionModal').classList.remove('show');
+            document.getElementById('collectionName').value = '';
+        }
+
+        function openAddPersonModal() {
+            document.getElementById('addPersonModal').classList.add('show');
+        }
+
+        function closeAddPersonModal() {
+            document.getElementById('addPersonModal').classList.remove('show');
+            document.getElementById('personName').value = '';
+            document.getElementById('personCategory').value = 'inner';
+            document.getElementById('personNotes').value = '';
+        }
+        
+        async function createCollection() {
+            const name = document.getElementById('collectionName').value.trim();
+            if (!name) return;
+            
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                console.log("Making API request to collections-service:", "http://localhost:8011/collections");
+                const response = await fetch('http://localhost:8011/collections', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                    },
+                    body: JSON.stringify({
+                        name: name,
+                        icon: "📁",
+                        x: Math.random() * 400 - 200,
+                        y: Math.random() * 400 - 200,
+                        size: 60,
+                        color: selectedColor
+                    })
+                });
+                
+                const newCol = {
+                    id: `c${response.collection.id}`,
+                    type: 'collection',
+                    name: name,
+                    icon: "📁",
+                    x: Math.random() * 400 - 200,
+                    y: Math.random() * 400 - 200,
+                    size: 60,
+                    color: selectedColor,
+                    items: []
+                };
+                collections.push(newCol);
+                closeNewCollectionModal();
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to create collection:', error);
+                alert('Failed to create collection');
+            }
+        }
+
+        async function createPerson() {
+            const name = document.getElementById('personName').value.trim();
+            const category = document.getElementById('personCategory').value;
+            const notes = document.getElementById('personNotes').value.trim();
+            
+            if (!name) return;
+            
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                console.log("Making API request to people-service:", "http://localhost:8010/people");
+                const response = await fetch('http://localhost:8010/people', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                    },
+                    body: JSON.stringify({
+                        name: name,
+                        relationship: category,
+                        notes: notes,
+                        metadata: {
+                            strength: category === 'inner' ? 0.9 : category === 'circle' ? 0.7 : category === 'acquaintance' ? 0.5 : category === 'professional' ? 0.6 : 0.3,
+                            frequency: category === 'inner' ? 7 : category === 'circle' ? 14 : category === 'acquaintance' ? 30 : category === 'professional' ? 21 : 90,
+                            lastContact: category === 'inner' ? 3 : category === 'circle' ? 7 : category === 'acquaintance' ? 14 : category === 'professional' ? 10 : 30
+                        }
+                    })
+                });
+                
+                // Add to local people array
+                const newPerson = {
+                    id: response.person.id,
+                    name: name,
+                    category: category,
+                    notes: notes,
+                    strength: category === 'inner' ? 0.9 : category === 'circle' ? 0.7 : category === 'acquaintance' ? 0.5 : category === 'professional' ? 0.6 : 0.3,
+                    frequency: category === 'inner' ? 7 : category === 'circle' ? 14 : category === 'acquaintance' ? 30 : category === 'professional' ? 21 : 90,
+                    lastContact: category === 'inner' ? 3 : category === 'circle' ? 7 : category === 'acquaintance' ? 14 : category === 'professional' ? 10 : 30,
+                    angle: Math.random() * Math.PI * 2,
+                    relationships: []
+                };
+                
+                people.push(newPerson);
+                closeAddPersonModal();
+                updateSidebar();
+                updateLegend();
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to create person:', error);
+                alert('Failed to create person');
+            }
+        }
+        
+        async function createNewTile() {
+            const col = collections.find(c => c.id === currentCollection);
+            if (!col) return;
+            
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const collectionId = col.id.replace('c', '');
+                console.log("Making API request to collections-service:", `http://localhost:8011/collections/${collectionId}/tiles`);
+                const response = await fetch(`http://localhost:8011/collections/${collectionId}/tiles`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                    },
+                    body: JSON.stringify({
+                        collection_id: parseInt(collectionId),
+                        name: "",
+                        x: Math.random() * 300 - 150,
+                        y: Math.random() * 300 - 150,
+                        size: 50,
+                        content: ""
+                    })
+                });
+                
+                const newTile = {
+                    id: `t${response.tile.id}`,
+                    type: 'tile',
+                    name: "",
+                    x: Math.random() * 300 - 150,
+                    y: Math.random() * 300 - 150,
+                    size: 50,
+                    content: "",
+                    preview: null,
+                    dbId: response.tile.id // Store the actual database ID
+                };
+                col.items.push(newTile);
+                setTimeout(() => openTile(newTile), 100);
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to create tile:', error);
+                alert('Failed to create tile');
+            }
+        }
+        
+        function openTile(item) {
+            if (openTiles.includes(item.id)) return;
+            
+            openTiles.push(item.id);
+            
+            const tile = document.createElement('div');
+            tile.className = 'tile show';
+            tile.id = `tile-${item.id}`;
+            
+            const isPhotoTile = item.preview?.type === 'image';
+            if (isPhotoTile) {
+                tile.classList.add('photo-tile');
+            }
+            
+            // Use saved position if exists, otherwise center
+            if (item.tileX && item.tileY) {
+                tile.style.left = item.tileX + 'px';
+                tile.style.top = item.tileY + 'px';
+                tile.style.transform = 'none';
+            } else {
+                tile.style.left = '50%';
+                tile.style.top = '50%';
+                tile.style.transform = 'translate(-50%, -50%)';
+            }
+            
+            // Use saved width if exists
+            if (item.tileWidth) {
+                tile.style.width = item.tileWidth + 'px';
+            }
+            
+            let contentHtml = '';
+            
+            if (isPhotoTile) {
+                // Photo-centric layout
+                contentHtml = `
+                    <div class="tile-header photo-header" onmousedown="startTileDrag(event, '${item.id}')">
+                        <input type="text" class="tile-title" placeholder="Add a title..." value="${item.name || ''}" 
+                               oninput="updateTileName('${item.id}', this.value)">
+                        <button class="tile-close" onclick="closeTile('${item.id}')">×</button>
+                    </div>
+                    <div class="tile-content photo-content">
+                        <div class="tile-photo-main">
+                            <img src="${item.preview.image}" alt="Photo">
+                            <div class="tile-resize-handle" onmousedown="startImageResize(event, '${item.id}')">⇲</div>
+                        </div>
+                        <textarea class="tile-editor photo-notes" placeholder="Add notes (optional)..." 
+                                  oninput="updateTileContent('${item.id}', this.value)">${item.content || ''}</textarea>
+                    </div>
+                    <div class="tile-toolbar">
+                        <button class="tile-tool-btn" onclick="editTile('${item.id}')">✏️ Edit</button>
+                        <button class="tile-tool-btn delete" onclick="deleteTile('${item.id}')">🗑️ Delete</button>
+                    </div>
+                `;
+            } else {
+                // Standard text/link layout
+                const previewHtml = item.preview ? `
+                    <div class="tile-preview">
+                        <div class="tile-preview-image">${item.preview.image}</div>
+                        <div class="tile-preview-title">${item.preview.title}</div>
+                        <div class="tile-preview-description">${item.preview.description}</div>
+                        <div class="tile-preview-url">${item.preview.url}</div>
+                    </div>
+                ` : '';
+                
+                contentHtml = `
+                    <div class="tile-header" onmousedown="startTileDrag(event, '${item.id}')">
+                        <input type="text" class="tile-title" placeholder="Untitled" value="${item.name || ''}" 
+                               oninput="updateTileName('${item.id}', this.value)">
+                        <button class="tile-close" onclick="closeTile('${item.id}')">×</button>
+                    </div>
+                    <div class="tile-content">
+                        <textarea class="tile-editor" placeholder="Type notes or paste a link..." 
+                                  oninput="updateTileContent('${item.id}', this.value)">${item.content || ''}</textarea>
+                        ${previewHtml}
+                    </div>
+                    <div class="tile-toolbar">
+                        <button class="tile-tool-btn" onclick="editTile('${item.id}')">✏️ Edit</button>
+                        <button class="tile-tool-btn delete" onclick="deleteTile('${item.id}')">🗑️ Delete</button>
+                    </div>
+                `;
+            }
+            
+            tile.innerHTML = contentHtml;
+            document.getElementById('tilesContainer').appendChild(tile);
+        }
+        
+        let draggedTile = null, tileDragStartX = 0, tileDragStartY = 0;
+        let resizingTile = null, resizeStartWidth = 0, resizeStartX = 0;
+        
+        function startTileDrag(e, tileId) {
+            draggedTile = document.getElementById(`tile-${tileId}`);
+            const rect = draggedTile.getBoundingClientRect();
+            tileDragStartX = e.clientX - rect.left;
+            tileDragStartY = e.clientY - rect.top;
+            draggedTile.classList.add('dragging');
+            
+            document.addEventListener('mousemove', moveTile);
+            document.addEventListener('mouseup', stopTileDrag);
+        }
+        
+        function moveTile(e) {
+            if (!draggedTile) return;
+            const newX = e.clientX - tileDragStartX;
+            const newY = e.clientY - tileDragStartY;
+            draggedTile.style.left = newX + 'px';
+            draggedTile.style.top = newY + 'px';
+            draggedTile.style.transform = 'none';
+        }
+        
+        function stopTileDrag() {
+            if (draggedTile) {
+                // Save position to item
+                const tileId = draggedTile.id.replace('tile-', '');
+                const col = collections.find(c => c.id === currentCollection);
+                const item = col?.items.find(i => i.id === tileId);
+                if (item) {
+                    item.tileX = parseInt(draggedTile.style.left);
+                    item.tileY = parseInt(draggedTile.style.top);
+                }
+                
+                draggedTile.classList.remove('dragging');
+                draggedTile = null;
+            }
+            document.removeEventListener('mousemove', moveTile);
+            document.removeEventListener('mouseup', stopTileDrag);
+        }
+        
+        function startImageResize(e, tileId) {
+            e.stopPropagation();
+            resizingTile = document.getElementById(`tile-${tileId}`);
+            resizeStartWidth = resizingTile.offsetWidth;
+            resizeStartX = e.clientX;
+            
+            document.addEventListener('mousemove', resizeImage);
+            document.addEventListener('mouseup', stopImageResize);
+        }
+        
+        function resizeImage(e) {
+            if (!resizingTile) return;
+            const delta = e.clientX - resizeStartX;
+            const newWidth = Math.max(320, Math.min(800, resizeStartWidth + delta));
+            resizingTile.style.width = newWidth + 'px';
+        }
+        
+        function stopImageResize() {
+            if (resizingTile) {
+                // Save width to item
+                const tileId = resizingTile.id.replace('tile-', '');
+                const col = collections.find(c => c.id === currentCollection);
+                const item = col?.items.find(i => i.id === tileId);
+                if (item) {
+                    item.tileWidth = resizingTile.offsetWidth;
+                }
+                
+                resizingTile = null;
+            }
+            document.removeEventListener('mousemove', resizeImage);
+            document.removeEventListener('mouseup', stopImageResize);
+        }
+        
+        async function updateTileName(itemId, name) {
+            const col = collections.find(c => c.id === currentCollection);
+            const item = col?.items.find(i => i.id === itemId);
+            if (item) {
+                item.name = name;
+                await saveTile(item);
+            }
+        }
+        
+        async function updateTileContent(itemId, content) {
+            const col = collections.find(c => c.id === currentCollection);
+            const item = col?.items.find(i => i.id === itemId);
+            if (item) {
+                item.content = content;
+                
+                const urlRegex = /(https?:\/\/[^\s]+)/g;
+                const urls = content.match(urlRegex);
+                if (urls && urls.length > 0 && !item.preview) {
+                    item.preview = await fetchLinkPreview(urls[0]);
+                    closeTile(itemId);
+                    setTimeout(() => openTile(item), 50);
+                }
+                
+                await saveTile(item);
+            }
+        }
+        
+        async function saveTile(item) {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const tileId = item.dbId || item.id.replace('t', '');
+                await fetch(`http://localhost:8011/tiles/${tileId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                    },
+                    body: JSON.stringify({
+                        collection_id: parseInt(currentCollection.replace('c', '')),
+                        name: item.name,
+                        content: item.content,
+                        preview_type: item.preview?.type || null,
+                        preview_data: item.preview || null,
+                        x: item.x,
+                        y: item.y,
+                        size: item.size,
+                        tile_x: item.tileX,
+                        tile_y: item.tileY,
+                        tile_width: item.tileWidth
+                    })
+                });
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to save tile:', error);
+            }
+        }
+        
+        function findItemById(itemId) {
+            for (const col of collections) {
+                const item = col.items.find(i => i.id === itemId);
+                if (item) return item;
+            }
+            return null;
+        }
+        
+        function editTile(itemId) {
+            const tile = document.getElementById(`tile-${itemId}`);
+            tile.querySelector('.tile-editor').focus();
+        }
+        
+        async function deleteTile(itemId) {
+            if (!confirm('Delete this tile?')) return;
+            
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const item = findItemById(itemId);
+                const tileId = item?.dbId || itemId.replace('t', '');
+                await fetch(`http://localhost:8011/tiles/${tileId}`, {
+                    method: 'DELETE',
+                    headers: session ? { 'Authorization': `Bearer ${session.token}` } : {}
+                });
+                
+                const col = collections.find(c => c.id === currentCollection);
+                if (col) {
+                    col.items = col.items.filter(i => i.id !== itemId);
+                }
+                closeTile(itemId);
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to delete tile:', error);
+                alert('Failed to delete tile');
+            }
+        }
+        
+        function closeTile(itemId) {
+            const tile = document.getElementById(`tile-${itemId}`);
+            if (tile) tile.remove();
+            openTiles = openTiles.filter(id => id !== itemId);
+        }
+        
+        function animate() {
+            breathePhase += 0.02;
+            draw();
+            animationFrame = requestAnimationFrame(animate);
+        }
+        
+        function draw() {
+            const bgGradient = ctx.createLinearGradient(0, 0, width, height);
+            bgGradient.addColorStop(0, '#fafbfc');
+            bgGradient.addColorStop(1, '#f1f3f6');
+            ctx.fillStyle = bgGradient;
+            ctx.fillRect(0, 0, width, height);
+            
+            ctx.save();
+            ctx.translate(centerX + offsetX, centerY + offsetY);
+            ctx.scale(scale, scale);
+            
+            if (currentView === 'people') {
+                drawPeopleView();
+            } else if (currentCollection) {
+                drawCollectionCanvas();
+            } else {
+                drawCollectionsCanvas();
+            }
+            
+            ctx.restore();
+        }
+        
+        function drawPeopleView() {
+            const blendedGlow = ctx.createRadialGradient(0, 0, 0, 0, 0, 250);
+            blendedGlow.addColorStop(0, 'rgba(236, 72, 153, 0.15)');
+            blendedGlow.addColorStop(0.3, 'rgba(168, 85, 247, 0.12)');
+            blendedGlow.addColorStop(0.6, 'rgba(20, 184, 166, 0.12)');
+            blendedGlow.addColorStop(1, 'rgba(20, 184, 166, 0)');
+            ctx.fillStyle = blendedGlow;
+            ctx.beginPath();
+            ctx.arc(0, 0, 250, 0, Math.PI * 2);
+            ctx.fill();
+            
+            const visiblePeople = people.filter(p => activeFilters.includes(p.category));
+            visiblePeople.forEach(p => {
+                if (p.relationships) {
+                    p.relationships.forEach(relId => {
+                        const related = people.find(person => person.id === relId);
+                        if (related && activeFilters.includes(related.category)) {
+                            const pos1 = getPolarPosition(p);
+                            const pos2 = getPolarPosition(related);
+                            ctx.strokeStyle = 'rgba(124, 58, 237, 0.15)';
+                            ctx.lineWidth = 2;
+                            ctx.setLineDash([5, 5]);
+                            ctx.beginPath();
+                            ctx.moveTo(pos1.x, pos1.y);
+                            ctx.lineTo(pos2.x, pos2.y);
+                            ctx.stroke();
+                            ctx.setLineDash([]);
+                        }
+                    });
+                }
+            });
+            
+            visiblePeople.forEach(p => {
+                const pos = getPolarPosition(p);
+                const o = p.strength * 0.25;
+                const g = ctx.createLinearGradient(0, 0, pos.x, pos.y);
+                if (p.category === 'inner') {
+                    g.addColorStop(0, `rgba(124, 58, 237, ${o*0.8})`);
+                    g.addColorStop(1, `rgba(236, 72, 153, ${o})`);
+                    ctx.lineWidth = 1.5;
+                } else {
+                    g.addColorStop(0, `rgba(124, 58, 237, ${o*0.6})`);
+                    g.addColorStop(1, `rgba(20, 184, 166, ${o*0.8})`);
+                    ctx.lineWidth = 1;
+                    ctx.setLineDash([3, 3]);
+                }
+                ctx.strokeStyle = g;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(pos.x, pos.y);
+                ctx.stroke();
+            });
+            ctx.setLineDash([]);
+            
+            visiblePeople.forEach(p => drawPerson(p));
+            drawYouNode();
+        }
+        
+        function drawYouNode() {
+            const r = 36;
+            const breathe = 1 + Math.sin(breathePhase) * 0.02;
+            ctx.beginPath();
+            ctx.arc(0, 0, r * breathe, 0, Math.PI * 2);
+            const g = ctx.createRadialGradient(-r*0.3, -r*0.3, 0, 0, 0, r);
+            g.addColorStop(0, '#a855f7');
+            g.addColorStop(0.5, '#8b5cf6');
+            g.addColorStop(1, '#7c3aed');
+            ctx.fillStyle = g;
+            ctx.fill();
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 15px var(--font-text)';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('You', 0, 0);
+        }
+        
+        function drawPerson(p) {
+            const pos = getPolarPosition(p);
+            const floatOffset = !isDragging && !draggedItem ? Math.sin(breathePhase * 1.5 + p.angle) * 3 : 0;
+            pos.y += floatOffset;
+            
+            const r = 28;
+            const hov = hoveredItem?.id === p.id;
+            const ring = p.category === 'inner' ? '#ec4899' : 
+                         p.category === 'circle' ? '#14b8a6' : 
+                         p.category === 'acquaintance' ? '#9ca3af' :
+                         p.category === 'professional' ? '#3b82f6' :
+                         p.category === 'archive' ? '#6b7280' : '#9ca3af';
+            const needsAttention = p.lastContact > p.frequency * 1.5;
+            const pulseScale = needsAttention ? 1 + Math.sin(breathePhase * 2) * 0.05 : 1;
+            const hoverScale = hov ? 1.15 : 1;
+            const finalScale = pulseScale * hoverScale;
+            
+            if (needsAttention) {
+                const pulseSize = r * 2 * (1 + Math.sin(breathePhase * 2) * 0.1);
+                const og = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, pulseSize);
+                og.addColorStop(0, 'rgba(245, 158, 11, 0.3)');
+                og.addColorStop(1, 'rgba(245, 158, 11, 0)');
+                ctx.fillStyle = og;
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, pulseSize, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, r * finalScale, 0, Math.PI * 2);
+            ctx.fillStyle = 'white';
+            ctx.fill();
+            ctx.strokeStyle = ring;
+            ctx.lineWidth = hov ? 4 : 3.5;
+            ctx.stroke();
+            
+            ctx.fillStyle = '#1f2937';
+            ctx.font = '600 14px var(--font-text)';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.shadowColor = 'rgba(255, 255, 255, 0.9)';
+            ctx.shadowBlur = 4;
+            ctx.fillText(p.name, pos.x, pos.y + r * finalScale + 20);
+            ctx.shadowBlur = 0;
+        }
+        
+        function drawCollectionsCanvas() {
+            collections.forEach((col, index) => {
+                const floatOffset = !isDragging && !draggedItem ? Math.sin(breathePhase + index) * 5 : 0;
+                const floatingCol = {...col, y: col.y + floatOffset};
+                drawCanvasItem(floatingCol, draggedItem?.id === col.id, hoveredItem?.id === col.id);
+            });
+        }
+        
+        function drawCollectionCanvas() {
+            const col = collections.find(c => c.id === currentCollection);
+            if (!col) return;
+            col.items.forEach((item, index) => {
+                if (openTiles.includes(item.id)) return;
+                
+                const floatOffset = !isDragging && !draggedItem ? Math.sin(breathePhase + index * 0.5) * 3 : 0;
+                const floatingItem = {...item, y: item.y + floatOffset};
+                drawCanvasItem(floatingItem, draggedItem?.id === item.id, hoveredItem?.id === item.id);
+            });
+        }
+        
+        function drawCanvasItem(item, isDragged, isHovered) {
+            const color = item.color || '#7c3aed';
+            const r = (item.size || 50) / 2;
+            const scale = isDragged ? 1.1 : isHovered ? 1.05 : 1;
+            
+            ctx.save();
+            ctx.translate(item.x, item.y);
+            ctx.scale(scale, scale);
+            ctx.globalAlpha = isDragged ? 0.7 : 1;
+            
+            ctx.fillStyle = 'white';
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(0, 0, r, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            
+            ctx.fillStyle = color;
+            ctx.font = `${r * 0.8}px var(--font-text)`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(item.icon || '📝', 0, 0);
+            
+            ctx.restore();
+            
+            ctx.fillStyle = '#1f2937';
+            ctx.font = '600 12px var(--font-text)';
+            ctx.textAlign = 'center';
+            ctx.shadowColor = 'rgba(255, 255, 255, 0.9)';
+            ctx.shadowBlur = 4;
+            ctx.fillText(item.name || 'Untitled', item.x, item.y + r * scale + 16);
+            ctx.shadowBlur = 0;
+        }
+        
+        function getPolarPosition(item) {
+            const a = (item.angle * Math.PI) / 180;
+            return { x: Math.cos(a) * item.distance, y: Math.sin(a) * item.distance };
+        }
+        
+        canvas.addEventListener('mousedown', e => {
+            const rect = canvas.getBoundingClientRect();
+            const mx = (e.clientX - rect.left - centerX - offsetX) / scale;
+            const my = (e.clientY - rect.top - centerY - offsetY) / scale;
+            const item = getItemAtPosition(mx, my);
+            
+            mouseDownTime = Date.now();
+            mouseDownItem = item;
+            
+            if (item && (currentView === 'collections' || currentCollection)) {
+                // Wait to see if drag
+            } else {
+                isDragging = true;
+                dragStartX = e.clientX - offsetX;
+                dragStartY = e.clientY - offsetY;
+            }
+        });
+        
+        canvas.addEventListener('mousemove', e => {
+            const rect = canvas.getBoundingClientRect();
+            const mx = (e.clientX - rect.left - centerX - offsetX) / scale;
+            const my = (e.clientY - rect.top - centerY - offsetY) / scale;
+            
+            if (mouseDownItem && !draggedItem && (Date.now() - mouseDownTime > DRAG_THRESHOLD)) {
+                draggedItem = mouseDownItem;
+                isDragging = false;
+            }
+            
+            if (draggedItem && (currentView === 'collections' || currentCollection)) {
+                draggedItem.x = mx;
+                draggedItem.y = my;
+            } else if (isDragging) {
+                offsetX = e.clientX - dragStartX;
+                offsetY = e.clientY - dragStartY;
+            } else {
+                const item = getItemAtPosition(mx, my);
+                if (item !== hoveredItem) {
+                    hoveredItem = item;
+                    if (item) {
+                        showTooltip(e.clientX, e.clientY, item.name);
+                    } else hideTooltip();
+                }
+            }
+        });
+        
+        canvas.addEventListener('mouseup', e => {
+            const clickDuration = Date.now() - mouseDownTime;
+            
+            if (mouseDownItem && clickDuration < DRAG_THRESHOLD && !draggedItem) {
+                if (mouseDownItem.type === 'collection') {
+                    openCollection(mouseDownItem.id);
+                } else if (mouseDownItem.type === 'person') {
+                    showPersonDetail(mouseDownItem);
+                } else if (mouseDownItem.type === 'tile') {
+                    openTile(mouseDownItem);
+                }
+            } else if (!mouseDownItem && clickDuration < DRAG_THRESHOLD) {
+                // Click on blank space
+                const panel = document.getElementById('detailPanel');
+                if (panel.classList.contains('open')) {
+                    // Close detail panel if open
+                    closeDetail();
+                } else if (currentCollection || currentView === 'collections') {
+                    // Navigate back
+                    navigateBack();
+                }
+            }
+            
+            isDragging = false;
+            draggedItem = null;
+            mouseDownItem = null;
+        });
+        
+        canvas.addEventListener('mouseleave', () => {
+            isDragging = false;
+            draggedItem = null;
+            hoveredItem = null;
+            mouseDownItem = null;
+            hideTooltip();
+        });
+        
+        function getItemAtPosition(mx, my) {
+            if (currentView === 'people') {
+                for (const p of people.filter(p => activeFilters.includes(p.category))) {
+                    const pos = getPolarPosition(p);
+                    if (Math.sqrt(Math.pow(mx - pos.x, 2) + Math.pow(my - pos.y, 2)) < 28) return p;
+                }
+            } else if (currentCollection) {
+                const col = collections.find(c => c.id === currentCollection);
+                if (col?.items) {
+                    for (const item of col.items) {
+                        if (openTiles.includes(item.id)) continue;
+                        const r = (item.size || 50) / 2;
+                        if (Math.sqrt(Math.pow(mx - item.x, 2) + Math.pow(my - item.y, 2)) < r) return item;
+                    }
+                }
+            } else {
+                for (const col of collections) {
+                    const r = (col.size || 60) / 2;
+                    if (Math.sqrt(Math.pow(mx - col.x, 2) + Math.pow(my - col.y, 2)) < r) return col;
+                }
+            }
+            return null;
+        }
+        
+        function openCollection(id) {
+            navigationPath.push(currentCollection);
+            currentCollection = id;
+            updateBreadcrumb();
+            document.getElementById('backBtn').style.display = 'flex';
+            updateSidebar();
+            updateLegend();
+            updateFabVisibility();
+        }
+        
+        function navigateBack() {
+            if (navigationPath.length > 0) {
+                currentCollection = navigationPath.pop();
+            } else {
+                currentCollection = null;
+            }
+            updateBreadcrumb();
+            if (!currentCollection) {
+                document.getElementById('breadcrumb').style.display = 'none';
+                document.getElementById('backBtn').style.display = 'none';
+            }
+            updateSidebar();
+            updateLegend();
+            updateFabVisibility();
+        }
+        
+        function updateBreadcrumb() {
+            const breadcrumb = document.getElementById('breadcrumb');
+            if (currentCollection) {
+                breadcrumb.style.display = 'flex';
+                const col = collections.find(c => c.id === currentCollection);
+                breadcrumb.innerHTML = `
+                    <span class="breadcrumb-link" onclick="navigateBack()">Collections</span>
+                    <span class="breadcrumb-separator">›</span>
+                    <span>${col ? col.name : ''}</span>
+                `;
+            } else {
+                breadcrumb.style.display = 'none';
+            }
+        }
+        
+        async function showPersonDetail(person) {
+            const panel = document.getElementById('detailPanel');
+            const icon = document.getElementById('detailIcon');
+            const name = document.getElementById('detailName');
+            const subtitle = document.getElementById('detailSubtitle');
+            const content = document.getElementById('detailContent');
+            const isEditing = panel.classList.contains('editing');
+            
+            icon.textContent = '👤';
+            
+            if (isEditing) {
+                name.innerHTML = `<input type="text" id="editPersonName" value="${person.name}" class="edit-field" placeholder="Full name">`;
+                subtitle.innerHTML = `<select id="editPersonCategory" class="edit-field">
+                    <option value="inner" ${person.category === 'inner' ? 'selected' : ''}>Inner Circle</option>
+                    <option value="circle" ${person.category === 'circle' ? 'selected' : ''}>Circle</option>
+                    <option value="acquaintance" ${person.category === 'acquaintance' ? 'selected' : ''}>Acquaintances</option>
+                    <option value="professional" ${person.category === 'professional' ? 'selected' : ''}>Professional</option>
+                    <option value="archive" ${person.category === 'archive' ? 'selected' : ''}>Archive</option>
+                </select>`;
+            } else {
+                name.textContent = person.name;
+                subtitle.textContent = person.relationshipType || 'Friend';
+            }
+            
+            // Load enhanced person data
+            const personId = person.id.replace('p', '');
+            const enhancedPerson = await loadEnhancedPerson(personId);
+            if (enhancedPerson) {
+                person = enhancedPerson;
+            }
+            
+            let htmlSections = [];
+            
+            htmlSections.push(`
+                <div class="detail-section">
+                    <div class="section-title">Connection Health</div>
+                    <div class="connection-health">
+                        <div>Based on your usual pattern</div>
+                        <div class="health-bar"><div class="health-fill" style="width: ${Math.min(100, person.strength * 100)}%"></div></div>
+                        <div class="health-stats">
+                            <div class="stat-box"><div class="stat-label">Last Contact</div><div class="stat-value">${Math.floor(person.lastContact / 7)}w ago</div></div>
+                            <div class="stat-box"><div class="stat-label">Frequency</div><div class="stat-value">Every ${Math.floor(person.frequency / 7)}w</div></div>
+                            <div class="stat-box"><div class="stat-label">Strength</div><div class="stat-value">${Math.round(person.strength * 100)}%</div></div>
+                        </div>
+                        <div class="tags-container">
+                            <span class="tag">${person.category === 'inner' ? 'Inner Circle' : 
+                                               person.category === 'circle' ? 'Circle' : 
+                                               person.category === 'acquaintance' ? 'Acquaintances' :
+                                               person.category === 'professional' ? 'Professional' :
+                                               person.category === 'archive' ? 'Archive' : person.category}</span>
+                            ${person.birthday ? `<span class="tag">🎂 ${person.birthday}</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="quick-actions">
+                        <div class="quick-action-btn" onclick="scheduleWithPerson('${person.id}')"><div class="quick-action-icon">📅</div><div class="quick-action-label">Schedule</div></div>
+                        <div class="quick-action-btn" onclick="createTodoForPerson('${person.id}')"><div class="quick-action-icon">✓</div><div class="quick-action-label">To-Do</div></div>
+                        <div class="quick-action-btn" onclick="addNoteToPerson('${person.id}')"><div class="quick-action-icon">📝</div><div class="quick-action-label">Note</div></div>
+                        <div class="quick-action-btn" onclick="setGoalWithPerson('${person.id}')"><div class="quick-action-icon">🎯</div><div class="quick-action-label">Goal</div></div>
+                        <div class="quick-action-btn" onclick="addGiftForPerson('${person.id}')"><div class="quick-action-icon">🎁</div><div class="quick-action-label">Gift</div></div>
+                        <div class="quick-action-btn" onclick="logConversationWithPerson('${person.id}')"><div class="quick-action-icon">💬</div><div class="quick-action-label">Log</div></div>
+                        <div class="quick-action-btn" onclick="trackDebtWithPerson('${person.id}')"><div class="quick-action-icon">💰</div><div class="quick-action-label">Debt</div></div>
+                        <div class="quick-action-btn" onclick="editPerson('${person.id}')"><div class="quick-action-icon">${isEditing ? '💾' : '✏️'}</div><div class="quick-action-label">${isEditing ? 'Save' : 'Edit'}</div></div>
+                    </div>
+                </div>
+            `);
+            
+            // Contact & Background section
+            htmlSections.push(`
+                <div class="detail-section">
+                    <div class="section-title">Contact & Background</div>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <div class="info-label">Phone</div>
+                            <div class="info-value">
+                                ${isEditing ? `<input type="tel" id="editPersonPhone" value="${person.phone || ''}" class="edit-field" placeholder="Phone number">` : (person.phone || 'Not provided')}
+                            </div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Email</div>
+                            <div class="info-value">
+                                ${isEditing ? `<input type="email" id="editPersonEmail" value="${person.email || ''}" class="edit-field" placeholder="Email address">` : (person.email || 'Not provided')}
+                            </div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Birthday</div>
+                            <div class="info-value">
+                                ${isEditing ? `<input type="date" id="editPersonBirthday" value="${person.birthday || ''}" class="edit-field">` : (person.birthday || 'Not provided')}
+                            </div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Address</div>
+                            <div class="info-value">
+                                ${isEditing ? `<input type="text" id="editPersonAddress" value="${person.address || ''}" class="edit-field" placeholder="Address">` : (person.address || 'Not provided')}
+                            </div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Company</div>
+                            <div class="info-value">
+                                ${isEditing ? `<input type="text" id="editPersonCompany" value="${person.company || ''}" class="edit-field" placeholder="Company">` : (person.company || 'Not provided')}
+                            </div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Job Title</div>
+                            <div class="info-value">
+                                ${isEditing ? `<input type="text" id="editPersonJobTitle" value="${person.jobTitle || ''}" class="edit-field" placeholder="Job title">` : (person.jobTitle || 'Not provided')}
+                            </div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Career</div>
+                            <div class="info-value">
+                                ${isEditing ? `<input type="text" id="editPersonCareer" value="${person.career || ''}" class="edit-field" placeholder="Career field">` : (person.career || 'Not provided')}
+                            </div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">How We Met</div>
+                            <div class="info-value">
+                                ${isEditing ? `<input type="text" id="editPersonHowMet" value="${person.howMet || ''}" class="edit-field" placeholder="How you met">` : (person.howMet || 'Not provided')}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `);
+            
+            if (person.sharedGoals?.length > 0) {
+                htmlSections.push(`
+                    <div class="detail-section">
+                        <div class="section-title">Shared Goals</div>
+                        <div class="shared-goals">
+                            ${person.sharedGoals.map(g => `
+                                <div class="goal-item">
+                                    <div class="goal-text">${g}</div>
+                                    <div class="goal-status planned">Planned</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `);
+            }
+            
+            if (person.activities?.length > 0) {
+                htmlSections.push(`
+                    <div class="detail-section">
+                        <div class="section-title">Activities Together</div>
+                        ${person.activities.map(a => `
+                            <div class="activity-item">
+                                <div class="timeline-icon">🏃</div>
+                                <div class="timeline-content">
+                                    <div class="timeline-title">${a.activity}</div>
+                                    <div class="timeline-meta">${a.when} • Last: ${a.lastDone}</div>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `);
+            }
+            
+            if (person.conversations?.length > 0) {
+                htmlSections.push(`
+                    <div class="detail-section">
+                        <div class="section-title">Recent Conversations</div>
+                        ${person.conversations.map(c => `
+                            <div class="timeline-item">
+                                <div class="timeline-icon">💬</div>
+                                <div class="timeline-content">
+                                    <div class="timeline-title">${c.topic}</div>
+                                    <div class="timeline-meta">${c.date} • ${c.notes}</div>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `);
+            }
+            
+            if (person.timeline?.length > 0) {
+                htmlSections.push(`
+                    <div class="detail-section">
+                        <div class="section-title">Timeline</div>
+                        ${person.timeline.map(t => `
+                            <div class="timeline-item">
+                                <div class="timeline-icon">${t.type === 'coffee' ? '☕' : t.type === 'dinner' ? '🍽️' : '🎬'}</div>
+                                <div class="timeline-content">
+                                    <div class="timeline-title">${t.text}</div>
+                                    <div class="timeline-meta">${t.date}${t.location ? ' • ' + t.location : ''}</div>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `);
+            }
+            
+            if (person.gifts?.length > 0) {
+                htmlSections.push(`
+                    <div class="detail-section">
+                        <div class="section-title">Gifts</div>
+                        ${person.gifts.map(g => `
+                            <div class="gift-item">
+                                <div class="timeline-icon">🎁</div>
+                                <div class="timeline-content">
+                                    <div class="timeline-title">${g.item}</div>
+                                    <div class="timeline-meta">${g.occasion} • ${g.status === 'given' ? 'Given' : 'Idea'}</div>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `);
+            }
+            
+            if (person.importantDates?.length > 0) {
+                htmlSections.push(`
+                    <div class="detail-section">
+                        <div class="section-title">Important Dates</div>
+                        ${person.importantDates.map(d => `
+                            <div class="note-item">
+                                <div class="timeline-title">${d.name}</div>
+                                <div class="timeline-meta">${d.date}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `);
+            }
+            
+            // Notes & Preferences section
+            htmlSections.push(`
+                <div class="detail-section">
+                    <div class="section-title">Notes & Preferences</div>
+                    <div class="notes-section">
+                        ${isEditing ? `
+                            <textarea id="editPersonNotes" class="edit-field notes-textarea" placeholder="Add notes about this person...">${person.notes || ''}</textarea>
+                        ` : `
+                            <div class="note-item">
+                                <div class="timeline-title">${person.notes || 'No notes yet'}</div>
+                            </div>
+                        `}
+                        ${person.foodPrefs ? `
+                            <div class="note-item">
+                                <div class="timeline-title"><strong>Food:</strong> ${person.foodPrefs.join(', ')}</div>
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `);
+            
+            content.innerHTML = htmlSections.join('');
+            panel.classList.add('open');
+        }
+        
+        // Person detail action functions
+        function scheduleWithPerson(personId) {
+            const person = people.find(p => p.id === personId);
+            if (!person) return;
+            
+            const title = prompt(`Schedule something with ${person.name}:`, 'Coffee meeting');
+            if (title) {
+                const date = prompt('When? (e.g., "Next Tuesday 2pm" or "2024-01-15 14:00"):', '');
+                if (date) {
+                    alert(`Scheduled: ${title} with ${person.name} on ${date}`);
+                    // TODO: Integrate with calendar/scheduling system
+                }
+            }
+        }
+        
+        function createTodoForPerson(personId) {
+            const person = people.find(p => p.id === personId);
+            if (!person) return;
+            
+            const todo = prompt(`Create a to-do related to ${person.name}:`, 'Call to check in');
+            if (todo) {
+                const priority = prompt('Priority (1-5, where 5 is highest):', '3');
+                if (priority) {
+                    alert(`Created to-do: ${todo} (Priority: ${priority})`);
+                    // TODO: Integrate with task management system
+                }
+            }
+        }
+        
+        function addNoteToPerson(personId) {
+            const person = people.find(p => p.id === personId);
+            if (!person) return;
+            
+            const note = prompt(`Add a note about ${person.name}:`, '');
+            if (note) {
+                alert(`Note added: ${note}`);
+                // TODO: Save note to person's data
+            }
+        }
+        
+        function setGoalWithPerson(personId) {
+            const person = people.find(p => p.id === personId);
+            if (!person) return;
+            
+            const goal = prompt(`Set a goal with ${person.name}:`, 'Plan a trip together');
+            if (goal) {
+                const deadline = prompt('Deadline (optional):', '');
+                alert(`Goal set: ${goal}${deadline ? ` (Deadline: ${deadline})` : ''}`);
+                // TODO: Save goal to person's data
+            }
+        }
+        
+        function addGiftForPerson(personId) {
+            const person = people.find(p => p.id === personId);
+            if (!person) return;
+            
+            const gift = prompt(`Gift idea for ${person.name}:`, '');
+            if (gift) {
+                const occasion = prompt('Occasion (optional):', 'Birthday');
+                alert(`Gift idea added: ${gift}${occasion ? ` for ${occasion}` : ''}`);
+                // TODO: Save gift idea to person's data
+            }
+        }
+        
+        function logConversationWithPerson(personId) {
+            const person = people.find(p => p.id === personId);
+            if (!person) return;
+            
+            const topic = prompt(`What did you talk about with ${person.name}?`, '');
+            if (topic) {
+                const notes = prompt('Additional notes (optional):', '');
+                alert(`Conversation logged: ${topic}${notes ? `\nNotes: ${notes}` : ''}`);
+                // TODO: Save conversation to person's data
+            }
+        }
+        
+        function trackDebtWithPerson(personId) {
+            const person = people.find(p => p.id === personId);
+            if (!person) return;
+            
+            const amount = prompt(`Debt amount with ${person.name} (positive = they owe you, negative = you owe them):`, '0');
+            if (amount !== null) {
+                const reason = prompt('Reason (optional):', '');
+                alert(`Debt tracked: ${amount}${reason ? ` (${reason})` : ''}`);
+                // TODO: Save debt to person's data
+            }
+        }
+        
+        function editPerson(personId) {
+            const person = people.find(p => p.id === personId);
+            if (!person) return;
+            
+            // Toggle edit mode
+            const panel = document.getElementById('detailPanel');
+            const isEditing = panel.classList.contains('editing');
+            
+            if (isEditing) {
+                // Save changes and exit edit mode
+                savePersonChanges(personId);
+                panel.classList.remove('editing');
+            } else {
+                // Enter edit mode
+                panel.classList.add('editing');
+                showPersonDetail(person); // Re-render with edit fields
+            }
+        }
+        
+        function savePersonChanges(personId) {
+            const person = people.find(p => p.id === personId);
+            if (!person) return;
+            
+            // Collect all form values
+            const name = document.getElementById('editPersonName')?.value || person.name;
+            const category = document.getElementById('editPersonCategory')?.value || person.category;
+            const phone = document.getElementById('editPersonPhone')?.value || '';
+            const email = document.getElementById('editPersonEmail')?.value || '';
+            const birthday = document.getElementById('editPersonBirthday')?.value || '';
+            const address = document.getElementById('editPersonAddress')?.value || '';
+            const notes = document.getElementById('editPersonNotes')?.value || '';
+            const howMet = document.getElementById('editPersonHowMet')?.value || '';
+            const career = document.getElementById('editPersonCareer')?.value || '';
+            const company = document.getElementById('editPersonCompany')?.value || '';
+            const jobTitle = document.getElementById('editPersonJobTitle')?.value || '';
+            
+            // Update person object
+            person.name = name;
+            person.category = category;
+            person.phone = phone;
+            person.email = email;
+            person.birthday = birthday;
+            person.address = address;
+            person.notes = notes;
+            person.howMet = howMet;
+            person.career = career;
+            person.company = company;
+            person.jobTitle = jobTitle;
+            
+            // TODO: Save to backend
+            console.log('Person updated:', person);
+            
+            // Refresh the display
+            showPersonDetail(person);
+            updateSidebar();
+            updateLegend();
+        }
+        
+        function updateSidebar() {
+            const list = document.getElementById('insightsList');
+            const filters = document.getElementById('filterChips');
+            
+            if (currentView === 'people') {
+                filters.innerHTML = `
+                    <div class="filter-chip ${activeFilters.includes('inner') ? 'active' : ''}" onclick="toggleFilter('inner')">Inner Circle</div>
+                    <div class="filter-chip ${activeFilters.includes('circle') ? 'active' : ''}" onclick="toggleFilter('circle')">Circle</div>
+                    <div class="filter-chip ${activeFilters.includes('acquaintance') ? 'active' : ''}" onclick="toggleFilter('acquaintance')">Acquaintances</div>
+                    <div class="filter-chip ${activeFilters.includes('professional') ? 'active' : ''}" onclick="toggleFilter('professional')">Professional</div>
+                    <div class="filter-chip ${activeFilters.includes('archive') ? 'active' : ''}" onclick="toggleFilter('archive')">Archive</div>
+                `;
+                
+                list.innerHTML = people.filter(person => activeFilters.length === 0 || activeFilters.includes(person.category)).map(person => `
+                    <div class="insight-card" onclick="showPersonDetail(personData["${person.id}"])">
+                        <div class="insight-label">${person.name}</div>
+                        <div class="insight-text">${person.relationship || person.category}${person.birthday ? ` • Birthday: ${person.birthday}` : ""}</div>
+                        <div class="insight-action">View Details</div>
+                    </div>
+                `).join("");
+            } else {
+                filters.innerHTML = '';
+                list.innerHTML = '';
+            }
+        }
+        
+        function toggleFilter(category) {
+            const index = activeFilters.indexOf(category);
+            if (index > -1) {
+                activeFilters.splice(index, 1);
+            } else {
+                activeFilters.push(category);
+            }
+            updateSidebar();
+        }
+        
+        function updateLegend() {
+            const legend = document.getElementById('canvasLegend');
+            if (currentView === 'people') {
+                legend.innerHTML = `
+                    <div class="legend-title">Relationship Map</div>
+                    <div class="legend-item">
+                        <div class="legend-circle" style="border-color: #ec4899; background: white;"></div>
+                        <span>Inner Circle</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-circle" style="border-color: #14b8a6; background: white;"></div>
+                        <span>Circle</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-circle" style="border-color: #9ca3af; background: white;"></div>
+                        <span>Acquaintances</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-circle" style="border-color: #3b82f6; background: white;"></div>
+                        <span>Professional</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-circle" style="border-color: #6b7280; background: white;"></div>
+                        <span>Archive</span>
+                    </div>
+                `;
+            } else {
+                legend.innerHTML = `
+                    <div class="legend-title">Canvas</div>
+                    <div class="legend-item">
+                        <span>Paste to add content</span>
+                    </div>
+                    <div class="legend-item">
+                        <span>Click blank to go back</span>
+                    </div>
+                `;
+            }
+        }
+        
+        function closeDetail() { document.getElementById('detailPanel').classList.remove('open'); }
+        function showTooltip(x, y, t) { 
+            const el = document.getElementById('tooltip'); 
+            el.textContent = t; 
+            el.style.left = x + 'px'; 
+            el.style.top = (y - 40) + 'px'; 
+            el.classList.add('show'); 
+        }
+        function hideTooltip() { document.getElementById('tooltip').classList.remove('show'); }
+        function resetView() { scale = 1; offsetX = 0; offsetY = 0; }
+        function zoomIn() { scale = Math.min(2, scale * 1.2); }
+        function zoomOut() { scale = Math.max(0.5, scale / 1.2); }
+        function searchMemories(q) { console.log('Search:', q); }
+        function switchView(view) {
+            currentView = view;
+            currentCollection = null;
+            navigationPath = [];
+            document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+            event.target.classList.add('active');
+            updateSidebar();
+            updateLegend();
+            updateFabVisibility();
+        }
+        
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+        updateSidebar();
+        updateLegend();
+        animate();
+        
+        // Authentication and notification functions
+
+        // Notifications system
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+            
+            // Clear notification indicator when panel is opened
+            const notificationBtn = document.querySelector('.notifications-btn');
+            notificationBtn.classList.remove('has-notifications');
+        }
+
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+
+        async function loadNotifications() {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                console.log("Making API request to:", "/public-memories/?type=people");
+                const response = await apiRequest('/reminders/notifications/pending', {
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                const notifications = response.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            // Update notification button indicator
+            if (notifications.length > 0) {
+                notificationBtn.classList.add('has-notifications');
+            } else {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
+                     onclick="handleNotificationClick(${notification.id})">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${new Date(notification.created_at).toLocaleTimeString()}</span>
+                        ${notification.priority ? `<span class="notification-priority" style="background: ${getPriorityColor(notification.priority)}; color: white;">${notification.priority}</span>` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function getPriorityColor(priority) {
+            switch(priority.toLowerCase()) {
+                case 'high': return '#ef4444';
+                case 'medium': return '#f59e0b';
+                case 'low': return '#10b981';
+                default: return '#6b7280';
+            }
+        }
+
+        function handleNotificationClick(notificationId) {
+            // Mark notification as acknowledged
+            acknowledgeNotification(notificationId);
+            closeNotifications();
+        }
+
+        async function acknowledgeNotification(notificationId) {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
+                    method: 'POST',
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                // Reload notifications
+                loadNotifications();
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to acknowledge notification:', error);
+            }
+        }
+
+        // More overlay functions
+        function openMoreOverlay() {
+            document.getElementById('moreOverlay').classList.add('active');
+        }
+
+        function closeMoreOverlay() {
+            document.getElementById('moreOverlay').classList.remove('active');
+        }
+
+        function navigateToPage(page) {
+            window.location.href = page;
+        }
+
+
+        // Time/Date Update Functions
+        function updateTimeDate() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            const timeElement = document.getElementById('currentTime');
+            const dateElement = document.getElementById('currentDate');
+            
+            if (timeElement) timeElement.textContent = timeString;
+            if (dateElement) dateElement.textContent = dateString;
+        }
+
+        // Initialize authentication and notifications on page load
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Load notifications on page load
+            loadNotifications();
+            
+            // Update API status
+            updateAPIStatus();
+            
+            // Load initial data
+            await loadPeople();
+            await loadCollections();
+            
+            // Update UI
+            updateSidebar();
+            updateLegend();
+            
+            // Update time/date immediately and every minute
+            updateTimeDate();
+            setInterval(updateTimeDate, 60000);
+        });
+
+        async function updateAPIStatus() {
+            const statusEl = document.getElementById('apiStatus');
+            try {
+                await apiRequest('/health');
+                statusEl.textContent = 'Online';
+                statusEl.className = 'api-indicator online';
+            } catch (error) {
+                console.error("Error loading people:", error);
+                statusEl.textContent = 'Offline';
+                statusEl.className = 'api-indicator offline';
+            }
+        }
+    </script>
+
+    <!-- Floating Add Button for People -->
+    <button class="floating-add-btn" onclick="openAddPersonModal()" title="Add Person">+</button>
+    <script>
+    // Zoe Orb Functions
+    let orbChatOpen = false;
+    let orbWebSocket = null;
+    
+    function toggleOrbChat() {
+        if (!orbChatOpen) {
+            openOrbChat();
+        } else {
+            closeOrbChat();
+        }
+    }
+    
+    function openOrbChat() {
+        // Create chat window if it doesn't exist
+        if (!document.getElementById('orbChatWindow')) {
+            const chatWindow = document.createElement('div');
+            chatWindow.id = 'orbChatWindow';
+            chatWindow.className = 'orb-chat-window';
+            chatWindow.innerHTML = `
+                <div class="orb-chat-header">
+                    <div class="orb-chat-title">Chat with Zoe</div>
+                    <button class="orb-chat-close" onclick="closeOrbChat()">×</button>
+                </div>
+                <div class="orb-chat-messages" id="orbChatMessages">
+                    <div class="orb-chat-message assistant">
+                        Hi! I'm Zoe, your AI assistant. How can I help you today?
+                    </div>
+                </div>
+                <div class="orb-chat-input-area">
+                    <textarea class="orb-chat-input" id="orbChatInput" placeholder="Type your message..." rows="1"></textarea>
+                    <button class="orb-chat-send" id="orbChatSend" onclick="sendOrbMessage()">→</button>
+                </div>
+            `;
+            document.body.appendChild(chatWindow);
+        }
+        
+        document.getElementById('orbChatWindow').style.display = 'block';
+        document.getElementById('orbChatInput').focus();
+        orbChatOpen = true;
+        document.getElementById('zoeOrb').classList.add('chatting');
+        
+        // Connect to intelligence WebSocket
+        connectOrbWebSocket();
+    }
+    
+    function closeOrbChat() {
+        if (document.getElementById('orbChatWindow')) {
+            document.getElementById('orbChatWindow').style.display = 'none';
+        }
+        orbChatOpen = false;
+        document.getElementById('zoeOrb').classList.remove('chatting');
+        
+        // Disconnect WebSocket
+        if (orbWebSocket) {
+            orbWebSocket.close();
+            orbWebSocket = null;
+        }
+    }
+    
+    function sendOrbMessage() {
+        const input = document.getElementById('orbChatInput');
+        const message = input.value.trim();
+        if (!message) return;
+        
+        // Add user message
+        addOrbMessage(message, 'user');
+        input.value = '';
+        
+        // Send to chat API
+        fetch('/api/chat/enhanced', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Session-ID': localStorage.getItem('session_id') || 'default'
+            },
+            body: JSON.stringify({ message: message, context: {} })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.response) {
+                addOrbMessage(data.response, 'assistant');
+            }
+        })
+        .catch(error => {
+            addOrbMessage('Sorry, I encountered an error. Please try again.', 'assistant');
+        });
+    }
+    
+    function addOrbMessage(message, sender) {
+        const messagesDiv = document.getElementById('orbChatMessages');
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `orb-chat-message ${sender}`;
+        messageDiv.textContent = message;
+        messagesDiv.appendChild(messageDiv);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+    
+    function connectOrbWebSocket() {
+        if (orbWebSocket) return;
+        
+        try {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/intelligence`;
+            orbWebSocket = new WebSocket(wsUrl);
+            
+            orbWebSocket.onopen = function() {
+                document.getElementById('zoeOrb').classList.add('connected');
+                document.getElementById('zoeOrb').classList.remove('connecting');
+            };
+            
+            orbWebSocket.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                if (data.type === 'proactive_suggestion') {
+                    showOrbNotification(data.data);
+                }
+            };
+            
+            orbWebSocket.onclose = function() {
+                document.getElementById('zoeOrb').classList.remove('connected');
+                document.getElementById('zoeOrb').classList.add('connecting');
+                orbWebSocket = null;
+            };
+            
+            orbWebSocket.onerror = function() {
+                document.getElementById('zoeOrb').classList.add('error');
+            };
+        } catch (error) {
+                console.error("Error loading people:", error);
+            console.log('WebSocket connection failed', error);
+        }
+    }
+    
+    function showOrbNotification(notification) {
+        // Add badge to orb
+        document.getElementById('zoeOrb').classList.add('badge');
+        
+        // Show toast notification
+        const toast = document.createElement('div');
+        toast.className = 'orb-toast';
+        toast.innerHTML = `
+            <div class="orb-toast-content">
+                <div class="orb-toast-title">${notification.title}</div>
+                <div class="orb-toast-message">${notification.message}</div>
+            </div>
+        `;
+        document.body.appendChild(toast);
+        
+        // Auto-remove after 5 seconds
+        setTimeout(() => {
+            if (toast.parentNode) {
+                toast.parentNode.removeChild(toast);
+            }
+        }, 5000);
+    }
+    
+    // Initialize orb on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        // Set initial state
+        document.getElementById('zoeOrb').classList.add('connecting');
+        
+        // Try to connect WebSocket
+        connectOrbWebSocket();
+        
+        // Add Enter key support for chat input
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && orbChatOpen) {
+                e.preventDefault();
+                sendOrbMessage();
+            }
+        });
+    });
+    </script>
+    <!-- Zoe Orb -->
+    <div class="zoe-orb" id="zoeOrb" title="Click to chat with Zoe" onclick="toggleOrbChat()">
+    </div>
+</body>
+</html>
