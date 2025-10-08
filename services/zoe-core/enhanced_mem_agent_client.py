@@ -95,6 +95,7 @@ class EnhancedMemAgentClient:
                     data = await response.json()
                     
                     # Format response for compatibility with existing chat system
+                    extracted_results = self._extract_results(data)
                     return {
                         "enhanced": True,
                         "experts": data.get("experts", []),
@@ -104,7 +105,8 @@ class EnhancedMemAgentClient:
                         "execution_summary": data.get("execution_summary", ""),
                         "fallback": False,
                         # Legacy format for compatibility
-                        "results": self._extract_results(data),
+                        "results": extracted_results,
+                        "semantic_results": extracted_results,  # Add semantic_results for chat.py compatibility
                         "confidence": data.get("total_confidence", 0.5)
                     }
                 else:

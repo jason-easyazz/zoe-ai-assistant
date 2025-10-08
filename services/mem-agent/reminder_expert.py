@@ -92,9 +92,8 @@ class ReminderExpert:
                     headers={"X-Service-Token": "zoe_internal_2025"},
                     json={
                         "title": title,
-                        "reminder_time": reminder_time,
-                        "reminder_date": date_str,
-                        "user_id": user_id,
+                        "due_time": reminder_time,
+                        "due_date": date_str,
                         "reminder_type": "once",
                         "category": "personal"
                     }
