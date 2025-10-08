@@ -68,12 +68,12 @@ class HomeAssistantExpert:
             # Call Home Assistant API via MCP
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.api_base}/homeassistant/control",
+                    f"{self.api_base}/homeassistant/service",
                     headers={"X-Service-Token": "zoe_internal_2025"},
                     json={
-                        "action": "turn_on",
-                        "device": device,
-                        "user_id": user_id
+                        "service": "light.turn_on",
+                        "entity_id": f"light.{device.replace(' ', '_')}",
+                        "data": {}
                     },
                     timeout=5.0
                 )
@@ -107,12 +107,12 @@ class HomeAssistantExpert:
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.api_base}/homeassistant/control",
+                    f"{self.api_base}/homeassistant/service",
                     headers={"X-Service-Token": "zoe_internal_2025"},
                     json={
-                        "action": "turn_off",
-                        "device": device,
-                        "user_id": user_id
+                        "service": "light.turn_off",
+                        "entity_id": f"light.{device.replace(' ', '_')}",
+                        "data": {}
                     },
                     timeout=5.0
                 )
@@ -146,12 +146,12 @@ class HomeAssistantExpert:
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.api_base}/homeassistant/control",
+                    f"{self.api_base}/homeassistant/service",
                     headers={"X-Service-Token": "zoe_internal_2025"},
                     json={
-                        "action": "set_temperature",
-                        "temperature": temperature,
-                        "user_id": user_id
+                        "service": "climate.set_temperature",
+                        "entity_id": "climate.thermostat",
+                        "data": {"temperature": temperature}
                     },
                     timeout=5.0
                 )

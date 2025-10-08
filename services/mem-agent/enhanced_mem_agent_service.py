@@ -10,6 +10,11 @@ Expert Specialists:
 - CalendarExpert: Creates and manages calendar events
 - MemoryExpert: Semantic memory search and retrieval
 - PlanningExpert: Goal decomposition and task planning
+- ReminderExpert: Reminder creation and management
+- HomeAssistantExpert: Smart home control
+- PersonExpert: People and relationship management
+- JournalExpert: Journal entry management
+- BirthdayExpert: Birthday tracking
 """
 
 from fastapi import FastAPI, HTTPException
@@ -21,6 +26,13 @@ import json
 import re
 from datetime import datetime, timedelta
 import asyncio
+
+# Import expert modules
+from reminder_expert import ReminderExpert
+from homeassistant_expert import HomeAssistantExpert
+from journal_expert import JournalExpert
+from improved_birthday_expert import ImprovedBirthdayExpert
+from person_expert import PersonExpert
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -70,7 +82,8 @@ class ListExpert:
             r"add.*to.*list|add.*shopping|add.*task",
             r"create.*list|new.*list",
             r"show.*list|what.*list|list.*items",
-            r"remove.*from.*list|delete.*list.*item"
+            r"remove.*from.*list|delete.*list.*item",
+            r"what.*need.*buy|shopping.*list|need.*store|buy.*store"
         ]
     
     def can_handle(self, query: str) -> float:
@@ -138,7 +151,7 @@ class ListExpert:
             }
 
     async def _get_list_items(self, query: str, user_id: str) -> Dict[str, Any]:
-        """Get items from list"""
+        """Get items from list - this IS an action (querying data)"""
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(f"{self.api_base}/tasks")
@@ -157,18 +170,19 @@ class ListExpert:
                                     "priority": item.get("priority")
                                 })
                         
+                        item_names = [item["text"] for item in items]
                         return {
                             "success": True,
                             "action": "get_list_items",
                             "items": items,
-                            "message": f"📋 Found {len(items)} items across {len(lists)} lists"
+                            "message": f"📋 You need to buy: {', '.join(item_names)}" if items else "📋 Your shopping list is empty"
                         }
                     else:
                         return {
                             "success": True,
                             "action": "get_list_items",
                             "items": [],
-                            "message": "📋 No items found in any lists"
+                            "message": "📋 Your shopping list is empty"
                         }
                 else:
                     return {
@@ -576,7 +590,12 @@ class EnhancedMemAgent:
             "list": ListExpert(),
             "calendar": CalendarExpert(),
             "memory": MemoryExpert(),
-            "planning": PlanningExpert()
+            "planning": PlanningExpert(),
+            "reminder": ReminderExpert(),
+            "homeassistant": HomeAssistantExpert(),
+            "journal": JournalExpert(),
+            "birthday": ImprovedBirthdayExpert(),
+            "person": PersonExpert()
         }
     
     async def process_request(self, request: EnhancedRequest) -> EnhancedResponse:
