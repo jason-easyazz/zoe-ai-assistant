@@ -1,0 +1,853 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <title>Zoe AI - LangGraph Enhanced Chat</title>
+    
+    <!-- Mermaid for graph visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    
+    <style>
+        * { 
+            margin: 0; padding: 0; box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+            min-height: 100vh; color: #fff;
+            font-size: 15px;
+        }
+        
+        /* Navigation */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0;
+            background: rgba(15, 12, 41, 0.95); backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(123, 97, 255, 0.3);
+            padding: 12px 20px; z-index: 100;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        
+        .nav-title {
+            font-size: 18px; font-weight: 600;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        
+        .nav-controls {
+            display: flex; gap: 10px;
+        }
+        
+        .nav-btn {
+            padding: 8px 16px; border-radius: 8px;
+            background: rgba(123, 97, 255, 0.2);
+            border: 1px solid rgba(123, 97, 255, 0.3);
+            color: #7B61FF; cursor: pointer;
+            font-size: 13px; transition: all 0.3s ease;
+        }
+        
+        .nav-btn:hover { background: rgba(123, 97, 255, 0.3); }
+        .nav-btn.active { background: #7B61FF; color: white; }
+        
+        /* Main Layout */
+        .main-container {
+            display: grid;
+            grid-template-columns: 300px 1fr 350px;
+            gap: 20px;
+            padding: 80px 20px 20px;
+            max-width: 1800px;
+            margin: 0 auto;
+            height: calc(100vh - 80px);
+        }
+        
+        /* Left Panel - Agent Status */
+        .agent-panel {
+            background: rgba(15, 12, 41, 0.8);
+            border-radius: 16px;
+            border: 1px solid rgba(123, 97, 255, 0.2);
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        .panel-title {
+            font-size: 16px; font-weight: 600;
+            margin-bottom: 15px;
+            color: #7B61FF;
+        }
+        
+        .agent-card {
+            background: rgba(123, 97, 255, 0.1);
+            border: 1px solid rgba(123, 97, 255, 0.2);
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 10px;
+            transition: all 0.3s ease;
+        }
+        
+        .agent-card:hover {
+            background: rgba(123, 97, 255, 0.2);
+            transform: translateX(5px);
+        }
+        
+        .agent-card.active {
+            border-color: #7B61FF;
+            box-shadow: 0 0 20px rgba(123, 97, 255, 0.3);
+        }
+        
+        .agent-name {
+            font-weight: 600; font-size: 14px;
+            margin-bottom: 4px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        
+        .agent-status {
+            font-size: 12px; color: #888;
+        }
+        
+        .agent-status.active { color: #5AE0E0; }
+        
+        .status-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: #888;
+        }
+        
+        .status-dot.active {
+            background: #5AE0E0;
+            box-shadow: 0 0 10px #5AE0E0;
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        /* Center Panel - Chat */
+        .chat-panel {
+            display: flex;
+            flex-direction: column;
+            background: rgba(15, 12, 41, 0.6);
+            border-radius: 16px;
+            border: 1px solid rgba(123, 97, 255, 0.2);
+            overflow: hidden;
+        }
+        
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        
+        .message {
+            max-width: 80%;
+            padding: 14px 18px;
+            border-radius: 16px;
+            font-size: 14px;
+            line-height: 1.6;
+            animation: messageSlide 0.3s ease-out;
+        }
+        
+        @keyframes messageSlide {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .user-message {
+            align-self: flex-end;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+        }
+        
+        .zoe-message {
+            align-self: flex-start;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        /* Workflow Events */
+        .workflow-event {
+            align-self: center;
+            background: rgba(123, 97, 255, 0.15);
+            border: 1px solid rgba(123, 97, 255, 0.3);
+            border-radius: 12px;
+            padding: 12px 16px;
+            font-size: 13px;
+            color: #7B61FF;
+            max-width: 90%;
+            text-align: center;
+        }
+        
+        .step-card {
+            background: rgba(90, 224, 224, 0.1);
+            border: 1px solid rgba(90, 224, 224, 0.3);
+            border-radius: 12px;
+            padding: 14px;
+            margin: 8px 0;
+        }
+        
+        .step-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        
+        .step-title {
+            font-weight: 600;
+            color: #5AE0E0;
+        }
+        
+        .step-status {
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            background: rgba(90, 224, 224, 0.2);
+        }
+        
+        /* Generative UI Cards */
+        .ui-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 16px;
+            margin: 12px 0;
+        }
+        
+        .ui-card-title {
+            font-weight: 600;
+            font-size: 15px;
+            margin-bottom: 12px;
+            color: #7B61FF;
+        }
+        
+        .ui-card-content {
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        
+        .tool-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: rgba(46, 204, 113, 0.2);
+            border: 1px solid rgba(46, 204, 113, 0.3);
+            border-radius: 8px;
+            font-size: 12px;
+            color: #2ecc71;
+            margin: 4px;
+        }
+        
+        /* Input Area */
+        .input-container {
+            padding: 16px 20px;
+            background: rgba(15, 12, 41, 0.8);
+            border-top: 1px solid rgba(123, 97, 255, 0.2);
+        }
+        
+        .input-wrapper {
+            display: flex;
+            gap: 12px;
+            align-items: flex-end;
+        }
+        
+        .input-field {
+            flex: 1;
+            min-height: 44px;
+            max-height: 120px;
+            padding: 12px 16px;
+            border: 2px solid rgba(123, 97, 255, 0.3);
+            border-radius: 12px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: none;
+            outline: none;
+            background: rgba(255, 255, 255, 0.05);
+            color: white;
+        }
+        
+        .input-field:focus {
+            border-color: #7B61FF;
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.2);
+        }
+        
+        .send-btn {
+            width: 44px; height: 44px;
+            border: none; border-radius: 12px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease;
+        }
+        
+        .send-btn:hover { transform: scale(1.05); }
+        .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        /* Right Panel - Workflow Visualization */
+        .workflow-panel {
+            background: rgba(15, 12, 41, 0.8);
+            border-radius: 16px;
+            border: 1px solid rgba(123, 97, 255, 0.2);
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        .workflow-graph {
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 12px;
+            padding: 16px;
+            margin-top: 16px;
+            min-height: 300px;
+        }
+        
+        .workflow-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 16px;
+        }
+        
+        .stat-card {
+            background: rgba(123, 97, 255, 0.1);
+            border: 1px solid rgba(123, 97, 255, 0.2);
+            border-radius: 10px;
+            padding: 12px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #7B61FF;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #888;
+            margin-top: 4px;
+        }
+        
+        /* Human-in-the-Loop Controls */
+        .hitl-controls {
+            background: rgba(241, 196, 15, 0.1);
+            border: 2px solid rgba(241, 196, 15, 0.4);
+            border-radius: 12px;
+            padding: 16px;
+            margin: 12px 0;
+        }
+        
+        .hitl-title {
+            font-weight: 600;
+            color: #f1c40f;
+            margin-bottom: 12px;
+        }
+        
+        .hitl-buttons {
+            display: flex;
+            gap: 8px;
+        }
+        
+        .hitl-btn {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 8px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .hitl-btn.approve {
+            background: #2ecc71;
+            color: white;
+        }
+        
+        .hitl-btn.reject {
+            background: #e74c3c;
+            color: white;
+        }
+        
+        .hitl-btn.modify {
+            background: #3498db;
+            color: white;
+        }
+        
+        /* Progress Bar */
+        .progress-bar {
+            height: 4px;
+            background: rgba(123, 97, 255, 0.2);
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 12px 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #7B61FF 0%, #5AE0E0 100%);
+            width: 0%;
+            transition: width 0.5s ease;
+        }
+        
+        /* Responsive */
+        @media (max-width: 1400px) {
+            .main-container {
+                grid-template-columns: 250px 1fr;
+            }
+            .workflow-panel {
+                display: none;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .main-container {
+                grid-template-columns: 1fr;
+            }
+            .agent-panel {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="nav-bar">
+        <div class="nav-title">⚡ Zoe AI - LangGraph Enhanced</div>
+        <div class="nav-controls">
+            <button class="nav-btn active" id="toggleAgents">🤖 Agents: ON</button>
+            <button class="nav-btn active" id="toggleViz">📊 Viz: ON</button>
+            <button class="nav-btn" onclick="location.href='/chat.html'">🔙 Classic</button>
+        </div>
+    </nav>
+
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- Left Panel: Agent Status -->
+        <div class="agent-panel">
+            <div class="panel-title">🤖 Active Agents</div>
+            <div id="agentList">
+                <div class="agent-card">
+                    <div class="agent-name">
+                        <span class="status-dot"></span>
+                        Planner Agent
+                    </div>
+                    <div class="agent-status">Idle</div>
+                </div>
+                <div class="agent-card">
+                    <div class="agent-name">
+                        <span class="status-dot"></span>
+                        Executor Agent
+                    </div>
+                    <div class="agent-status">Idle</div>
+                </div>
+                <div class="agent-card">
+                    <div class="agent-name">
+                        <span class="status-dot"></span>
+                        Validator Agent
+                    </div>
+                    <div class="agent-status">Idle</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center Panel: Chat -->
+        <div class="chat-panel">
+            <div class="messages-container" id="messagesContainer">
+                <div class="zoe-message">
+                    👋 Welcome to Zoe's LangGraph Enhanced Chat!
+                    <br><br>
+                    I now have multi-agent workflows, real-time visualization, and human-in-the-loop capabilities.
+                    <br><br>
+                    Try asking me to: "Create a family movie night plan for Friday" or "Organize my calendar for next week"
+                </div>
+            </div>
+
+            <div class="input-container">
+                <div class="input-wrapper">
+                    <textarea 
+                        class="input-field" 
+                        id="chatInput" 
+                        placeholder="Ask me anything... I'll show you my multi-agent workflow!"
+                        rows="1"
+                        onkeydown="handleKeyDown(event)"
+                    ></textarea>
+                    <button class="send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel: Workflow Visualization -->
+        <div class="workflow-panel">
+            <div class="panel-title">📊 Workflow Status</div>
+            
+            <div class="workflow-stats">
+                <div class="stat-card">
+                    <div class="stat-value" id="stepCount">0</div>
+                    <div class="stat-label">Steps</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="duration">0s</div>
+                    <div class="stat-label">Duration</div>
+                </div>
+            </div>
+
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+
+            <div class="workflow-graph" id="workflowGraph">
+                <div style="text-align: center; color: #888; padding: 40px;">
+                    Workflow graph will appear here when active
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/common.js?v=7"></script>
+    <script>
+        let isStreaming = false;
+        let currentSessionId = null;
+        let enableAgents = true;
+        let enableVisualization = true;
+        let workflowStartTime = 0;
+        let totalSteps = 0;
+        let completedSteps = 0;
+
+        // Initialize Mermaid
+        mermaid.initialize({ 
+            theme: 'dark',
+            themeVariables: {
+                primaryColor: '#7B61FF',
+                primaryTextColor: '#fff',
+                primaryBorderColor: '#5AE0E0',
+                lineColor: '#5AE0E0',
+                secondaryColor: '#302b63',
+                tertiaryColor: '#0f0c29'
+            }
+        });
+
+        // Toggle controls
+        document.getElementById('toggleAgents').addEventListener('click', function() {
+            enableAgents = !enableAgents;
+            this.classList.toggle('active');
+            this.textContent = `🤖 Agents: ${enableAgents ? 'ON' : 'OFF'}`;
+        });
+
+        document.getElementById('toggleViz').addEventListener('click', function() {
+            enableVisualization = !enableVisualization;
+            this.classList.toggle('active');
+            this.textContent = `📊 Viz: ${enableVisualization ? 'ON' : 'OFF'}`;
+        });
+
+        // Input handling
+        function handleKeyDown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        // Send message
+        async function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message || isStreaming) return;
+
+            // Add user message
+            addMessage(message, 'user');
+            input.value = '';
+
+            // Reset workflow stats
+            workflowStartTime = Date.now();
+            totalSteps = 0;
+            completedSteps = 0;
+            updateProgress(0);
+
+            // Start streaming
+            await streamLangGraphResponse(message);
+        }
+
+        // Stream LangGraph response
+        async function streamLangGraphResponse(message) {
+            isStreaming = true;
+            document.getElementById('sendBtn').disabled = true;
+
+            try {
+                const apiBase = window.API_BASE || API_BASE;
+                const response = await fetch(`${apiBase}/chat/langgraph`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: message,
+                        enable_agents: enableAgents,
+                        enable_visualization: enableVisualization,
+                        context: {}
+                    })
+                });
+
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let currentMessage = null;
+                let messageText = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const event = JSON.parse(line.slice(6));
+                                handleLangGraphEvent(event, { currentMessage, messageText });
+                                
+                                // Update references
+                                if (event.type === 'content_start' && !currentMessage) {
+                                    currentMessage = addMessage('', 'zoe');
+                                    messageText = '';
+                                }
+                                if (event.type === 'content_delta') {
+                                    messageText += event.content;
+                                    if (currentMessage) {
+                                        currentMessage.textContent = messageText;
+                                    }
+                                }
+                            } catch (e) {
+                                console.warn('Parse error:', e);
+                            }
+                        }
+                    }
+                }
+
+            } catch (error) {
+                console.error('Streaming error:', error);
+                addMessage('Sorry, I encountered an error: ' + error.message, 'zoe');
+            } finally {
+                isStreaming = false;
+                document.getElementById('sendBtn').disabled = false;
+            }
+        }
+
+        // Handle LangGraph events
+        function handleLangGraphEvent(event, refs) {
+            console.log('Event:', event);
+
+            switch (event.type) {
+                case 'session_start':
+                    currentSessionId = event.session_id;
+                    updateDuration();
+                    break;
+
+                case 'workflow_planning_start':
+                    addWorkflowEvent('🎯 ' + event.message);
+                    break;
+
+                case 'agent_goal_created':
+                    addWorkflowEvent('📋 Goal: ' + event.goal.title);
+                    break;
+
+                case 'workflow_plan_created':
+                    totalSteps = event.plan.steps.length;
+                    document.getElementById('stepCount').textContent = totalSteps;
+                    addWorkflowEvent(`📊 Created plan with ${totalSteps} steps`);
+                    displayPlan(event.plan);
+                    break;
+
+                case 'workflow_graph':
+                    renderWorkflowGraph(event.graph);
+                    break;
+
+                case 'agent_step_start':
+                    updateAgentStatus(event.agent_type, 'active');
+                    addStepCard(event.step);
+                    break;
+
+                case 'agent_step_complete':
+                    completedSteps++;
+                    updateProgress((completedSteps / totalSteps) * 100);
+                    break;
+
+                case 'agent_thinking':
+                    updateAgentStatus(event.agent_type, 'thinking');
+                    addWorkflowEvent(event.message);
+                    break;
+
+                case 'tool_call_start':
+                    addToolIndicator(event.tool, event.message);
+                    break;
+
+                case 'tool_result':
+                    addToolResult(event.tool, event.success, event.message);
+                    break;
+
+                case 'content_delta':
+                    // Handled in main loop
+                    break;
+
+                case 'workflow_error':
+                    addMessage('⚠️ ' + event.message, 'workflow');
+                    break;
+
+                case 'session_end':
+                    resetAgentStatus();
+                    break;
+            }
+        }
+
+        // UI helper functions
+        function addMessage(text, type) {
+            const container = document.getElementById('messagesContainer');
+            const div = document.createElement('div');
+            div.className = `message ${type}-message`;
+            div.textContent = text;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+            return div;
+        }
+
+        function addWorkflowEvent(text) {
+            const container = document.getElementById('messagesContainer');
+            const div = document.createElement('div');
+            div.className = 'workflow-event';
+            div.textContent = text;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function displayPlan(plan) {
+            const container = document.getElementById('messagesContainer');
+            const card = document.createElement('div');
+            card.className = 'ui-card';
+            card.innerHTML = `
+                <div class="ui-card-title">📋 Execution Plan</div>
+                <div class="ui-card-content">
+                    ${plan.steps.map((step, i) => `
+                        <div style="margin: 8px 0;">
+                            ${i + 1}. ${step.description}
+                            <span style="color: #888; font-size: 12px;"> (${step.estimated_duration_minutes}min)</span>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            container.appendChild(card);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function addStepCard(step) {
+            const container = document.getElementById('messagesContainer');
+            const card = document.createElement('div');
+            card.className = 'step-card';
+            card.id = `step-${step.step_id}`;
+            card.innerHTML = `
+                <div class="step-header">
+                    <div class="step-title">${step.description}</div>
+                    <div class="step-status">⏳ Running</div>
+                </div>
+            `;
+            container.appendChild(card);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function addToolIndicator(tool, message) {
+            const container = document.getElementById('messagesContainer');
+            const indicator = document.createElement('div');
+            indicator.className = 'tool-indicator';
+            indicator.innerHTML = `🔧 ${message}`;
+            container.appendChild(indicator);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function addToolResult(tool, success, message) {
+            const container = document.getElementById('messagesContainer');
+            const indicator = document.createElement('div');
+            indicator.className = 'tool-indicator';
+            indicator.style.background = success ? 'rgba(46, 204, 113, 0.2)' : 'rgba(231, 76, 60, 0.2)';
+            indicator.style.borderColor = success ? 'rgba(46, 204, 113, 0.3)' : 'rgba(231, 76, 60, 0.3)';
+            indicator.style.color = success ? '#2ecc71' : '#e74c3c';
+            indicator.innerHTML = `${success ? '✅' : '❌'} ${message}`;
+            container.appendChild(indicator);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function updateAgentStatus(agentType, status) {
+            const agentCards = document.querySelectorAll('.agent-card');
+            agentCards.forEach(card => {
+                const name = card.querySelector('.agent-name').textContent.toLowerCase();
+                if (name.includes(agentType.toLowerCase())) {
+                    const dot = card.querySelector('.status-dot');
+                    const statusEl = card.querySelector('.agent-status');
+                    
+                    if (status === 'active' || status === 'thinking') {
+                        card.classList.add('active');
+                        dot.classList.add('active');
+                        statusEl.classList.add('active');
+                        statusEl.textContent = status === 'thinking' ? 'Thinking...' : 'Active';
+                    } else {
+                        card.classList.remove('active');
+                        dot.classList.remove('active');
+                        statusEl.classList.remove('active');
+                        statusEl.textContent = 'Idle';
+                    }
+                }
+            });
+        }
+
+        function resetAgentStatus() {
+            const agentCards = document.querySelectorAll('.agent-card');
+            agentCards.forEach(card => {
+                card.classList.remove('active');
+                card.querySelector('.status-dot').classList.remove('active');
+                card.querySelector('.agent-status').classList.remove('active');
+                card.querySelector('.agent-status').textContent = 'Idle';
+            });
+        }
+
+        function updateProgress(percent) {
+            document.getElementById('progressFill').style.width = percent + '%';
+        }
+
+        function updateDuration() {
+            if (workflowStartTime) {
+                const elapsed = Math.floor((Date.now() - workflowStartTime) / 1000);
+                document.getElementById('duration').textContent = elapsed + 's';
+            }
+            if (isStreaming) {
+                setTimeout(updateDuration, 1000);
+            }
+        }
+
+        function renderWorkflowGraph(graph) {
+            const container = document.getElementById('workflowGraph');
+            
+            // Create Mermaid diagram
+            let diagram = 'graph TD\n';
+            graph.nodes.forEach(node => {
+                diagram += `    ${node.id}["${node.label}"]\n`;
+            });
+            graph.edges.forEach(edge => {
+                diagram += `    ${edge.from} --> ${edge.to}\n`;
+            });
+
+            container.innerHTML = `<div class="mermaid">${diagram}</div>`;
+            mermaid.init(undefined, container.querySelector('.mermaid'));
+        }
+
+        // Focus input on load
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('chatInput').focus();
+        });
+    </script>
+</body>
+</html>
+

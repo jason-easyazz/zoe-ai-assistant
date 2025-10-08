@@ -1,0 +1,34 @@
+I need to continue working on my Zoe AI Assistant.
+
+Current state from my system:
+```
+📍 Location: /home/pi/zoe
+🐙 GitHub: https://github.com/jason-easyazz/zoe-ai-assistant
+🐳 Containers Running: zoe-ui,zoe-core,zoe-ollama,zoe-redis
+🧠 AI Model: llama3.2:3b (loaded in zoe-ollama)
+🌐 Web UI: http://192.168.1.60:8080 (working)
+🔌 API: http://192.168.1.60:8000 (working)
+💾 Database Stats: 4 conversations, 1 events
+📝 Last Commit: 220e9cb 📚 Added permanent project instructions and continuity system
+⏰ State Generated: Wed 20 Aug 21:47:18 AWST 2025
+```
+
+System Architecture:
+- Docker containers with zoe- prefix
+- Single docker-compose.yml
+- SQLite database at data/zoe.db
+- Services: FastAPI backend, Nginx frontend, Ollama AI, Redis cache
+
+Please:
+1. Load the Zoe project documents from your knowledge
+2. Acknowledge the current state above
+3. Show available enhancement options
+4. Provide complete scripts with GitHub auto-sync
+
+All scripts should:
+- Start with: cd /home/pi/zoe
+- End with: git push
+- Include full file contents
+- Test immediately after changes
+
+What would you like me to work on next?

@@ -1,0 +1,92 @@
+{
+  "name": "Email Importance to Zoe Notifications",
+  "nodes": [
+    {
+      "parameters": {
+        "downloadAttachments": false,
+        "options": {
+          "format": "simple",
+          "allowUnauthorizedCerts": true
+        }
+      },
+      "id": "imapRead",
+      "name": "IMAP Read Unread",
+      "type": "n8n-nodes-base.imap",
+      "typeVersion": 2,
+      "position": [260, 280],
+      "credentials": {
+        "imap": {
+          "id": "REPLACE_WITH_YOUR_IMAP_CREDENTIAL_ID",
+          "name": "IMAP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://zoe.local/developer/importance_config.json",
+        "options": {"allowUnauthorizedCerts": true}
+      },
+      "id": "fetchConfig",
+      "name": "Fetch Config",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [260, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $items(1, 0).json;\nfunction scoreEmail(email, cfg){\n  const w = cfg.weights; let score = 0;\n  const from = (email.from || '').toLowerCase();\n  const subject = (email.subject || '').toLowerCase();\n  const snippet = (email.text || email.textHtml || '').toLowerCase();\n  const recipients = (email.to || '').split(',').map(s=>s.trim()).filter(Boolean);\n  if (cfg.vip_senders.some(v => from.includes(v.toLowerCase()))) score += w.vip_sender;\n  if (cfg.company_domains.some(d => from.endsWith('@'+d) || from.includes('.'+d))) score += w.company_domain;\n  if (recipients.length === 1) score += w.sole_recipient;\n  if (recipients.length > 1 && recipients.length <= 3) score += w.few_recipients;\n  const text = subject + ' ' + snippet;\n  if (cfg.high_priority_keywords.some(k => text.includes(k))) score += w.keyword_high;\n  if (cfg.medium_priority_keywords.some(k => text.includes(k))) score += w.keyword_medium;\n  if (cfg.low_signal_keywords.some(k => text.includes(k))) score += w.keyword_low;\n  if (email.hasAttachments) score += w.has_attachment;\n  if (email.flagged) score += w.flagged;\n  if (email.listId) score += w.bulk;\n  if (/(today|tomorrow|\\b\\d{1,2}:\\d{2}\\b)/i.test(text)) score += w.time_sensitive;\n  return score;\n}\nreturn items.map(item => {\n  const email = item.json;\n  const score = scoreEmail(email, config);\n  return { json: { ...email, importanceScore: score, notify: score >= config.thresholds.notify, digest: score >= config.thresholds.digest } };\n});"
+      },
+      "id": "scoreEmails",
+      "name": "Score Emails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [500, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {"value1": "={{$json.importanceScore}}", "operation": "greaterEqual", "value2": 60}
+          ]
+        }
+      },
+      "id": "ifImportant",
+      "name": "Important?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [740, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://zoe.local/api/reminders/",
+        "responseFormat": "json",
+        "jsonParameters": true,
+        "options": {"allowUnauthorizedCerts": true},
+        "body": {
+          "title": "={{'Important: ' + ($json.subject || '(no subject)')}}",
+          "description": "={{'From: ' + ($json.from || '') + '\\nPreview: ' + (($json.text || '').slice(0,300))}}",
+          "priority": "high",
+          "category": "work",
+          "due_date": "={{$now.format('YYYY-MM-DD')}}",
+          "due_time": "={{$now.add(30, 'seconds').format('HH:mm:ss')}}",
+          "requires_acknowledgment": false
+        }
+      },
+      "id": "notifyZoe",
+      "name": "Notify Zoe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [980, 160]
+    }
+  ],
+  "connections": {
+    "IMAP Read Unread": {"main": [[{"node": "Score Emails", "type": "main", "index": 0}]]},
+    "Fetch Config": {"main": [[{"node": "Score Emails", "type": "main", "index": 1}]]},
+    "Score Emails": {"main": [[{"node": "Important?", "type": "main", "index": 0}]]},
+    "Important?": {"main": [[{"node": "Notify Zoe", "type": "main", "index": 0}], []]}
+  },
+  "active": false,
+  "settings": {"timezone": "Australia/Perth"},
+  "pinData": {}
+}

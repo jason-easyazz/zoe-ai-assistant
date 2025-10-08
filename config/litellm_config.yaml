@@ -1,0 +1,106 @@
+# LiteLLM Proxy Configuration for Zoe
+# Phase 2: Optimal caching, fallbacks, and load balancing
+
+model_list:
+  # Local Ollama models (privacy-first)
+  - model_name: zoe-local
+    litellm_params:
+      model: ollama/llama3.2:3b
+      api_base: http://localhost:11434
+      stream: true
+      timeout: 30
+    model_info:
+      mode: streaming
+      supports_function_calling: false
+      id: zoe-local-chat
+      
+  - model_name: zoe-memory
+    litellm_params:
+      model: ollama/llama3.2:3b
+      api_base: http://localhost:11434
+      timeout: 10
+    model_info:
+      mode: completion
+      id: zoe-memory-retrieval
+      
+  # Cloud fallback models (when needed)
+  - model_name: claude-fallback
+    litellm_params:
+      model: claude-3-5-sonnet-20241022
+      api_key: ${ANTHROPIC_API_KEY}
+      timeout: 30
+    model_info:
+      mode: chat
+      id: claude-reasoning
+      
+  - model_name: gpt-fallback
+    litellm_params:
+      model: gpt-4o-mini
+      api_key: ${OPENAI_API_KEY}
+      timeout: 30
+    model_info:
+      mode: chat
+      id: gpt-reasoning
+
+router_settings:
+  # Routing strategy
+  routing_strategy: latency-based-routing
+  
+  # Model aliases for easy access
+  model_group_alias:
+    fast: [zoe-local]
+    memory: [zoe-memory, zoe-local]
+    reasoning: [claude-fallback, gpt-fallback, zoe-local]
+  
+  # Redis caching configuration
+  redis_host: ${REDIS_HOST:-zoe-redis}
+  redis_port: ${REDIS_PORT:-6379}
+  cache_responses: true
+  cache_kwargs:
+    ttl: 3600  # 1 hour cache
+    namespace: "zoe:cache"
+    supported_call_types: ["completion", "acompletion", "embedding", "aembedding"]
+  
+  # Semantic caching (cache similar queries)
+  enable_semantic_caching: true
+  similarity_threshold: 0.85
+  
+  # Fallback configuration
+  fallbacks:
+    - zoe-local  # Always fallback to local
+  num_retries: 2
+  retry_after: 2
+  timeout: 30
+  
+  # Allowed fails before circuit breaker
+  allowed_fails: 3
+  cooldown_time: 60
+
+general_settings:
+  # Master key for auth (use env var in production)
+  master_key: ${LITELLM_MASTER_KEY:-sk-1234}
+  
+  # Database for tracking
+  database_url: "sqlite:////app/data/litellm.db"
+  
+  # Cost tracking
+  max_budget: 50.0
+  budget_duration: "30d"
+  
+  # Enable metrics
+  success_callback: ["prometheus"]
+  
+  # Logging
+  set_verbose: false
+  json_logs: true
+
+# Litellm proxy settings
+litellm_settings:
+  drop_params: true
+  add_function_to_prompt: false
+  
+# Environment defaults
+environment_variables:
+  REDIS_HOST: "zoe-redis"
+  REDIS_PORT: "6379"
+  LITELLM_MASTER_KEY: "sk-1234"

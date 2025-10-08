@@ -1,0 +1,18 @@
+model_list:
+  - model_name: gemma3-ultra-fast
+    litellm_params:
+      model: ollama/gemma3:1b
+      api_base: http://zoe-ollama:11434
+      temperature: 0.7
+      top_p: 0.9
+      max_tokens: 128
+      timeout: 30
+
+general_settings:
+  master_key: "sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f"
+  disable_database_usage: true
+  disable_spend_logs: true
+  disable_otel_logging: true
+  disable_ui: true
+  store_model_in_db: false
+

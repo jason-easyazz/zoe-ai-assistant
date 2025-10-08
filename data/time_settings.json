@@ -1,0 +1,14 @@
+{
+  "timezone": "UTC",
+  "ntp_servers": [
+    "pool.ntp.org",
+    "time.nist.gov",
+    "time.google.com"
+  ],
+  "sync_interval": 3600,
+  "auto_sync": true,
+  "manual_time": null,
+  "location": null,
+  "last_sync": "2025-09-16T10:36:55.774980",
+  "sync_attempts": 1
+}

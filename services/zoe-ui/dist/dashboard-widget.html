@@ -1,0 +1,2053 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe AI Dashboard - Widget System</title>
+    <style>
+        /* Desktop Widget System Variables */
+        :root {
+            /* Zoe Brand Colors */
+            --primary-gradient: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            --secondary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            
+            /* Desktop-specific sizing */
+            --widget-radius: 16px;
+            --widget-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+            --widget-shadow-hover: 0 12px 40px rgba(0, 0, 0, 0.18);
+            --grid-gap: 24px;
+            --widget-min-width: 320px;
+            --widget-min-height: 240px;
+            
+            /* Desktop touch targets */
+            --touch-target: 44px;
+            --touch-large: 56px;
+            
+            /* Theme colors */
+            --background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            --surface: rgba(255, 255, 255, 0.9);
+            --surface-hover: rgba(255, 255, 255, 0.95);
+            --text-primary: #333;
+            --text-secondary: #666;
+            --border: rgba(255, 255, 255, 0.3);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: var(--background);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        /* Navigation - EXACT COPY from dashboard.html */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold; position: relative;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+            animation: notificationDotPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 8px rgba(123, 97, 255, 0);
+            }
+        }
+        
+        @keyframes notificationDotPulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.2);
+                opacity: 0.7;
+            }
+        }
+        
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .notifications-title {
+            font-size: 18px; font-weight: 600; color: #333; margin: 0;
+        }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content {
+            padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title {
+            font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px;
+        }
+        .notification-meta {
+            font-size: 12px; color: #666; display: flex; gap: 10px;
+        }
+        .notification-time {
+            color: #7B61FF; font-weight: 500;
+        }
+        .notification-priority {
+            padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600;
+        }
+        .no-notifications {
+            text-align: center; color: #666; font-size: 14px; padding: 40px 20px;
+        }
+        
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.warning::before { background: #ea580c; }
+
+        /* Time/Date Display in Top Right */
+        .time-date-display {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time {
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        .current-date {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.2;
+        }
+
+        /* User Menu Styles */
+        .user-menu {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .user-menu:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .user-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 2px;
+        }
+        
+        .user-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        
+        .user-role {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.2;
+        }
+        
+        .user-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+            padding: 8px 0;
+            min-width: 200px;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-10px);
+            transition: all 0.3s ease;
+        }
+        
+        .user-dropdown.open {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 12px 16px;
+            color: #333;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 400;
+            transition: all 0.2s ease;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+            cursor: pointer;
+        }
+        
+        .dropdown-item:hover {
+            background: rgba(123, 97, 255, 0.1);
+            color: #7B61FF;
+        }
+        
+        .dropdown-divider {
+            height: 1px;
+            background: rgba(255, 255, 255, 0.3);
+            margin: 8px 0;
+        }
+
+        .edit-mode-btn {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-height: 44px;
+        }
+
+        .edit-mode-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+
+        .edit-mode-btn.active {
+            background: #ff4757;
+        }
+
+        /* Main Container */
+        .main-container {
+            padding: 80px 20px 20px;
+            min-height: 100vh;
+        }
+
+        /* Widget Grid */
+        .widget-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(var(--widget-min-width), 1fr));
+            gap: var(--grid-gap);
+            grid-auto-rows: minmax(var(--widget-min-height), auto);
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        /* Desktop-specific grid layouts */
+        @media (min-width: 1200px) {
+            .widget-grid {
+                grid-template-columns: repeat(4, 1fr);
+            }
+        }
+
+        @media (min-width: 1600px) {
+            .widget-grid {
+                grid-template-columns: repeat(5, 1fr);
+            }
+        }
+
+        /* Widget Base Styles */
+        .widget {
+            background: var(--surface);
+            border-radius: var(--widget-radius);
+            padding: 24px;
+            box-shadow: var(--widget-shadow);
+            position: relative;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            overflow: hidden;
+            user-select: none;
+        }
+
+        .widget:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--widget-shadow-hover);
+            background: var(--surface-hover);
+        }
+
+        /* Widget Controls (Edit Mode) */
+        .widget-controls {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            display: flex;
+            gap: 8px;
+            opacity: 0;
+            transition: all 0.2s ease;
+            pointer-events: none;
+        }
+
+        body.edit-mode .widget-controls {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .widget-control-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--text-primary);
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .widget-control-btn:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: scale(1.1);
+        }
+
+        .widget-control-btn.delete:hover {
+            background: #ff4757;
+        }
+
+        /* Widget Sizes */
+        .widget.size-small { 
+            grid-column: span 1; 
+            grid-row: span 1; 
+            min-height: 240px;
+        }
+        .widget.size-medium { 
+            grid-column: span 1; 
+            grid-row: span 2; 
+            min-height: 480px;
+        }
+        .widget.size-large { 
+            grid-column: span 2; 
+            grid-row: span 1; 
+            min-height: 240px;
+        }
+        .widget.size-xlarge { 
+            grid-column: span 2; 
+            grid-row: span 2; 
+            min-height: 480px;
+        }
+
+        /* Widget Headers */
+        .widget-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+
+        .widget-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .widget-badge {
+            background: var(--primary-gradient);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* Widget Content */
+        .widget-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+        
+        /* Widget Content Areas */
+        #eventsContent, #tasksContent {
+            display: flex;
+            flex-direction: column;
+            padding: 8px;
+            overflow-y: auto;
+            max-height: 200px;
+            min-height: auto;
+        }
+        
+        /* Remove loading widget styles when content is loaded */
+        #eventsContent:not(.loading-widget), #tasksContent:not(.loading-widget) {
+            align-items: stretch;
+            justify-content: flex-start;
+        }
+        
+        /* Calendar Event Items - Match calendar page styling */
+        .calendar-event-item {
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .calendar-event-item:hover {
+            transform: translateX(4px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+        
+        .calendar-event-item.work {
+            background: rgba(59, 130, 246, 0.15);
+            border-left-color: #2563eb !important;
+            color: #1e40af;
+        }
+        
+        .calendar-event-item.personal {
+            background: rgba(147, 51, 234, 0.15);
+            border-left-color: #9333ea !important;
+            color: #7e22ce;
+        }
+        
+        .calendar-event-item.bucket {
+            background: rgba(16, 185, 129, 0.15);
+            border-left-color: #059669 !important;
+            color: #047857;
+        }
+        
+        .calendar-event-item.shopping {
+            background: rgba(251, 146, 60, 0.15);
+            border-left-color: #ea580c !important;
+            color: #c2410c;
+        }
+        
+        .calendar-event-item.health {
+            background: rgba(236, 72, 153, 0.15);
+            border-left-color: #be185d !important;
+            color: #9d174d;
+        }
+        
+        .calendar-event-item.routine {
+            background: rgba(107, 114, 128, 0.15);
+            border-left-color: #374151 !important;
+            color: #1f2937;
+        }
+        
+        .calendar-event-item.social {
+            background: rgba(34, 197, 94, 0.15);
+            border-left-color: #16a34a !important;
+            color: #15803d;
+        }
+        
+        .calendar-event-item.family {
+            background: rgba(168, 85, 247, 0.15);
+            border-left-color: #9333ea !important;
+            color: #7c3aed;
+        }
+        
+        /* Time Display - Match touch version styling */
+        .time-display {
+            font-size: 32px;
+            font-weight: 300;
+            background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        /* Task Items - Match calendar page styling */
+        .task-item {
+            cursor: grab;
+            transition: all 0.3s;
+        }
+        
+        .task-item:hover {
+            transform: translateX(4px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+        
+        .task-item.work {
+            background: rgba(59, 130, 246, 0.15);
+            color: #1e40af;
+        }
+        
+        .task-item.personal {
+            background: rgba(147, 51, 234, 0.15);
+            color: #7e22ce;
+        }
+        
+        .task-item.bucket {
+            background: rgba(16, 185, 129, 0.15);
+            color: #047857;
+        }
+        
+        .task-item.shopping {
+            background: rgba(251, 146, 60, 0.15);
+            color: #c2410c;
+        }
+        
+        .task-item.health {
+            background: rgba(236, 72, 153, 0.15);
+            color: #9d174d;
+        }
+        
+        .task-item.routine {
+            background: rgba(107, 114, 128, 0.15);
+            color: #1f2937;
+        }
+        
+        .task-item.social {
+            background: rgba(34, 197, 94, 0.15);
+            color: #15803d;
+        }
+        
+        .task-item.family {
+            background: rgba(168, 85, 247, 0.15);
+            color: #7c3aed;
+        }
+
+        /* Drag and Drop Styles */
+        .widget.dragging {
+            opacity: 0.5;
+            transform: rotate(5deg);
+            z-index: 1000;
+        }
+
+        .widget.drag-over {
+            border: 2px dashed #7B61FF;
+            background: rgba(123, 97, 255, 0.05);
+        }
+
+        .widget.new {
+            animation: widgetAppear 0.5s ease-out;
+        }
+
+        @keyframes widgetAppear {
+            from {
+                opacity: 0;
+                transform: scale(0.8) translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        /* Edit Mode Styles */
+        body.edit-mode .widget {
+            border: 2px dashed rgba(123, 97, 255, 0.3);
+        }
+
+        body.edit-mode .widget:hover {
+            border-color: rgba(123, 97, 255, 0.6);
+        }
+
+        /* Widget Library Overlay */
+        .widget-library-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(8px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+
+        /* Widget Settings Panel */
+        .widget-settings-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(8px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+
+        .widget-settings-overlay.active {
+            display: flex;
+            opacity: 1;
+        }
+
+        .widget-settings-panel {
+            background: white;
+            border-radius: 20px;
+            padding: 32px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            transform: scale(0.8);
+            transition: transform 0.3s ease;
+        }
+
+        .widget-settings-overlay.active .widget-settings-panel {
+            transform: scale(1);
+        }
+
+        .settings-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .settings-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .close-settings {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .close-settings:hover {
+            background: #ff4757;
+            color: white;
+        }
+
+        .settings-section {
+            margin-bottom: 24px;
+        }
+
+        .settings-label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .settings-input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+
+        .settings-input:focus {
+            outline: none;
+            border-color: #7B61FF;
+        }
+
+        .settings-select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            background: white;
+            cursor: pointer;
+        }
+
+        .settings-button {
+            width: 100%;
+            padding: 12px 16px;
+            background: var(--primary-gradient);
+            border: none;
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .settings-button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+
+        .widget-library-overlay.active {
+            display: flex;
+            opacity: 1;
+        }
+
+        .widget-library {
+            background: white;
+            border-radius: 20px;
+            padding: 32px;
+            max-width: 800px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            transform: scale(0.8);
+            transition: transform 0.3s ease;
+        }
+
+        .widget-library-overlay.active .widget-library {
+            transform: scale(1);
+        }
+
+        .library-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .library-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .close-library {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .close-library:hover {
+            background: #ff4757;
+            color: white;
+        }
+
+        .library-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .library-widget {
+            background: #f8f9fa;
+            border: 2px solid transparent;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .library-widget:hover {
+            border-color: #7B61FF;
+            background: rgba(123, 97, 255, 0.05);
+            transform: translateY(-2px);
+        }
+
+        .library-widget-icon {
+            font-size: 32px;
+            margin-bottom: 12px;
+            display: block;
+        }
+
+        .library-widget-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .library-widget-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* Responsive Design - EXACT COPY from dashboard.html */
+        @media (max-width: 900px) {
+            .nav-menu { display: none; }
+            .widget-grid { grid-template-columns: 1fr; }
+        }
+        
+        @media (max-width: 420px) {
+            .main-container { padding: 80px 10px 20px; }
+            .widget-grid { gap: 15px; }
+            .widget.size-large,
+            .widget.size-xlarge {
+                grid-column: span 1;
+            }
+        }
+
+        /* Loading States */
+        .loading-widget {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 200px;
+            color: var(--text-secondary);
+        }
+
+        .spinner {
+            width: 24px;
+            height: 24px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #7B61FF;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 12px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation - EXACT COPY from dashboard.html -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="handleLogout()"></div>
+            <div class="nav-menu">
+                <a href="chat.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="dashboard-widget.html" class="nav-item active">Widgets</a>
+                <a href="lists.html" class="nav-item">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- Time/Date Display -->
+            <div class="time-date-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+            
+            <!-- Edit Mode Button -->
+            <button class="edit-mode-btn" id="editModeBtn" onclick="toggleEditMode()">Edit Mode</button>
+            
+            <!-- User Menu (moved to mini-orb click) -->
+            <div class="user-menu" onclick="toggleUserDropdown()" style="display: none;">
+                <div class="user-avatar" id="userAvatar">?</div>
+                
+                <div class="user-dropdown" id="userDropdown">
+                    <a href="#" class="dropdown-item" onclick="showUserProfile()">Profile</a>
+                    <a href="#" class="dropdown-item" onclick="showSecuritySettings()">Security</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" class="dropdown-item" onclick="switchUser()">Switch User</a>
+                    <a href="#" class="dropdown-item" onclick="upgradeSession()" id="upgradeSessionItem" style="display: none;">Upgrade Session</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="admin.html" class="dropdown-item" id="adminLink" style="display: none;">Admin Dashboard</a>
+                    <div class="dropdown-divider" id="adminDivider" style="display: none;"></div>
+                    <a href="#" class="dropdown-item" onclick="logout()">Logout</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <div class="widget-grid" id="widgetGrid">
+            <!-- Widgets will be dynamically loaded here -->
+        </div>
+    </div>
+
+    <!-- Widget Library Overlay -->
+    <div class="widget-library-overlay" id="widgetLibraryOverlay">
+        <div class="widget-library">
+            <div class="library-header">
+                <h2 class="library-title">Add Widget</h2>
+                <button class="close-library" onclick="closeWidgetLibrary()">×</button>
+            </div>
+            <div class="library-grid" id="libraryGrid">
+                <!-- Widget library items will be populated here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Widget Settings Overlay -->
+    <div class="widget-settings-overlay" id="widgetSettingsOverlay">
+        <div class="widget-settings-panel">
+            <div class="settings-header">
+                <h2 class="settings-title">Widget Settings</h2>
+                <button class="close-settings" onclick="closeWidgetSettings()">×</button>
+            </div>
+            <div class="settings-section">
+                <label class="settings-label">Widget Size</label>
+                <select class="settings-select" id="settingsSize">
+                    <option value="size-small">Small</option>
+                    <option value="size-medium">Medium</option>
+                    <option value="size-large">Large</option>
+                    <option value="size-xlarge">Extra Large</option>
+                </select>
+            </div>
+            <div class="settings-section">
+                <label class="settings-label">Update Interval (seconds)</label>
+                <input type="number" class="settings-input" id="settingsInterval" value="30" min="5" max="300">
+            </div>
+            <div class="settings-section">
+                <label class="settings-label">Widget Position</label>
+                <select class="settings-select" id="settingsPosition">
+                    <option value="auto">Auto</option>
+                    <option value="top-left">Top Left</option>
+                    <option value="top-right">Top Right</option>
+                    <option value="bottom-left">Bottom Left</option>
+                    <option value="bottom-right">Bottom Right</option>
+                </select>
+            </div>
+            <button class="settings-button" onclick="applyWidgetSettings()">Apply Settings</button>
+        </div>
+    </div>
+
+    <script>
+        // Desktop Widget System Implementation
+        const WIDGET_STORAGE_KEY = 'zoe_desktop_widgets';
+        let isEditMode = false;
+        let draggedWidget = null;
+        
+        // Helper functions for user session and device ID (from touch version)
+        function getUserSession() {
+            try {
+                const sessionData = localStorage.getItem('zoe.session');
+                return sessionData ? JSON.parse(sessionData) : null;
+            } catch (e) {
+                console.warn('Failed to parse session data:', e);
+                return null;
+            }
+        }
+        
+        function getDeviceId() {
+            let deviceId = localStorage.getItem('zoe.device.id');
+            if (!deviceId) {
+                // Create a stable device ID based on browser fingerprint
+                const screenInfo = `${screen.width}x${screen.height}x${screen.colorDepth}`;
+                const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                const language = navigator.language;
+                const fingerprint = `${screenInfo}-${timezone}-${language}-${Date.now()}`;
+                
+                deviceId = btoa(fingerprint).replace(/[^a-zA-Z0-9]/g, '').substring(0, 32);
+                
+                localStorage.setItem('zoe.device.id', deviceId);
+                console.log('🔑 Generated device ID:', deviceId);
+            }
+            return deviceId;
+        }
+
+        // Widget Registry - Desktop optimized widgets
+        const WidgetRegistry = {
+            widgets: new Map(),
+            
+            register(name, widgetClass) {
+                this.widgets.set(name, widgetClass);
+            },
+            
+            get(name) {
+                return this.widgets.get(name);
+            },
+            
+            getAll() {
+                return Array.from(this.widgets.keys());
+            }
+        };
+
+        // Desktop Widget Manager
+        const DesktopWidgetManager = {
+            activeWidgets: new Map(),
+            
+            createWidget(type, container) {
+                const WidgetClass = WidgetRegistry.get(type);
+                if (!WidgetClass) {
+                    console.error(`Widget type '${type}' not found`);
+                    return null;
+                }
+                
+                const element = document.createElement('div');
+                element.className = 'widget size-small new';
+                element.setAttribute('data-widget-type', type);
+                
+                // Create widget instance
+                const widgetInstance = new WidgetClass();
+                
+                // Initialize the widget
+                widgetInstance.init(element);
+                
+                // Add to container
+                container.appendChild(element);
+                
+                // Track active widget
+                this.activeWidgets.set(element, widgetInstance);
+                
+                // Setup interactions
+                this.setupWidgetInteractions(element);
+                
+                // Remove 'new' class after animation
+                setTimeout(() => element.classList.remove('new'), 500);
+                
+                console.log(`✅ Created desktop widget: ${type}`);
+                return element;
+            },
+            
+            removeWidget(element) {
+                const widgetInstance = this.activeWidgets.get(element);
+                if (widgetInstance && widgetInstance.destroy) {
+                    widgetInstance.destroy();
+                }
+                this.activeWidgets.delete(element);
+                element.remove();
+                this.saveLayout();
+            },
+            
+            resizeWidget(element, newSize) {
+                const currentSize = Array.from(element.classList).find(cls => cls.startsWith('size-'));
+                if (currentSize) {
+                    element.classList.remove(currentSize);
+                }
+                element.classList.add(newSize);
+                this.saveLayout();
+            },
+            
+            setupWidgetInteractions(element) {
+                // Desktop drag and drop
+                element.addEventListener('mousedown', this.handleMouseDown.bind(this));
+                element.addEventListener('dragstart', this.handleDragStart.bind(this));
+                element.addEventListener('dragend', this.handleDragEnd.bind(this));
+                
+                // Click handler for non-edit mode
+                element.addEventListener('click', (e) => {
+                    if (!isEditMode && !e.target.closest('.widget-controls')) {
+                        const widgetInstance = this.activeWidgets.get(element);
+                        if (widgetInstance && widgetInstance.onClick) {
+                            widgetInstance.onClick();
+                        }
+                    }
+                });
+            },
+            
+            handleMouseDown(e) {
+                if (!isEditMode) return;
+                e.preventDefault();
+                draggedWidget = e.target.closest('.widget');
+                if (draggedWidget) {
+                    draggedWidget.classList.add('dragging');
+                    document.addEventListener('mousemove', this.handleMouseMove.bind(this));
+                    document.addEventListener('mouseup', this.handleMouseUp.bind(this));
+                }
+            },
+            
+            handleMouseMove(e) {
+                if (!draggedWidget) return;
+                
+                const grid = document.getElementById('widgetGrid');
+                const rect = grid.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                // Find the drop target
+                const dropTarget = this.findDropTarget(x, y);
+                if (dropTarget && dropTarget !== draggedWidget) {
+                    // Visual feedback
+                    this.clearDropIndicators();
+                    dropTarget.classList.add('drag-over');
+                }
+            },
+            
+            findDropTarget(x, y) {
+                const grid = document.getElementById('widgetGrid');
+                const widgets = Array.from(grid.children);
+                
+                for (const widget of widgets) {
+                    if (widget === draggedWidget) continue;
+                    
+                    const rect = widget.getBoundingClientRect();
+                    const gridRect = grid.getBoundingClientRect();
+                    
+                    const widgetX = rect.left - gridRect.left;
+                    const widgetY = rect.top - gridRect.top;
+                    const widgetWidth = rect.width;
+                    const widgetHeight = rect.height;
+                    
+                    if (x >= widgetX && x <= widgetX + widgetWidth &&
+                        y >= widgetY && y <= widgetY + widgetHeight) {
+                        return widget;
+                    }
+                }
+                
+                return null;
+            },
+            
+            clearDropIndicators() {
+                const grid = document.getElementById('widgetGrid');
+                const widgets = Array.from(grid.children);
+                widgets.forEach(widget => widget.classList.remove('drag-over'));
+            },
+            
+            handleMouseUp(e) {
+                if (draggedWidget) {
+                    draggedWidget.classList.remove('dragging');
+                    draggedWidget = null;
+                    document.removeEventListener('mousemove', this.handleMouseMove.bind(this));
+                    document.removeEventListener('mouseup', this.handleMouseUp.bind(this));
+                    this.saveLayout();
+                }
+            },
+            
+            handleDragStart(e) {
+                if (!isEditMode) {
+                    e.preventDefault();
+                    return;
+                }
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/html', e.target.outerHTML);
+                e.target.classList.add('dragging');
+            },
+            
+            handleDragEnd(e) {
+                e.target.classList.remove('dragging');
+            },
+            
+            async saveLayout() {
+                const grid = document.getElementById('widgetGrid');
+                const widgets = Array.from(grid.children);
+                const layout = widgets.map((widget, index) => ({
+                    type: widget.getAttribute('data-widget-type'),
+                    size: Array.from(widget.classList).find(cls => cls.startsWith('size-')) || 'size-small',
+                    order: index
+                }));
+                
+                // Always save to local storage first
+                localStorage.setItem(WIDGET_STORAGE_KEY, JSON.stringify(layout));
+                console.log('💾 Desktop widget layout saved to localStorage');
+                
+                // Try to save to backend if user is authenticated
+                try {
+                    const session = getUserSession();
+                    const deviceId = getDeviceId();
+                    
+                    if (session && session.session_id) {
+                        const response = await fetch('/api/user/layout', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-Session-ID': session.session_id
+                            },
+                            body: JSON.stringify({
+                                device_id: deviceId,
+                                layout_type: 'desktop_dashboard',
+                                layout: layout
+                            })
+                        });
+                        
+                        if (response.ok) {
+                            console.log('💾 Desktop widget layout saved to backend');
+                        } else {
+                            console.warn('Failed to save layout to backend, using localStorage only');
+                        }
+                    }
+                } catch (error) {
+                    console.warn('Backend save failed, using localStorage only:', error);
+                }
+            },
+            
+            async loadLayout() {
+                // Try to load from backend first if user is authenticated
+                try {
+                    const session = getUserSession();
+                    const deviceId = getDeviceId();
+                    
+                    if (session && session.session_id) {
+                        const response = await fetch(`/api/user/layout?device_id=${deviceId}&layout_type=desktop_dashboard`, {
+                            headers: {
+                                'X-Session-ID': session.session_id
+                            }
+                        });
+                        
+                        if (response.ok) {
+                            const data = await response.json();
+                            if (data.layout && Array.isArray(data.layout)) {
+                                this.applyLayout(data.layout);
+                                console.log('💾 Desktop widget layout loaded from backend');
+                                return;
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.warn('Backend load failed, trying localStorage:', error);
+                }
+                
+                // Fallback to local storage
+                const saved = localStorage.getItem(WIDGET_STORAGE_KEY);
+                if (!saved) {
+                    this.createDefaultLayout();
+                    return;
+                }
+                
+                try {
+                    const layout = JSON.parse(saved);
+                    this.applyLayout(layout);
+                    console.log('💾 Desktop widget layout loaded from localStorage');
+                } catch (e) {
+                    console.error('Failed to parse saved layout:', e);
+                    this.createDefaultLayout();
+                }
+            },
+            
+            createDefaultLayout() {
+                const grid = document.getElementById('widgetGrid');
+                const defaultWidgets = ['events', 'tasks', 'home', 'weather', 'clock'];
+                
+                defaultWidgets.forEach(type => {
+                    this.createWidget(type, grid);
+                });
+                
+                this.saveLayout();
+            },
+            
+            applyLayout(layout) {
+                const grid = document.getElementById('widgetGrid');
+                grid.innerHTML = '';
+                
+                layout.forEach(item => {
+                    const widget = this.createWidget(item.type, grid);
+                    if (widget && item.size !== 'size-small') {
+                        this.resizeWidget(widget, item.size);
+                    }
+                });
+            }
+        };
+
+        // Desktop Widget Classes
+        class EventsWidget {
+            init(element) {
+                element.innerHTML = `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Resize">📏</button>
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); openWidgetSettings(this.closest('.widget'))" title="Settings">⚙️</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove">🗑️</button>
+                    </div>
+                    <div class="widget-header">
+                        <div class="widget-title">📅 Events</div>
+                        <div class="widget-badge" id="eventsCount">0</div>
+                    </div>
+                    <div class="widget-content">
+                        <div class="loading-widget" id="eventsContent">
+                            <div class="spinner"></div>
+                            Loading events...
+                        </div>
+                    </div>
+                `;
+                
+                this.loadEvents();
+            }
+            
+            async loadEvents() {
+                try {
+                    // Try the calendar API first
+                    const response = await fetch('/api/calendar/events');
+                    if (response.ok) {
+                        const data = await response.json();
+                        const events = Array.isArray(data) ? data : data.events || [];
+                        
+                        const today = new Date().toISOString().split('T')[0];
+                        const todaysEvents = events.filter(event => {
+                            const eventDate = event.start_date || event.date;
+                            return eventDate === today;
+                        });
+                        
+                        // Transform events to match expected format
+                        const transformedEvents = todaysEvents.map(event => ({
+                            title: event.title,
+                            start_time: event.start_time,
+                            category: event.category || 'personal'
+                        }));
+                        
+                        this.updateEvents(transformedEvents);
+                    } else {
+                        // Fallback to demo data
+                        this.updateEvents([]);
+                    }
+                } catch (error) {
+                    console.error('Failed to load events:', error);
+                    // Use demo data as fallback
+                    this.updateEvents([
+                        { title: 'Team Standup', start_time: '09:00', category: 'Work' },
+                        { title: 'Dentist Appointment', start_time: '14:30', category: 'Health' },
+                        { title: 'Dinner with Sarah', start_time: '18:00', category: 'Social' }
+                    ]);
+                }
+            }
+            
+            updateEvents(events) {
+                const content = document.getElementById('eventsContent');
+                const count = document.getElementById('eventsCount');
+                
+                count.textContent = events.length;
+                
+                // Remove loading widget class
+                content.classList.remove('loading-widget');
+                
+                if (events.length === 0) {
+                    content.innerHTML = '<div style="text-align: center; color: #666; font-style: italic;">No events today</div>';
+                    return;
+                }
+                
+                content.innerHTML = events.map(event => `
+                    <div class="calendar-event-item ${event.category || 'personal'}" style="padding: 12px; border-radius: 8px; margin-bottom: 8px; cursor: pointer; transition: all 0.3s; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); border-left: 4px solid;">
+                        <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px;">${this.formatTime(event.start_time || event.time)}</div>
+                        <div style="font-size: 14px; font-weight: 500;">${event.title}</div>
+                    </div>
+                `).join('');
+            }
+            
+            formatTime(timeStr) {
+                if (!timeStr) return 'All Day';
+                const [hours, minutes] = timeStr.split(':');
+                const hour12 = hours % 12 || 12;
+                const ampm = hours >= 12 ? 'PM' : 'AM';
+                return `${hour12}:${minutes} ${ampm}`;
+            }
+            
+            onClick() {
+                window.location.href = 'calendar.html';
+            }
+        }
+
+        class TasksWidget {
+            init(element) {
+                element.innerHTML = `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Resize">📏</button>
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); openWidgetSettings(this.closest('.widget'))" title="Settings">⚙️</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove">🗑️</button>
+                    </div>
+                    <div class="widget-header">
+                        <div class="widget-title">✅ Tasks</div>
+                        <div class="widget-badge" id="tasksCount">0</div>
+                    </div>
+                    <div class="widget-content">
+                        <div class="loading-widget" id="tasksContent">
+                            <div class="spinner"></div>
+                            Loading tasks...
+                        </div>
+                    </div>
+                `;
+                
+                this.loadTasks();
+            }
+            
+            async loadTasks() {
+                try {
+                    const response = await fetch('/api/lists/tasks');
+                    const data = await response.json();
+                    
+                    // Handle the response structure from lists API
+                    let tasks = [];
+                    if (data.tasks && Array.isArray(data.tasks)) {
+                        // Transform the tasks to match expected format
+                        tasks = data.tasks.map(task => ({
+                            id: task.id,
+                            title: task.text,
+                            name: task.text,
+                            status: 'pending', // Default status since API doesn't provide it
+                            priority: task.priority || 'medium',
+                            list_name: task.list_name,
+                            category: task.list_category
+                        }));
+                    } else if (Array.isArray(data)) {
+                        tasks = data;
+                    }
+                    
+                    this.updateTasks(tasks);
+                } catch (error) {
+                    console.error('Failed to load tasks:', error);
+                    this.updateTasks([]);
+                }
+            }
+            
+            updateTasks(tasks) {
+                const content = document.getElementById('tasksContent');
+                const count = document.getElementById('tasksCount');
+                
+                // Remove loading widget class
+                content.classList.remove('loading-widget');
+                
+                // Ensure tasks is an array
+                if (!Array.isArray(tasks)) {
+                    tasks = [];
+                }
+                
+                const pendingTasks = tasks.filter(task => task.status !== 'completed' && task.status !== 'done');
+                count.textContent = pendingTasks.length;
+                
+                if (pendingTasks.length === 0) {
+                    content.innerHTML = '<div style="text-align: center; color: #666; font-style: italic;">All tasks completed! 🎉</div>';
+                    return;
+                }
+                
+                content.innerHTML = pendingTasks.slice(0, 5).map(task => `
+                    <div class="task-item ${task.category || 'personal'}" style="padding: 12px; border-radius: 8px; margin-bottom: 8px; cursor: grab; transition: all 0.3s; display: flex; align-items: center; gap: 10px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);">
+                        <input type="checkbox" class="task-checkbox" onchange="toggleTask(this, '${task.id}')" style="width: 18px; height: 18px; cursor: pointer;">
+                        <div class="task-text" style="flex: 1; font-size: 14px; font-weight: 500;">${task.title || task.name || 'Untitled Task'}</div>
+                        <div style="font-size: 12px; color: ${this.getPriorityColor(task.priority)}; font-weight: 600;">${task.priority || 'Medium'}</div>
+                    </div>
+                `).join('');
+            }
+            
+            getPriorityColor(priority) {
+                switch(priority?.toLowerCase()) {
+                    case 'high': return '#dc2626';
+                    case 'medium': return '#ea580c';
+                    case 'low': return '#22c55e';
+                    default: return '#666';
+                }
+            }
+            
+            onClick() {
+                window.location.href = 'tasks.html';
+            }
+        }
+
+        class HomeWidget {
+            init(element) {
+                element.innerHTML = `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Resize">📏</button>
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); openWidgetSettings(this.closest('.widget'))" title="Settings">⚙️</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove">🗑️</button>
+                    </div>
+                    <div class="widget-header">
+                        <div class="widget-title">🏠 Home</div>
+                        <div class="widget-badge" id="homeStatus">Online</div>
+                    </div>
+                    <div class="widget-content">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+                            <button class="room-btn" onclick="toggleRoom('living_room')" style="padding: 12px; border: none; border-radius: 8px; background: rgba(123, 97, 255, 0.1); color: #7B61FF; font-size: 12px; cursor: pointer;">
+                                💡 Living Room
+                            </button>
+                            <button class="room-btn on" onclick="toggleRoom('kitchen')" style="padding: 12px; border: none; border-radius: 8px; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); color: white; font-size: 12px; cursor: pointer;">
+                                🔆 Kitchen
+                            </button>
+                            <button class="room-btn" onclick="toggleRoom('bedroom')" style="padding: 12px; border: none; border-radius: 8px; background: rgba(123, 97, 255, 0.1); color: #7B61FF; font-size: 12px; cursor: pointer;">
+                                🛏️ Bedroom
+                            </button>
+                            <button class="room-btn" onclick="toggleRoom('office')" style="padding: 12px; border: none; border-radius: 8px; background: rgba(123, 97, 255, 0.1); color: #7B61FF; font-size: 12px; cursor: pointer;">
+                                💻 Office
+                            </button>
+                        </div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                            <div style="text-align: center; padding: 8px; background: rgba(255,255,255,0.5); border-radius: 8px;">
+                                <div style="font-size: 16px; font-weight: 600; color: #7B61FF;">⚡ 2.4kW</div>
+                                <div style="font-size: 10px; color: #666;">Solar Output</div>
+                            </div>
+                            <div style="text-align: center; padding: 8px; background: rgba(255,255,255,0.5); border-radius: 8px;">
+                                <div style="font-size: 16px; font-weight: 600; color: #7B61FF;">🔋 85%</div>
+                                <div style="font-size: 10px; color: #666;">Battery</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            onClick() {
+                // Open home assistant interface
+                window.open('/homeassistant', '_blank');
+            }
+        }
+
+        // Additional Widget Classes
+        class WeatherWidget {
+            init(element) {
+                element.innerHTML = `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Resize">📏</button>
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); openWidgetSettings(this.closest('.widget'))" title="Settings">⚙️</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove">🗑️</button>
+                    </div>
+                    <div class="widget-header">
+                        <div class="widget-title">🌤️ Weather</div>
+                        <div class="widget-badge">23°C</div>
+                    </div>
+                    <div class="widget-content">
+                        <div style="text-align: center; padding: 20px 0;">
+                            <div style="font-size: 48px; margin-bottom: 12px;">☀️</div>
+                            <div style="font-size: 24px; font-weight: 600; margin-bottom: 8px;">23°C</div>
+                            <div style="font-size: 14px; color: #666; margin-bottom: 16px;">Sunny</div>
+                            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;">
+                                <div style="text-align: center;">
+                                    <div style="font-size: 12px; color: #666;">Mon</div>
+                                    <div style="font-size: 16px;">☀️</div>
+                                    <div style="font-size: 12px;">25°</div>
+                                </div>
+                                <div style="text-align: center;">
+                                    <div style="font-size: 12px; color: #666;">Tue</div>
+                                    <div style="font-size: 16px;">⛅</div>
+                                    <div style="font-size: 12px;">22°</div>
+                                </div>
+                                <div style="text-align: center;">
+                                    <div style="font-size: 12px; color: #666;">Wed</div>
+                                    <div style="font-size: 16px;">🌧️</div>
+                                    <div style="font-size: 12px;">19°</div>
+                                </div>
+                                <div style="text-align: center;">
+                                    <div style="font-size: 12px; color: #666;">Thu</div>
+                                    <div style="font-size: 16px;">☀️</div>
+                                    <div style="font-size: 12px;">26°</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            onClick() {
+                window.open('https://weather.com', '_blank');
+            }
+        }
+
+        class ClockWidget {
+            init(element) {
+                element.innerHTML = `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Resize">📏</button>
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); openWidgetSettings(this.closest('.widget'))" title="Settings">⚙️</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove">🗑️</button>
+                    </div>
+                    <div class="widget-header">
+                        <div class="widget-title">🕐 Clock</div>
+                    </div>
+                    <div class="widget-content" style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;">
+                        <div id="clockTime" class="time-display" style="font-size: 32px; font-weight: 300; margin-bottom: 8px;">--:--</div>
+                        <div id="clockDate" style="font-size: 14px; color: #666;">Loading...</div>
+                        <div id="clockTimezone" style="font-size: 12px; color: #999; margin-top: 8px;">Local Time</div>
+                    </div>
+                `;
+                
+                this.updateTime();
+                setInterval(() => this.updateTime(), 1000);
+            }
+            
+            updateTime() {
+                const now = new Date();
+                const timeElement = document.getElementById('clockTime');
+                const dateElement = document.getElementById('clockDate');
+                const timezoneElement = document.getElementById('clockTimezone');
+                
+                if (timeElement) {
+                    timeElement.textContent = now.toLocaleTimeString([], { 
+                        hour: 'numeric', 
+                        minute: '2-digit', 
+                        hour12: true 
+                    });
+                }
+                
+                if (dateElement) {
+                    dateElement.textContent = now.toLocaleDateString([], { 
+                        weekday: 'long', 
+                        month: 'long', 
+                        day: 'numeric' 
+                    });
+                }
+                
+                if (timezoneElement) {
+                    timezoneElement.textContent = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                }
+            }
+            
+            onClick() {
+                // Open system time settings or world clock
+                console.log('Clock widget clicked');
+            }
+        }
+
+        class SystemWidget {
+            init(element) {
+                element.innerHTML = `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Resize">📏</button>
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); openWidgetSettings(this.closest('.widget'))" title="Settings">⚙️</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove">🗑️</button>
+                    </div>
+                    <div class="widget-header">
+                        <div class="widget-title">💻 System</div>
+                        <div class="widget-badge" id="systemStatus">Online</div>
+                    </div>
+                    <div class="widget-content">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                            <div style="text-align: center; padding: 12px; background: rgba(255,255,255,0.5); border-radius: 8px;">
+                                <div style="font-size: 16px; font-weight: 600; color: #7B61FF;" id="cpuUsage">45%</div>
+                                <div style="font-size: 10px; color: #666;">CPU</div>
+                            </div>
+                            <div style="text-align: center; padding: 12px; background: rgba(255,255,255,0.5); border-radius: 8px;">
+                                <div style="font-size: 16px; font-weight: 600; color: #7B61FF;" id="memoryUsage">2.1GB</div>
+                                <div style="font-size: 10px; color: #666;">Memory</div>
+                            </div>
+                            <div style="text-align: center; padding: 12px; background: rgba(255,255,255,0.5); border-radius: 8px;">
+                                <div style="font-size: 16px; font-weight: 600; color: #7B61FF;" id="diskUsage">156GB</div>
+                                <div style="font-size: 10px; color: #666;">Disk</div>
+                            </div>
+                            <div style="text-align: center; padding: 12px; background: rgba(255,255,255,0.5); border-radius: 8px;">
+                                <div style="font-size: 16px; font-weight: 600; color: #7B61FF;" id="uptime">2d 14h</div>
+                                <div style="font-size: 10px; color: #666;">Uptime</div>
+                            </div>
+                        </div>
+                        <div style="margin-top: 16px; padding: 12px; background: rgba(255,255,255,0.5); border-radius: 8px; text-align: center;">
+                            <div style="font-size: 12px; color: #666; margin-bottom: 4px;">Services</div>
+                            <div style="font-size: 14px; color: #22c55e;">✅ All Systems Operational</div>
+                        </div>
+                    </div>
+                `;
+                
+                this.updateSystemStats();
+                setInterval(() => this.updateSystemStats(), 30000); // Update every 30 seconds
+            }
+            
+            updateSystemStats() {
+                // Mock system stats - in real implementation, these would come from API
+                const cpuElement = document.getElementById('cpuUsage');
+                const memoryElement = document.getElementById('memoryUsage');
+                const diskElement = document.getElementById('diskUsage');
+                const uptimeElement = document.getElementById('uptime');
+                
+                if (cpuElement) {
+                    cpuElement.textContent = Math.floor(Math.random() * 30 + 30) + '%';
+                }
+                
+                if (memoryElement) {
+                    memoryElement.textContent = (Math.random() * 2 + 1).toFixed(1) + 'GB';
+                }
+                
+                if (diskElement) {
+                    diskElement.textContent = Math.floor(Math.random() * 50 + 150) + 'GB';
+                }
+                
+                if (uptimeElement) {
+                    uptimeElement.textContent = Math.floor(Math.random() * 5 + 1) + 'd ' + Math.floor(Math.random() * 24) + 'h';
+                }
+            }
+            
+            onClick() {
+                // Open system monitoring interface
+                window.open('/system/monitor', '_blank');
+            }
+        }
+
+        class NotesWidget {
+            init(element) {
+                element.innerHTML = `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Resize">📏</button>
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); openWidgetSettings(this.closest('.widget'))" title="Settings">⚙️</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove">🗑️</button>
+                    </div>
+                    <div class="widget-header">
+                        <div class="widget-title">📝 Notes</div>
+                        <button onclick="event.stopPropagation(); addQuickNote()" style="background: var(--primary-gradient); border: none; border-radius: 6px; color: white; padding: 4px 8px; font-size: 12px; cursor: pointer;">+ Add</button>
+                    </div>
+                    <div class="widget-content">
+                        <div id="notesList" style="max-height: 300px; overflow-y: auto;">
+                            <div style="padding: 8px; border-bottom: 1px solid rgba(0,0,0,0.1); font-size: 14px;">
+                                <div style="font-weight: 600; margin-bottom: 4px;">Meeting with team</div>
+                                <div style="color: #666; font-size: 12px;">Discuss project timeline and deliverables</div>
+                            </div>
+                            <div style="padding: 8px; border-bottom: 1px solid rgba(0,0,0,0.1); font-size: 14px;">
+                                <div style="font-weight: 600; margin-bottom: 4px;">Buy groceries</div>
+                                <div style="color: #666; font-size: 12px;">Milk, bread, eggs, vegetables</div>
+                            </div>
+                            <div style="padding: 8px; font-size: 14px;">
+                                <div style="font-weight: 600; margin-bottom: 4px;">Call dentist</div>
+                                <div style="color: #666; font-size: 12px;">Schedule cleaning appointment</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            onClick() {
+                window.location.href = 'notes.html';
+            }
+        }
+
+        // Register all widgets
+        WidgetRegistry.register('events', EventsWidget);
+        WidgetRegistry.register('tasks', TasksWidget);
+        WidgetRegistry.register('home', HomeWidget);
+        WidgetRegistry.register('weather', WeatherWidget);
+        WidgetRegistry.register('clock', ClockWidget);
+        WidgetRegistry.register('system', SystemWidget);
+        WidgetRegistry.register('notes', NotesWidget);
+
+        // Global functions
+        function toggleEditMode() {
+            isEditMode = !isEditMode;
+            document.body.classList.toggle('edit-mode', isEditMode);
+            const btn = document.getElementById('editModeBtn');
+            btn.textContent = isEditMode ? 'Exit Edit' : 'Edit Mode';
+            btn.classList.toggle('active', isEditMode);
+            
+            if (!isEditMode) {
+                DesktopWidgetManager.saveLayout();
+            }
+        }
+
+        function cycleWidgetSize(widget) {
+            const sizes = ['size-small', 'size-medium', 'size-large', 'size-xlarge'];
+            const currentSize = Array.from(widget.classList).find(cls => cls.startsWith('size-'));
+            const currentIndex = sizes.indexOf(currentSize);
+            const nextIndex = (currentIndex + 1) % sizes.length;
+            DesktopWidgetManager.resizeWidget(widget, sizes[nextIndex]);
+        }
+
+        function removeWidget(widget) {
+            if (confirm('Remove this widget?')) {
+                DesktopWidgetManager.removeWidget(widget);
+            }
+        }
+
+        function openWidgetLibrary() {
+            const overlay = document.getElementById('widgetLibraryOverlay');
+            const grid = document.getElementById('libraryGrid');
+            
+            // Populate library with available widgets
+            const availableWidgets = [
+                { type: 'events', icon: '📅', name: 'Events', desc: 'Today\'s calendar events' },
+                { type: 'tasks', icon: '✅', name: 'Tasks', desc: 'Today\'s tasks and todos' },
+                { type: 'home', icon: '🏠', name: 'Home', desc: 'Smart home controls' },
+                { type: 'weather', icon: '🌤️', name: 'Weather', desc: 'Current weather and forecast' },
+                { type: 'clock', icon: '🕐', name: 'Clock', desc: 'Current time and date' },
+                { type: 'system', icon: '💻', name: 'System', desc: 'System status and resources' },
+                { type: 'notes', icon: '📝', name: 'Notes', desc: 'Quick notes and reminders' }
+            ];
+            
+            grid.innerHTML = availableWidgets.map(widget => `
+                <div class="library-widget" onclick="addWidget('${widget.type}')">
+                    <div class="library-widget-icon">${widget.icon}</div>
+                    <div class="library-widget-name">${widget.name}</div>
+                    <div class="library-widget-desc">${widget.desc}</div>
+                </div>
+            `).join('');
+            
+            overlay.classList.add('active');
+        }
+
+        function closeWidgetLibrary() {
+            document.getElementById('widgetLibraryOverlay').classList.remove('active');
+        }
+
+        function addWidget(type) {
+            const grid = document.getElementById('widgetGrid');
+            DesktopWidgetManager.createWidget(type, grid);
+            closeWidgetLibrary();
+        }
+
+        function toggleRoom(room) {
+            const btn = event.target;
+            btn.classList.toggle('on');
+            console.log(`Toggling ${room}`);
+        }
+
+        function addQuickNote() {
+            const title = prompt('Note title:');
+            if (title) {
+                const content = prompt('Note content:');
+                if (content) {
+                    // In a real implementation, this would save to the API
+                    const notesList = document.getElementById('notesList');
+                    const noteDiv = document.createElement('div');
+                    noteDiv.style.cssText = 'padding: 8px; border-bottom: 1px solid rgba(0,0,0,0.1); font-size: 14px;';
+                    noteDiv.innerHTML = `
+                        <div style="font-weight: 600; margin-bottom: 4px;">${title}</div>
+                        <div style="color: #666; font-size: 12px;">${content}</div>
+                    `;
+                    notesList.insertBefore(noteDiv, notesList.firstChild);
+                }
+            }
+        }
+
+        // Widget Settings Functions
+        let currentSettingsWidget = null;
+
+        function openWidgetSettings(widget) {
+            currentSettingsWidget = widget;
+            const overlay = document.getElementById('widgetSettingsOverlay');
+            
+            // Populate current settings
+            const currentSize = Array.from(widget.classList).find(cls => cls.startsWith('size-'));
+            document.getElementById('settingsSize').value = currentSize || 'size-small';
+            
+            overlay.classList.add('active');
+        }
+
+        function closeWidgetSettings() {
+            document.getElementById('widgetSettingsOverlay').classList.remove('active');
+            currentSettingsWidget = null;
+        }
+
+        function applyWidgetSettings() {
+            if (!currentSettingsWidget) return;
+            
+            const newSize = document.getElementById('settingsSize').value;
+            const interval = document.getElementById('settingsInterval').value;
+            const position = document.getElementById('settingsPosition').value;
+            
+            // Apply size change
+            if (newSize) {
+                DesktopWidgetManager.resizeWidget(currentSettingsWidget, newSize);
+            }
+            
+            // Store settings (in a real implementation, this would save to API)
+            const widgetSettings = {
+                size: newSize,
+                interval: interval,
+                position: position
+            };
+            
+            localStorage.setItem(`widget_settings_${currentSettingsWidget.getAttribute('data-widget-type')}`, JSON.stringify(widgetSettings));
+            
+            closeWidgetSettings();
+            console.log('Widget settings applied:', widgetSettings);
+        }
+
+        async function toggleTask(checkbox, taskId) {
+            const isCompleted = checkbox.checked;
+            try {
+                // Try to update via lists API first
+                const response = await fetch(`/api/lists/tasks/${taskId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: isCompleted ? 'completed' : 'pending' })
+                });
+                
+                if (!response.ok) {
+                    // Fallback: just update the UI without API call
+                    console.warn('API update failed, updating UI only');
+                }
+                
+                // Refresh the tasks widget
+                const tasksWidget = document.querySelector('[data-widget-type="tasks"]');
+                if (tasksWidget) {
+                    const widgetInstance = DesktopWidgetManager.activeWidgets.get(tasksWidget);
+                    if (widgetInstance && widgetInstance.loadTasks) {
+                        widgetInstance.loadTasks();
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to toggle task:', error);
+                // Revert checkbox state on error
+                checkbox.checked = !isCompleted;
+            }
+        }
+
+        // Navigation Functions - EXACT COPY from dashboard.html
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('currentTime').textContent = now.toLocaleTimeString([], { 
+                hour: 'numeric', minute: '2-digit', hour12: true 
+            });
+            document.getElementById('currentDate').textContent = now.toLocaleDateString([], { 
+                weekday: 'long', month: 'long', day: 'numeric' 
+            });
+        }
+
+        function handleLogout() {
+            if (confirm('Are you sure you want to logout?')) {
+                window.location.href = 'auth.html';
+            }
+        }
+
+        function openNotifications() {
+            const panel = document.getElementById('notificationsPanel');
+            panel.classList.add('open');
+        }
+
+        function closeNotifications() {
+            const panel = document.getElementById('notificationsPanel');
+            panel.classList.remove('open');
+        }
+
+        function toggleUserDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('open');
+        }
+
+        function showUserProfile() {
+            alert('User profile functionality coming soon!');
+        }
+
+        function showSecuritySettings() {
+            alert('Security settings functionality coming soon!');
+        }
+
+        function switchUser() {
+            alert('Switch user functionality coming soon!');
+        }
+
+        function upgradeSession() {
+            alert('Session upgrade functionality coming soon!');
+        }
+
+        function logout() {
+            handleLogout();
+        }
+
+        function openMoreOverlay() {
+            alert('More options coming soon!');
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            // Update time immediately and then every minute
+            updateTime();
+            setInterval(updateTime, 60000);
+            
+            DesktopWidgetManager.loadLayout();
+            
+            // Add floating action button for adding widgets in edit mode
+            const fab = document.createElement('button');
+            fab.innerHTML = '+';
+            fab.style.cssText = `
+                position: fixed;
+                bottom: 32px;
+                right: 32px;
+                width: 64px;
+                height: 64px;
+                border-radius: 50%;
+                background: var(--primary-gradient);
+                border: none;
+                color: white;
+                font-size: 24px;
+                cursor: pointer;
+                box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+                transition: all 0.3s ease;
+                z-index: 1000;
+                opacity: 0;
+                pointer-events: none;
+            `;
+            
+            fab.addEventListener('click', openWidgetLibrary);
+            document.body.appendChild(fab);
+            
+            // Show/hide FAB based on edit mode
+            const observer = new MutationObserver(() => {
+                fab.style.opacity = isEditMode ? '1' : '0';
+                fab.style.pointerEvents = isEditMode ? 'auto' : 'none';
+            });
+            
+            observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+        });
+    </script>
+</body>
+</html>
