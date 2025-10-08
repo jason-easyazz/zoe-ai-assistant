@@ -3,6 +3,8 @@ data/*.db
 data/*.sqlite
 data/billing/
 data/logs/
+data/backup/
+data/context_cache.db
 
 # Docker volumes
 volumes/
@@ -96,6 +98,10 @@ env/
 aider_env/
 tools/aider_env/
 tools/aider-env/
+mcp_test_env/
+**/venv/
+**/__pycache__/
+.pytest_cache/
 
 # Logs
 logs/
@@ -123,3 +129,7 @@ models/*.safetensors
 .config/
 .ssh/
 homeassistant/.storage/
+homeassistant/*.db
+homeassistant/*.db-shm
+homeassistant/*.db-wal
+homeassistant/*.log*
