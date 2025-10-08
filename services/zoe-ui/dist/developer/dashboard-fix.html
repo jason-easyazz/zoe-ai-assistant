@@ -1,0 +1,55 @@
+<script>
+// Inline metrics updater - works regardless of dashboard structure
+(function() {
+    async function fixMetrics() {
+        try {
+            const response = await fetch('/api/developer/metrics');
+            const data = await response.json();
+            
+            // Find all elements that might be metric displays
+            const possibleMetricElements = [
+                // Try different selectors
+                document.querySelectorAll('.metric-value'),
+                document.querySelectorAll('[class*="metric"]'),
+                document.querySelectorAll('[class*="usage"]'),
+                document.querySelectorAll('[id*="cpu"], [id*="memory"], [id*="disk"]')
+            ];
+            
+            // Find CPU display
+            possibleMetricElements.forEach(elements => {
+                elements.forEach(elem => {
+                    const text = elem.parentElement?.textContent || '';
+                    if (text.toLowerCase().includes('cpu') && data.cpu_percent !== undefined) {
+                        if (elem.textContent === '--' || elem.textContent === '') {
+                            elem.textContent = `${data.cpu_percent.toFixed(1)}%`;
+                            elem.style.fontSize = '24px';
+                            elem.style.fontWeight = 'bold';
+                        }
+                    }
+                    if (text.toLowerCase().includes('memory') && data.memory_percent !== undefined) {
+                        if (elem.textContent === '--' || elem.textContent === '') {
+                            elem.textContent = `${data.memory_percent.toFixed(1)}%`;
+                            elem.style.fontSize = '24px';
+                            elem.style.fontWeight = 'bold';
+                        }
+                    }
+                    if (text.toLowerCase().includes('disk') && data.disk_percent !== undefined) {
+                        if (elem.textContent === '--' || elem.textContent === '') {
+                            elem.textContent = `${data.disk_percent.toFixed(1)}%`;
+                            elem.style.fontSize = '24px';
+                            elem.style.fontWeight = 'bold';
+                        }
+                    }
+                });
+            });
+            
+        } catch (error) {
+            console.error('Metrics fetch failed:', error);
+        }
+    }
+    
+    // Run immediately and every 5 seconds
+    fixMetrics();
+    setInterval(fixMetrics, 5000);
+})();
+</script>

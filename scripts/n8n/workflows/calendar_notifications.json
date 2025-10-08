@@ -1,0 +1,66 @@
+{
+  "name": "Calendar Event Notifications",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{"field": "minutes", "minutesInterval": 15}]
+        }
+      },
+      "name": "Check Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://zoe-core:8000/api/calendar/upcoming",
+        "qs": {
+          "parameters": [
+            {"name": "minutes", "value": "15"}
+          ]
+        }
+      },
+      "name": "Get Upcoming Events",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json['events'].length}}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "name": "Has Events?",
+      "type": "n8n-nodes-base.if",
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://zoe-core:8000/api/notifications/send",
+        "method": "POST",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "Event Starting Soon"
+            },
+            {
+              "name": "message",
+              "value": "={{$json['events'][0]['title']}} starts in 15 minutes"
+            }
+          ]
+        }
+      },
+      "name": "Send Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [850, 250]
+    }
+  ]
+}

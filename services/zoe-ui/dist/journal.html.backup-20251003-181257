@@ -1,0 +1,2939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Zoe - Journal</title>
+    <style>
+        * { 
+            margin: 0; padding: 0; box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh; color: #333;
+            font-size: clamp(14px, 1.6vw, 16px);
+        }
+        
+        /* Navigation */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        /* Authentication Integration */
+        .user-menu {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .user-menu:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .user-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .user-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        
+        .user-role {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.2;
+        }
+        
+        .user-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 8px 0;
+            min-width: 200px;
+            z-index: 1000;
+            display: none;
+            border: 1px solid #e1e5e9;
+        }
+        
+        .user-dropdown.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 8px 16px;
+            color: #333;
+            text-decoration: none;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .dropdown-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .dropdown-divider {
+            height: 1px;
+            background: #e1e5e9;
+            margin: 4px 0;
+        }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold; position: relative;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+            animation: notificationDotPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 8px rgba(123, 97, 255, 0);
+            }
+        }
+        
+        @keyframes notificationDotPulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.2);
+                opacity: 0.7;
+            }
+        }
+        
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .notifications-title {
+            font-size: 18px; font-weight: 600; color: #333; margin: 0;
+        }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content {
+            padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title {
+            font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px;
+        }
+        .notification-meta {
+            font-size: 12px; color: #666; display: flex; gap: 10px;
+        }
+        .notification-time {
+            color: #7B61FF; font-weight: 500;
+        }
+        .notification-priority {
+            padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600;
+        }
+        .no-notifications {
+            text-align: center; color: #666; font-size: 14px; padding: 40px 20px;
+        }
+        
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.warning::before { background: #ea580c; }
+
+        /* Time/Date Display in Top Right */
+        .time-date-display {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time {
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        .current-date {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.2;
+        }
+
+        /* Main Layout */
+        .main-container { 
+            padding: 70px 20px 20px; height: 100vh; display: flex; flex-direction: column;
+        }
+        
+        .top-actions { display: flex; align-items: center; gap: 15px; }
+        .search-btn {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 8px; width: 36px; height: 36px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px;
+        }
+        .search-btn:hover { background: rgba(255, 255, 255, 0.9); color: #333; }
+
+        /* Calendar Header - Matching Calendar Page */
+        .calendar-header { 
+            display: flex; justify-content: space-between; align-items: center; 
+            margin-bottom: 15px; padding: 0 5px;
+        }
+        .calendar-header-left {
+            display: flex; align-items: center; gap: 10px;
+        }
+        .calendar-header-center {
+            flex: 1; text-align: center;
+        }
+        .calendar-header-right {
+            display: flex; align-items: center; gap: 10px;
+        }
+        .month-title { 
+            font-size: 18px; font-weight: 300;
+            line-height: 1.2; color: #333;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .nav-button { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 6px; width: 36px; height: 36px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; 
+            font-size: 14px; font-weight: 600; color: #666; margin-top: 2px; 
+        }
+        .nav-button:hover { 
+            background: rgba(255, 255, 255, 0.8); color: #333; transform: scale(1.05);
+        }
+        .view-toggle {
+            display: flex; background: rgba(255, 255, 255, 0.6); 
+            border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 6px;
+            overflow: hidden;
+        }
+        .view-toggle-btn {
+            padding: 10px 14px; background: transparent; border: none;
+            cursor: pointer; transition: all 0.3s ease; 
+            font-size: 12px; font-weight: 500; color: #666; 
+            min-width: 44px; min-height: 44px; display: flex; 
+            align-items: center; justify-content: center;
+        }
+        .view-toggle-btn.active {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+        }
+        
+        /* Calendar View */
+        .calendar-view {
+            flex: 1; display: flex; flex-direction: column;
+        }
+        
+        .calendar-header {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 30px; padding: 0 10px;
+        }
+        
+        .month-title {
+            font-size: 18px; font-weight: 500; color: #333;
+            margin: 0;
+        }
+        
+        .nav-btn {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.6);
+            border-radius: 8px; width: 40px; height: 40px; display: flex; align-items: center;
+            justify-content: center; cursor: pointer; transition: all 0.2s ease; font-size: 18px;
+            color: #666;
+        }
+        .nav-btn:hover { 
+            background: rgba(255, 255, 255, 0.9); 
+            color: #333;
+            transform: scale(1.05);
+        }
+        
+        .calendar-grid { 
+            display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; 
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px); 
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 16px; padding: 20px;
+            height: 500px;
+        }
+        
+        .calendar-day-header {
+            text-align: center; padding: 12px 8px;
+            font-size: 12px; font-weight: 600; color: #666; text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .calendar-day {
+            aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+            border-radius: 8px; cursor: pointer; transition: all 0.3s ease;
+            position: relative; font-weight: 500; min-height: 40px;
+            background: transparent;
+        }
+        
+        .calendar-day:hover {
+            background: rgba(123, 97, 255, 0.1); transform: scale(1.05);
+        }
+        
+        .calendar-day.other-month {
+            color: #ccc; opacity: 0.5;
+        }
+        
+        .calendar-day.today {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; font-weight: 600;
+        }
+        
+        .calendar-day.has-entries {
+            background: rgba(123, 97, 255, 0.2); color: #7B61FF;
+        }
+        
+        .calendar-day.has-entries::after {
+            content: ''; position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%);
+            width: 4px; height: 4px; background: #7B61FF; border-radius: 50%;
+        }
+        
+        .day-number {
+            font-size: 14px; font-weight: 500; color: #333;
+            margin-bottom: 4px;
+        }
+        
+        .day-entries {
+            flex: 1; display: flex; flex-direction: column; gap: 2px;
+        }
+        
+        .day-entry-preview {
+            background: rgba(123,97,255,0.1); border-radius: 4px;
+            padding: 4px 6px; font-size: 11px; color: #333;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            border-left: 3px solid rgba(123,97,255,0.3);
+        }
+        
+        .day-entry-preview.has-photo {
+            background: rgba(90,224,224,0.1);
+            border-left-color: rgba(90,224,224,0.3);
+        }
+        
+        /* Day View */
+        .day-view {
+            flex: 1; display: flex; flex-direction: column;
+        }
+        
+        .day-header {
+            display: flex; align-items: center; gap: 20px;
+            margin-bottom: 30px; padding-bottom: 20px;
+            border-bottom: 1px solid rgba(0,0,0,0.08);
+        }
+        
+        .back-btn {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.6);
+            border-radius: 8px; padding: 8px 16px; cursor: pointer; transition: all 0.2s ease;
+            font-size: 14px; color: #666; display: flex; align-items: center; gap: 8px;
+        }
+        .back-btn:hover {
+            background: rgba(255, 255, 255, 0.9); color: #333;
+        }
+        
+        .day-title {
+            font-size: 16px; font-weight: 500; color: #333; margin: 0;
+        }
+        
+        /* Calendar Layout - Two Panel System */
+        .calendar-layout {
+            display: grid; grid-template-columns: 2fr 1fr; gap: 24px;
+            max-width: 1200px; margin: 0 auto; align-items: start;
+            height: calc(100vh - 140px);
+        }
+        
+        /* Right Panel - Matching Calendar */
+        .right-panel { 
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px); 
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 20px; 
+            padding: 24px; display: flex; flex-direction: column; 
+            height: 100%; position: relative; align-self: stretch;
+        }
+        
+        .panel-content { 
+            flex: 1; overflow-y: auto; padding-bottom: 0;
+            height: 100%; min-height: 400px;
+        }
+        
+        .entries-list { 
+            margin-bottom: 0; 
+        }
+        
+        .no-entries {
+            text-align: center; color: #666; font-size: 14px; padding: 20px;
+        }
+        
+        /* Day View Layout - Matching Calendar */
+        .day-view {
+            display: none; margin-bottom: 15px;
+        }
+        
+        .day-view.active { 
+            display: block; 
+        }
+        
+        .day-view-layout {
+            display: grid; grid-template-columns: 2fr 1fr; gap: 15px;
+            max-width: 1200px; margin: 0 auto; align-items: start;
+        }
+        
+        .day-view-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 15px; padding: 0 5px;
+        }
+        
+        .day-view-title {
+            font-size: 16px; font-weight: 300;
+            line-height: 1.2; color: #333;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        
+        .day-view-nav {
+            display: flex; gap: 8px;
+        }
+        
+        .day-events, .day-tasks {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 16px;
+            padding: 20px; display: flex; flex-direction: column;
+            height: 100%; position: relative; align-self: stretch;
+        }
+        
+        .section-title {
+            font-size: 16px; font-weight: 600; line-height: 1.4;
+            color: #333; margin: 0; padding: 12px 16px 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .day-timeline {
+            display: flex; flex-direction: column; flex: 1;
+            overflow-y: auto; padding: 8px;
+        }
+        
+        .entry-detail {
+            flex: 1; overflow-y: auto; padding-bottom: 0;
+            min-height: 300px; max-height: calc(100% - 40px);
+        }
+        
+        /* Timeline Slots */
+        .time-slot {
+            display: flex; gap: 12px; padding: 12px; margin-bottom: 8px;
+            background: rgba(255, 255, 255, 0.3); border-radius: 8px;
+            cursor: pointer; transition: all 0.3s ease; border-left: 3px solid transparent;
+            position: relative;
+        }
+        
+        .time-slot:hover {
+            transform: translateX(4px); background: rgba(255, 255, 255, 0.5);
+            border-left-color: rgba(123, 97, 255, 0.3);
+        }
+        
+        .time-slot.selected {
+            background: rgba(123, 97, 255, 0.3); color: #7B61FF; font-weight: 600;
+            border-left-color: #7B61FF;
+        }
+        
+        .time-slot-label {
+            font-size: 12px; color: #7B61FF; font-weight: 600;
+            text-transform: uppercase; min-width: 60px; flex-shrink: 0;
+            padding-top: 2px;
+        }
+        
+        .time-slot-content {
+            flex: 1; display: flex; flex-direction: column; gap: 4px;
+        }
+        /* Day timeline photo strip */
+        .time-slot-photos { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+        .time-slot-photo { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; cursor: pointer; }
+        
+        .entry-title {
+            font-size: 14px; font-weight: 500; color: #333;
+            line-height: 1.3; margin: 0;
+        }
+        
+        .entry-preview {
+            font-size: 12px; color: #666; line-height: 1.4;
+            margin: 0;
+        }
+        
+        .entry-mood {
+            font-size: 12px; color: #7B61FF; margin-top: 4px;
+        }
+
+        /* Day View Entry Styles - Matching Calendar */
+        .day-entry-item {
+            padding: 8px; border-left: 3px solid transparent;
+            cursor: pointer; transition: all 0.3s ease; border-radius: 8px; margin-bottom: 4px;
+            background: rgba(255, 255, 255, 0.3); position: relative;
+            min-height: 45px; display: flex; flex-direction: column;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        
+        .day-entry-item:hover {
+            transform: translateX(4px); background: rgba(255, 255, 255, 0.5);
+        }
+        
+        .day-entry-item.selected {
+            background: rgba(123, 97, 255, 0.3); color: #7B61FF; font-weight: 600;
+            border: 2px solid #7B61FF;
+        }
+        
+        .day-entry-time {
+            font-size: 10px; color: #7B61FF; font-weight: 600; margin-bottom: 2px;
+            text-transform: uppercase;
+        }
+        
+        .day-entry-title {
+            font-size: 12px; color: #333; font-weight: 500; margin-bottom: 0;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            line-height: 1.2;
+        }
+        
+        .day-entry-preview {
+            font-size: 10px; color: #666; margin-top: 2px;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        
+        .day-entry-mood {
+            font-size: 12px; margin-top: 4px; color: #7B61FF;
+        }
+        
+        /* Entry Detail View - Matching Calendar Panel */
+        .entry-detail-title {
+            font-size: 16px; font-weight: 300; color: #333; margin-bottom: 2px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        
+        .entry-detail-meta {
+            display: flex; align-items: center; gap: 16px; margin-bottom: 20px;
+            font-size: 11px; color: #666; font-weight: 400;
+            text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        
+        .entry-detail-mood {
+            font-size: 16px; color: #7B61FF;
+        }
+        
+        .entry-detail-content {
+            font-size: 14px; line-height: 1.6; color: #444;
+            white-space: pre-wrap; margin-bottom: 20px;
+        }
+        
+        .entry-detail-photos {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 8px; margin-top: 16px;
+        }
+        
+        .entry-detail-photo {
+            width: 100%; height: 120px; object-fit: cover; border-radius: 8px;
+            cursor: pointer; transition: transform 0.2s ease;
+        }
+        
+        .entry-detail-photo:hover {
+            transform: scale(1.02);
+        }
+        
+        /* Entry Modal (Day One Style) */
+        .entry-modal {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: flex; align-items: center; justify-content: center; z-index: 5000;
+            padding: 20px;
+        }
+        
+        .entry-modal-content {
+            background: white; border-radius: 16px; max-width: 600px; width: 100%;
+            max-height: 80vh; overflow: hidden; display: flex; flex-direction: column;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+        }
+        
+        .entry-modal-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 20px 24px; border-bottom: 1px solid rgba(0,0,0,0.08);
+        }
+        
+        .entry-modal-date {
+            font-size: 14px; color: #999; font-weight: 500;
+        }
+        
+        .entry-modal-close {
+            background: none; border: none; font-size: 18px; color: #999;
+            cursor: pointer; width: 32px; height: 32px; display: flex;
+            align-items: center; justify-content: center; border-radius: 6px;
+            transition: all 0.2s ease;
+        }
+        
+        .entry-modal-close:hover {
+            background: rgba(0,0,0,0.05); color: #333;
+        }
+        
+        .entry-modal-body {
+            flex: 1; overflow-y: auto; padding: 24px;
+        }
+        
+        .entry-modal-title {
+            font-size: 18px; font-weight: 500; color: #333; margin-bottom: 16px;
+            line-height: 1.3;
+        }
+        
+        .entry-modal-mood {
+            font-size: 16px; margin-bottom: 20px;
+        }
+        
+        .entry-modal-content-text {
+            font-size: 15px; line-height: 1.6; color: #444;
+            white-space: pre-wrap; margin-bottom: 20px;
+        }
+        
+        .entry-modal-photos {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 8px; margin-top: 16px;
+        }
+        
+        .entry-modal-photo {
+            width: 100%; height: 120px; object-fit: cover; border-radius: 8px;
+            cursor: pointer;
+        }
+        
+        .entry-modal-actions {
+            display: flex; gap: 12px; padding: 20px 24px;
+            border-top: 1px solid rgba(0,0,0,0.08);
+        }
+        
+        .entry-modal-btn {
+            flex: 1; padding: 12px 20px; border: 1px solid rgba(0,0,0,0.1);
+            border-radius: 8px; background: white; color: #666; cursor: pointer;
+            font-size: 14px; font-weight: 500; transition: all 0.2s ease;
+        }
+        
+        .entry-modal-btn:hover {
+            background: #f8f9fa; color: #333;
+        }
+        
+        .entry-modal-btn.danger {
+            color: #ef4444; border-color: #ef4444;
+        }
+        
+        .entry-modal-btn.danger:hover {
+            background: #ef4444; color: white;
+        }
+
+        /* Right page: content */
+        .entry-full-title { 
+            font-size: 18px; font-weight: 400; color: #333; margin-bottom: 12px; 
+            line-height: 1.3;
+        }
+        .entry-full-date { 
+            font-size: 12px; color: #999; margin-bottom: 16px; 
+            letter-spacing: 0.3px; text-transform: uppercase;
+        }
+        .entry-full-mood { 
+            font-size: 16px; margin-bottom: 16px; 
+        }
+        .entry-full-content { 
+            font-size: 15px; line-height: 1.6; color: #444; 
+            margin-bottom: 20px; white-space: pre-wrap;
+        }
+        .entry-photos-grid { 
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); 
+            gap: 8px; margin-top: 16px;
+        }
+        .entry-photo-large { 
+            width: 100%; height: 120px; object-fit: cover; border-radius: 8px; 
+            border: 1px solid rgba(255,255,255,0.6); cursor: pointer; 
+        }
+        
+        /* Minimal action buttons */
+        .entry-actions-minimal {
+            position: absolute; top: 16px; right: 16px;
+            display: flex; gap: 8px; opacity: 0; transition: opacity 0.2s ease;
+        }
+        .entry-content:hover .entry-actions-minimal {
+            opacity: 1;
+        }
+        .action-btn-minimal {
+            background: rgba(255, 255, 255, 0.9); border: 1px solid rgba(255, 255, 255, 0.6);
+            border-radius: 6px; width: 32px; height: 32px; display: flex; align-items: center;
+            justify-content: center; cursor: pointer; transition: all 0.2s ease; font-size: 14px;
+            color: #666;
+        }
+        .action-btn-minimal:hover {
+            background: rgba(255, 255, 255, 1); color: #333;
+            transform: scale(1.05);
+        }
+        
+        /* Entry content container */
+        #entryContent {
+            position: relative;
+        }
+
+        /* Overlays: date picker & search */
+        .overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.35); backdrop-filter: blur(6px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+        }
+        .overlay.active { display: flex; }
+        .overlay-card {
+            width: 92%; max-width: 520px; background: rgba(255,255,255,0.95); border: 1px solid rgba(255,255,255,0.6);
+            border-radius: 16px; padding: 18px; box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+        }
+        .overlay-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+        .overlay-title { font-size: 18px; font-weight: 500; }
+        .overlay-close { border: none; background: rgba(0,0,0,0.04); width: 36px; height: 36px; border-radius: 10px; font-size: 18px; cursor: pointer; }
+        .month-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+        .month-btn { padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.7); background: rgba(255,255,255,0.85); cursor: pointer; }
+        .month-btn.active { background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); color: white; border-color: transparent; }
+        .days-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+        .day-btn { padding: 10px 0; text-align: center; border-radius: 8px; border: 1px solid rgba(255,255,255,0.7); background: rgba(255,255,255,0.85); cursor: pointer; font-size: 13px; }
+        .day-btn.today { outline: 2px solid rgba(123,97,255,0.3); }
+        .day-btn.active { background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); color: white; border-color: transparent; }
+
+        /* Search overlay */
+        .search-input-big { width: 100%; padding: 14px 16px; font-size: 16px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.7); background: rgba(255,255,255,0.9); margin-bottom: 10px; }
+        .search-results { max-height: 50vh; overflow: auto; }
+        .search-item { padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.6); background: rgba(255,255,255,0.85); margin-bottom: 8px; cursor: pointer; }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center; padding: 60px 20px; color: #666;
+        }
+        .empty-icon { font-size: 48px; margin-bottom: 16px; }
+        .empty-title { font-size: 18px; font-weight: 500; margin-bottom: 8px; }
+        .empty-subtitle { font-size: 14px; }
+
+        /* Floating Add Button */
+        .floating-add-btn { 
+            position: fixed; bottom: 30px; right: 30px; width: 64px; height: 64px; 
+            border-radius: 50%; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            border: none; color: white; cursor: pointer; display: flex; align-items: center; 
+            justify-content: center; font-size: 28px; transition: all 0.3s ease; 
+            z-index: 1000; box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+        .floating-add-btn:hover { transform: scale(1.1); box-shadow: 0 6px 16px rgba(123, 97, 255, 0.4); }
+
+        /* Enhanced Add Form Styles */
+        .enhanced-add-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 6000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .enhanced-add-overlay.active { display: flex; opacity: 1; }
+        .enhanced-add-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 16px;
+            padding: 20px; max-width: 800px; width: 98%; position: relative;
+            transform: scale(0.9); transition: transform 0.3s ease;
+            max-height: 85vh; overflow-y: auto;
+        }
+        .enhanced-add-overlay.active .enhanced-add-content { transform: scale(1); }
+        .enhanced-add-header { 
+            display: flex; justify-content: flex-end; align-items: center; 
+            margin-bottom: 10px; padding-bottom: 5px; 
+        }
+        .enhanced-add-title {
+            display: none; /* Hide title for 7" screen */
+        }
+        .enhanced-add-close {
+            background: rgba(255, 255, 255, 0.8); border: none;
+            border-radius: 50%; width: 32px; height: 32px;
+            font-size: 16px; cursor: pointer; color: #666;
+            position: absolute; top: 10px; right: 10px; z-index: 10;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        /* Add Type Toggle */
+        .add-type-toggle {
+            display: flex; gap: 10px; margin-bottom: 25px;
+            background: rgba(255, 255, 255, 0.3); border-radius: 12px;
+            padding: 4px; border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .toggle-btn {
+            flex: 1; padding: 12px 20px; border: none; border-radius: 8px;
+            background: transparent; color: #666; font-size: 14px; font-weight: 500;
+            cursor: pointer; transition: all 0.3s ease; min-height: 44px;
+            display: flex; align-items: center; justify-content: center; gap: 8px;
+        }
+        .toggle-btn.active {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+        .toggle-btn:hover:not(.active) {
+            background: rgba(255, 255, 255, 0.5); color: #333;
+        }
+        .enhanced-add-layout {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+            align-items: start;
+        }
+        .enhanced-form-section {
+            background: rgba(255, 255, 255, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 12px; padding: 15px;
+        }
+        .enhanced-form-title {
+            font-size: 16px; font-weight: 600; color: #333;
+            margin-bottom: 15px; display: flex; align-items: center; gap: 6px;
+        }
+        .enhanced-form-field {
+            margin-bottom: 15px;
+        }
+        .enhanced-form-label {
+            display: block; font-size: 14px; font-weight: 500; color: #555;
+            margin-bottom: 8px;
+        }
+        .enhanced-form-input {
+            width: 100%; padding: 12px 16px; border: 1px solid rgba(255, 255, 255, 0.6);
+            border-radius: 10px; background: rgba(255, 255, 255, 0.8);
+            font-size: 14px; color: #333; transition: all 0.3s ease;
+        }
+        .enhanced-form-input:focus {
+            outline: none; border-color: #7B61FF;
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+        .enhanced-form-row {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 15px;
+        }
+        .enhanced-form-checkbox {
+            display: flex; align-items: center; gap: 8px;
+            margin-bottom: 20px;
+        }
+        .enhanced-form-checkbox input[type="checkbox"] {
+            width: 16px; height: 16px; accent-color: #7B61FF;
+        }
+        .enhanced-form-checkbox label {
+            font-size: 14px; color: #555; cursor: pointer;
+        }
+        .enhanced-form-actions {
+            display: flex; gap: 12px; justify-content: flex-end;
+            margin-top: 25px; padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        .enhanced-form-btn {
+            padding: 12px 24px; border: none; border-radius: 10px;
+            font-size: 14px; font-weight: 500; cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .enhanced-form-btn.primary {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+        }
+        .enhanced-form-btn.primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+        .enhanced-form-btn.secondary {
+            background: rgba(255, 255, 255, 0.6);
+            color: #666; border: 1px solid rgba(255, 255, 255, 0.4);
+        }
+        .enhanced-form-btn.secondary:hover {
+            background: rgba(255, 255, 255, 0.8);
+        }
+
+        /* AI Chat Section */
+        .ai-chat-section {
+            text-align: center; display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+        }
+        .ai-chat-orb {
+            width: 80px; height: 80px; border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 32px; cursor: pointer; margin-bottom: 20px;
+            transition: all 0.3s ease; box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+            animation: pulse 2s infinite;
+        }
+        .ai-chat-orb:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 16px rgba(123, 97, 255, 0.4);
+            animation: none;
+        }
+        .ai-chat-text {
+            font-size: 16px; font-weight: 500; color: #333;
+            margin-bottom: 15px;
+        }
+        .voice-conversation {
+            margin-top: 20px; padding: 15px; background: rgba(123, 97, 255, 0.05);
+            border-radius: 8px; border: 1px solid rgba(123, 97, 255, 0.1);
+        }
+        .conversation-item {
+            margin-bottom: 10px; padding: 8px 12px; border-radius: 6px;
+            font-size: 14px; line-height: 1.4;
+        }
+        .conversation-item.user {
+            background: rgba(123, 97, 255, 0.1); border-left: 3px solid #7B61FF;
+        }
+        .conversation-item.assistant {
+            background: rgba(90, 224, 224, 0.1); border-left: 3px solid #5AE0E0;
+        }
+        .conversation-item strong {
+            color: #333; margin-right: 8px;
+        }
+        
+        /* Photo Upload Styles - Optimized for 7" screen */
+        .photo-upload-area {
+            border: 2px dashed #ddd; border-radius: 6px; padding: 10px;
+            text-align: center; background: #fafafa; transition: all 0.3s ease;
+        }
+        .photo-upload-area:hover {
+            border-color: #7B61FF; background: rgba(123, 97, 255, 0.05);
+        }
+        .photo-upload-placeholder {
+            cursor: pointer; padding: 10px;
+        }
+        .photo-upload-icon {
+            font-size: 16px; margin-bottom: 5px; color: #7B61FF;
+        }
+        .photo-upload-text {
+            font-size: 12px; font-weight: 500; color: #333; margin-bottom: 3px;
+        }
+        .photo-upload-subtext {
+            font-size: 10px; color: #666;
+        }
+        .photo-preview-container {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(50px, 1fr));
+            gap: 6px; margin-top: 8px;
+        }
+        .photo-preview {
+            position: relative; width: 50px; height: 50px;
+            border-radius: 6px; overflow: hidden; border: 1px solid #ddd;
+        }
+        .photo-preview img {
+            width: 100%; height: 100%; object-fit: cover;
+        }
+        .photo-remove {
+            position: absolute; top: -3px; right: -3px;
+            width: 16px; height: 16px; border-radius: 50%;
+            background: #ff4444; color: white; border: none;
+            font-size: 10px; cursor: pointer; display: flex;
+            align-items: center; justify-content: center;
+        }
+        
+        /* Photo Layout Styles */
+        .photo-layout-options {
+            display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap;
+        }
+        .layout-option {
+            padding: 8px 12px; border: 2px solid #ddd; border-radius: 8px;
+            background: white; cursor: pointer; transition: all 0.3s ease;
+            font-size: 12px; font-weight: 500; color: #666;
+        }
+        .layout-option.active {
+            border-color: #7B61FF; background: rgba(123, 97, 255, 0.1);
+            color: #7B61FF;
+        }
+        .layout-option:hover:not(.active) {
+            border-color: #999; background: #f5f5f5;
+        }
+        
+        /* Photo Layout Grids */
+        .photo-grid-single { display: grid; grid-template-columns: 1fr; gap: 10px; }
+        .photo-grid-double { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .photo-grid-triple { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+        .photo-grid-masonry { 
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); 
+            gap: 10px; 
+        }
+        .photo-grid-mosaic {
+            display: grid; grid-template-columns: 2fr 1fr; grid-template-rows: 1fr 1fr;
+            gap: 8px; height: 200px;
+        }
+        .photo-grid-mosaic .photo-preview:first-child {
+            grid-row: 1 / -1;
+        }
+        .voice-examples {
+            background: rgba(123, 97, 255, 0.1);
+            border-radius: 8px; padding: 15px; text-align: left;
+        }
+        .voice-examples p {
+            margin: 5px 0; font-size: 12px; color: #666;
+        }
+        .voice-examples strong {
+            color: #7B61FF;
+        }
+        
+        @media (max-width: 768px) {
+            .enhanced-add-layout { grid-template-columns: 1fr; gap: 20px; }
+            .enhanced-add-content { padding: 20px; max-width: 95%; }
+            .enhanced-form-row { grid-template-columns: 1fr; }
+        }
+
+        /* Voice Dictation Modal */
+        .voice-modal {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.8); display: flex;
+            align-items: center; justify-content: center; z-index: 2000;
+        }
+        .voice-modal-content {
+            background: white; border-radius: 16px; padding: 30px;
+            max-width: 500px; width: 90%; text-align: center;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+        }
+        .voice-modal-header {
+            margin-bottom: 20px;
+        }
+        .voice-modal-title {
+            font-size: 18px; font-weight: 600; color: #333;
+            margin-bottom: 8px;
+        }
+        .voice-modal-subtitle {
+            font-size: 14px; color: #666;
+        }
+        .voice-status {
+            margin: 20px 0; padding: 20px;
+            background: rgba(123, 97, 255, 0.1);
+            border-radius: 12px; border: 2px solid rgba(123, 97, 255, 0.2);
+        }
+        .voice-status.listening {
+            background: rgba(255, 107, 107, 0.1);
+            border-color: rgba(255, 107, 107, 0.3);
+        }
+        .voice-status.processing {
+            background: rgba(255, 193, 7, 0.1);
+            border-color: rgba(255, 193, 7, 0.3);
+        }
+        .voice-status.success {
+            background: rgba(40, 167, 69, 0.1);
+            border-color: rgba(40, 167, 69, 0.3);
+        }
+        .voice-icon {
+            font-size: 48px; margin-bottom: 10px;
+        }
+        .voice-text {
+            font-size: 16px; color: #333; margin-bottom: 10px;
+            min-height: 20px;
+        }
+        .voice-transcript {
+            font-size: 14px; color: #666; font-style: italic;
+            min-height: 20px; max-height: 100px; overflow-y: auto;
+        }
+        .voice-controls {
+            display: flex; gap: 12px; justify-content: center; margin-top: 20px;
+        }
+        .voice-btn {
+            padding: 12px 24px; border: none; border-radius: 8px;
+            font-size: 14px; font-weight: 500; cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .voice-btn.primary {
+            background: #7B61FF; color: white;
+        }
+        .voice-btn.primary:hover {
+            background: #6B4CE6;
+        }
+        .voice-btn.secondary {
+            background: #f8f9fa; color: #666; border: 1px solid #dee2e6;
+        }
+        .voice-btn.secondary:hover {
+            background: #e9ecef;
+        }
+
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+
+        /* Photo Modal */
+        .photo-modal {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.9); display: none; align-items: center;
+            justify-content: center; z-index: 4000; opacity: 0; transition: all 0.3s ease;
+        }
+        .photo-modal.active { display: flex; opacity: 1; }
+        .photo-modal-content {
+            max-width: 90vw; max-height: 90vh; position: relative;
+        }
+        .photo-modal img {
+            max-width: 100%; max-height: 100%; border-radius: 12px;
+        }
+        .photo-modal-close {
+            position: absolute; top: -40px; right: 0; background: rgba(255, 255, 255, 0.2);
+            border: none; border-radius: 50%; width: 40px; height: 40px;
+            font-size: 20px; cursor: pointer; color: white;
+        }
+
+        /* Mobile Responsive */
+        @media (max-width: 900px) {
+            .nav-menu { display: none; }
+            .book { max-width: 100%; grid-template-columns: 1fr; }
+            .spine { display: none; }
+            .nav-arrow { width: 52px; height: 52px; }
+            .more-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+    <script src="js/auth.js"></script>
+</head>
+<body>
+    <!-- Navigation -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="toggleUserDropdown()"></div>
+            <div class="nav-menu">
+                <a href="chat.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="lists.html" class="nav-item">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item active">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- Time/Date Display -->
+            <div class="time-date-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+            
+            <!-- User Menu (hidden, accessible via mini-orb click) -->
+            <div class="user-menu" onclick="toggleUserDropdown()" style="display: none;">
+                <div class="user-avatar" id="userAvatar">?</div>
+                <div class="user-info">
+                    <div class="username" id="username">User</div>
+                    <div class="user-role" id="userRole">Member</div>
+                </div>
+                <div class="user-dropdown" id="userDropdown">
+                    <a href="#" class="dropdown-item" onclick="showUserProfile()">Profile</a>
+                    <a href="#" class="dropdown-item" onclick="showSecuritySettings()">Security</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" class="dropdown-item" onclick="switchUser()">Switch User</a>
+                    <a href="#" class="dropdown-item" onclick="upgradeSession()" id="upgradeSessionItem" style="display: none;">Upgrade Session</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="admin.html" class="dropdown-item" id="adminLink" style="display: none;">Admin Dashboard</a>
+                    <div class="dropdown-divider" id="adminDivider" style="display: none;"></div>
+                    <a href="#" class="dropdown-item" onclick="logout()">Logout</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <!-- Top Actions -->
+        <div class="top-actions">
+            <button class="search-btn" onclick="openSearchOverlay()" title="Search entries">🔍</button>
+        </div>
+
+        <!-- Calendar Header - Matching Calendar Page -->
+        <div class="calendar-header">
+            <div class="calendar-header-left">
+                <button class="nav-button" onclick="previousMonth()">‹</button>
+            </div>
+            <div class="calendar-header-center">
+                <h1 class="month-title" id="currentMonth">Loading...</h1>
+            </div>
+            <div class="calendar-header-right">
+                <button class="nav-button" onclick="nextMonth()">›</button>
+                <div class="view-toggle">
+                    <button class="view-toggle-btn active" onclick="switchView('month')" id="monthViewBtn">Month</button>
+                    <button class="view-toggle-btn" onclick="switchView('day')" id="dayViewBtn">Day</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Month View -->
+        <div class="calendar-layout" id="monthView">
+            <div class="calendar-grid" id="calendarGrid">
+                <div style="grid-column: 1/-1; text-align: center; padding: 40px; color: #666;">
+                    Loading calendar...
+                </div>
+            </div>
+
+            <div class="right-panel">
+                <div class="panel-content" id="panelContent">
+                    <div class="entries-list" id="entriesList">
+                        <div class="no-entries">Select a date to view journal entries</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Day View -->
+        <div class="day-view" id="dayView">
+            <div class="day-view-layout">
+                <!-- Left Side: Day Timeline -->
+                <div class="day-events">
+                    <div class="day-timeline" id="dayTimeline">
+                        <!-- Timeline will be generated here -->
+                    </div>
+                </div>
+                
+                <!-- Right Side: Entry Detail -->
+                <div class="day-tasks">
+                    <div class="section-title">Entry Details</div>
+                    <div class="entry-detail" id="dayEntryDetail">
+                        <div class="empty-state">
+                            <div class="empty-icon">📖</div>
+                            <div class="empty-title">Select an entry</div>
+                            <div class="empty-subtitle">Choose an entry to read the full content</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="alert('Coming soon!')">
+                    <div class="more-item-icon">📊</div>
+                    <div class="more-item-label">Analytics</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Photo Modal -->
+    <div class="photo-modal" id="photoModal">
+        <div class="photo-modal-content">
+            <button class="photo-modal-close" onclick="closePhotoModal()">×</button>
+            <img id="modalPhoto" src="" alt="Journal photo">
+        </div>
+    </div>
+
+    <!-- Date Picker Overlay -->
+    <div class="overlay" id="dateOverlay">
+        <div class="overlay-card">
+            <div class="overlay-header">
+                <button class="overlay-close" onclick="closeDatePicker()">×</button>
+                <div class="overlay-title" id="overlayTitle">Pick a date</div>
+                <div style="display:flex; gap:8px;">
+                    <button class="overlay-close" onclick="changeYear(-1)">−</button>
+                    <button class="overlay-close" onclick="changeYear(1)">+</button>
+                </div>
+            </div>
+            <div class="month-row" id="monthRow"></div>
+            <div class="days-grid" id="daysGrid"></div>
+        </div>
+    </div>
+
+    <!-- Search Overlay -->
+    <div class="overlay" id="searchOverlay">
+        <div class="overlay-card">
+            <div class="overlay-header">
+                <div class="overlay-title">Search entries</div>
+                <button class="overlay-close" onclick="closeSearchOverlay()">×</button>
+            </div>
+            <input id="searchBig" class="search-input-big" placeholder="Search by title or content" />
+            <div id="searchResults" class="search-results"></div>
+        </div>
+    </div>
+
+    <!-- Enhanced Add Entry Form -->
+    <div class="enhanced-add-overlay" id="enhancedAddOverlay">
+        <div class="enhanced-add-content">
+            <div class="enhanced-add-header">
+                <h3 class="enhanced-add-title">New Journal Entry</h3>
+                <button class="enhanced-add-close" onclick="closeEnhancedAddForm()">×</button>
+            </div>
+            
+            <div class="enhanced-add-layout">
+                <!-- Manual Form Section -->
+                <div class="enhanced-form-section">
+                    <!-- Toggle between Entry and Memory -->
+                    <div class="add-type-toggle">
+                        <button class="toggle-btn active" id="toggleEntry" onclick="toggleAddType('entry')">📝 Entry</button>
+                        <button class="toggle-btn" id="toggleMemory" onclick="toggleAddType('memory')">🧠 Memory</button>
+                    </div>
+                    <h4 class="enhanced-form-title">📝 Entry Details</h4>
+                    <div class="enhanced-form-field">
+                        <label class="enhanced-form-label">Entry Title</label>
+                        <input type="text" class="enhanced-form-input" id="enhancedEntryTitle" placeholder="Enter entry title">
+                    </div>
+                    <div class="enhanced-form-field">
+                        <label class="enhanced-form-label">Entry Content</label>
+                        <textarea class="enhanced-form-input" id="enhancedEntryContent" rows="6" placeholder="Write your thoughts, experiences, or reflections..."></textarea>
+                    </div>
+                    <div class="enhanced-form-row">
+                        <div class="enhanced-form-field">
+                            <label class="enhanced-form-label">Mood</label>
+                            <select class="enhanced-form-input" id="enhancedEntryMood">
+                                <option value="">Select mood...</option>
+                                <option value="happy">😊 Happy</option>
+                                <option value="sad">😢 Sad</option>
+                                <option value="excited">🤩 Excited</option>
+                                <option value="anxious">😰 Anxious</option>
+                                <option value="calm">😌 Calm</option>
+                                <option value="grateful">🙏 Grateful</option>
+                                <option value="frustrated">😤 Frustrated</option>
+                                <option value="content">😌 Content</option>
+                            </select>
+                        </div>
+                        <div class="enhanced-form-field">
+                            <label class="enhanced-form-label">Category</label>
+                            <select class="enhanced-form-input" id="enhancedEntryCategory">
+                                <option value="general">General</option>
+                                <option value="work">Work</option>
+                                <option value="personal">Personal</option>
+                                <option value="health">Health</option>
+                                <option value="relationships">Relationships</option>
+                                <option value="goals">Goals</option>
+                                <option value="reflection">Reflection</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="enhanced-form-checkbox">
+                        <input type="checkbox" id="enhancedEntryPrivate">
+                        <label for="enhancedEntryPrivate">Private entry (not shared)</label>
+                    </div>
+                    <div class="enhanced-form-field">
+                        <label class="enhanced-form-label">Photos (Optional)</label>
+                        <div class="photo-upload-area" id="photoUploadArea">
+                            <input type="file" id="photoInput" multiple accept="image/*" style="display: none;" onchange="handlePhotoUpload(event)">
+                            <div class="photo-upload-placeholder" onclick="document.getElementById('photoInput').click()">
+                                <div class="photo-upload-icon">📷</div>
+                                <div class="photo-upload-text">Tap to add photos</div>
+                                <div class="photo-upload-subtext">Multiple photos supported</div>
+                            </div>
+                            <div class="photo-preview-container" id="photoPreviewContainer"></div>
+                            <div class="photo-layout-options" id="photoLayoutOptions" style="display: none;">
+                                <div class="layout-option active" onclick="selectPhotoLayout('single')">Single</div>
+                                <div class="layout-option" onclick="selectPhotoLayout('double')">Double</div>
+                                <div class="layout-option" onclick="selectPhotoLayout('triple')">Triple</div>
+                                <div class="layout-option" onclick="selectPhotoLayout('masonry')">Masonry</div>
+                                <div class="layout-option" onclick="selectPhotoLayout('mosaic')">Mosaic</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Voice Assistant Section -->
+                <div class="enhanced-form-section ai-chat-section">
+                    <h4 class="enhanced-form-title">🎤 Voice Dictation</h4>
+                    <div class="ai-chat-orb" onclick="toggleVoiceInput()">
+                        🎤
+                    </div>
+                    <div class="ai-chat-text">
+                        Press to talk
+                    </div>
+                    <div class="voice-conversation" id="voiceConversation" style="display: none;">
+                        <div class="conversation-item user" id="userMessage" style="display: none;">
+                            <strong>You:</strong> <span id="userText"></span>
+                        </div>
+                        <div class="conversation-item assistant" id="assistantMessage" style="display: none;">
+                            <strong>Zoe:</strong> <span id="assistantText"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="enhanced-form-actions">
+                <button class="enhanced-form-btn secondary" onclick="closeEnhancedAddForm()">Cancel</button>
+                <button class="enhanced-form-btn primary" onclick="saveEnhancedEntry()">Create Entry</button>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Floating Add Button -->
+    <button class="floating-add-btn" onclick="openEnhancedAddForm()" title="New Entry">+</button>
+
+    <script src="js/common.js?v=1.5"></script>
+    <script src="js/ai-processor.js?v=1.1"></script>
+    <script>
+        let allEntries = [];
+        let currentEntry = null;
+        let currentDate = new Date();
+        let currentView = 'calendar'; // 'calendar' or 'day'
+        let selectedDay = null;
+        let isEditing = false;
+        let editingEntryId = null;
+        
+        // Update API status
+        async function updateAPIStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const indicator = document.getElementById('apiStatus');
+                if (response.ok) {
+                    indicator.textContent = 'Online';
+                    indicator.className = 'api-indicator online';
+                } else {
+                    indicator.textContent = 'Warning';
+                    indicator.className = 'api-indicator warning';
+                }
+            } catch (error) {
+                document.getElementById('apiStatus').textContent = 'Offline';
+                document.getElementById('apiStatus').className = 'api-indicator offline';
+            }
+        }
+
+        // Time/Date Update Functions
+        function updateTimeDate() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            const timeElement = document.getElementById('currentTime');
+            const dateElement = document.getElementById('currentDate');
+            
+            if (timeElement) timeElement.textContent = timeString;
+            if (dateElement) dateElement.textContent = dateString;
+        }
+
+        // User Menu Functions
+        function toggleUserDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            if (dropdown) {
+                dropdown.classList.toggle('show');
+            }
+        }
+
+        // Authentication and UI functions now handled by auth.js and common.js
+        // Removed duplicate stub functions
+
+        // Notifications Functions
+        function openNotifications() {
+            const panel = document.getElementById('notificationsPanel');
+            if (panel) {
+                panel.classList.add('open');
+            }
+        }
+
+        function closeNotifications() {
+            const panel = document.getElementById('notificationsPanel');
+            if (panel) {
+                panel.classList.remove('open');
+            }
+        }
+
+        // More Overlay Functions
+        function openMoreOverlay() {
+            const overlay = document.getElementById('moreOverlay');
+            if (overlay) {
+                overlay.classList.add('active');
+            }
+        }
+
+        function closeMoreOverlay() {
+            const overlay = document.getElementById('moreOverlay');
+            if (overlay) {
+                overlay.classList.remove('active');
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            loadEntries();
+            updateCalendarHeader();
+            renderCalendar();
+            
+            // Update time/date immediately and every minute
+            updateTimeDate();
+            setInterval(updateTimeDate, 60000);
+            updateTime();
+            setInterval(updateTime, 1000);
+            updateAPIStatus();
+            setInterval(updateAPIStatus, 30000); // Check every 30s
+            
+            // Handle routed data from other pages
+            handleRoutedData();
+
+            // Search overlay handlers
+            document.getElementById('searchBig').addEventListener('input', onSearchInput);
+        });
+
+        // Load journal entries
+        async function loadEntries() {
+            try {
+                console.log('Loading entries with API_BASE:', API_BASE);
+                const response = await apiRequest('/journal');
+                allEntries = response.entries || [];
+                if (currentView === 'month') {
+                    renderCalendar();
+                } else if (currentView === 'day') {
+                    renderDayView(currentDate);
+                }
+            } catch (error) {
+                console.error('Failed to load entries:', error);
+                console.error('API_BASE was:', API_BASE);
+                allEntries = [];
+                if (currentView === 'month') {
+                    renderCalendar();
+                }
+            }
+        }
+
+        // Check if two dates are the same day
+        function isSameDate(date1, date2) {
+            return date1.getFullYear() === date2.getFullYear() &&
+                   date1.getMonth() === date2.getMonth() &&
+                   date1.getDate() === date2.getDate();
+        }
+        // Calendar Functions
+        function renderCalendar() {
+            const monthTitle = document.getElementById('currentMonth');
+            const calendarGrid = document.getElementById('calendarGrid');
+            
+            const year = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+            
+            monthTitle.textContent = currentDate.toLocaleDateString('en-US', { 
+                month: 'long', 
+                year: 'numeric' 
+            });
+            
+            // Get first day of month and number of days
+            const firstDay = new Date(year, month, 1);
+            const lastDay = new Date(year, month + 1, 0);
+            const daysInMonth = lastDay.getDate();
+            const startingDayOfWeek = firstDay.getDay();
+            
+            // Clear grid
+            calendarGrid.innerHTML = '';
+            
+            // Add day headers
+            const dayHeaders = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            dayHeaders.forEach(day => {
+                const dayHeader = document.createElement('div');
+                dayHeader.className = 'calendar-day-header';
+                dayHeader.textContent = day;
+                calendarGrid.appendChild(dayHeader);
+            });
+            
+            // Add empty cells for days before month starts
+            for (let i = 0; i < startingDayOfWeek; i++) {
+                const emptyDay = document.createElement('div');
+                emptyDay.className = 'calendar-day other-month';
+                calendarGrid.appendChild(emptyDay);
+            }
+            
+            // Add days of the month
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dayElement = document.createElement('div');
+                dayElement.className = 'calendar-day';
+                dayElement.onclick = () => selectCalendarDay(new Date(year, month, day));
+                
+                const dayNumber = document.createElement('div');
+                dayNumber.className = 'day-number';
+                dayNumber.textContent = day;
+                dayElement.appendChild(dayNumber);
+                
+                // Check if today
+                const today = new Date();
+                if (year === today.getFullYear() && month === today.getMonth() && day === today.getDate()) {
+                    dayElement.classList.add('today');
+                }
+                
+                // Add entries for this day
+                const dayDate = new Date(year, month, day);
+                const dayEntries = allEntries.filter(entry => 
+                    isSameDate(new Date(entry.created_at), dayDate)
+                );
+                
+                if (dayEntries.length > 0) {
+                    dayElement.classList.add('has-entries');
+                }
+                
+                calendarGrid.appendChild(dayElement);
+            }
+        }
+        
+        function openDayView(date) {
+            selectedDay = date;
+            currentDate = date; // Update current date for navigation
+            switchView('day');
+        }
+        
+        function selectCalendarDay(date) {
+            // Update right panel with entries for selected day
+            updateRightPanel(date);
+        }
+        
+        function updateRightPanel(date) {
+            const entriesListEl = document.getElementById('entriesList');
+            
+            // Get entries for this date
+            const entriesForDate = allEntries
+                .filter(entry => isSameDate(new Date(entry.created_at), date))
+                .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            
+            if (entriesForDate.length === 0) {
+                entriesListEl.innerHTML = `
+                    <div class="no-entries">No entries for this day</div>
+                `;
+            } else {
+                entriesListEl.innerHTML = entriesForDate.map(entry => `
+                    <div class="day-entry-item" onclick="openDayView(new Date('${entry.created_at}'))">
+                        <div class="day-entry-time">${formatTime(entry.created_at)}</div>
+                        <div class="day-entry-title">${escapeHtml(entry.title)}</div>
+                        <div class="day-entry-preview">${escapeHtml(entry.content.substring(0, 50))}${entry.content.length > 50 ? '...' : ''}</div>
+                        ${entry.mood ? `<div class="day-entry-mood">${entry.mood}</div>` : ''}
+                    </div>
+                `).join('');
+            }
+        }
+        
+        
+        function renderDayView(date) {
+            const dayTimeline = document.getElementById('dayTimeline');
+            const dayEntryDetail = document.getElementById('dayEntryDetail');
+            
+            const entriesForDate = allEntries
+                .filter(entry => isSameDate(new Date(entry.created_at), date))
+                .sort((a, b) => new Date(a.created_at) - new Date(b.created_at)); // Sort by time ascending for timeline
+            
+            if (entriesForDate.length === 0) {
+                dayTimeline.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">📝</div>
+                        <div class="empty-title">No entries for this day</div>
+                        <div class="empty-subtitle">Tap + to add your first note today</div>
+                    </div>
+                `;
+                dayEntryDetail.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">📖</div>
+                        <div class="empty-title">Select an entry</div>
+                        <div class="empty-subtitle">Choose an entry to read the full content</div>
+                    </div>
+                `;
+                return;
+            }
+            
+            // Create timeline entries
+            dayTimeline.innerHTML = entriesForDate.map(entry => {
+                const entryTime = new Date(entry.created_at);
+                const timeStr = entryTime.toLocaleTimeString('en-US', { 
+                    hour: 'numeric', 
+                    minute: '2-digit',
+                    hour12: true 
+                });
+                
+                const photosStrip = entry.photos && entry.photos.length > 0
+                    ? `<div class=\"time-slot-photos\">${entry.photos.slice(0,4).map(p => `<img src=\"${p}\" class=\"time-slot-photo\" onclick=\"event.stopPropagation(); openPhotoModal('${p}')\">`).join('')}</div>`
+                    : '';
+                
+                return `
+                    <div class="time-slot" onclick="selectDayEntry(${entry.id})">
+                        <div class="time-slot-label">${timeStr}</div>
+                        <div class="time-slot-content">
+                            <div class="entry-title">${escapeHtml(entry.title)}</div>
+                            <div class="entry-preview">${escapeHtml(entry.content.substring(0, 80))}${entry.content.length > 80 ? '...' : ''}</div>
+                            ${photosStrip}
+                            ${entry.mood ? `<div class="entry-mood">${entry.mood}</div>` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+        
+        function selectDayEntry(entryId) {
+            const entry = allEntries.find(e => e.id === entryId);
+            if (!entry) return;
+            
+            currentEntry = entry;
+            
+            // Update UI - clear previous selections
+            document.querySelectorAll('.time-slot').forEach(item => {
+                item.classList.remove('selected');
+            });
+            document.querySelectorAll('.day-entry-item').forEach(item => {
+                item.classList.remove('selected');
+            });
+            
+            // Add selection to clicked item
+            if (event && event.target) {
+                const container = event.target.closest('.time-slot') || event.target.closest('.day-entry-item');
+                if (container) container.classList.add('selected');
+            }
+            
+            // Show entry detail
+            showEntryDetail(entry);
+        }
+        
+        function showEntryDetail(entry) {
+            const dayEntryDetail = document.getElementById('dayEntryDetail');
+            dayEntryDetail.innerHTML = `
+                <div class="entry-detail-title">${escapeHtml(entry.title)}</div>
+                <div class="entry-detail-meta">
+                    <span>${formatDate(entry.created_at)}</span>
+                    <span>${formatTime(entry.created_at)}</span>
+                    ${entry.mood ? `<span class="entry-detail-mood">${entry.mood}</span>` : ''}
+                </div>
+                <div class="entry-detail-content">${escapeHtml(entry.content)}</div>
+                ${entry.photos && entry.photos.length > 0 ? `
+                    <div class="entry-detail-photos">
+                        ${entry.photos.map(photo => 
+                            `<img src="${photo}" class="entry-detail-photo" alt="Journal photo" onclick="openPhotoModal('${photo}')">`
+                        ).join('')}
+                    </div>
+                ` : ''}
+                <div style="margin-top: 20px; display: flex; gap: 12px;">
+                    <button class="entry-modal-btn" onclick="editEntry(${entry.id})">Edit</button>
+                    <button class="entry-modal-btn danger" onclick="deleteEntry(${entry.id})">Delete</button>
+                </div>
+            `;
+        }
+
+        // View switching functions - Matching Calendar
+        async function switchView(view) {
+            currentView = view;
+            
+            // Update toggle buttons
+            document.querySelectorAll('.view-toggle-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(view + 'ViewBtn').classList.add('active');
+            
+            // Show/hide views
+            const monthView = document.getElementById('monthView');
+            const dayView = document.getElementById('dayView');
+            
+            if (view === 'month') {
+                monthView.style.display = 'grid';
+                dayView.classList.remove('active');
+                updateCalendarHeader();
+                renderCalendar();
+            } else if (view === 'day') {
+                monthView.style.display = 'none';
+                dayView.classList.add('active');
+                updateCalendarHeader();
+                if (selectedDay) {
+                    renderDayView(selectedDay);
+                } else {
+                    renderDayView(currentDate);
+                }
+            }
+        }
+        
+        function updateCalendarHeader() {
+            const monthTitle = document.getElementById('currentMonth');
+            if (currentView === 'month') {
+                monthTitle.textContent = currentDate.toLocaleDateString('en-US', { 
+                    month: 'long', 
+                    year: 'numeric' 
+                });
+            } else if (currentView === 'day') {
+                const today = new Date();
+                const isToday = isSameDate(currentDate, today);
+                
+                if (isToday) {
+                    monthTitle.textContent = 'Today';
+                } else {
+                    monthTitle.textContent = currentDate.toLocaleDateString('en-US', { 
+                        month: 'long', 
+                        day: 'numeric', 
+                        year: 'numeric' 
+                    });
+                }
+            }
+        }
+        
+        function previousMonth() {
+            const next = new Date(currentDate);
+            next.setMonth(next.getMonth() - 1);
+            currentDate = next;
+            updateCalendarHeader();
+            if (currentView === 'month') {
+                renderCalendar();
+            } else if (currentView === 'day') {
+                renderDayView(currentDate);
+            }
+        }
+        
+        function nextMonth() {
+            const next = new Date(currentDate);
+            next.setMonth(next.getMonth() + 1);
+            currentDate = next;
+            updateCalendarHeader();
+            if (currentView === 'month') {
+                renderCalendar();
+            } else if (currentView === 'day') {
+                renderDayView(currentDate);
+            }
+        }
+        
+        function navigateDay(delta) {
+            const next = new Date(currentDate);
+            next.setDate(next.getDate() + delta);
+            currentDate = next;
+            selectedDay = next;
+            updateCalendarHeader();
+            renderDayView(next);
+        }
+
+        // Select entry - show full content in modal
+        function selectEntry(entryId) {
+            const entry = allEntries.find(e => e.id === entryId);
+            if (!entry) return;
+            
+            currentEntry = entry;
+            
+            // Update UI
+            document.querySelectorAll('.entry-item').forEach(item => {
+                item.classList.remove('selected');
+            });
+            if (event && event.target) {
+                const container = event.target.closest('.entry-item');
+                if (container) container.classList.add('selected');
+            }
+            
+            // Show entry in modal
+            showEntryModal(entry);
+        }
+        
+        // Show entry in modal (Day One style)
+        function showEntryModal(entry) {
+            const modal = document.createElement('div');
+            modal.className = 'entry-modal';
+            modal.innerHTML = `
+                <div class="entry-modal-content">
+                    <div class="entry-modal-header">
+                        <div class="entry-modal-date">${formatDate(entry.created_at)}</div>
+                        <button class="entry-modal-close" onclick="closeEntryModal()">×</button>
+                    </div>
+                    <div class="entry-modal-body">
+                        <h1 class="entry-modal-title">${escapeHtml(entry.title)}</h1>
+                        ${entry.mood ? `<div class="entry-modal-mood">${entry.mood}</div>` : ''}
+                        <div class="entry-modal-content-text">${escapeHtml(entry.content)}</div>
+                        ${entry.photos && entry.photos.length > 0 ? `
+                            <div class="entry-modal-photos">
+                                ${entry.photos.map(photo => 
+                                    `<img src="${photo}" class="entry-modal-photo" alt="Journal photo" onclick="openPhotoModal('${photo}')">`
+                                ).join('')}
+                            </div>
+                        ` : ''}
+                    </div>
+                    <div class="entry-modal-actions">
+                        <button class="entry-modal-btn" onclick="editEntry(${entry.id}); closeEntryModal();">Edit</button>
+                        <button class="entry-modal-btn danger" onclick="deleteEntry(${entry.id}); closeEntryModal();">Delete</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+        
+        function closeEntryModal() {
+            const modal = document.querySelector('.entry-modal');
+            if (modal) modal.remove();
+        }
+
+        // Display entry content
+        function displayEntryContent(entry) {
+            const contentContainer = document.getElementById('entryContent');
+            
+            contentContainer.innerHTML = `
+                <div class="entry-full-title">${entry.title}</div>
+                <div class="entry-full-date">${formatDate(entry.created_at)}</div>
+                ${entry.mood ? `<div class="entry-full-mood">${entry.mood}</div>` : ''}
+                <div class="entry-full-content">${entry.content}</div>
+                ${entry.photos && entry.photos.length > 0 ? `
+                    <div class="entry-photos-grid">
+                        ${entry.photos.map(photo => 
+                            `<img src="${photo}" class="entry-photo-large" alt="Journal photo" onclick="openPhotoModal('${photo}')">`
+                        ).join('')}
+                    </div>
+                ` : ''}
+                <div class="entry-actions-minimal">
+                    <button class="action-btn-minimal" onclick="editEntry(${entry.id})" title="Edit entry">✏️</button>
+                    <button class="action-btn-minimal" onclick="deleteEntry(${entry.id})" title="Delete entry">🗑️</button>
+                </div>
+            `;
+        }
+
+        // Open photo modal
+        function openPhotoModal(photoUrl) {
+            const modal = document.getElementById('photoModal');
+            const modalPhoto = document.getElementById('modalPhoto');
+            modalPhoto.src = photoUrl;
+            modal.classList.add('active');
+        }
+
+        // Close photo modal
+        function closePhotoModal() {
+            document.getElementById('photoModal').classList.remove('active');
+        }
+
+        // Create new entry
+        function createNewEntry() {
+            // Redirect to a new entry creation page or open modal
+            window.location.href = 'journal-edit.html?mode=create';
+        }
+
+        // Enhanced Add Form Functions
+        function openEnhancedAddForm() {
+            const overlay = document.getElementById('enhancedAddOverlay');
+            if (overlay) {
+                overlay.classList.add('active');
+                // Focus on the first input
+                setTimeout(() => {
+                    const firstInput = document.getElementById('enhancedEntryTitle');
+                    if (firstInput) firstInput.focus();
+                }, 300);
+            }
+        }
+
+        function closeEnhancedAddForm() {
+            const overlay = document.getElementById('enhancedAddOverlay');
+            if (overlay) {
+                overlay.classList.remove('active');
+                // Clear form
+                clearEnhancedForm();
+            }
+        }
+
+        // Toggle between Entry and Memory forms
+        function toggleAddType(type) {
+            const toggleEntry = document.getElementById('toggleEntry');
+            const toggleMemory = document.getElementById('toggleMemory');
+            const title = document.querySelector('.enhanced-add-title');
+            const formTitle = document.querySelector('.enhanced-form-title');
+            
+            if (type === 'entry') {
+                toggleEntry.classList.add('active');
+                toggleMemory.classList.remove('active');
+                title.textContent = 'New Journal Entry';
+                formTitle.textContent = '📝 Entry Details';
+            } else {
+                toggleEntry.classList.remove('active');
+                toggleMemory.classList.add('active');
+                title.textContent = 'New Memory';
+                formTitle.textContent = '🧠 Memory Details';
+            }
+        }
+
+        function clearEnhancedForm() {
+            document.getElementById('enhancedEntryTitle').value = '';
+            document.getElementById('enhancedEntryContent').value = '';
+            document.getElementById('enhancedEntryMood').value = '';
+            document.getElementById('enhancedEntryCategory').value = 'general';
+            document.getElementById('enhancedEntryPrivate').checked = false;
+            // Clear photos
+            document.getElementById('photoPreviewContainer').innerHTML = '';
+            document.getElementById('photoInput').value = '';
+            uploadedPhotos = [];
+            currentPhotoLayout = 'single';
+            updatePhotoLayout();
+        }
+
+        // Photo handling functions
+        let uploadedPhotos = [];
+        let currentPhotoLayout = 'single';
+        
+        function handlePhotoUpload(event) {
+            const files = Array.from(event.target.files);
+            files.forEach(file => {
+                if (file.type.startsWith('image/')) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        // Compress the image
+                        compressImage(e.target.result, file.type, 0.7, (compressedDataUrl) => {
+                            const photoData = {
+                                id: Date.now() + Math.random(),
+                                file: file,
+                                dataUrl: compressedDataUrl
+                            };
+                            uploadedPhotos.push(photoData);
+                            displayPhotoPreview(photoData);
+                            updatePhotoLayout();
+                        });
+                    };
+                    reader.readAsDataURL(file);
+                }
+            });
+        }
+        
+        function compressImage(dataUrl, type, quality, callback) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
+            
+            img.onload = function() {
+                // Calculate new dimensions (max 800px width)
+                const maxWidth = 800;
+                const maxHeight = 600;
+                let { width, height } = img;
+                
+                if (width > maxWidth) {
+                    height = (height * maxWidth) / width;
+                    width = maxWidth;
+                }
+                if (height > maxHeight) {
+                    width = (width * maxHeight) / height;
+                    height = maxHeight;
+                }
+                
+                canvas.width = width;
+                canvas.height = height;
+                
+                // Draw and compress
+                ctx.drawImage(img, 0, 0, width, height);
+                const compressedDataUrl = canvas.toDataURL(type, quality);
+                callback(compressedDataUrl);
+            };
+            
+            img.src = dataUrl;
+        }
+        
+        function displayPhotoPreview(photoData) {
+            const container = document.getElementById('photoPreviewContainer');
+            const preview = document.createElement('div');
+            preview.className = 'photo-preview';
+            preview.innerHTML = `
+                <img src="${photoData.dataUrl}" alt="Preview">
+                <button class="photo-remove" onclick="removePhoto('${photoData.id}')">×</button>
+            `;
+            container.appendChild(preview);
+        }
+        
+        function removePhoto(photoId) {
+            uploadedPhotos = uploadedPhotos.filter(photo => photo.id !== photoId);
+            const container = document.getElementById('photoPreviewContainer');
+            const previews = container.querySelectorAll('.photo-preview');
+            previews.forEach(preview => {
+                if (preview.querySelector('.photo-remove').onclick.toString().includes(photoId)) {
+                    preview.remove();
+                }
+            });
+            updatePhotoLayout();
+        }
+        
+        function selectPhotoLayout(layout) {
+            currentPhotoLayout = layout;
+            const options = document.querySelectorAll('.layout-option');
+            options.forEach(option => option.classList.remove('active'));
+            event.target.classList.add('active');
+            updatePhotoLayout();
+        }
+        
+        function updatePhotoLayout() {
+            const container = document.getElementById('photoPreviewContainer');
+            const layoutOptions = document.getElementById('photoLayoutOptions');
+            
+            // Show layout options if there are photos
+            if (uploadedPhotos.length > 0) {
+                layoutOptions.style.display = 'flex';
+            } else {
+                layoutOptions.style.display = 'none';
+            }
+            
+            // Apply layout class
+            container.className = `photo-preview-container photo-grid-${currentPhotoLayout}`;
+        }
+
+        async function saveEnhancedEntry() {
+            const title = document.getElementById('enhancedEntryTitle').value.trim();
+            const content = document.getElementById('enhancedEntryContent').value.trim();
+            const mood = document.getElementById('enhancedEntryMood').value;
+            const category = document.getElementById('enhancedEntryCategory').value;
+            const isPrivate = document.getElementById('enhancedEntryPrivate').checked;
+
+            if (!title || !content) {
+                alert('Please enter both title and content');
+                return;
+            }
+
+            try {
+                // Create new entry data
+                const entryData = {
+                title: title,
+                content: content,
+                mood: mood,
+                category: category,
+                isPrivate: isPrivate,
+                photos: uploadedPhotos.map(photo => {
+                    // Check if compressed image is still too large
+                    const compressedSize = (photo.dataUrl.length * 3) / 4; // Approximate base64 size
+                    if (compressedSize > 500000) { // 500KB limit
+                        console.warn(`Photo ${photo.file.name} is still too large after compression (${compressedSize} bytes), skipping`);
+                        return null;
+                    }
+                    return photo.dataUrl; // Just the base64 string, not an object
+                }).filter(photo => photo !== null)
+                };
+
+                // Save via API
+                const response = await apiRequest('/journal/', {
+                    method: 'POST',
+                    body: JSON.stringify(entryData)
+                });
+
+                // Add to local entries array
+                allEntries.unshift(response.entry);
+            
+                // Refresh display
+                if (currentView === 'month') {
+                    renderCalendar();
+                } else if (currentView === 'day') {
+                    renderDayView(currentDate);
+                }
+            
+            // Clear photos
+            uploadedPhotos = [];
+            document.getElementById('photoPreviewContainer').innerHTML = '';
+            document.getElementById('photoInput').value = '';
+            
+            // Close form
+            closeEnhancedAddForm();
+            
+            // Show success message
+            showNotification(`Created journal entry: "${title}"`, 'success');
+            } catch (error) {
+                console.error('Failed to save entry:', error);
+                showNotification('Failed to save entry. Please try again.', 'error');
+            }
+        }
+
+        // Voice Dictation Functions
+        let recognition = null;
+        let isListening = false;
+        let currentTranscript = '';
+
+        function initVoiceRecognition() {
+            if ('webkitSpeechRecognition' in window) {
+                recognition = new webkitSpeechRecognition();
+            } else if ('SpeechRecognition' in window) {
+                recognition = new SpeechRecognition();
+            } else {
+                console.log('Speech recognition not supported');
+                return false;
+            }
+
+            recognition.continuous = false;
+            recognition.interimResults = true;
+            recognition.lang = 'en-US';
+
+            recognition.onstart = function() {
+                isListening = true;
+                showConversation();
+                showUserMessage('Listening...');
+            };
+
+            recognition.onresult = function(event) {
+                let interimTranscript = '';
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    if (event.results[i].isFinal) {
+                        currentTranscript += event.results[i][0].transcript;
+                    } else {
+                        interimTranscript += event.results[i][0].transcript;
+                    }
+                }
+                if (interimTranscript) {
+                    showUserMessage(interimTranscript);
+                }
+            };
+
+            recognition.onerror = function(event) {
+                console.error('Speech recognition error:', event.error);
+                isListening = false;
+                
+                let errorMessage = 'Sorry, I had trouble hearing you. ';
+                switch(event.error) {
+                    case 'not-allowed':
+                        errorMessage = 'Microphone access denied. Please allow microphone access and try again.';
+                        break;
+                    case 'no-speech':
+                        errorMessage = 'I didn\'t hear anything. Please try again.';
+                        break;
+                    case 'audio-capture':
+                        errorMessage = 'No microphone found. Please check your microphone.';
+                        break;
+                    case 'network':
+                        errorMessage = 'Network error. Please check your connection.';
+                        break;
+                    default:
+                        errorMessage = 'Something went wrong. Please try again.';
+                }
+                
+                showAssistantMessage(errorMessage);
+                
+                // Show grant permission button for not-allowed errors
+                if (event.error === 'not-allowed') {
+                    const grantBtn = document.getElementById('grantPermissionBtn');
+                    if (grantBtn) grantBtn.style.display = 'inline-block';
+                }
+                
+                // Reset button
+                const startBtn = document.getElementById('startListeningBtn');
+                if (startBtn) {
+                    startBtn.textContent = 'Start Listening';
+                    startBtn.onclick = startListening;
+                }
+            };
+
+            recognition.onend = function() {
+                isListening = false;
+                if (currentTranscript.trim()) {
+                    processVoiceCommand(currentTranscript);
+                } else {
+                    showAssistantMessage('I didn\'t hear anything. Please try again.');
+                }
+                
+                // Reset button
+                const startBtn = document.getElementById('startListeningBtn');
+                if (startBtn) {
+                    startBtn.textContent = 'Start Listening';
+                    startBtn.onclick = startListening;
+                }
+            };
+
+            return true;
+        }
+
+        async function startVoiceInput() {
+            console.log('🎤 Voice input started');
+            
+            // Check if getUserMedia is available
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showAssistantMessage('Voice input is not available. Please use HTTPS or a modern browser.');
+                return;
+            }
+            
+            // Request microphone permission
+            try {
+                console.log('🎤 Requesting microphone permission...');
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                console.log('🎤 Permission granted!');
+                
+                // Permission granted, stop the stream
+                stream.getTracks().forEach(track => track.stop());
+                
+                // Initialize speech recognition
+                if (!initVoiceRecognition()) {
+                    showAssistantMessage('Speech recognition is not supported in this browser.');
+                    return;
+                }
+                
+                currentTranscript = '';
+                recognition.start();
+                
+            } catch (error) {
+                console.error('🎤 Microphone permission denied:', error);
+                showAssistantMessage('Microphone access denied. Please allow microphone access and try again.');
+            }
+        }
+
+        function toggleVoiceInput() {
+            if (isListening) {
+                stopVoiceInput();
+            } else {
+                startVoiceInput();
+            }
+        }
+
+        function stopVoiceInput() {
+            if (recognition && isListening) {
+                recognition.stop();
+            }
+            isListening = false;
+            currentTranscript = '';
+        }
+
+        // Route to other pages with data
+        function routeToPage(page, action, formData) {
+            if (page === 'lists') {
+                window.location.href = `lists.html?action=${action}&data=${encodeURIComponent(JSON.stringify(formData))}`;
+            } else if (page === 'calendar') {
+                window.location.href = `calendar.html?action=${action}&data=${encodeURIComponent(JSON.stringify(formData))}`;
+            } else {
+                showAssistantMessage(`I understand you want to add something to ${page}, but I'm not sure how to handle that from here.`);
+            }
+        }
+
+        // Handle routed data from URL parameters
+        function handleRoutedData() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const action = urlParams.get('action');
+            const data = urlParams.get('data');
+            
+            if (action && data) {
+                try {
+                    const formData = JSON.parse(decodeURIComponent(data));
+                    
+                    // Open the enhanced form
+                    openEnhancedAddForm();
+                    
+                    // Populate based on action
+                    if (action === 'addEntry') {
+                        document.getElementById('enhancedEntryTitle').value = formData.title;
+                        document.getElementById('enhancedEntryContent').value = formData.content;
+                        document.getElementById('enhancedEntryMood').value = formData.mood;
+                        document.getElementById('enhancedEntryCategory').value = formData.category;
+                    }
+                    
+                    // Clean up URL
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                } catch (error) {
+                    console.error('Error handling routed data:', error);
+                }
+            }
+        }
+
+        async function startListening() {
+            if (!recognition) return;
+            
+            // Request microphone permission first
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // Permission granted, stop the stream and start recognition
+                stream.getTracks().forEach(track => track.stop());
+                
+                currentTranscript = '';
+                recognition.start();
+                document.getElementById('startListeningBtn').textContent = 'Stop Listening';
+                document.getElementById('startListeningBtn').onclick = stopListening;
+                
+                // Hide grant permission button if it was shown
+                const grantBtn = document.getElementById('grantPermissionBtn');
+                if (grantBtn) grantBtn.style.display = 'none';
+            } catch (error) {
+                console.error('Microphone permission denied:', error);
+                updateVoiceStatus('error', '❌ Permission Denied', 'Microphone access is required for voice input.');
+                
+                // Show grant permission button
+                const grantBtn = document.getElementById('grantPermissionBtn');
+                if (grantBtn) grantBtn.style.display = 'inline-block';
+            }
+        }
+
+        async function requestMicrophonePermission() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                stream.getTracks().forEach(track => track.stop());
+                
+                updateVoiceStatus('idle', '🎤 Ready', 'Permission granted! Click "Start Listening" to begin.');
+                
+                // Hide grant permission button
+                const grantBtn = document.getElementById('grantPermissionBtn');
+                if (grantBtn) grantBtn.style.display = 'none';
+            } catch (error) {
+                console.error('Microphone permission still denied:', error);
+                updateVoiceStatus('error', '❌ Still Denied', 'Please check your browser settings and allow microphone access for this site.');
+            }
+        }
+
+        function stopListening() {
+            if (recognition && isListening) {
+                recognition.stop();
+            }
+        }
+
+        function updateVoiceStatus(status, icon, text) {
+            const statusEl = document.getElementById('voiceStatus');
+            const textEl = document.getElementById('voiceText');
+            const iconEl = document.querySelector('.voice-icon');
+            
+            if (statusEl) {
+                statusEl.className = `voice-status ${status}`;
+            }
+            if (textEl) {
+                textEl.textContent = text;
+            }
+            if (iconEl) {
+                iconEl.textContent = icon;
+            }
+        }
+
+        // Voice conversation functions
+        function showUserMessage(text) {
+            const userMessage = document.getElementById('userMessage');
+            const userText = document.getElementById('userText');
+            if (userMessage && userText) {
+                userText.textContent = text;
+                userMessage.style.display = 'block';
+            }
+        }
+
+        function showAssistantMessage(text) {
+            const assistantMessage = document.getElementById('assistantMessage');
+            const assistantText = document.getElementById('assistantText');
+            if (assistantMessage && assistantText) {
+                assistantText.textContent = text;
+                assistantMessage.style.display = 'block';
+            }
+        }
+
+        function showConversation() {
+            const conversation = document.getElementById('voiceConversation');
+            if (conversation) {
+                conversation.style.display = 'block';
+            }
+        }
+
+        // AI-powered command processing for journal
+        function processWithAI(command) {
+            const patterns = {
+                // Title extraction patterns
+                title: {
+                    timeBased: /^(today|this morning|this afternoon|this evening|yesterday|last night|this week|this month)/i,
+                    feelingBased: /^(i feel|i'm feeling|i am feeling|i think|i believe|i realize|i learned|i discovered)/i,
+                    actionBased: /^(work|meeting|appointment|event|happened|occurred|went to|visited|saw|met)/i
+                },
+                // Mood detection patterns
+                mood: {
+                    happy: /(?:happy|joy|excited|great|wonderful|amazing|fantastic|brilliant|awesome|delighted|thrilled|ecstatic)/i,
+                    sad: /(?:sad|down|depressed|upset|disappointed|hurt|broken|devastated|miserable|gloomy|melancholy)/i,
+                    grateful: /(?:grateful|thankful|blessed|appreciate|gratitude|fortunate|lucky)/i,
+                    anxious: /(?:anxious|worried|nervous|stressed|concerned|uneasy|troubled|fearful|apprehensive)/i,
+                    calm: /(?:calm|peaceful|relaxed|serene|content|tranquil|zen|meditative|centered)/i,
+                    frustrated: /(?:frustrated|annoyed|irritated|angry|mad|furious|livid|exasperated)/i,
+                    excited: /(?:excited|thrilled|pumped|energized|enthusiastic|eager|anticipating)/i
+                },
+                // Category detection patterns
+                category: {
+                    work: /(?:work|job|office|meeting|project|task|deadline|business|conference|presentation)/i,
+                    health: /(?:health|exercise|doctor|medical|fitness|wellness|appointment|checkup|dentist)/i,
+                    relationships: /(?:family|relationship|partner|spouse|children|kids|friends|social|date)/i,
+                    goals: /(?:goal|plan|future|dream|aspiration|ambition|resolution|target|objective)/i,
+                    reflection: /(?:reflect|think|contemplate|meditate|ponder|consider|analyze|evaluate)/i,
+                    personal: /(?:travel|trip|vacation|journey|adventure|hobby|interest|passion|creative)/i
+                }
+            };
+
+            let result = {
+                title: '',
+                content: command,
+                mood: '',
+                category: 'general',
+                confidence: 0
+            };
+
+            // Extract title
+            for (let [type, pattern] of Object.entries(patterns.title)) {
+                const match = command.match(pattern);
+                if (match) {
+                    result.title = match[0];
+                    result.confidence = 0.8;
+                    break;
+                }
+            }
+
+            // If no title pattern found, use first few words
+            if (!result.title) {
+                const words = command.split(' ');
+                result.title = words.length > 6 ? words.slice(0, 6).join(' ') + '...' : command;
+                result.confidence = 0.5;
+            }
+
+            // Detect mood
+            for (let [moodType, pattern] of Object.entries(patterns.mood)) {
+                if (pattern.test(command)) {
+                    result.mood = moodType;
+                    break;
+                }
+            }
+
+            // Detect category
+            for (let [categoryType, pattern] of Object.entries(patterns.category)) {
+                if (pattern.test(command)) {
+                    result.category = categoryType;
+                    break;
+                }
+            }
+
+            return result;
+        }
+
+        function updateVoiceText(text) {
+            const transcriptEl = document.getElementById('voiceTranscript');
+            if (transcriptEl) {
+                transcriptEl.textContent = text;
+            }
+        }
+
+        function processVoiceCommand(transcript) {
+            showAssistantMessage('Processing...');
+            showUserMessage(transcript);
+            
+            // Use unified AI processing
+            const result = window.zoeAI.processInput(transcript, { page: 'journal' });
+            
+            // Show the AI's response
+            if (result.response) {
+                showAssistantMessage(result.response);
+            }
+            
+            if (result.routing.page === 'journal') {
+                // Populate form fields with AI results
+                document.getElementById('enhancedEntryTitle').value = result.routing.formData.title;
+                document.getElementById('enhancedEntryContent').value = result.routing.formData.content;
+                document.getElementById('enhancedEntryMood').value = result.routing.formData.mood;
+                document.getElementById('enhancedEntryCategory').value = result.routing.formData.category;
+            } else if (result.routing.page === 'conversation') {
+                // Handle conversational responses
+                if (result.intent === 'greeting' || result.intent === 'question') {
+                    // Just show the response, no form population needed
+                }
+            } else if (result.routing.page === 'memory') {
+                // Memory saved, just show confirmation
+            } else {
+                // Route to other pages
+                routeToPage(result.routing.page, result.routing.action, result.routing.formData);
+            }
+            
+            // Hide voice controls after success
+            setTimeout(() => {
+                stopVoiceInput();
+            }, 2000);
+        }
+
+        // Edit entry
+        function editEntry(entryId) {
+            window.location.href = `journal-edit.html?mode=edit&id=${entryId}`;
+        }
+
+        // Delete entry
+        async function deleteEntry(entryId) {
+            if (!confirm('Delete this entry?')) return;
+            
+            try {
+                await apiRequest(`/journal/${entryId}`, {
+                    method: 'DELETE'
+                });
+                
+                allEntries = allEntries.filter(e => e.id !== entryId);
+                if (currentView === 'month') {
+                    renderCalendar();
+                } else if (currentView === 'day') {
+                    renderDayView(currentDate);
+                }
+                
+                // Clear content if deleted entry was selected
+                if (currentEntry && currentEntry.id === entryId) {
+                    currentEntry = null;
+                    if (currentView === 'day') {
+                        document.getElementById('dayEntryDetail').innerHTML = `
+                            <div class="empty-state">
+                                <div class="empty-icon">📖</div>
+                                <div class="empty-title">Select an entry</div>
+                                <div class="empty-subtitle">Choose an entry to read the full content</div>
+                            </div>
+                        `;
+                    }
+                }
+                
+                showNotification('Entry deleted', 'success');
+            } catch (error) {
+                console.error('Failed to delete entry:', error);
+                showNotification('Failed to delete entry', 'error');
+            }
+        }
+
+        // Search overlay
+        function openSearchOverlay() {
+            document.getElementById('searchOverlay').classList.add('active');
+            document.getElementById('searchBig').focus();
+        }
+        function closeSearchOverlay() {
+            document.getElementById('searchOverlay').classList.remove('active');
+            document.getElementById('searchResults').innerHTML = '';
+            document.getElementById('searchBig').value = '';
+        }
+        function onSearchInput(e) {
+            const q = e.target.value.toLowerCase();
+            const results = document.getElementById('searchResults');
+            if (!q) { results.innerHTML = ''; return; }
+            const filtered = allEntries.filter(en => en.title.toLowerCase().includes(q) || en.content.toLowerCase().includes(q));
+            if (filtered.length === 0) { results.innerHTML = '<div class="empty-state"><div class="empty-title">No results</div></div>'; return; }
+            results.innerHTML = filtered.slice(0, 50).map(en => `
+                <div class="search-item" onclick="jumpToEntry(${en.id})">
+                    <div style="font-weight:600; font-size:14px;">${escapeHtml(en.title)}</div>
+                    <div style="font-size:12px; color:#666;">${formatDate(en.created_at)}</div>
+                </div>
+            `).join('');
+        }
+        function jumpToEntry(id) {
+            const en = allEntries.find(e => e.id === id);
+            if (!en) return;
+            const entryDate = new Date(en.created_at);
+            currentDate = entryDate;
+            
+            // Switch to day view for the entry's date
+            openDayView(entryDate);
+            
+            // Select the entry after a short delay to ensure day view is rendered
+            setTimeout(() => {
+                selectDayEntry(id);
+            }, 100);
+            
+            closeSearchOverlay();
+        }
+
+        // Date picker overlay
+        function openDatePicker() {
+            buildMonthRow();
+            buildDaysGrid();
+            document.getElementById('dateOverlay').classList.add('active');
+        }
+        function closeDatePicker() {
+            document.getElementById('dateOverlay').classList.remove('active');
+        }
+        function changeYear(delta) {
+            currentDate.setFullYear(currentDate.getFullYear() + delta);
+            buildMonthRow();
+            buildDaysGrid();
+            updateDateHeaders();
+        }
+        function buildMonthRow() {
+            const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+            const mRow = document.getElementById('monthRow');
+            const y = currentDate.getFullYear();
+            document.getElementById('overlayTitle').textContent = `Select date — ${y}`;
+            mRow.innerHTML = months.map((m,i)=>`<button class="month-btn ${i===currentDate.getMonth()?'active':''}" onclick="selectMonth(${i})">${m}</button>`).join('');
+        }
+        function buildDaysGrid() {
+            const daysGrid = document.getElementById('daysGrid');
+            const y = currentDate.getFullYear();
+            const m = currentDate.getMonth();
+            const daysInMonth = new Date(y, m+1, 0).getDate();
+            const today = new Date();
+            let html = '';
+            for (let d=1; d<=daysInMonth; d++) {
+                const isToday = isSameDate(new Date(y,m,d), today);
+                const isActive = d === currentDate.getDate();
+                html += `<button class="day-btn ${isToday?'today':''} ${isActive?'active':''}" onclick="selectDay(${d})">${d}</button>`;
+            }
+            daysGrid.innerHTML = html;
+        }
+        function selectMonth(m) {
+            currentDate.setMonth(m);
+            buildMonthRow();
+            buildDaysGrid();
+        }
+        function selectDay(d) {
+            currentDate.setDate(d);
+            closeDatePicker();
+            currentEntry = null;
+            
+            // Switch to day view for the selected date
+            openDayView(currentDate);
+        }
+
+        // Swipe detectors
+        function addSwipeListeners(el) {
+            let startX = 0, startY = 0, startTime = 0;
+            el.addEventListener('touchstart', (e) => {
+                const t = e.touches[0]; startX = t.clientX; startY = t.clientY; startTime = Date.now();
+            }, { passive: true });
+            el.addEventListener('touchend', (e) => {
+                const t = e.changedTouches[0];
+                const dx = t.clientX - startX; const dy = t.clientY - startY; const dt = Date.now() - startTime;
+                if (dt < 500 && Math.abs(dx) > 50 && Math.abs(dy) < 40) {
+                    if (dx < 0) navigateDay(1); else navigateDay(-1);
+                }
+            }, { passive: true });
+        }
+
+        // Utility functions
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+            });
+        }
+        function formatTime(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        }
+        function escapeHtml(str) {
+            return String(str).replace(/[&<>"]+/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[s]));
+        }
+
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('currentTime').textContent = now.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+            document.getElementById('currentDate').textContent = now.toLocaleDateString('en-US', {
+                weekday: 'short',
+                month: 'short',
+                day: 'numeric'
+            });
+        }
+
+        function navigateToPage(page) {
+            window.location.href = page;
+        }
+
+        // Close modals when clicking outside
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('more-overlay')) {
+                closeMoreOverlay();
+            }
+            if (e.target.classList.contains('photo-modal')) {
+                closePhotoModal();
+            }
+            if (e.target.id === 'dateOverlay') {
+                closeDatePicker();
+            }
+            if (e.target.id === 'searchOverlay') {
+                closeSearchOverlay();
+            }
+        });
+
+        // Notifications system
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+            
+            // Clear notification indicator when panel is opened
+            const notificationBtn = document.querySelector('.notifications-btn');
+            notificationBtn.classList.remove('has-notifications');
+        }
+
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+
+        async function loadNotifications() {
+            try {
+                const response = await apiRequest('/reminders/notifications/pending');
+                const notifications = response.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            // Update notification button indicator
+            if (notifications.length > 0) {
+                notificationBtn.classList.add('has-notifications');
+            } else {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
+                     onclick="handleNotificationClick(${notification.id})">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${new Date(notification.created_at).toLocaleTimeString()}</span>
+                        ${notification.priority ? `<span class="notification-priority" style="background: ${getPriorityColor(notification.priority)}; color: white;">${notification.priority}</span>` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function getPriorityColor(priority) {
+            switch(priority.toLowerCase()) {
+                case 'high': return '#ef4444';
+                case 'medium': return '#f59e0b';
+                case 'low': return '#10b981';
+                default: return '#6b7280';
+            }
+        }
+
+        function handleNotificationClick(notificationId) {
+            // Mark notification as acknowledged
+            acknowledgeNotification(notificationId);
+            closeNotifications();
+        }
+
+        async function acknowledgeNotification(notificationId) {
+            try {
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
+                    method: 'POST'
+                });
+                // Reload notifications
+                loadNotifications();
+            } catch (error) {
+                console.error('Failed to acknowledge notification:', error);
+            }
+        }
+
+        // User menu functions
+        function toggleUserDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function showUserProfile() {
+            // Implement user profile modal
+            alert('User profile coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function showSecuritySettings() {
+            // Implement security settings
+            alert('Security settings coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        // Authentication functions now handled by auth.js
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const userMenu = document.querySelector('.user-menu');
+            const dropdown = document.getElementById('userDropdown');
+            
+            if (userMenu && !userMenu.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+
+        // Load notifications on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadNotifications();
+        });
+    </script>
+</body>
+</html>
+</html>

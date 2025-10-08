@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html><head><title>Quick Test</title></head><body>
+<h1>Testing...</h1>
+<div id="result" style="font-family: monospace; white-space: pre-wrap;"></div>
+<script>
+(async () => {
+    const r = document.getElementById('result');
+    const res = await fetch('/api/chat/langgraph', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({message: "hi", enable_agents: false})
+    });
+    
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let count = 0;
+    
+    while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        
+        buffer += decoder.decode(value, {stream: true});
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        
+        for (const line of lines) {
+            if (line.startsWith('data: ')) {
+                count++;
+                const e = JSON.parse(line.slice(6));
+                r.textContent += `${count}. ${e.type}`;
+                if (e.content) r.textContent += ` - "${e.content}"`;
+                r.textContent += '\n';
+            }
+        }
+    }
+    r.textContent += '\n✅ Complete!';
+})();
+</script>
+</body></html>
+

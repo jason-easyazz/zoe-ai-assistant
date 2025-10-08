@@ -1,0 +1,161 @@
+services:
+  zoe-core:
+    build: ./services/zoe-core
+    container_name: zoe-core
+    restart: unless-stopped
+    ports:
+    - 8000:8000
+    volumes:
+    - ./services/zoe-core:/app
+    - ./data:/app/data
+    - /var/run/docker.sock:/var/run/docker.sock
+    - /home/pi/zoe:/home/pi/zoe:rw
+    - /usr/bin/docker:/usr/bin/docker:ro
+    - /proc:/host/proc:ro
+    - /sys:/host/sys:ro
+    environment:
+    - PYTHONUNBUFFERED=1
+    - DOCKER_HOST=unix:///var/run/docker.sock
+    - PROJECT_ROOT=/home/pi/zoe
+    - FULL_ACCESS=true
+    networks:
+    - zoe-network
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8000/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    env_file:
+    - .env
+  zoe-ui:
+    image: nginx:alpine
+    container_name: zoe-ui
+    ports:
+    - 80:80
+    - 443:443
+    volumes:
+    - ./services/zoe-ui/dist:/usr/share/nginx/html
+    - ./services/zoe-ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    - ./ssl:/etc/nginx/ssl:ro
+    networks:
+    - zoe-network
+    restart: unless-stopped
+  zoe-ollama:
+    image: ollama/ollama:latest
+    container_name: zoe-ollama
+    ports:
+    - 11434:11434
+    volumes:
+    - zoe_ollama_data:/root/.ollama
+    networks:
+    - zoe-network
+    restart: unless-stopped
+  zoe-redis:
+    image: redis:alpine
+    container_name: zoe-redis
+    ports:
+    - 6379:6379
+    volumes:
+    - zoe_redis_data:/data
+    networks:
+    - zoe-network
+    restart: unless-stopped
+  zoe-whisper:
+    build: ./services/zoe-whisper
+    container_name: zoe-whisper
+    ports:
+    - 9001:9001
+    volumes:
+    - zoe_whisper_models:/root/.cache/whisper
+    devices:
+    - /dev/snd:/dev/snd
+    environment:
+    - PULSE_SERVER=unix:/run/user/1000/pulse/native
+    networks:
+    - zoe-network
+    restart: unless-stopped
+  zoe-tts:
+    build: ./services/zoe-tts
+    container_name: zoe-tts
+    ports:
+    - 9002:9002
+    volumes:
+    - zoe_tts_models:/root/.local/share/tts
+    devices:
+    - /dev/snd:/dev/snd
+    environment:
+    - PULSE_SERVER=unix:/run/user/1000/pulse/native
+    networks:
+    - zoe-network
+    restart: unless-stopped
+  zoe-n8n:
+    image: n8nio/n8n
+    container_name: zoe-n8n
+    ports:
+    - 5678:5678
+    volumes:
+    - zoe_n8n_data:/home/node/.n8n
+    - ./scripts/n8n/workflows:/workflows
+    - ./ssl:/ssl:ro
+    environment:
+    - N8N_BASIC_AUTH_ACTIVE=true
+    - N8N_BASIC_AUTH_USER=zoe
+    - N8N_BASIC_AUTH_PASSWORD=zoe2025
+    - N8N_SECURE_COOKIE=true
+    - N8N_PROTOCOL=https
+    - N8N_HOST=zoe.local
+    - N8N_PORT=5678
+    - WEBHOOK_URL=https://zoe.local:5678/
+    - N8N_SSL_CERT=/ssl/zoe.crt
+    - N8N_SSL_KEY=/ssl/zoe.key
+    networks:
+    - zoe-network
+    restart: unless-stopped
+  zoe-litellm:
+    build: ./services/zoe-litellm
+    container_name: zoe-litellm
+    ports:
+    - 8001:8001
+    environment:
+    - OPENAI_API_KEY=${OPENAI_API_KEY}
+    - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    networks:
+    - zoe-network
+    restart: unless-stopped
+    depends_on:
+    - zoe-ollama
+  zoe-auth:
+    build: ./services/zoe-auth
+    container_name: zoe-auth
+    ports:
+    - 8002:8002
+    volumes:
+    - ./data:/app/data
+    networks:
+    - zoe-network
+    restart: unless-stopped
+    environment:
+    - PYTHONUNBUFFERED=1
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: zoe-cloudflared
+    command: tunnel --no-autoupdate run --token eyJhIjoiYWNiMGYxMDEyMWFkYzY3ODY2ZTA1ZDM1YmE3NGExZmIiLCJzIjoidFlsaVh6VEg0R1JlODZwQmp2TW1KNHBDSTd5VzNOZk1mVk8yYUdtU1dDWT0iLCJ0IjoiOTM0M2RkY2YtYzE0MC00OTE5LTk5MjItYWJmZjhiYzAyODU2In0=
+    restart: unless-stopped
+    networks:
+    - zoe-network
+    extra_hosts:
+    - "host.docker.internal:host-gateway"
+networks:
+  zoe-network:
+    driver: bridge
+volumes:
+  zoe_ollama_data: null
+  zoe_redis_data: null
+  zoe_whisper_models: null
+  zoe_tts_models: null
+  zoe_n8n_data: null
+  zoe_database: null

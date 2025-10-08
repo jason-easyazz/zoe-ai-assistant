@@ -1,0 +1,521 @@
+"""
+Zoe Core Chat Router - Fully Integrated with Enhancement Systems
+================================================================
+
+This is the SINGLE, CONSOLIDATED chat router for Zoe.
+Integrates: Temporal Memory, Cross-Agent Collaboration, User Satisfaction, AG-UI Protocol
+"""
+
+from fastapi import APIRouter, Query, Request, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from typing import Optional, AsyncGenerator, Dict, Any
+import sys
+import json
+import asyncio
+import time
+import uuid
+import logging
+import httpx
+
+sys.path.append('/app')
+from ai_client import get_ai_response, get_ai_response_streaming
+
+router = APIRouter(tags=["chat"])
+logger = logging.getLogger(__name__)
+
+class ChatMessage(BaseModel):
+    message: str
+    context: Optional[dict] = None
+
+# ==================== ENHANCEMENT SYSTEM INTEGRATIONS ====================
+
+async def create_or_get_episode(user_id: str, message: str) -> Optional[str]:
+    """Create or get active conversation episode for temporal memory"""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            # Check for active episode
+            response = await client.get(
+                "http://localhost:8000/api/temporal-memory/episodes/active",
+                params={"user_id": user_id}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("episode"):
+                    return data["episode"]["id"]
+            
+            # Create new episode
+            response = await client.post(
+                "http://localhost:8000/api/temporal-memory/episodes",
+                json={"context_type": "general", "participants": [user_id]},
+                params={"user_id": user_id}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("episode", {}).get("id")
+    
+    except Exception as e:
+        logger.warning(f"Episode creation failed: {e}")
+    
+    return None
+
+async def add_to_episode(episode_id: str, message: str, message_type: str, user_id: str):
+    """Add message to temporal memory episode"""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post(
+                f"http://localhost:8000/api/temporal-memory/episodes/{episode_id}/messages",
+                params={
+                    "message": message,
+                    "message_type": message_type,
+                    "user_id": user_id
+                }
+            )
+    except Exception as e:
+        logger.warning(f"Failed to add message to episode: {e}")
+
+async def search_temporal_memories(query: str, user_id: str, episode_id: Optional[str] = None) -> list:
+    """Search temporal memories for context"""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.post(
+                "http://localhost:8000/api/temporal-memory/search",
+                json={
+                    "query": query,
+                    "episode_id": episode_id
+                },
+                params={"user_id": user_id}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("memories", [])
+    
+    except Exception as e:
+        logger.warning(f"Temporal memory search failed: {e}")
+    
+    return []
+
+async def orchestrate_complex_task(request: str, user_id: str, context: Dict) -> Optional[Dict]:
+    """Use cross-agent collaboration for complex tasks"""
+    try:
+        # Detect if this needs orchestration
+        complex_keywords = ["schedule and", "create and", "plan my", "organize my", "coordinate"]
+        if not any(keyword in request.lower() for keyword in complex_keywords):
+            return None
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "http://localhost:8000/api/orchestration/orchestrate",
+                json={
+                    "request": request,
+                    "context": context
+                },
+                params={"user_id": user_id}
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+    
+    except Exception as e:
+        logger.warning(f"Orchestration failed: {e}")
+    
+    return None
+
+async def record_interaction(interaction_id: str, user_id: str, request_text: str, 
+                             response_text: str, response_time: float):
+    """Record interaction for user satisfaction tracking"""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            await client.post(
+                "http://localhost:8000/api/satisfaction/interaction",
+                json={
+                    "interaction_id": interaction_id,
+                    "request_text": request_text,
+                    "response_text": response_text,
+                    "response_time": response_time
+                },
+                params={"user_id": user_id}
+            )
+    except Exception as e:
+        logger.warning(f"Satisfaction recording failed: {e}")
+
+async def get_satisfaction_metrics(user_id: str) -> Optional[Dict]:
+    """Get user satisfaction metrics"""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(
+                "http://localhost:8000/api/satisfaction/metrics",
+                params={"user_id": user_id}
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+    
+    except Exception as e:
+        logger.warning(f"Failed to get satisfaction metrics: {e}")
+    
+    return None
+
+# ==================== STREAMING CHAT WITH ENHANCEMENTS ====================
+
+async def generate_enhanced_chat_stream(
+    message: str, 
+    user_id: str, 
+    context: Dict
+) -> AsyncGenerator[Dict, None]:
+    """Generate chat stream with full enhancement system integration"""
+    
+    start_time = time.time()
+    interaction_id = str(uuid.uuid4())
+    episode_id = None
+    orchestration_result = None
+    response_text = ""
+    
+    try:
+        # Emit session start
+        yield {
+            'type': 'session_start',
+            'timestamp': time.time(),
+            'interaction_id': interaction_id
+        }
+        
+        # 1. TEMPORAL MEMORY: Create/get episode
+        yield {
+            'type': 'enhancement_start',
+            'enhancement': 'temporal_memory',
+            'message': '🧠 Connecting to temporal memory...',
+            'timestamp': time.time()
+        }
+        
+        episode_id = await create_or_get_episode(user_id, message)
+        
+        if episode_id:
+            context['episode_id'] = episode_id
+            yield {
+                'type': 'enhancement_result',
+                'enhancement': 'temporal_memory',
+                'success': True,
+                'message': f'✅ Episode tracked: {episode_id[:8]}...',
+                'timestamp': time.time()
+            }
+            
+            # Add user message to episode
+            await add_to_episode(episode_id, message, "user", user_id)
+            
+            # Search temporal memories for context
+            memories = await search_temporal_memories(message, user_id, episode_id)
+            if memories:
+                context['temporal_memories'] = memories
+                yield {
+                    'type': 'enhancement_result',
+                    'enhancement': 'temporal_memory',
+                    'success': True,
+                    'message': f'📚 Retrieved {len(memories)} relevant memories',
+                    'timestamp': time.time()
+                }
+        
+        # 2. CROSS-AGENT COLLABORATION: Check for complex tasks
+        yield {
+            'type': 'enhancement_start',
+            'enhancement': 'orchestration',
+            'message': '🤝 Analyzing task complexity...',
+            'timestamp': time.time()
+        }
+        
+        orchestration_result = await orchestrate_complex_task(message, user_id, context)
+        
+        if orchestration_result:
+            yield {
+                'type': 'enhancement_result',
+                'enhancement': 'orchestration',
+                'success': True,
+                'message': f'✅ Orchestrated {len(orchestration_result.get("decomposed_tasks", []))} sub-tasks',
+                'timestamp': time.time(),
+                'data': orchestration_result
+            }
+            context['orchestration'] = orchestration_result
+        else:
+            yield {
+                'type': 'enhancement_result',
+                'enhancement': 'orchestration',
+                'success': True,
+                'message': '✅ Single-agent task detected',
+                'timestamp': time.time()
+            }
+        
+        # 3. AI RESPONSE: Stream the actual AI response
+        yield {
+            'type': 'agent_thinking',
+            'message': '💭 Generating response...',
+            'timestamp': time.time()
+        }
+        
+        # Pass enhanced context to AI
+        async for event in get_ai_response_streaming(message, context):
+            # Collect response text for satisfaction tracking
+            if event.get('type') == 'content_delta':
+                response_text += event.get('content', '')
+            yield event
+        
+        # 4. TEMPORAL MEMORY: Add assistant response to episode
+        if episode_id and response_text:
+            await add_to_episode(episode_id, response_text, "assistant", user_id)
+        
+        # 5. USER SATISFACTION: Record interaction
+        response_time = time.time() - start_time
+        
+        # Fire-and-forget satisfaction recording
+        asyncio.create_task(
+            record_interaction(interaction_id, user_id, message, response_text, response_time)
+        )
+        
+        # Get current satisfaction metrics
+        metrics = await get_satisfaction_metrics(user_id)
+        
+        if metrics:
+            yield {
+                'type': 'enhancement_result',
+                'enhancement': 'satisfaction',
+                'success': True,
+                'message': f'📊 Satisfaction: {metrics.get("average_satisfaction", 0):.1f}/5.0',
+                'timestamp': time.time(),
+                'data': metrics
+            }
+        
+        # Emit session end with summary
+        yield {
+            'type': 'session_end',
+            'timestamp': time.time(),
+            'interaction_id': interaction_id,
+            'response_time': response_time,
+            'episode_id': episode_id,
+            'enhancements_used': {
+                'temporal_memory': bool(episode_id),
+                'orchestration': bool(orchestration_result),
+                'satisfaction_tracking': True
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Enhanced chat stream error: {e}")
+        yield {
+            'type': 'error',
+            'message': f'Error in enhanced chat: {str(e)}',
+            'timestamp': time.time()
+        }
+
+# ==================== CHAT ENDPOINTS ====================
+
+@router.post("/api/chat/stream")
+async def chat_stream(msg: ChatMessage, user_id: str = Query("default", description="User ID for privacy isolation")):
+    """AG-UI Protocol streaming chat endpoint with full enhancement integration"""
+    
+    # Enhanced context
+    context = {
+        "mode": "user",
+        "user_id": user_id,
+        "timestamp": time.time()
+    }
+    
+    # Merge with provided context
+    if msg.context:
+        context.update(msg.context)
+        
+    async def format_sse_events():
+        """Format events as Server-Sent Events"""
+        try:
+            async for event in generate_enhanced_chat_stream(msg.message, user_id, context):
+                # Serialize and send event
+                event_json = json.dumps(event, default=str)
+                yield f"data: {event_json}\n\n"
+            except Exception as e:
+            logger.error(f"SSE formatting error: {e}")
+            error_event = {
+                'type': 'error',
+                'message': f'Stream error: {str(e)}',
+                'timestamp': time.time()
+            }
+            yield f"data: {json.dumps(error_event)}\n\n"
+        
+        return StreamingResponse(
+        format_sse_events(),
+        media_type="text/event-stream",
+            headers={
+            "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+            "Content-Type": "text/event-stream; charset=utf-8",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+@router.post("/api/chat/")
+@router.post("/api/chat")
+async def chat(msg: ChatMessage, user_id: str = Query("default", description="User ID for privacy isolation")):
+    """Non-streaming chat endpoint with enhancement integration (legacy support)"""
+    
+    start_time = time.time()
+    interaction_id = str(uuid.uuid4())
+    
+    try:
+        logger.info(f"💬 Chat request from {user_id}: {msg.message[:50]}...")
+        
+        # Enhanced context
+        context = {
+            "mode": "user",
+            "user_id": user_id,
+            "timestamp": time.time()
+        }
+        
+        if msg.context:
+            context.update(msg.context)
+        
+        # 1. Temporal Memory: Create/get episode
+        episode_id = await create_or_get_episode(user_id, msg.message)
+        if episode_id:
+            context['episode_id'] = episode_id
+            await add_to_episode(episode_id, msg.message, "user", user_id)
+            
+            # Search temporal memories
+            memories = await search_temporal_memories(msg.message, user_id, episode_id)
+            if memories:
+                context['temporal_memories'] = memories
+        
+        # 2. Cross-Agent Collaboration: Check for complex tasks
+        orchestration_result = await orchestrate_complex_task(msg.message, user_id, context)
+        if orchestration_result:
+            context['orchestration'] = orchestration_result
+        
+        # 3. Get AI response
+        response = await get_ai_response(msg.message, context)
+        
+        # 4. Add assistant response to episode
+        if episode_id:
+            await add_to_episode(episode_id, response, "assistant", user_id)
+        
+        # 5. Record interaction for satisfaction tracking
+        response_time = time.time() - start_time
+        asyncio.create_task(
+            record_interaction(interaction_id, user_id, msg.message, response, response_time)
+        )
+        
+        return {
+            "response": response,
+            "response_time": response_time,
+            "interaction_id": interaction_id,
+            "episode_id": episode_id,
+            "enhancements_active": {
+                "temporal_memory": bool(episode_id),
+                "orchestration": bool(orchestration_result),
+                "satisfaction_tracking": True
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Chat error: {e}")
+        return {
+            "response": f"I apologize, but I encountered an error: {str(e)}",
+            "error": str(e),
+            "response_time": time.time() - start_time
+        }
+
+@router.get("/api/chat/status")
+async def chat_status(user_id: str = Query("default")):
+    """Get chat system status with enhancement system information"""
+    try:
+        # Get episode info
+        episode = None
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(
+                "http://localhost:8000/api/temporal-memory/episodes/active",
+                params={"user_id": user_id}
+            )
+            if response.status_code == 200:
+                episode = response.json().get("episode")
+        
+        # Get satisfaction metrics
+        metrics = await get_satisfaction_metrics(user_id)
+        
+        return {
+            "status": "operational",
+            "user_id": user_id,
+            "enhancements": {
+                "temporal_memory": {
+                    "active": True,
+                    "active_episode": episode.get("id") if episode else None,
+                    "episode_messages": episode.get("message_count", 0) if episode else 0
+                },
+                "cross_agent_collaboration": {
+                    "active": True,
+                    "orchestration_endpoint": "/api/orchestration/orchestrate"
+                },
+                "user_satisfaction": {
+                    "active": True,
+                    "average_satisfaction": metrics.get("average_satisfaction", 0) if metrics else 0,
+                    "total_interactions": metrics.get("total_interactions", 0) if metrics else 0
+                }
+            },
+            "timestamp": time.time()
+        }
+    
+    except Exception as e:
+        return {
+            "status": "degraded",
+            "error": str(e),
+            "timestamp": time.time()
+        }
+
+@router.get("/api/chat/capabilities")
+async def chat_capabilities():
+    """Get available chat capabilities and enhancement systems"""
+    return {
+        "chat_modes": ["user", "developer"],
+        "enhancement_systems": {
+            "temporal_memory": {
+                "name": "Temporal & Episodic Memory",
+                "description": "Conversation episode tracking and time-based memory search",
+                "features": [
+                    "Episode creation and tracking",
+                    "Message history with temporal context",
+                    "Memory search with time range filters",
+                    "Memory decay for importance weighting"
+                ]
+            },
+            "cross_agent_collaboration": {
+                "name": "Multi-Expert Orchestration",
+                "description": "Coordinate multiple specialized agents for complex tasks",
+                "features": [
+                    "Automatic task decomposition",
+                    "Parallel expert execution",
+                    "Result synthesis",
+                    "Available experts: calendar, lists, memory, planning, development, weather, homeassistant"
+                ]
+            },
+            "user_satisfaction": {
+                "name": "User Satisfaction Tracking",
+                "description": "Track and learn from user satisfaction patterns",
+                "features": [
+                    "Automatic interaction recording",
+                    "Explicit feedback collection (1-5 rating)",
+                    "Implicit signal analysis",
+                    "Satisfaction trend tracking"
+                ]
+            },
+            "light_rag": {
+                "name": "Light RAG Intelligence",
+                "description": "Vector embeddings with relationship awareness",
+                "status": "integrated_in_memory_system"
+            }
+        },
+        "streaming_protocol": "AG-UI Protocol (Server-Sent Events)",
+        "endpoints": {
+            "streaming": "/api/chat/stream",
+            "non_streaming": "/api/chat",
+            "status": "/api/chat/status",
+            "capabilities": "/api/chat/capabilities"
+        }
+    }

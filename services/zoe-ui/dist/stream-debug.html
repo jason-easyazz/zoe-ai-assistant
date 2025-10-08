@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Stream Debug</title>
+    <style>
+        body { padding: 20px; font-family: monospace; background: #000; color: #0f0; }
+        #log { white-space: pre-wrap; padding: 20px; background: #111; }
+        .event { margin: 10px 0; padding: 10px; background: #222; border-left: 3px solid #0f0; }
+        .content { color: #ff0; }
+    </style>
+</head>
+<body>
+    <h1>Real-Time Stream Debug</h1>
+    <button onclick="startStream()">Start Stream</button>
+    <div id="log"></div>
+
+    <script>
+        let eventCount = 0;
+
+        async function startStream() {
+            const log = document.getElementById('log');
+            log.innerHTML = 'Starting...\n\n';
+            eventCount = 0;
+
+            try {
+                const response = await fetch('/api/chat/langgraph', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: "say hello",
+                        enable_agents: false,
+                        enable_visualization: false
+                    })
+                });
+
+                log.innerHTML += `Response: ${response.status} ${response.statusText}\n`;
+                log.innerHTML += `Headers: ${response.headers.get('content-type')}\n\n`;
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    
+                    if (done) {
+                        log.innerHTML += `\n\n✅ Stream complete - ${eventCount} events received`;
+                        break;
+                    }
+
+                    buffer += decoder.decode(value, { stream: true });
+                    
+                    // Show raw buffer for debugging
+                    if (eventCount < 10) {
+                        log.innerHTML += `\nRAW BUFFER (${buffer.length} bytes): ${buffer.substring(0, 100)}...\n`;
+                    }
+                    
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            eventCount++;
+                            try {
+                                const event = JSON.parse(line.slice(6));
+                                
+                                const eventDiv = document.createElement('div');
+                                eventDiv.className = 'event';
+                                eventDiv.innerHTML = `<strong>Event ${eventCount}: ${event.type}</strong>`;
+                                
+                                if (event.content) {
+                                    eventDiv.innerHTML += `<div class="content">Content: "${event.content}"</div>`;
+                                }
+                                if (event.message) {
+                                    eventDiv.innerHTML += `<div>Message: ${event.message}</div>`;
+                                }
+                                
+                                log.appendChild(eventDiv);
+                                window.scrollTo(0, document.body.scrollHeight);
+                                
+                            } catch (e) {
+                                log.innerHTML += `\n❌ Parse error: ${e.message}\nLine: ${line}\n`;
+                            }
+                        } else if (line.trim()) {
+                            log.innerHTML += `\n⚠️ Non-data line: ${line}\n`;
+                        }
+                    }
+                }
+
+            } catch (error) {
+                log.innerHTML += `\n\n❌ ERROR: ${error.message}\n${error.stack}`;
+            }
+        }
+    </script>
+</body>
+</html>
+

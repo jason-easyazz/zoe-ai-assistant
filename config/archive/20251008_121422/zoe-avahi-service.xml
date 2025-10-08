@@ -1,0 +1,50 @@
+<?xml version="1.0" standalone='no'?><!--*-nxml-*-->
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+
+<!-- Zoe AI Assistant Service Discovery -->
+<service-group>
+  <name replace-wildcards="yes">Zoe AI Assistant on %h</name>
+  
+  <!-- Main Web Interface -->
+  <service>
+    <type>_http._tcp</type>
+    <port>80</port>
+    <host-name>zoe.local</host-name>
+    <txt-record>path=/</txt-record>
+    <txt-record>description=Zoe AI Assistant Main Interface</txt-record>
+    <txt-record>version=5.0</txt-record>
+  </service>
+  
+  <!-- HTTPS Interface (when available) -->
+  <service>
+    <type>_https._tcp</type>
+    <port>443</port>
+    <host-name>zoe.local</host-name>
+    <txt-record>path=/</txt-record>
+    <txt-record>description=Zoe AI Assistant Secure Interface</txt-record>
+    <txt-record>version=5.0</txt-record>
+  </service>
+  
+  <!-- API Discovery -->
+  <service>
+    <type>_zoe-api._tcp</type>
+    <port>8000</port>
+    <host-name>zoe.local</host-name>
+    <txt-record>path=/api</txt-record>
+    <txt-record>description=Zoe AI Assistant API</txt-record>
+    <txt-record>version=5.0</txt-record>
+  </service>
+  
+  <!-- Service Discovery Endpoint -->
+  <service>
+    <type>_zoe-discovery._tcp</type>
+    <port>80</port>
+    <host-name>zoe.local</host-name>
+    <txt-record>path=/api/services</txt-record>
+    <txt-record>description=Zoe Services Discovery</txt-record>
+    <txt-record>automation=5678</txt-record>
+    <txt-record>home=8123</txt-record>
+    <txt-record>ollama=11434</txt-record>
+  </service>
+</service-group>
+

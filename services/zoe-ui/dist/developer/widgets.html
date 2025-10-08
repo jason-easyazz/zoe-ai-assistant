@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Widget Development</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            height: 100vh;
+            overflow: hidden;
+            color: #333;
+        }
+
+        /* Header */
+        .header {
+            height: 56px;
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+        }
+
+        .nav {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            color: #333;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 16px;
+        }
+
+        .nav-link {
+            color: #666;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            padding: 8px 12px;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover, .nav-link.active {
+            color: #7B61FF;
+            background: rgba(123, 97, 255, 0.1);
+        }
+
+        /* Main Content */
+        .main-content {
+            height: calc(100vh - 56px);
+            display: flex;
+        }
+
+        .sidebar {
+            width: 280px;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(10px);
+            border-right: 1px solid rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .content {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        /* Widget Cards */
+        .widget-card {
+            background: white;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            transition: all 0.2s;
+        }
+
+        .widget-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+        }
+
+        .widget-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .widget-name {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .widget-version {
+            font-size: 12px;
+            color: #666;
+            background: #f0f0f0;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+
+        .widget-status {
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+
+        .status-active { background: #e8f5e8; color: #2e7d32; }
+        .status-inactive { background: #fff3e0; color: #f57c00; }
+        .status-error { background: #ffebee; color: #c62828; }
+
+        .widget-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary { background: #7B61FF; color: white; }
+        .btn-secondary { background: #f0f0f0; color: #333; }
+        .btn-danger { background: #ff4757; color: white; }
+        .btn-success { background: #2ed573; color: white; }
+
+        .btn:hover { transform: translateY(-1px); opacity: 0.9; }
+
+        /* Widget Editor */
+        .widget-editor {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        .editor-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .editor-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 6px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #7B61FF;
+        }
+
+        .form-textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            min-height: 200px;
+            resize: vertical;
+        }
+
+        .form-textarea:focus {
+            outline: none;
+            border-color: #7B61FF;
+        }
+
+        /* Stats */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 24px;
+            font-weight: 600;
+            color: #7B61FF;
+            margin-bottom: 4px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .spinner {
+            width: 32px;
+            height: 32px;
+            border: 3px solid #f0f0f0;
+            border-top: 3px solid #7B61FF;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+    <script src="/js/auth.js"></script>
+</head>
+<body>
+    <div class="header">
+        <div class="nav">
+            <a href="index.html" class="logo">
+                <div class="logo-icon">Z</div>
+                <span>Developer Dashboard</span>
+            </a>
+            <div class="nav-links">
+                <a href="index.html" class="nav-link">Dashboard</a>
+                <a href="tasks.html" class="nav-link">Tasks</a>
+                <a href="widgets.html" class="nav-link active">Widgets</a>
+                <a href="templates.html" class="nav-link">Templates</a>
+                <a href="monitor.html" class="nav-link">Monitor</a>
+                <a href="chat.html" class="nav-link">Chat</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <div class="sidebar">
+            <h3 style="margin-bottom: 16px; color: #333;">Widget Registry</h3>
+            <div id="widgetList">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    Loading widgets...
+                </div>
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number" id="totalWidgets">-</div>
+                    <div class="stat-label">Total Widgets</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="activeWidgets">-</div>
+                    <div class="stat-label">Active Widgets</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="pendingUpdates">-</div>
+                    <div class="stat-label">Pending Updates</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="widgetErrors">-</div>
+                    <div class="stat-label">Widget Errors</div>
+                </div>
+            </div>
+
+            <div class="widget-editor">
+                <div class="editor-header">
+                    <h3 class="editor-title">Create New Widget</h3>
+                    <button class="btn btn-primary" onclick="createWidget()">Create Widget</button>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Widget Name</label>
+                    <input type="text" id="widgetName" class="form-input" placeholder="e.g., weather-widget">
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Version</label>
+                    <input type="text" id="widgetVersion" class="form-input" placeholder="1.0.0" value="1.0.0">
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Default Size</label>
+                    <select id="widgetSize" class="form-input">
+                        <option value="size-small">Small</option>
+                        <option value="size-medium">Medium</option>
+                        <option value="size-large">Large</option>
+                        <option value="size-xlarge">Extra Large</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Update Interval (ms)</label>
+                    <input type="number" id="updateInterval" class="form-input" placeholder="1000" value="1000">
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Widget Template</label>
+                    <textarea id="widgetTemplate" class="form-textarea" placeholder="Enter widget HTML template...">
+<div class="widget-controls">
+    <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+    <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+</div>
+<div class="size-indicator">Small</div>
+<div class="widget-content">
+    <h3>New Widget</h3>
+    <p>Widget content goes here...</p>
+</div>
+                    </textarea>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="api-config.js"></script>
+    <script>
+        // Load widgets on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadWidgets();
+            loadStats();
+        });
+
+        async function loadWidgets() {
+            try {
+                const data = await WidgetManager.getWidgets();
+                displayWidgets(data.widgets || []);
+            } catch (error) {
+                console.error('Failed to load widgets:', error);
+                document.getElementById('widgetList').innerHTML = '<div class="loading">Failed to load widgets</div>';
+            }
+        }
+
+        function displayWidgets(widgets) {
+            const container = document.getElementById('widgetList');
+            
+            if (widgets.length === 0) {
+                container.innerHTML = '<div class="loading">No widgets found</div>';
+                return;
+            }
+
+            container.innerHTML = widgets.map(widget => `
+                <div class="widget-card">
+                    <div class="widget-header">
+                        <div class="widget-name">${widget.name}</div>
+                        <div class="widget-version">v${widget.version}</div>
+                    </div>
+                    <div class="widget-status status-${widget.status || 'active'}">
+                        ${widget.status || 'Active'}
+                    </div>
+                    <div class="widget-actions">
+                        <button class="btn btn-primary" onclick="testWidget('${widget.name}')">Test</button>
+                        <button class="btn btn-secondary" onclick="editWidget('${widget.name}')">Edit</button>
+                        <button class="btn btn-success" onclick="updateWidget('${widget.name}')">Update</button>
+                        <button class="btn btn-danger" onclick="deleteWidget('${widget.name}')">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function loadStats() {
+            try {
+                const data = await WidgetManager.getWidgets();
+                const widgets = data.widgets || [];
+                
+                document.getElementById('totalWidgets').textContent = widgets.length;
+                document.getElementById('activeWidgets').textContent = widgets.filter(w => w.status === 'active').length;
+                document.getElementById('pendingUpdates').textContent = widgets.filter(w => w.hasUpdate).length;
+                document.getElementById('widgetErrors').textContent = widgets.filter(w => w.status === 'error').length;
+            } catch (error) {
+                console.error('Failed to load stats:', error);
+            }
+        }
+
+        async function createWidget() {
+            const name = document.getElementById('widgetName').value;
+            const version = document.getElementById('widgetVersion').value;
+            const size = document.getElementById('widgetSize').value;
+            const interval = document.getElementById('updateInterval').value;
+            const template = document.getElementById('widgetTemplate').value;
+
+            if (!name || !template) {
+                alert('Please fill in widget name and template');
+                return;
+            }
+
+            try {
+                const result = await WidgetManager.createWidget({
+                    name,
+                    version,
+                    defaultSize: size,
+                    updateInterval: parseInt(interval),
+                    template
+                });
+
+                if (result.success) {
+                    alert('Widget created successfully!');
+                    loadWidgets();
+                    loadStats();
+                    // Clear form
+                    document.getElementById('widgetName').value = '';
+                    document.getElementById('widgetTemplate').value = '';
+                } else {
+                    alert('Failed to create widget: ' + result.error);
+                }
+            } catch (error) {
+                alert('Error creating widget: ' + error.message);
+            }
+        }
+
+        async function testWidget(widgetName) {
+            try {
+                const result = await WidgetManager.testWidget(widgetName);
+                if (result.success) {
+                    alert(`Widget ${widgetName} test passed!`);
+                } else {
+                    alert(`Widget ${widgetName} test failed: ${result.error}`);
+                }
+            } catch (error) {
+                alert('Test error: ' + error.message);
+            }
+        }
+
+        async function updateWidget(widgetName) {
+            try {
+                const result = await WidgetManager.updateWidget(widgetName);
+                if (result.success) {
+                    alert(`Widget ${widgetName} updated successfully!`);
+                    loadWidgets();
+                    loadStats();
+                } else {
+                    alert(`Failed to update widget: ${result.error}`);
+                }
+            } catch (error) {
+                alert('Update error: ' + error.message);
+            }
+        }
+
+        function editWidget(widgetName) {
+            // TODO: Implement widget editing
+            alert('Widget editing not implemented yet');
+        }
+
+        function deleteWidget(widgetName) {
+            if (confirm(`Are you sure you want to delete widget "${widgetName}"?`)) {
+                // TODO: Implement widget deletion
+                alert('Widget deletion not implemented yet');
+            }
+        }
+    </script>
+</body>
+</html>
+

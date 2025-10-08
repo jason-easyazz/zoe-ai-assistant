@@ -1,0 +1,1446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Zoe - Welcome</title>
+    <style>
+        * { 
+            margin: 0; padding: 0; box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            min-height: 100vh; color: #fff;
+            font-size: clamp(16px, 2.2vw, 20px);
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+            touch-action: manipulation;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* The main orb */
+        .main-orb {
+            width: clamp(250px, 35vw, 350px);
+            height: clamp(250px, 35vw, 350px);
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            margin: 0 auto 30px;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            animation: breathe 4s ease-in-out infinite;
+            box-shadow: 
+                0 0 60px rgba(123, 97, 255, 0.4),
+                0 0 120px rgba(90, 224, 224, 0.2),
+                inset 0 0 60px rgba(255, 255, 255, 0.1);
+        }
+
+        @keyframes breathe {
+            0%, 100% { 
+                transform: scale(1) translateY(0px);
+                filter: brightness(1);
+            }
+            50% { 
+                transform: scale(1.05) translateY(-10px);
+                filter: brightness(1.1);
+            }
+        }
+
+        .main-orb:hover {
+            transform: scale(1.1) translateY(-20px);
+            box-shadow: 
+                0 0 80px rgba(123, 97, 255, 0.6),
+                0 0 160px rgba(90, 224, 224, 0.3),
+                inset 0 0 60px rgba(255, 255, 255, 0.2);
+            animation: none;
+        }
+
+        /* Main container */
+        .container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            position: relative;
+            z-index: 10;
+        }
+
+        .welcome-stage {
+            text-align: center;
+            transition: all 1s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        /* Welcome text */
+        .welcome-text {
+            margin-bottom: 30px;
+            opacity: 0;
+            animation: fadeInUp 1s ease-out 0.5s forwards;
+        }
+
+        .welcome-title {
+            font-size: clamp(42px, 7vw, 64px);
+            font-weight: 300;
+            margin-bottom: 12px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .welcome-subtitle {
+            font-size: clamp(16px, 2.5vw, 22px);
+            color: rgba(255, 255, 255, 0.7);
+            font-weight: 300;
+            margin-bottom: 16px;
+        }
+
+        .welcome-hint {
+            font-size: clamp(14px, 2vw, 18px);
+            color: rgba(255, 255, 255, 0.5);
+            animation: glow 2s ease-in-out infinite alternate;
+        }
+
+        @keyframes glow {
+            from { opacity: 0.5; }
+            to { opacity: 0.8; }
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Profile selection overlay */
+        .profile-selection {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(20px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 20;
+        }
+
+        .profile-selection.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .profile-container {
+            text-align: center;
+            max-width: 800px;
+            width: 90%;
+        }
+
+        .profile-title {
+            font-size: clamp(32px, 6vw, 48px);
+            font-weight: 300;
+            margin-bottom: 40px;
+            color: #fff;
+        }
+
+        .profile-grid {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 30px;
+            margin-bottom: 40px;
+            flex-wrap: wrap;
+            transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .profile-grid.expanded {
+            display: none !important;
+        }
+        
+        .profile-container.auth-active .profile-title,
+        .profile-container.auth-active .profile-grid {
+            display: none !important;
+        }
+
+        .profile-card {
+            background: transparent;
+            border: none;
+            border-radius: 50%;
+            width: clamp(100px, 15vw, 140px);
+            height: clamp(100px, 15vw, 140px);
+            cursor: pointer;
+            transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: visible;
+            flex-shrink: 0;
+            min-width: 88px;
+            min-height: 88px;
+        }
+
+        .profile-card.selected {
+            transform: scale(1.1);
+        }
+
+        .profile-card.selected .profile-avatar {
+            box-shadow: 0 0 30px rgba(123, 97, 255, 0.4);
+        }
+
+        .profile-card.others-selected {
+            opacity: 0.7;
+            transform: scale(0.9);
+        }
+
+        .profile-grid.expanded .profile-card {
+            width: 80px;
+            height: 80px;
+        }
+
+        .profile-grid.expanded .profile-card.selected {
+            width: 90px;
+            height: 90px;
+        }
+
+        .profile-grid.expanded .profile-avatar {
+            width: 50px;
+            height: 50px;
+            font-size: 20px;
+        }
+
+        .profile-grid.expanded .profile-card.selected .profile-avatar {
+            width: 60px;
+            height: 60px;
+            font-size: 24px;
+        }
+
+        .profile-card:hover {
+            transform: translateY(-10px) scale(1.05);
+        }
+
+        .profile-card:hover .profile-avatar {
+            box-shadow: 
+                0 20px 40px rgba(0, 0, 0, 0.3),
+                0 0 30px rgba(123, 97, 255, 0.3);
+        }
+
+        .profile-avatar {
+            width: clamp(60px, 10vw, 90px);
+            height: clamp(60px, 10vw, 90px);
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: clamp(24px, 4vw, 36px);
+            font-weight: bold;
+            color: white;
+            transition: all 0.3s ease;
+            margin-bottom: 8px;
+        }
+
+        .profile-grid.expanded .profile-avatar {
+            width: 60px;
+            height: 60px;
+            font-size: 24px;
+        }
+
+        .profile-card:not(:hover):not(.selected) .profile-avatar {
+            transition: all 0.3s ease;
+        }
+
+        .profile-name {
+            font-size: clamp(12px, 1.8vw, 16px);
+            font-weight: 500;
+            color: #fff;
+            text-align: center;
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+
+        .profile-card:hover .profile-name {
+            opacity: 1;
+        }
+
+        .profile-role {
+            display: none;
+        }
+
+        /* Auth Panel Styles - BACK TO WORKING DESIGN */
+        .auth-panel {
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            opacity: 0;
+            transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+            background: rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(20px);
+            border-radius: 20px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+            z-index: 25;
+            width: 90vw;
+            height: 80vh;
+            max-width: 1200px;
+            max-height: 700px;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        .auth-panel.show {
+            opacity: 1;
+            transform: translate(-50%, -50%);
+        }
+
+        /* Header section - FIXED AT TOP */
+        .auth-header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 12px 20px;
+            background: rgba(0, 0, 0, 0.15);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+            height: 60px;
+            z-index: 100;
+            backdrop-filter: blur(15px);
+        }
+
+        .auth-header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .auth-header-center {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .auth-header-center {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .auth-header-right {
+            display: flex;
+            align-items: center;
+        }
+
+        .auth-header-signin {
+            display: flex;
+            align-items: center;
+        }
+
+        .password-input-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+        }
+
+        .password-input-container .password-input {
+            margin-bottom: 0;
+            min-height: 40px;
+            font-size: 16px;
+            padding: 10px 14px;
+            width: 100%;
+            max-width: 300px;
+        }
+
+        .pin-display-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+        }
+
+        .pin-display-container .pin-display {
+            margin-bottom: 0;
+            padding: 10px 16px;
+            width: 100%;
+            max-width: 300px;
+        }
+
+        .selected-user-section {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            min-width: 220px;
+            flex-shrink: 0;
+        }
+
+        .selected-user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: bold;
+            color: white;
+            box-shadow: 0 0 12px rgba(123, 97, 255, 0.4);
+            animation: gentle-breathe 4s ease-in-out infinite;
+        }
+
+        @keyframes gentle-breathe {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.03); }
+        }
+
+        .selected-user-name {
+            font-size: 16px;
+            font-weight: 500;
+            color: #fff;
+            margin: 0;
+        }
+
+        .selected-user-role {
+            font-size: 14px;
+            font-weight: 400;
+            color: rgba(255, 255, 255, 0.8);
+            margin: 0;
+        }
+
+
+        /* Input method area - 95% OF SCREEN */
+        .auth-input-method {
+            flex: 1;
+            padding: 5px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 0;
+            overflow: hidden;
+        }
+
+        .auth-tabs {
+            display: flex;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 4px;
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .auth-tab {
+            padding: 8px 16px;
+            border: none;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.7);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            font-size: 14px;
+            min-height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            white-space: nowrap;
+        }
+
+        .auth-tab.active {
+            background: rgba(123, 97, 255, 0.3);
+            color: white;
+            box-shadow: 0 2px 8px rgba(123, 97, 255, 0.3);
+        }
+
+        .auth-mode {
+            display: none;
+        }
+
+        .auth-mode.active {
+            display: block;
+        }
+
+        .pin-display {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            padding: 10px 16px;
+            margin-bottom: 0;
+            display: flex;
+            justify-content: center;
+            backdrop-filter: blur(20px);
+            width: 100%;
+            max-width: 300px;
+        }
+
+        .pin-dots {
+            display: flex;
+            gap: 15px;
+        }
+
+        .pin-dot {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transition: all 0.3s ease;
+        }
+
+        .pin-dot.filled {
+            background: #7B61FF;
+            box-shadow: 0 0 15px rgba(123, 97, 255, 0.5);
+            transform: scale(1.2);
+        }
+
+        .pin-keypad {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 25px;
+            max-width: 500px;
+            margin: 0 auto;
+            padding: 0;
+        }
+
+        .keypad-btn {
+            aspect-ratio: 1;
+            border: none;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 36px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(20px);
+            min-height: 100px;
+            min-width: 100px;
+        }
+
+        .keypad-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
+            transform: scale(1.05);
+            border-color: #7B61FF;
+        }
+
+        .keypad-btn:active {
+            transform: scale(0.95);
+        }
+
+        .keypad-btn.zero {
+            grid-column: 2;
+        }
+
+        .keypad-btn.backspace {
+            grid-column: 3;
+            background: rgba(231, 76, 60, 0.3);
+            font-size: 18px;
+        }
+
+        .keypad-btn.backspace:hover {
+            background: rgba(231, 76, 60, 0.5);
+        }
+
+        .password-input {
+            width: 100%;
+            max-width: 300px;
+            padding: 10px 14px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            color: white;
+            font-size: 16px;
+            margin-bottom: 0;
+            backdrop-filter: blur(20px);
+            min-height: 40px;
+        }
+
+        .password-input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .password-input:focus {
+            outline: none;
+            border-color: #7B61FF;
+            box-shadow: 
+                0 0 0 3px rgba(123, 97, 255, 0.2),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .auth-submit-btn {
+            width: 100%;
+            max-width: 350px;
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-height: 36px;
+            margin-bottom: 0;
+            box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+
+        .auth-submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 16px rgba(123, 97, 255, 0.4);
+        }
+
+        .auth-submit-btn:active {
+            transform: translateY(-1px);
+        }
+
+        /* Touch Keyboard Styles - 100% WIDE */
+        .touch-keyboard {
+            flex: 1;
+            margin: 0;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.1);
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-height: 0;
+        }
+
+        .keyboard-row {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 15px;
+            justify-content: center;
+            flex: 1;
+        }
+
+        .keyboard-row:last-child {
+            margin-bottom: 0;
+        }
+
+        .key-btn {
+            min-width: 80px;
+            height: 80px;
+            border: none;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 24px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(20px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex: 1;
+            max-width: 100px;
+        }
+
+        .key-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
+            transform: scale(1.05);
+            border-color: #7B61FF;
+        }
+
+        .key-btn:active {
+            transform: scale(0.95);
+        }
+
+        .key-btn.shift {
+            min-width: 100px;
+            max-width: 110px;
+            background: rgba(123, 97, 255, 0.3);
+            border-color: rgba(123, 97, 255, 0.4);
+        }
+
+        .key-btn.shift.active {
+            background: rgba(123, 97, 255, 0.6);
+            border-color: rgba(123, 97, 255, 0.6);
+        }
+
+        .key-btn.backspace {
+            min-width: 100px;
+            max-width: 110px;
+            background: rgba(231, 76, 60, 0.3);
+            border-color: rgba(231, 76, 60, 0.4);
+        }
+
+        .key-btn.space {
+            flex: 3;
+            min-width: 300px;
+            max-width: 500px;
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .key-btn.enter {
+            min-width: 100px;
+            max-width: 110px;
+            background: rgba(46, 204, 113, 0.3);
+            border-color: rgba(46, 204, 113, 0.4);
+        }
+
+        /* Back button - IN HEADER */
+        .back-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: rgba(255, 255, 255, 0.8);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+            height: 36px;
+            min-width: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .back-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            color: #fff;
+        }
+
+        .guest-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            color: rgba(255, 255, 255, 0.8);
+            padding: 16px 32px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            margin-top: 20px;
+            min-height: 50px;
+            min-width: 120px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .guest-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            color: #fff;
+            transform: translateY(-2px);
+        }
+
+        /* SIMPLE FIXED SIZING - NO COMPLEX RESPONSIVE */
+
+        /* Responsive adjustments for mobile portrait */
+        @media (max-width: 768px) and (orientation: portrait) {
+            .auth-panel {
+                flex-direction: column;
+                gap: 30px;
+                padding: 20px;
+                width: 95%;
+                max-width: 400px;
+            }
+
+            .auth-user-info {
+                min-width: auto;
+            }
+
+            .auth-input-section {
+                max-width: none;
+                width: 100%;
+            }
+
+            .profile-grid.expanded {
+                padding: 15px;
+                gap: 15px;
+            }
+
+            .profile-title {
+                font-size: clamp(28px, 5vw, 40px);
+                margin-bottom: 30px;
+            }
+
+            .profile-grid.expanded .profile-card {
+                width: 60px;
+                height: 60px;
+            }
+
+            .profile-grid.expanded .profile-card.selected {
+                width: 70px;
+                height: 70px;
+            }
+
+            .profile-grid.expanded .profile-avatar {
+                width: 40px;
+                height: 40px;
+                font-size: 18px;
+            }
+
+            .profile-grid.expanded .profile-card.selected .profile-avatar {
+                width: 50px;
+                height: 50px;
+                font-size: 20px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .auth-panel {
+                gap: 20px;
+                padding: 15px;
+            }
+
+            .selected-user-avatar {
+                width: 100px;
+                height: 100px;
+                font-size: 40px;
+            }
+
+            .selected-user-name {
+                font-size: 20px;
+            }
+        }
+    </style>
+<script>
+(function(){
+  const key="zoe_session";
+  const getSession=()=>{
+    const s=localStorage.getItem(key);
+    if(!s)return "";
+    try{const j=JSON.parse(s);return j.session_id||"";}catch(e){return "";}
+  };
+  const origFetch=window.fetch;
+  window.fetch=function(u,o){o=o||{};o.headers=o.headers||{};const sid=getSession();if(sid){o.headers["X-Session-ID"]=sid;} if(typeof u==="string"){u=u.replace(/[?&]user_id=[^&]*/g,"");} return origFetch(u,o);};
+})();
+</script>
+    <script src="/js/auth.js"></script>
+</head>
+<body>
+    <!-- Main Welcome Container -->
+    <div class="container">
+        <div class="welcome-stage" id="welcomeStage">
+            <!-- Main Orb -->
+            <div class="main-orb" id="mainOrb" onclick="showProfiles()"></div>
+
+            <!-- Welcome Text -->
+            <div class="welcome-text">
+                <h1 class="welcome-title">Zoe</h1>
+                <p class="welcome-subtitle">Your Personal AI Assistant</p>
+                <p class="welcome-hint">Touch the orb to begin</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Profile Selection Overlay -->
+    <div class="profile-selection" id="profileSelection">
+        <div class="profile-container">
+            <h2 class="profile-title">Who's using Zoe today?</h2>
+            
+            <div class="profile-grid" id="profileGrid">
+                <!-- Profiles will be loaded dynamically -->
+            </div>
+            
+            <!-- Auth Header - Fixed at top -->
+            <div class="auth-header" id="authHeader" style="display: none;">
+                <!-- Back button -->
+                <button class="back-btn" onclick="hideProfiles()">← Back</button>
+                
+                <!-- User info section -->
+                <div class="auth-header-left">
+                    <div class="selected-user-avatar" id="selectedUserAvatar"></div>
+                    <div>
+                        <div class="selected-user-name" id="selectedUserName"></div>
+                        <div class="selected-user-role" id="selectedUserRole"></div>
+                    </div>
+                </div>
+                
+                <!-- Password/PIN entry section -->
+                <div class="auth-header-center">
+                    <div class="password-input-container" id="passwordInputContainer">
+                        <input type="password" class="password-input" id="passwordInput" placeholder="Enter password" onkeypress="if(event.key==='Enter') submitPassword()" onclick="showTouchKeyboard()">
+                    </div>
+                    <div class="pin-display-container" id="pinDisplayContainer" style="display: none;">
+                        <div class="pin-display">
+                            <div class="pin-dots" id="pinDots">
+                                <div class="pin-dot"></div>
+                                <div class="pin-dot"></div>
+                                <div class="pin-dot"></div>
+                                <div class="pin-dot"></div>
+                                <div class="pin-dot"></div>
+                                <div class="pin-dot"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- PIN/Password choice section -->
+                <div class="auth-header-right">
+                    <div class="auth-tabs">
+                        <button class="auth-tab active" id="passcodeTab" onclick="switchAuthMode('passcode')">PIN</button>
+                        <button class="auth-tab" id="passwordTab" onclick="switchAuthMode('password')">Password</button>
+                    </div>
+                </div>
+                
+                <!-- Sign in button -->
+                <div class="auth-header-signin">
+                    <button class="auth-submit-btn" id="authSubmitBtn" onclick="submitAuth()" style="display: none;">Sign In</button>
+                </div>
+            </div>
+
+            <!-- Auth Panel - Hidden initially -->
+            <div class="auth-panel" id="authPanel" style="display: none;">
+                
+                <!-- Data entry area under auth tabs -->
+                
+                <!-- Input method area - fills remaining space -->
+                <div class="auth-input-method">
+
+                    <!-- PIN Keypad - fills remaining space -->
+                    <div class="auth-mode passcode-mode active" id="passcodeMode">
+                        <div class="pin-keypad">
+                            <button class="keypad-btn" onclick="addPin('1')">1</button>
+                            <button class="keypad-btn" onclick="addPin('2')">2</button>
+                            <button class="keypad-btn" onclick="addPin('3')">3</button>
+                            <button class="keypad-btn" onclick="addPin('4')">4</button>
+                            <button class="keypad-btn" onclick="addPin('5')">5</button>
+                            <button class="keypad-btn" onclick="addPin('6')">6</button>
+                            <button class="keypad-btn" onclick="addPin('7')">7</button>
+                            <button class="keypad-btn" onclick="addPin('8')">8</button>
+                            <button class="keypad-btn" onclick="addPin('9')">9</button>
+                            <button class="keypad-btn zero" onclick="addPin('0')">0</button>
+                            <button class="keypad-btn backspace" onclick="removePin()">⌫</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Touch Keyboard - fills entire bottom section -->
+                    <div class="auth-mode password-mode" id="passwordMode">
+                        <div class="touch-keyboard" id="touchKeyboard" style="display: none;">
+                            <div class="keyboard-row">
+                                <button class="key-btn" onclick="addToPassword('q')">q</button>
+                                <button class="key-btn" onclick="addToPassword('w')">w</button>
+                                <button class="key-btn" onclick="addToPassword('e')">e</button>
+                                <button class="key-btn" onclick="addToPassword('r')">r</button>
+                                <button class="key-btn" onclick="addToPassword('t')">t</button>
+                                <button class="key-btn" onclick="addToPassword('y')">y</button>
+                                <button class="key-btn" onclick="addToPassword('u')">u</button>
+                                <button class="key-btn" onclick="addToPassword('i')">i</button>
+                                <button class="key-btn" onclick="addToPassword('o')">o</button>
+                                <button class="key-btn" onclick="addToPassword('p')">p</button>
+                            </div>
+                            <div class="keyboard-row">
+                                <button class="key-btn" onclick="addToPassword('a')">a</button>
+                                <button class="key-btn" onclick="addToPassword('s')">s</button>
+                                <button class="key-btn" onclick="addToPassword('d')">d</button>
+                                <button class="key-btn" onclick="addToPassword('f')">f</button>
+                                <button class="key-btn" onclick="addToPassword('g')">g</button>
+                                <button class="key-btn" onclick="addToPassword('h')">h</button>
+                                <button class="key-btn" onclick="addToPassword('j')">j</button>
+                                <button class="key-btn" onclick="addToPassword('k')">k</button>
+                                <button class="key-btn" onclick="addToPassword('l')">l</button>
+                            </div>
+                            <div class="keyboard-row">
+                                <button class="key-btn shift" onclick="toggleShift()">⬆</button>
+                                <button class="key-btn" onclick="addToPassword('z')">z</button>
+                                <button class="key-btn" onclick="addToPassword('x')">x</button>
+                                <button class="key-btn" onclick="addToPassword('c')">c</button>
+                                <button class="key-btn" onclick="addToPassword('v')">v</button>
+                                <button class="key-btn" onclick="addToPassword('b')">b</button>
+                                <button class="key-btn" onclick="addToPassword('n')">n</button>
+                                <button class="key-btn" onclick="addToPassword('m')">m</button>
+                                <button class="key-btn backspace" onclick="removeFromPassword()">⌫</button>
+                            </div>
+                            <div class="keyboard-row">
+                                <button class="key-btn space" onclick="addToPassword(' ')">Space</button>
+                                <button class="key-btn enter" onclick="submitPassword()">Enter</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let userProfiles = [];
+
+        async function showProfiles() {
+            document.getElementById('profileSelection').classList.add('active');
+            await loadUserProfiles();
+        }
+
+        async function loadUserProfiles() {
+            try {
+                // Try to load profiles from the auth API
+                const response = await fetch('/api/auth/profiles');
+                if (response.ok) {
+                    userProfiles = await response.json();
+                    // Cache successful response
+                    localStorage.setItem('zoe_user_profiles', JSON.stringify(userProfiles));
+                } else {
+                    throw new Error('API returned error');
+                }
+            } catch (error) {
+                console.warn('Could not load profiles from API, using demo/cached profiles');
+                
+                // Try cached profiles first
+                const stored = localStorage.getItem('zoe_user_profiles');
+                if (stored) {
+                    userProfiles = JSON.parse(stored);
+                } else {
+                    // Fallback to demo profiles for development
+                    userProfiles = [
+                        {
+                            user_id: 'demo_admin',
+                            username: 'Admin',
+                            role: 'Administrator',
+                            avatar: 'A',
+                            demo: true
+                        },
+                        {
+                            user_id: 'demo_user',
+                            username: 'User',
+                            role: 'User',
+                            avatar: 'U',
+                            demo: true
+                        }
+                    ];
+                    console.info('Using demo profiles - start auth service for full functionality');
+                }
+            }
+
+            renderProfiles();
+        }
+
+        function renderProfiles() {
+            const grid = document.getElementById('profileGrid');
+
+            // Always add guest as the last profile
+            const allProfiles = [...userProfiles, {
+                user_id: 'guest',
+                username: 'Guest',
+                role: 'guest',
+                avatar: '👤'
+            }];
+
+            grid.innerHTML = allProfiles.map(profile => `
+                <div class="profile-card" onclick="selectProfile('${profile.user_id}', '${profile.username}', '${profile.avatar || profile.username.charAt(0).toUpperCase()}')">
+                    <div class="profile-avatar">${profile.avatar || profile.username.charAt(0).toUpperCase()}</div>
+                    <div class="profile-name">${profile.username}</div>
+                </div>
+            `).join('');
+        }
+
+        function hideProfiles() {
+            document.getElementById('profileSelection').classList.remove('active');
+            // Reset profile container when hiding
+            const profileContainer = document.querySelector('.profile-container');
+            profileContainer.classList.remove('auth-active');
+            document.getElementById('profileGrid').classList.remove('expanded');
+            // Hide auth header and panel
+            document.getElementById('authHeader').style.display = 'none';
+            document.getElementById('authPanel').classList.remove('show');
+            setTimeout(() => {
+                document.getElementById('authPanel').style.display = 'none';
+            }, 300);
+        }
+
+        let selectedUserId = null;
+        let selectedUsername = null;
+        let currentPin = '';
+        let shiftPressed = false;
+
+        function selectProfile(userId, username, avatar) {
+            selectedUserId = userId;
+            selectedUsername = username;
+            
+            // Update profile cards
+            document.querySelectorAll('.profile-card').forEach(card => {
+                card.classList.remove('selected', 'others-selected');
+                if (card.onclick.toString().includes(userId)) {
+                    card.classList.add('selected');
+                } else {
+                    card.classList.remove('others-selected'); // Remove others-selected for top layout
+                }
+            });
+
+            // Animate grid to top layout
+            document.getElementById('profileGrid').classList.add('expanded');
+            
+            // Show auth panel
+            const authPanel = document.getElementById('authPanel');
+            const selectedAvatar = document.getElementById('selectedUserAvatar');
+            const selectedName = document.getElementById('selectedUserName');
+            const selectedRole = document.getElementById('selectedUserRole');
+            const profileContainer = document.querySelector('.profile-container');
+            
+            selectedAvatar.textContent = avatar;
+            selectedName.textContent = username;
+            selectedRole.textContent = userId === 'guest' ? 'Guest User' : 'Administrator';
+            
+            // Hide profile elements and show auth header and panel
+            profileContainer.classList.add('auth-active');
+            const authHeader = document.getElementById('authHeader');
+            authHeader.style.display = 'flex';
+            authPanel.style.display = 'flex';
+            setTimeout(() => {
+                authPanel.classList.add('show');
+            }, 100);
+
+            // Clear previous PIN and hide keyboard
+            currentPin = '';
+            updatePinDisplay();
+            document.getElementById('touchKeyboard').style.display = 'none';
+            
+            // Show submit button
+            document.getElementById('authSubmitBtn').style.display = 'block';
+        }
+
+        function switchAuthMode(mode) {
+            // Update tabs
+            document.querySelectorAll('.auth-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.getElementById(mode + 'Tab').classList.add('active');
+
+            // Update modes
+            document.querySelectorAll('.auth-mode').forEach(modeEl => {
+                modeEl.classList.remove('active');
+            });
+            document.getElementById(mode + 'Mode').classList.add('active');
+
+            // Show/hide password input and PIN display in header
+            const passwordContainer = document.getElementById('passwordInputContainer');
+            const pinContainer = document.getElementById('pinDisplayContainer');
+            
+            if (mode === 'password') {
+                passwordContainer.style.display = 'flex';
+                pinContainer.style.display = 'none';
+                document.getElementById('passwordInput').focus();
+            } else {
+                passwordContainer.style.display = 'none';
+                pinContainer.style.display = 'flex';
+                // Clear PIN when switching modes
+                currentPin = '';
+                updatePinDisplay();
+            }
+
+            // Show/hide keyboard based on mode
+            const keyboard = document.getElementById('touchKeyboard');
+            if (mode === 'password') {
+                keyboard.style.display = 'block';
+            } else {
+                keyboard.style.display = 'none';
+            }
+        }
+
+        // Unified submit function
+        function submitAuth() {
+            const activeMode = document.querySelector('.auth-tab.active').id.replace('Tab', '');
+            if (activeMode === 'passcode') {
+                submitPin();
+            } else {
+                submitPassword();
+            }
+        }
+
+        function addPin(digit) {
+            if (currentPin.length < 6) {
+                currentPin += digit;
+                updatePinDisplay();
+                
+                // Auto-submit when PIN is 4-6 digits
+                if (currentPin.length >= 4) {
+                    setTimeout(() => {
+                        if (currentPin.length >= 4) {
+                            submitPin();
+                        }
+                    }, 500);
+                }
+            }
+        }
+
+        function removePin() {
+            currentPin = currentPin.slice(0, -1);
+            updatePinDisplay();
+        }
+
+        function updatePinDisplay() {
+            const dots = document.querySelectorAll('.pin-dot');
+            dots.forEach((dot, index) => {
+                if (index < currentPin.length) {
+                    dot.classList.add('filled');
+                } else {
+                    dot.classList.remove('filled');
+                }
+            });
+        }
+
+        async function submitPin() {
+            if (currentPin.length < 4 || !selectedUsername) return;
+
+            try {
+                if (selectedUserId === 'guest') {
+                    // Guest login
+                    const response = await fetch('/api/auth/guest', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ device_info: {} })
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        handleSuccessfulAuth(data);
+                    } else {
+                        showAuthError('Guest access failed');
+                    }
+                } else {
+                    // Try PIN login first (assuming PIN is same as password for demo)
+                    const response = await fetch('/api/auth/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            username: selectedUsername,
+                            password: currentPin,
+                            device_info: {}
+                        })
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        handleSuccessfulAuth(data);
+                    } else {
+                        showAuthError('Invalid PIN');
+                        currentPin = '';
+                        updatePinDisplay();
+                    }
+                }
+            } catch (error) {
+                // Demo mode fallback
+                if ((selectedUsername === 'admin' && currentPin === 'admin') || 
+                    (selectedUsername === 'user' && currentPin === 'user') ||
+                    (selectedUserId === 'guest')) {
+                    
+                    const demoSession = {
+                        success: true,
+                        user_id: selectedUserId,
+                        username: selectedUsername,
+                        role: selectedUserId === 'guest' ? 'guest' : selectedUsername.toLowerCase(),
+                        session_id: 'demo_' + Date.now(),
+                        session_type: 'passcode',
+                        expires_at: new Date(Date.now() + 24*60*60*1000).toISOString(),
+                        demo_mode: true
+                    };
+                    
+                    handleSuccessfulAuth(demoSession);
+            } else {
+                    showAuthError('Auth service offline. Try admin/admin or user/user');
+                    currentPin = '';
+                    updatePinDisplay();
+                }
+            }
+        }
+
+        async function submitPassword() {
+            const password = document.getElementById('passwordInput').value;
+            if (!password || !selectedUsername) return;
+
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        username: selectedUsername,
+                        password: password,
+                        device_info: {}
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    handleSuccessfulAuth(data);
+                } else {
+                    showAuthError('Invalid password');
+                }
+            } catch (error) {
+                // Demo mode fallback
+                if ((selectedUsername === 'admin' && password === 'admin') || 
+                    (selectedUsername === 'user' && password === 'user')) {
+                    
+                    const demoSession = {
+                        success: true,
+                        user_id: selectedUserId,
+                        username: selectedUsername,
+                        role: selectedUsername.toLowerCase(),
+                        session_id: 'demo_' + Date.now(),
+                        session_type: 'password',
+                        expires_at: new Date(Date.now() + 24*60*60*1000).toISOString(),
+                        demo_mode: true
+                    };
+                    
+                    handleSuccessfulAuth(demoSession);
+                } else {
+                    showAuthError('Auth service offline. Try admin/admin or user/user');
+                }
+            }
+        }
+
+        function handleSuccessfulAuth(data) {
+            localStorage.setItem('zoe_session', JSON.stringify(data));
+            
+            // Show success and redirect
+            showAuthSuccess(`Welcome, ${data.username}!`);
+            setTimeout(() => {
+                window.location.href = 'dashboard.html';
+            }, 1500);
+        }
+
+        function showAuthError(message) {
+            // Create temporary error message
+            const errorEl = document.createElement('div');
+            errorEl.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: rgba(231, 76, 60, 0.9);
+                color: white;
+                padding: 15px 20px;
+                border-radius: 8px;
+                z-index: 10000;
+                font-weight: 500;
+            `;
+            errorEl.textContent = message;
+            document.body.appendChild(errorEl);
+            
+            setTimeout(() => errorEl.remove(), 3000);
+        }
+
+        function showAuthSuccess(message) {
+            const successEl = document.createElement('div');
+            successEl.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: rgba(46, 204, 113, 0.9);
+                color: white;
+                padding: 15px 20px;
+                border-radius: 8px;
+                z-index: 10000;
+                font-weight: 500;
+            `;
+            successEl.textContent = message;
+            document.body.appendChild(successEl);
+            
+            setTimeout(() => successEl.remove(), 3000);
+        }
+
+        // Touch Keyboard Functions
+        function showTouchKeyboard() {
+            // Only show keyboard if we're in password mode
+            const passwordMode = document.getElementById('passwordMode');
+            if (passwordMode.classList.contains('active')) {
+                document.getElementById('touchKeyboard').style.display = 'block';
+            }
+        }
+
+        function addToPassword(char) {
+            const input = document.getElementById('passwordInput');
+            if (shiftPressed && char.length === 1) {
+                char = char.toUpperCase();
+                shiftPressed = false;
+                updateShiftState();
+            }
+            input.value += char;
+        }
+
+        function removeFromPassword() {
+            const input = document.getElementById('passwordInput');
+            input.value = input.value.slice(0, -1);
+        }
+
+        function toggleShift() {
+            shiftPressed = !shiftPressed;
+            updateShiftState();
+        }
+
+        function updateShiftState() {
+            const shiftBtn = document.querySelector('.key-btn.shift');
+            if (shiftPressed) {
+                shiftBtn.classList.add('active');
+                // Update all letter keys to uppercase
+                document.querySelectorAll('.key-btn').forEach(btn => {
+                    const text = btn.textContent;
+                    if (text.length === 1 && text.match(/[a-z]/)) {
+                        btn.textContent = text.toUpperCase();
+                    }
+                });
+            } else {
+                shiftBtn.classList.remove('active');
+                // Update all letter keys to lowercase
+                document.querySelectorAll('.key-btn').forEach(btn => {
+                    const text = btn.textContent;
+                    if (text.length === 1 && text.match(/[A-Z]/)) {
+                        btn.textContent = text.toLowerCase();
+                    }
+                });
+            }
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check for redirect loops
+            const loopDetected = localStorage.getItem('redirect_loop_detected');
+            if (loopDetected) {
+                console.warn('Redirect loop detected, clearing session');
+                localStorage.removeItem('zoe_session');
+                localStorage.removeItem('redirect_loop_detected');
+                return;
+            }
+            
+            // If there's already a session, validate it before redirecting
+            const session = localStorage.getItem('zoe_session');
+            if (session) {
+                try {
+                    const sessionData = JSON.parse(session);
+                    if (sessionData.user_id && sessionData.expires_at) {
+                        const expiresAt = new Date(sessionData.expires_at);
+                        const now = new Date();
+                        
+                        if (now < expiresAt) {
+                            // Mark potential loop and redirect
+                            localStorage.setItem('redirect_loop_detected', 'true');
+                            setTimeout(() => {
+                                localStorage.removeItem('redirect_loop_detected');
+                            }, 5000); // Clear flag after 5 seconds
+                            
+                            window.location.href = 'dashboard.html';
+                            return;
+                        } else {
+                            // Session expired
+                            localStorage.removeItem('zoe_session');
+                        }
+                    }
+                } catch (error) {
+                    localStorage.removeItem('zoe_session');
+                }
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Developer Chat</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            height: 100vh;
+            overflow: hidden;
+            color: #333;
+        }
+
+        /* Header - same as dashboard */
+        .header {
+            height: 56px;
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+        }
+
+        .nav {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            text-decoration: none;
+            color: #333;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 4px;
+        }
+
+        .nav-link {
+            padding: 8px 16px;
+            border-radius: 8px;
+            text-decoration: none;
+            color: #666;
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+
+        .nav-link.active {
+            background: rgba(123, 97, 255, 0.1);
+            color: #7B61FF;
+        }
+
+        /* Chat Layout */
+        .chat-layout {
+            display: flex;
+            height: calc(100vh - 56px);
+        }
+
+        /* Left Panel - Chat */
+        .chat-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: white;
+            border-right: 1px solid #e0e0e0;
+        }
+
+        .chat-messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .message {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            line-height: 1.5;
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+            color: white;
+        }
+
+        .message.zack {
+            align-self: flex-start;
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .message.zack .response-meta {
+            font-size: 11px;
+            color: #666;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #ddd;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .confidence-indicator {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .confidence-bar {
+            width: 60px;
+            height: 4px;
+            background: #e0e0e0;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ff4444, #ffaa00, #44ff44);
+            transition: width 0.3s ease;
+        }
+
+        .thinking-time {
+            color: #888;
+        }
+
+        .chat-input-area {
+            padding: 16px;
+            background: #fafafa;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        .chat-input-wrapper {
+            display: flex;
+            gap: 12px;
+        }
+
+        .chat-input {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            resize: none;
+        }
+
+        .chat-input:focus {
+            outline: none;
+            border-color: #7B61FF;
+        }
+
+        .send-btn {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+
+        .send-btn:hover {
+            opacity: 0.9;
+        }
+
+        /* Right Panel - Artifact */
+        .artifact-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #2d2d2d;
+            color: #fff;
+        }
+
+        .artifact-header {
+            padding: 16px;
+            background: #1e1e1e;
+            border-bottom: 1px solid #444;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .artifact-title {
+            font-weight: 500;
+            color: #fff;
+        }
+
+        .artifact-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .artifact-btn {
+            padding: 6px 12px;
+            background: #444;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .artifact-btn:hover {
+            background: #555;
+        }
+
+        .artifact-content {
+            flex: 1;
+            padding: 16px;
+            overflow-y: auto;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .code-block {
+            background: #1e1e1e;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 12px;
+            overflow-x: auto;
+        }
+
+        .code-line {
+            white-space: pre;
+        }
+
+        /* Quick Actions */
+        .quick-actions {
+            padding: 12px 16px;
+            background: #fafafa;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .quick-btn {
+            padding: 6px 12px;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .quick-btn:hover {
+            background: rgba(123, 97, 255, 0.1);
+            border-color: #7B61FF;
+        }
+    </style>
+    <script src="/js/auth.js"></script>
+</head>
+<body>
+    <div class="header">
+        <div class="nav">
+            <a href="index.html" class="logo">
+                <div class="logo-icon">D</div>
+                <span>Developer</span>
+            </a>
+            <div class="nav-links">
+                <a href="index.html" class="nav-link">📊 Dashboard</a>
+                <a href="chat.html" class="nav-link active">💬 Chat</a>
+                <a href="aider.html" class="nav-link">🤖 Aider</a>
+                <a href="tasks.html" class="nav-link">📋 Tasks</a>
+                <a href="tools.html" class="nav-link">🔧 Tools</a>
+                <a href="monitor.html" class="nav-link">📈 Monitor</a>
+                <a href="backups.html" class="nav-link">💾 Backups</a>
+                <a href="settings.html" class="nav-link">⚙️ Settings</a>
+            </div>
+        </div>
+        <div class="header-right">
+            <span id="currentTime"></span>
+        </div>
+    </div>
+
+    <div class="chat-layout">
+        <!-- Chat Panel -->
+        <div class="chat-panel">
+            <div class="chat-messages" id="chatMessages">
+                <div class="message zack">
+                    I'm Zack, your development assistant. I can generate code, debug issues, and help manage your system. What would you like to work on?
+                </div>
+            </div>
+            
+            <div class="quick-actions">
+                <button class="quick-btn" onclick="quickPrompt('Generate backup script')">Backup Script</button>
+                <button class="quick-btn" onclick="quickPrompt('Check system health')">Health Check</button>
+                <button class="quick-btn" onclick="quickPrompt('Fix current errors')">Fix Errors</button>
+                <button class="quick-btn" onclick="quickPrompt('Optimize performance')">Optimize</button>
+                <button class="quick-btn" onclick="quickPrompt('Create new endpoint')">New Endpoint</button>
+            </div>
+            
+            <div class="chat-input-area">
+                <div class="chat-input-wrapper">
+                    <textarea 
+                        class="chat-input" 
+                        id="chatInput"
+                        placeholder="Ask Zack anything..."
+                        rows="2"
+                        onkeydown="handleChatKey(event)"
+                    ></textarea>
+                    <button class="send-btn" onclick="sendMessage()">Send</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Artifact Panel -->
+        <div class="artifact-panel">
+            <div class="artifact-header">
+                <div class="artifact-title" id="artifactTitle">Generated Code</div>
+                <div class="artifact-actions">
+                    <button class="artifact-btn" onclick="copyArtifact()">📋 Copy</button>
+                    <button class="artifact-btn" onclick="saveArtifact()">💾 Save</button>
+                    <button class="artifact-btn" onclick="createTask()">📌 Create Task</button>
+                    <button class="artifact-btn" onclick="clearArtifact()">🗑️ Clear</button>
+                </div>
+            </div>
+            <div class="artifact-content" id="artifactContent">
+                <div style="color: #666; text-align: center; margin-top: 100px;">
+                    Generated code and scripts will appear here
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.hostname === 'localhost' 
+            ? 'http://localhost:8000' 
+            : `http://${window.location.hostname}:8000`;
+
+        let currentArtifact = '';
+
+        // Update time
+        function updateTime() {
+            document.getElementById('currentTime').textContent = 
+                new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+        updateTime();
+        setInterval(updateTime, 1000);
+
+        // Handle chat input
+        function handleChatKey(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        }
+
+        // Send message to Zack
+        async function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message) return;
+
+            // Add user message
+            addMessage(message, 'user');
+            input.value = '';
+
+            try {
+                const response = await fetch(`${API_BASE}/api/developer/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const reply = data.response || data.message || 'Response received';
+                    
+                    // Add Zack's response with metadata
+                    addMessage(reply, 'zack', data);
+                    
+                    // Handle task suggestion if present
+                    if (data.suggested_task) {
+                        addTaskCreationButton(data.suggested_task);
+                    }
+                    
+                    // Extract and display code in artifact panel
+                    const codeMatch = reply.match(/```[\s\S]*?```/g);
+                    if (codeMatch) {
+                        const code = codeMatch[0].replace(/```\w*\n?/g, '').replace(/```/g, '');
+                        displayArtifact(code, message);
+                    }
+                } else {
+                    throw new Error('API error');
+                }
+            } catch (error) {
+                addMessage('Connection error. Please check the backend.', 'zack');
+            }
+        }
+
+        // Add message to chat
+        function addMessage(text, sender, metadata = null) {
+            const messagesDiv = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}`;
+            
+            // Create content div
+            const contentDiv = document.createElement('div');
+            contentDiv.textContent = text;
+            messageDiv.appendChild(contentDiv);
+            
+            // Add metadata for Zack's responses
+            if (sender === 'zack' && metadata && (metadata.confidence || metadata.thinking_time)) {
+                const metaDiv = document.createElement('div');
+                metaDiv.className = 'response-meta';
+                
+                // Confidence indicator
+                if (metadata.confidence) {
+                    const confidenceDiv = document.createElement('div');
+                    confidenceDiv.className = 'confidence-indicator';
+                    confidenceDiv.innerHTML = `
+                        <span>Confidence:</span>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" style="width: ${Math.round(metadata.confidence * 100)}%"></div>
+                        </div>
+                        <span>${Math.round(metadata.confidence * 100)}%</span>
+                    `;
+                    metaDiv.appendChild(confidenceDiv);
+                }
+                
+                // Thinking time
+                if (metadata.thinking_time) {
+                    const timeDiv = document.createElement('div');
+                    timeDiv.className = 'thinking-time';
+                    timeDiv.textContent = `Thinking: ${metadata.thinking_time.toFixed(1)}s`;
+                    metaDiv.appendChild(timeDiv);
+                }
+                
+                messageDiv.appendChild(metaDiv);
+            }
+            
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Add task creation button after Zack's message
+        function addTaskCreationButton(taskData) {
+            const messagesDiv = document.getElementById('chatMessages');
+            const buttonDiv = document.createElement('div');
+            buttonDiv.className = 'task-suggestion';
+            buttonDiv.style.cssText = 'margin: 8px 0; text-align: center;';
+            
+            const button = document.createElement('button');
+            button.className = 'task-create-btn';
+            button.textContent = '✅ Create Task';
+            button.style.cssText = `
+                background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-weight: 500;
+                margin: 4px;
+            `;
+            button.onclick = () => createTaskFromChat(taskData);
+            
+            const cancelButton = document.createElement('button');
+            cancelButton.textContent = '❌ Cancel';
+            cancelButton.style.cssText = `
+                background: #666;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-weight: 500;
+                margin: 4px;
+            `;
+            cancelButton.onclick = () => buttonDiv.remove();
+            
+            buttonDiv.appendChild(button);
+            buttonDiv.appendChild(cancelButton);
+            messagesDiv.appendChild(buttonDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Create task from chat suggestion
+        async function createTaskFromChat(taskData) {
+            try {
+                const response = await fetch(`${API_BASE}/api/developer/chat/confirm-task`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(taskData)
+                });
+                
+                const result = await response.json();
+                addMessage(result.response, 'zack');
+                
+                // Remove the task creation buttons
+                const taskSuggestions = document.querySelectorAll('.task-suggestion');
+                taskSuggestions.forEach(el => el.remove());
+                
+            } catch (error) {
+                addMessage('Failed to create task. Please try again.', 'zack');
+            }
+        }
+
+        // Display code in artifact panel
+        function displayArtifact(code, title) {
+            currentArtifact = code;
+            document.getElementById('artifactTitle').textContent = title.substring(0, 50) + '...';
+            
+            const content = document.getElementById('artifactContent');
+            content.innerHTML = '';
+            
+            const codeBlock = document.createElement('div');
+            codeBlock.className = 'code-block';
+            
+            code.split('\n').forEach(line => {
+                const lineDiv = document.createElement('div');
+                lineDiv.className = 'code-line';
+                lineDiv.textContent = line;
+                codeBlock.appendChild(lineDiv);
+            });
+            
+            content.appendChild(codeBlock);
+        }
+
+        // Quick prompts
+        function quickPrompt(prompt) {
+            document.getElementById('chatInput').value = prompt;
+            sendMessage();
+        }
+
+        // Artifact actions
+        function copyArtifact() {
+            if (currentArtifact) {
+                navigator.clipboard.writeText(currentArtifact);
+                alert('Copied to clipboard!');
+            }
+        }
+
+        function saveArtifact() {
+            if (currentArtifact) {
+                const blob = new Blob([currentArtifact], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `zack-${Date.now()}.sh`;
+                a.click();
+                URL.revokeObjectURL(url);
+            }
+        }
+
+        function createTask() {
+            if (currentArtifact) {
+                const title = prompt('Task title:');
+                if (title) {
+                    fetch(`${API_BASE}/api/tasks/`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            title,
+                            description: currentArtifact,
+                            priority: 'medium',
+                            task_type: 'development'
+                        })
+                    })
+                    .then(() => alert('Task created!'))
+                    .catch(() => alert('Failed to create task'));
+                }
+            }
+        }
+
+        function clearArtifact() {
+            currentArtifact = '';
+            document.getElementById('artifactTitle').textContent = 'Generated Code';
+            document.getElementById('artifactContent').innerHTML = 
+                '<div style="color: #666; text-align: center; margin-top: 100px;">Generated code and scripts will appear here</div>';
+        }
+
+        // Check for message in URL
+        const params = new URLSearchParams(window.location.search);
+        const urlMessage = params.get('message');
+        if (urlMessage) {
+            document.getElementById('chatInput').value = urlMessage;
+            sendMessage();
+        }
+    </script>
+<script src="js/developer_enhanced.js"></script>
+</body>
+</html>
