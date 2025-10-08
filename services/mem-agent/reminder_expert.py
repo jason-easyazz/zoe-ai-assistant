@@ -57,11 +57,21 @@ class ReminderExpert:
             if not title_match:
                 # Try "remind me about X"
                 title_match = re.search(r"about (.+)", query, re.IGNORECASE)
-            title = title_match.group(1).strip() if title_match else "Reminder"
+            
+            if not title_match:
+                # Try extracting everything after "remind me" or "don't forget"
+                fallback = re.search(r"(?:remind me|don't forget)(?: about| to)? (.+)", query, re.IGNORECASE)
+                title = fallback.group(1).strip() if fallback else "Reminder"
+            else:
+                title = title_match.group(1).strip()
             
             # Extract time
             time_match = re.search(r"at (\d{1,2}(?::\d{2})?\s*(?:am|pm)?)", query, re.IGNORECASE)
             reminder_time = time_match.group(1).strip() if time_match else "09:00"
+            
+            # Normalize time format
+            if reminder_time and not any(x in reminder_time for x in [':', 'am', 'pm']):
+                reminder_time = f"{reminder_time}:00"
             
             # Extract date (tomorrow, next week, specific date)
             date_str = None
@@ -70,13 +80,13 @@ class ReminderExpert:
             elif "next week" in query.lower():
                 date_str = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
             else:
-                date_match = re.search(r"on (\w+ \d+|\d+(?:st|nd|rd|th)?)", query, re.IGNORECASE)
-                if date_match:
-                    # Would need date parsing here
-                    date_str = datetime.now().strftime("%Y-%m-%d")
+                # Default to tomorrow
+                date_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+            
+            logger.info(f"ReminderExpert: Creating reminder - title='{title}', date={date_str}, time={reminder_time}")
             
             # Call reminders API
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.post(
                     f"{self.api_base}/reminders/",
                     headers={"X-Service-Token": "zoe_internal_2025"},
@@ -87,24 +97,27 @@ class ReminderExpert:
                         "user_id": user_id,
                         "reminder_type": "once",
                         "category": "personal"
-                    },
-                    timeout=5.0
+                    }
                 )
                 
+                logger.info(f"ReminderExpert: API response status={response.status_code}")
+                
                 if response.status_code == 200:
+                    logger.info(f"ReminderExpert: ✅ Successfully created reminder")
                     return {
                         "success": True,
                         "action": "create_reminder",
-                        "message": f"✅ I'll remind you: {title} at {reminder_time}"
+                        "message": f"✅ I'll remind you: {title} at {reminder_time} on {date_str}"
                     }
                 else:
+                    logger.error(f"ReminderExpert: ❌ API error {response.status_code}: {response.text}")
                     return {
                         "success": False,
                         "error": f"API returned {response.status_code}",
                         "message": f"❌ Couldn't create reminder"
                     }
         except Exception as e:
-            logger.error(f"Reminder creation failed: {e}")
+            logger.error(f"Reminder creation failed: {e}", exc_info=True)
             return {
                 "success": False,
                 "error": str(e),
