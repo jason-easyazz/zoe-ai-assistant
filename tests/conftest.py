@@ -4,8 +4,12 @@ from fastapi.testclient import TestClient
 import jwt
 from datetime import datetime, timedelta
 import sys
+from pathlib import Path
 
-sys.path.insert(0, "/home/pi/zoe/services/zoe-core")
+# Add zoe-core to path for all tests to import modules like light_rag_memory, self_awareness
+ZOE_CORE_PATH = "/home/pi/zoe/services/zoe-core"
+if ZOE_CORE_PATH not in sys.path:
+    sys.path.insert(0, ZOE_CORE_PATH)
 
 SECRET_KEY = os.getenv("ZOE_AUTH_SECRET_KEY", "change-me-in-prod")
 ALGORITHM = "HS256"
