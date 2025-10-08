@@ -1,0 +1,1220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Zoe - Workflows</title>
+    <style>
+        * { 
+            margin: 0; padding: 0; box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh; color: #333;
+            font-size: clamp(14px, 1.6vw, 16px);
+        }
+        
+        /* Navigation */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        /* Authentication Integration */
+        .user-menu {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .user-menu:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .user-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .user-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        
+        .user-role {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.2;
+        }
+        
+        .user-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 8px 0;
+            min-width: 200px;
+            z-index: 1000;
+            display: none;
+            border: 1px solid #e1e5e9;
+        }
+        
+        .user-dropdown.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 8px 16px;
+            color: #333;
+            text-decoration: none;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .dropdown-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .dropdown-divider {
+            height: 1px;
+            background: #e1e5e9;
+            margin: 4px 0;
+        }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold; position: relative;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+            animation: notificationDotPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 8px rgba(123, 97, 255, 0);
+            }
+        }
+        
+        @keyframes notificationDotPulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.2);
+                opacity: 0.7;
+            }
+        }
+        
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .notifications-title {
+            font-size: 18px; font-weight: 600; color: #333; margin: 0;
+        }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content {
+            padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title {
+            font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px;
+        }
+        .notification-meta {
+            font-size: 12px; color: #666; display: flex; gap: 10px;
+        }
+        .notification-time {
+            color: #7B61FF; font-weight: 500;
+        }
+        .notification-priority {
+            padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600;
+        }
+        .no-notifications {
+            text-align: center; color: #666; font-size: 14px; padding: 40px 20px;
+        }
+        
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.warning::before { background: #ea580c; }
+
+        /* Main Layout */
+        .main-container { padding: 70px 20px 20px; }
+
+        /* Workflows Header */
+        .workflows-header {
+            text-align: center; margin-bottom: 30px;
+        }
+        .workflows-title {
+            font-size: 28px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .workflows-subtitle {
+            font-size: 16px; color: #666;
+        }
+
+        /* Workflows Grid */
+        .workflows-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px;
+            max-width: 1400px; margin: 0 auto;
+        }
+        .workflow-card {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; transition: all 0.3s ease;
+            cursor: pointer; min-height: 200px; position: relative;
+        }
+        .workflow-card:hover {
+            transform: translateY(-4px); background: rgba(255, 255, 255, 0.9);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+        }
+        .workflow-header {
+            display: flex; justify-content: space-between; align-items: flex-start;
+            margin-bottom: 16px;
+        }
+        .workflow-icon {
+            width: 50px; height: 50px; border-radius: 12px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 20px; color: white; margin-bottom: 12px;
+        }
+        .workflow-name {
+            font-size: 18px; font-weight: 600; color: #333; margin-bottom: 8px;
+        }
+        .workflow-description {
+            font-size: 14px; color: #666; line-height: 1.4; margin-bottom: 16px;
+        }
+        .workflow-status {
+            display: flex; align-items: center; gap: 8px; margin-bottom: 16px;
+        }
+        .status-indicator {
+            width: 8px; height: 8px; border-radius: 50%;
+        }
+        .status-active { background: #22c55e; }
+        .status-inactive { background: #ef4444; }
+        .status-paused { background: #f59e0b; }
+        .status-text {
+            font-size: 12px; font-weight: 500; text-transform: uppercase;
+        }
+        .workflow-details {
+            display: flex; justify-content: space-between; align-items: center;
+            font-size: 12px; color: #888; margin-bottom: 16px;
+        }
+        .workflow-actions {
+            display: flex; gap: 8px; justify-content: flex-end;
+        }
+        .workflow-btn {
+            padding: 8px 16px; border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 8px; background: rgba(255, 255, 255, 0.8);
+            color: #666; font-size: 12px; cursor: pointer;
+            transition: all 0.3s ease; min-height: 36px;
+        }
+        .workflow-btn:hover {
+            background: rgba(123, 97, 255, 0.1); color: #7B61FF;
+        }
+        .workflow-btn.primary {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; border-color: transparent;
+        }
+        .workflow-toggle {
+            position: absolute; top: 20px; right: 20px;
+        }
+        .toggle-switch {
+            position: relative; width: 48px; height: 24px;
+            background: #ccc; border-radius: 12px; cursor: pointer;
+            transition: background 0.3s ease;
+        }
+        .toggle-switch.active {
+            background: #22c55e;
+        }
+        .toggle-slider {
+            position: absolute; top: 2px; left: 2px; width: 20px; height: 20px;
+            background: white; border-radius: 50%; transition: transform 0.3s ease;
+        }
+        .toggle-switch.active .toggle-slider {
+            transform: translateX(24px);
+        }
+
+        /* Add Workflow Button */
+        .add-workflow-btn {
+            position: fixed; bottom: 30px; right: 30px; width: 64px; height: 64px;
+            border-radius: 50%; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: none; color: white; cursor: pointer; display: flex; align-items: center;
+            justify-content: center; font-size: 28px; transition: all 0.3s ease;
+            z-index: 1000; box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+        .add-workflow-btn:hover { transform: scale(1.1); box-shadow: 0 6px 16px rgba(123, 97, 255, 0.4); }
+
+        /* Add Workflow Modal */
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 2000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .modal-overlay.active { display: flex; opacity: 1; }
+        .modal-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 30px; max-width: 600px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .modal-overlay.active .modal-content { transform: scale(1); }
+        .modal-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 20px; padding-bottom: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        .modal-title {
+            font-size: 20px; font-weight: 500; color: #333;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .modal-close {
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-label {
+            display: block; font-size: 13px; font-weight: 500; color: #666;
+            margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .form-input, .form-select, .form-textarea {
+            width: 100%; padding: 16px 20px; border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 12px; background: rgba(255, 255, 255, 0.9);
+            font-size: 16px; outline: none; transition: all 0.3s ease; min-height: 56px;
+        }
+        .form-textarea {
+            min-height: 120px; resize: vertical;
+        }
+        .form-input:focus, .form-select:focus, .form-textarea:focus {
+            border-color: #7B61FF; box-shadow: 0 0 0 2px rgba(123, 97, 255, 0.1);
+        }
+        .form-actions {
+            display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px;
+        }
+        .form-btn {
+            padding: 16px 24px; border: none; border-radius: 12px; font-size: 16px;
+            font-weight: 500; cursor: pointer; transition: all 0.3s ease; min-height: 56px;
+            min-width: 120px;
+        }
+        .form-btn.primary {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+        }
+        .form-btn.secondary {
+            background: rgba(255, 255, 255, 0.8); color: #666;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center; padding: 60px 20px; color: #666;
+        }
+        .empty-icon { font-size: 48px; margin-bottom: 16px; }
+        .empty-title { font-size: 18px; font-weight: 500; margin-bottom: 8px; }
+        .empty-subtitle { font-size: 14px; }
+
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+
+        /* Mobile Responsive */
+        @media (max-width: 900px) {
+            .nav-menu { display: none; }
+            .workflows-grid { grid-template-columns: 1fr; }
+            .add-workflow-btn { bottom: 20px; right: 20px; width: 56px; height: 56px; font-size: 24px; }
+            .more-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+        <!-- Zoe Orb Styles -->
+        <style>
+        .zoe-orb {
+            position: fixed; bottom: 24px; right: 24px; width: 70px; height: 70px;
+            border-radius: 50%; cursor: pointer; transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            z-index: 1200; display: flex; align-items: center; justify-content: center;
+            overflow: hidden;
+            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
+            background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 50%, #A855F7 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
+        }
+        .zoe-orb::before {
+            content: ""; position: absolute; top: 50%; left: 50%; width: 20px; height: 20px;
+            background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+            border-radius: 50%; transform: translate(-50%, -50%);
+            animation: orb-inner-glow 2s ease-in-out infinite alternate;
+        }
+        .zoe-orb:hover {
+            transform: scale(1.12);
+            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.5), 0 0 50px rgba(123, 97, 255, 0.3);
+            animation-duration: 8s, 3s;
+        }
+        .zoe-orb:active { transform: scale(0.95); }
+        .zoe-orb.connecting {
+            background: linear-gradient(135deg, #7B61FF 0%, #6366F1 50%, #8B5CF6 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
+        }
+        .zoe-orb.connected {
+            background: linear-gradient(135deg, #7B61FF 0%, #10B981 50%, #34D399 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(16, 185, 129, 0.2);
+        }
+        .zoe-orb.thinking {
+            background: linear-gradient(135deg, #7B61FF 0%, #F59E0B 50%, #FBBF24 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(245, 158, 11, 0.2);
+            animation: orb-thinking-gentle 3s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
+        }
+        .zoe-orb.proactive {
+            background: linear-gradient(135deg, #7B61FF 0%, #EC4899 50%, #F472B6 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(236, 72, 153, 0.2);
+            animation: orb-proactive-gentle 4s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
+        }
+        .zoe-orb.error {
+            background: linear-gradient(135deg, #7B61FF 0%, #EF4444 50%, #F87171 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(239, 68, 68, 0.2);
+            animation: orb-error-shake 0.5s ease-in-out infinite, orb-liquid-swirl 3s ease-in-out infinite;
+        }
+        .zoe-orb.chatting {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 50%, #06B6D4 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.6), 0 0 60px rgba(123, 97, 255, 0.4);
+            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
+        }
+        .zoe-orb.badge::after {
+            content: ""; position: absolute; top: 8px; right: 8px; width: 12px; height: 12px;
+            background: #F59E0B; border-radius: 50%; border: 2px solid white;
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.8);
+            animation: badge-pulse 2s ease-in-out infinite;
+        }
+        @keyframes orb-liquid-swirl {
+            0%, 100% { background-position: 0% 50%; border-radius: 50% 45% 55% 50%; }
+            25% { background-position: 100% 50%; border-radius: 55% 50% 45% 55%; }
+            50% { background-position: 100% 100%; border-radius: 45% 55% 50% 45%; }
+            75% { background-position: 0% 100%; border-radius: 50% 45% 55% 50%; }
+        }
+        @keyframes orb-breathe {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        @keyframes orb-inner-glow {
+            0% { opacity: 0.3; transform: translate(-50%, -50%) scale(1); }
+            100% { opacity: 0.6; transform: translate(-50%, -50%) scale(1.1); }
+        }
+        @keyframes orb-thinking-gentle {
+            0%, 100% { transform: rotate(0deg); }
+            25% { transform: rotate(5deg); }
+            75% { transform: rotate(-5deg); }
+        }
+        @keyframes orb-proactive-gentle {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.08); }
+        }
+        @keyframes orb-error-shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-2px); }
+            75% { transform: translateX(2px); }
+        }
+        @keyframes badge-pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.2); }
+        }
+        </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
+            <div class="nav-menu">
+                <a href="index.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="lists.html" class="nav-item">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- User Menu -->
+            <div class="user-menu" onclick="toggleUserDropdown()">
+                <div class="user-avatar" id="userAvatar">?</div>
+                
+                <div class="user-dropdown" id="userDropdown">
+                    <a href="#" class="dropdown-item" onclick="showUserProfile()">Profile</a>
+                    <a href="#" class="dropdown-item" onclick="showSecuritySettings()">Security</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" class="dropdown-item" onclick="switchUser()">Switch User</a>
+                    <a href="#" class="dropdown-item" onclick="upgradeSession()" id="upgradeSessionItem" style="display: none;">Upgrade Session</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="admin.html" class="dropdown-item" id="adminLink" style="display: none;">Admin Dashboard</a>
+                    <div class="dropdown-divider" id="adminDivider" style="display: none;"></div>
+                    <a href="#" class="dropdown-item" onclick="logout()">Logout</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-container">
+
+        <!-- Workflows Header -->
+        <div class="workflows-header">
+            <h1 class="workflows-title">Automation Workflows</h1>
+            <p class="workflows-subtitle">Powered by n8n - Automate your daily tasks and routines</p>
+            <div id="mockDataNotice" style="display: none; background: rgba(251, 146, 60, 0.1); color: #ea580c; padding: 8px 16px; border-radius: 8px; font-size: 12px; margin-top: 10px;">
+                📝 Currently showing mock data - n8n integration in progress
+            </div>
+        </div>
+
+        <!-- Workflows Grid -->
+        <div class="workflows-grid" id="workflowsGrid">
+            <!-- Workflow cards will be populated here -->
+        </div>
+    </div>
+
+    <!-- Add Workflow Modal -->
+    <div class="modal-overlay" id="addWorkflowModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 class="modal-title">Add Workflow</h2>
+                <button class="modal-close" onclick="closeAddModal()">×</button>
+            </div>
+            
+            <form id="workflowForm">
+                <div class="form-group">
+                    <label class="form-label">Workflow Name</label>
+                    <input type="text" class="form-input" id="workflowName" placeholder="Enter workflow name" required>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-textarea" id="workflowDescription" placeholder="Describe what this workflow does..."></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Trigger</label>
+                    <select class="form-select" id="workflowTrigger">
+                        <option value="time">Time-based</option>
+                        <option value="event">Event-based</option>
+                        <option value="manual">Manual</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Actions</label>
+                    <textarea class="form-textarea" id="workflowActions" placeholder="Describe the actions this workflow will perform..."></textarea>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="button" class="form-btn secondary" onclick="closeAddModal()">Cancel</button>
+                    <button type="submit" class="form-btn primary">Create Workflow</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="alert('Coming soon!')">
+                    <div class="more-item-icon">📊</div>
+                    <div class="more-item-label">Analytics</div>
+                </div>
+                <div class="more-item" onclick="alert('Coming soon!')">
+                    <div class="more-item-icon">🔍</div>
+                    <div class="more-item-label">Search</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Workflow Button -->
+    <button class="add-workflow-btn" onclick="openAddModal()" title="Open n8n to create workflows">+</button>
+
+    <script src="js/auth.js"></script>
+    <script src="js/common.js"></script>
+    <script>
+        let allWorkflows = [];
+
+        // Load workflows from n8n
+        async function loadWorkflows() {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const response = await apiRequest('/n8n/workflows', {
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                allWorkflows = response.workflows || [];
+                // Hide mock data notice if we got real data
+                const notice = document.getElementById('mockDataNotice');
+                if (notice) notice.style.display = 'none';
+                displayWorkflows();
+            } catch (error) {
+                console.error('Failed to load workflows:', error);
+                console.log('Using mock data for demonstration...');
+                // Show mock data notice
+                const notice = document.getElementById('mockDataNotice');
+                if (notice) notice.style.display = 'block';
+                
+                // Mock data for demonstration while n8n integration is being fixed
+                allWorkflows = [
+                    {
+                        id: 'mock-1',
+                        name: 'Email Task Extractor',
+                        description: 'Automatically extracts tasks from incoming emails and adds them to your task list',
+                        active: true,
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString(),
+                        nodes: 5,
+                        icon: '📧'
+                    },
+                    {
+                        id: 'mock-2', 
+                        name: 'Calendar Sync',
+                        description: 'Syncs events between Google Calendar and your personal calendar',
+                        active: false,
+                        createdAt: new Date(Date.now() - 86400000).toISOString(),
+                        updatedAt: new Date(Date.now() - 3600000).toISOString(),
+                        nodes: 3,
+                        icon: '📅'
+                    },
+                    {
+                        id: 'mock-3',
+                        name: 'Weather Notifications',
+                        description: 'Sends daily weather updates and alerts for your location',
+                        active: true,
+                        createdAt: new Date(Date.now() - 172800000).toISOString(),
+                        updatedAt: new Date(Date.now() - 7200000).toISOString(),
+                        nodes: 4,
+                        icon: '🌤️'
+                    }
+                ];
+                displayWorkflows();
+            }
+        }
+
+        // Display workflows
+        function displayWorkflows() {
+            const container = document.getElementById('workflowsGrid');
+            
+            if (allWorkflows.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state" style="grid-column: 1/-1;">
+                        <div class="empty-icon">⚡</div>
+                        <div class="empty-title">No workflows yet</div>
+                        <div class="empty-subtitle">Create your first automation workflow</div>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = allWorkflows.map(workflow => `
+                <div class="workflow-card" onclick="editWorkflow('${workflow.id}')">
+                    <div class="workflow-toggle">
+                        <div class="toggle-switch ${workflow.active ? 'active' : ''}" 
+                             onclick="event.stopPropagation(); toggleWorkflow('${workflow.id}')">
+                            <div class="toggle-slider"></div>
+                        </div>
+                    </div>
+                    <div class="workflow-header">
+                        <div class="workflow-icon">${workflow.icon || '⚡'}</div>
+                    </div>
+                    <div class="workflow-name">${workflow.name || 'Unnamed Workflow'}</div>
+                    <div class="workflow-description">${workflow.description || 'No description available'}</div>
+                    <div class="workflow-status">
+                        <div class="status-indicator status-${workflow.active ? 'active' : 'inactive'}"></div>
+                        <span class="status-text">${workflow.active ? 'Active' : 'Inactive'}</span>
+                    </div>
+                    <div class="workflow-details">
+                        <span>Created: ${workflow.createdAt ? formatDate(workflow.createdAt) : 'Unknown'}</span>
+                        <span>Updated: ${workflow.updatedAt ? formatDate(workflow.updatedAt) : 'Unknown'}</span>
+                    </div>
+                    <div class="workflow-actions">
+                        <button class="workflow-btn" onclick="event.stopPropagation(); runWorkflow('${workflow.id}')">Run Now</button>
+                        <button class="workflow-btn primary" onclick="event.stopPropagation(); editWorkflow('${workflow.id}')">View</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Toggle workflow active state
+        async function toggleWorkflow(id) {
+            const workflow = allWorkflows.find(w => w.id === id);
+            if (!workflow) return;
+            
+            const newState = !workflow.active;
+            workflow.active = newState;
+            
+            try {
+                // Check if it's mock data
+                if (id.startsWith('mock-')) {
+                    // For mock data, just update locally
+                    displayWorkflows();
+                    showNotification(`Workflow ${newState ? 'activated' : 'deactivated'} (mock)`, 'success');
+                    return;
+                }
+                
+                const session = window.zoeAuth?.getCurrentSession();
+                const endpoint = newState ? `/n8n/workflows/${id}/activate` : `/n8n/workflows/${id}/deactivate`;
+                await apiRequest(endpoint, {
+                    method: 'POST',
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                
+                displayWorkflows();
+                showNotification(`Workflow ${newState ? 'activated' : 'deactivated'}`, 'success');
+            } catch (error) {
+                console.error('Failed to toggle workflow:', error);
+                // Revert change
+                workflow.active = !newState;
+                displayWorkflows();
+                showNotification('Failed to update workflow', 'error');
+            }
+        }
+
+        // Run workflow manually
+        async function runWorkflow(id) {
+            try {
+                // Check if it's mock data
+                if (id.startsWith('mock-')) {
+                    // For mock data, simulate execution
+                    showNotification('Workflow executed! (mock - n8n integration in progress)', 'success');
+                    return;
+                }
+                const session = window.zoeAuth?.getCurrentSession();
+                
+                await apiRequest(`/n8n/workflows/${id}/execute`, {
+                    method: 'POST',
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                
+                showNotification('Workflow executed!', 'success');
+                // Refresh workflows to update last run time
+                loadWorkflows();
+            } catch (error) {
+                console.error('Failed to run workflow:', error);
+                showNotification('Failed to run workflow', 'error');
+            }
+        }
+
+        // Edit workflow
+        function editWorkflow(id) {
+            const workflow = allWorkflows.find(w => w.id === id);
+            if (!workflow) return;
+            
+            // For now, just show details in an alert
+            // In a full implementation, you'd open an edit modal or redirect to n8n
+            let details = `Name: ${workflow.name || 'Unnamed Workflow'}\n`;
+            details += `Description: ${workflow.description || 'No description available'}\n`;
+            details += `Status: ${workflow.active ? 'Active' : 'Inactive'}\n`;
+            details += `Created: ${workflow.createdAt ? formatDate(workflow.createdAt) : 'Unknown'}\n`;
+            details += `Updated: ${workflow.updatedAt ? formatDate(workflow.updatedAt) : 'Unknown'}\n`;
+            details += `Nodes: ${workflow.nodes ? workflow.nodes.length : 0}\n`;
+            details += `\nTo edit this workflow, please use the n8n interface.`;
+            
+            alert(details);
+        }
+
+        // Open add modal
+        function openAddModal() {
+            // Instead of opening the modal, redirect to n8n interface
+            window.open('/n8n', '_blank');
+        }
+
+        // Close add modal
+        function closeAddModal() {
+            document.getElementById('addWorkflowModal').classList.remove('active');
+            document.getElementById('workflowForm').reset();
+        }
+
+        // Handle form submission
+        document.getElementById('workflowForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = {
+                name: document.getElementById('workflowName').value.trim(),
+                description: document.getElementById('workflowDescription').value.trim(),
+                trigger: document.getElementById('workflowTrigger').value,
+                actions: document.getElementById('workflowActions').value.trim(),
+                active: false
+            };
+            
+            try {
+                // Note: Creating workflows directly in n8n requires more complex setup
+                // For now, we'll show a message directing users to n8n interface
+                showNotification('To create workflows, please use the n8n interface at /n8n', 'info');
+                closeAddModal();
+            } catch (error) {
+                console.error('Failed to create workflow:', error);
+                showNotification('Failed to create workflow', 'error');
+            }
+        });
+
+        function navigateToPage(page) {
+            window.location.href = page;
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            loadWorkflows();
+            
+            // Load notifications on page load
+            loadNotifications();
+        });
+
+        // Notifications system
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+            
+            // Clear notification indicator when panel is opened
+            const notificationBtn = document.querySelector('.notifications-btn');
+            notificationBtn.classList.remove('has-notifications');
+        }
+
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+
+        async function loadNotifications() {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const response = await apiRequest('/reminders/notifications/pending', {
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                const notifications = response.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            // Update notification button indicator
+            if (notifications.length > 0) {
+                notificationBtn.classList.add('has-notifications');
+            } else {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
+                     onclick="handleNotificationClick(${notification.id})">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${new Date(notification.created_at).toLocaleTimeString()}</span>
+                        ${notification.priority ? `<span class="notification-priority" style="background: ${getPriorityColor(notification.priority)}; color: white;">${notification.priority}</span>` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function getPriorityColor(priority) {
+            switch(priority.toLowerCase()) {
+                case 'high': return '#ef4444';
+                case 'medium': return '#f59e0b';
+                case 'low': return '#10b981';
+                default: return '#6b7280';
+            }
+        }
+
+        function handleNotificationClick(notificationId) {
+            // Mark notification as acknowledged
+            acknowledgeNotification(notificationId);
+            closeNotifications();
+        }
+
+        async function acknowledgeNotification(notificationId) {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
+                    method: 'POST',
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                // Reload notifications
+                loadNotifications();
+            } catch (error) {
+                console.error('Failed to acknowledge notification:', error);
+            }
+        }
+
+        // User menu functions
+        function toggleUserDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function showUserProfile() {
+            // Implement user profile modal
+            alert('User profile coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function showSecuritySettings() {
+            // Implement security settings
+            alert('Security settings coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        // Authentication functions now handled by auth.js
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const userMenu = document.querySelector('.user-menu');
+            const dropdown = document.getElementById('userDropdown');
+            
+            if (userMenu && !userMenu.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+    </script>
+    <script>
+    // Zoe Orb Functions
+    let orbChatOpen = false;
+    let orbWebSocket = null;
+    
+    function toggleOrbChat() {
+        if (!orbChatOpen) {
+            openOrbChat();
+        } else {
+            closeOrbChat();
+        }
+    }
+    
+    function openOrbChat() {
+        // Create chat window if it doesn't exist
+        if (!document.getElementById('orbChatWindow')) {
+            const chatWindow = document.createElement('div');
+            chatWindow.id = 'orbChatWindow';
+            chatWindow.className = 'orb-chat-window';
+            chatWindow.innerHTML = `
+                <div class="orb-chat-header">
+                    <div class="orb-chat-title">Chat with Zoe</div>
+                    <button class="orb-chat-close" onclick="closeOrbChat()">×</button>
+                </div>
+                <div class="orb-chat-messages" id="orbChatMessages">
+                    <div class="orb-chat-message assistant">
+                        Hi! I'm Zoe, your AI assistant. How can I help you today?
+                    </div>
+                </div>
+                <div class="orb-chat-input-area">
+                    <textarea class="orb-chat-input" id="orbChatInput" placeholder="Type your message..." rows="1"></textarea>
+                    <button class="orb-chat-send" id="orbChatSend" onclick="sendOrbMessage()">→</button>
+                </div>
+            `;
+            document.body.appendChild(chatWindow);
+        }
+        
+        document.getElementById('orbChatWindow').style.display = 'block';
+        document.getElementById('orbChatInput').focus();
+        orbChatOpen = true;
+        document.getElementById('zoeOrb').classList.add('chatting');
+        
+        // Connect to intelligence WebSocket
+        connectOrbWebSocket();
+    }
+    
+    function closeOrbChat() {
+        if (document.getElementById('orbChatWindow')) {
+            document.getElementById('orbChatWindow').style.display = 'none';
+        }
+        orbChatOpen = false;
+        document.getElementById('zoeOrb').classList.remove('chatting');
+        
+        // Disconnect WebSocket
+        if (orbWebSocket) {
+            orbWebSocket.close();
+            orbWebSocket = null;
+        }
+    }
+    
+    function sendOrbMessage() {
+        const input = document.getElementById('orbChatInput');
+        const message = input.value.trim();
+        if (!message) return;
+        
+        // Add user message
+        addOrbMessage(message, 'user');
+        input.value = '';
+        
+        // Send to chat API
+        fetch('/api/chat/enhanced', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Session-ID': localStorage.getItem('session_id') || 'default'
+            },
+            body: JSON.stringify({ message: message, context: {} })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.response) {
+                addOrbMessage(data.response, 'assistant');
+            }
+        })
+        .catch(error => {
+            addOrbMessage('Sorry, I encountered an error. Please try again.', 'assistant');
+        });
+    }
+    
+    function addOrbMessage(message, sender) {
+        const messagesDiv = document.getElementById('orbChatMessages');
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `orb-chat-message ${sender}`;
+        messageDiv.textContent = message;
+        messagesDiv.appendChild(messageDiv);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+    
+    function connectOrbWebSocket() {
+        if (orbWebSocket) return;
+        
+        try {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/intelligence`;
+            orbWebSocket = new WebSocket(wsUrl);
+            
+            orbWebSocket.onopen = function() {
+                document.getElementById('zoeOrb').classList.add('connected');
+                document.getElementById('zoeOrb').classList.remove('connecting');
+            };
+            
+            orbWebSocket.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                if (data.type === 'proactive_suggestion') {
+                    showOrbNotification(data.data);
+                }
+            };
+            
+            orbWebSocket.onclose = function() {
+                document.getElementById('zoeOrb').classList.remove('connected');
+                document.getElementById('zoeOrb').classList.add('connecting');
+                orbWebSocket = null;
+            };
+            
+            orbWebSocket.onerror = function() {
+                document.getElementById('zoeOrb').classList.add('error');
+            };
+        } catch (error) {
+            console.log('WebSocket connection failed', error);
+        }
+    }
+    
+    function showOrbNotification(notification) {
+        // Add badge to orb
+        document.getElementById('zoeOrb').classList.add('badge');
+        
+        // Show toast notification
+        const toast = document.createElement('div');
+        toast.className = 'orb-toast';
+        toast.innerHTML = `
+            <div class="orb-toast-content">
+                <div class="orb-toast-title">${notification.title}</div>
+                <div class="orb-toast-message">${notification.message}</div>
+            </div>
+        `;
+        document.body.appendChild(toast);
+        
+        // Auto-remove after 5 seconds
+        setTimeout(() => {
+            if (toast.parentNode) {
+                toast.parentNode.removeChild(toast);
+            }
+        }, 5000);
+    }
+    
+    // Initialize orb on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        // Set initial state
+        document.getElementById('zoeOrb').classList.add('connecting');
+        
+        // Try to connect WebSocket
+        connectOrbWebSocket();
+        
+        // Add Enter key support for chat input
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && orbChatOpen) {
+                e.preventDefault();
+                sendOrbMessage();
+            }
+        });
+    });
+    </script>
+    <!-- Zoe Orb -->
+    <div class="zoe-orb" id="zoeOrb" title="Click to chat with Zoe" onclick="toggleOrbChat()">
+    </div>
+</body>
+</html>

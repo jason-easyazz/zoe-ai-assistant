@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+"""
+Simplified Zoe Authentication Service
+Main FastAPI application with basic authentication features
+"""
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from datetime import datetime, timedelta
+import sqlite3
+import os
+import json
+import bcrypt
+import uuid
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Create FastAPI app
+app = FastAPI(
+    title="Zoe Authentication Service",
+    description="Basic authentication system",
+    version="1.0.0"
+)
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, be more specific
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Database setup
+def init_db():
+    """Initialize SQLite database"""
+    os.makedirs("data", exist_ok=True)
+    conn = sqlite3.connect("data/auth.db")
+    conn.row_factory = sqlite3.Row
+    
+    # Create tables
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id TEXT PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT,
+            password_hash TEXT NOT NULL,
+            role TEXT DEFAULT 'user',
+            is_active BOOLEAN DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMP NOT NULL,
+            session_type TEXT DEFAULT 'password',
+            FOREIGN KEY (user_id) REFERENCES users(user_id)
+        )
+    """)
+    
+    conn.commit()
+    
+    # Create default admin user if no users exist
+    cursor = conn.execute("SELECT COUNT(*) FROM users")
+    if cursor.fetchone()[0] == 0:
+        admin_id = str(uuid.uuid4())
+        password_hash = bcrypt.hashpw("admin".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        conn.execute("""
+            INSERT INTO users (user_id, username, email, password_hash, role)
+            VALUES (?, ?, ?, ?, ?)
+        """, (admin_id, "admin", "admin@example.com", password_hash, "admin"))
+        
+        # Create demo user
+        user_id = str(uuid.uuid4())
+        password_hash = bcrypt.hashpw("user".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        conn.execute("""
+            INSERT INTO users (user_id, username, email, password_hash, role)
+            VALUES (?, ?, ?, ?, ?)
+        """, (user_id, "user", "user@example.com", password_hash, "user"))
+        
+        conn.commit()
+        logger.info("Created default admin and user accounts")
+    
+    conn.close()
+
+# Initialize database on startup
+init_db()
+
+# Pydantic models
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+    device_info: dict = {}
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    email: str = ""
+    role: str = "user"
+    device_info: dict = {}
+
+# Helper functions
+def get_db_connection():
+    conn = sqlite3.connect("data/auth.db")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def verify_password(password: str, hashed: str) -> bool:
+    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+
+def create_session(user_id: str, session_type: str = "password") -> dict:
+    session_id = str(uuid.uuid4())
+    expires_at = datetime.now() + timedelta(hours=24)
+    
+    conn = get_db_connection()
+    conn.execute("""
+        INSERT INTO sessions (session_id, user_id, expires_at, session_type)
+        VALUES (?, ?, ?, ?)
+    """, (session_id, user_id, expires_at.isoformat(), session_type))
+    conn.commit()
+    conn.close()
+    
+    return {
+        "session_id": session_id,
+        "expires_at": expires_at.isoformat(),
+        "session_type": session_type
+    }
+
+# Routes
+@app.get("/")
+async def root():
+    return {
+        "service": "Zoe Authentication Service",
+        "version": "1.0.0",
+        "status": "running"
+    }
+
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/api/auth/profiles")
+async def get_profiles():
+    """Get user profiles for the welcome screen"""
+    conn = get_db_connection()
+    cursor = conn.execute("SELECT user_id, username, role FROM users WHERE is_active = 1")
+    users = []
+    
+    for row in cursor.fetchall():
+        users.append({
+            "user_id": row["user_id"],
+            "username": row["username"],
+            "role": row["role"],
+            "avatar": row["username"][0].upper()
+        })
+    
+    conn.close()
+    return users
+
+@app.post("/api/auth/login")
+async def login(request: LoginRequest):
+    """User login with username/password"""
+    conn = get_db_connection()
+    cursor = conn.execute("SELECT * FROM users WHERE username = ? AND is_active = 1", (request.username,))
+    user = cursor.fetchone()
+    
+    if not user or not verify_password(request.password, user["password_hash"]):
+        conn.close()
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    session = create_session(user["user_id"])
+    conn.close()
+    
+    return {
+        "success": True,
+        "user_id": user["user_id"],
+        "username": user["username"],
+        "role": user["role"],
+        "session_id": session["session_id"],
+        "session_type": session["session_type"],
+        "expires_at": session["expires_at"]
+    }
+
+@app.post("/api/auth/register")
+async def register(request: RegisterRequest):
+    """Register new user"""
+    conn = get_db_connection()
+    
+    # Check if username exists
+    cursor = conn.execute("SELECT user_id FROM users WHERE username = ?", (request.username,))
+    if cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=400, detail="Username already exists")
+    
+    # Create user
+    user_id = str(uuid.uuid4())
+    password_hash = bcrypt.hashpw(request.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+    
+    conn.execute("""
+        INSERT INTO users (user_id, username, email, password_hash, role)
+        VALUES (?, ?, ?, ?, ?)
+    """, (user_id, request.username, request.email, password_hash, request.role))
+    
+    session = create_session(user_id)
+    conn.commit()
+    conn.close()
+    
+    return {
+        "success": True,
+        "user_id": user_id,
+        "username": request.username,
+        "role": request.role,
+        "session_id": session["session_id"],
+        "session_type": session["session_type"],
+        "expires_at": session["expires_at"]
+    }
+
+@app.post("/api/auth/guest")
+async def guest_login(request: dict):
+    """Guest login"""
+    session_id = "guest_" + str(uuid.uuid4())
+    expires_at = datetime.now() + timedelta(hours=4)
+    
+    return {
+        "success": True,
+        "user_id": "guest",
+        "username": "Guest",
+        "role": "guest",
+        "session_id": session_id,
+        "session_type": "guest",
+        "expires_at": expires_at.isoformat()
+    }
+
+@app.get("/api/auth/user")
+async def get_user(request: Request):
+    """Get current user info"""
+    session_id = request.headers.get("X-Session-ID")
+    if not session_id:
+        raise HTTPException(status_code=401, detail="No session")
+    
+    if session_id.startswith("guest_"):
+        return {
+            "user_id": "guest",
+            "username": "Guest",
+            "role": "guest"
+        }
+    
+    conn = get_db_connection()
+    cursor = conn.execute("""
+        SELECT u.* FROM users u
+        JOIN sessions s ON u.user_id = s.user_id
+        WHERE s.session_id = ? AND s.expires_at > ?
+    """, (session_id, datetime.now().isoformat()))
+    
+    user = cursor.fetchone()
+    conn.close()
+    
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    
+    return {
+        "user_id": user["user_id"],
+        "username": user["username"],
+        "role": user["role"],
+        "email": user["email"]
+    }
+
+@app.post("/api/auth/logout")
+async def logout(request: Request):
+    """Logout user"""
+    session_id = request.headers.get("X-Session-ID")
+    if session_id and not session_id.startswith("guest_"):
+        conn = get_db_connection()
+        conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+        conn.commit()
+        conn.close()
+    
+    return {"success": True}
+
+
+@app.get("/api/auth/passcode/status")
+async def get_passcode_status(request: Request):
+    """Get passcode status for security settings"""
+    session_id = request.headers.get("X-Session-ID")
+    if not session_id:
+        raise HTTPException(status_code=401, detail="No session")
+    
+    # For MVP, return basic status
+    return {
+        "has_passcode": False,
+        "passcode_required": False,
+        "last_updated": None
+    }
+
+@app.get("/api/auth/sessions")
+async def get_sessions(request: Request):
+    """Get active sessions for security management"""
+    session_id = request.headers.get("X-Session-ID")
+    if not session_id:
+        raise HTTPException(status_code=401, detail="No session")
+    
+    # For MVP, return mock session data
+    return {
+        "sessions": [
+            {
+                "session_id": session_id,
+                "device": "Current Device",
+                "location": "192.168.1.60",
+                "last_active": datetime.now().isoformat(),
+                "is_current": True
+            }
+        ],
+        "total_count": 1
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8002)
+
