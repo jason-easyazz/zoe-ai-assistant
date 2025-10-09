@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Zoe - Workflows</title>
+    <title>Zoe AI Assistant</title>
     <style>
         * { 
             margin: 0; padding: 0; box-sizing: border-box;
@@ -140,6 +140,7 @@
             border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
             justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
             font-size: 16px; font-weight: bold; position: relative;
+            font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
         }
         .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
         .notifications-btn.has-notifications {
@@ -230,184 +231,150 @@
         .api-indicator.offline::before { background: #ef4444; }
         .api-indicator.warning::before { background: #ea580c; }
 
+        /* Time/Date Display in Top Right */
+        .time-date-display {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time {
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        .current-date {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.2;
+        }
+
         /* Main Layout */
-        .main-container { padding: 70px 20px 20px; }
+        .main-container { 
+            padding: 70px 20px 20px; height: 100vh; display: flex; flex-direction: column;
+        }
+        
 
-        /* Workflows Header */
-        .workflows-header {
-            text-align: center; margin-bottom: 30px;
-        }
-        .workflows-title {
-            font-size: 28px; font-weight: 300; color: #333; margin-bottom: 10px;
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        }
-        .workflows-subtitle {
-            font-size: 16px; color: #666;
+        /* Chat Container */
+        .chat-container {
+            flex: 1; display: flex; flex-direction: column; 
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 16px;
+            overflow: hidden; margin-bottom: 20px;
         }
 
-        /* Workflows Grid */
-        .workflows-grid {
-            display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px;
-            max-width: 1400px; margin: 0 auto;
+        .chat-wrapper { display: grid; grid-template-columns: 1fr 320px; gap: 16px; height: calc(100vh - 120px); }
+        .intelligence-sidebar {
+            background: rgba(255,255,255,0.6); backdrop-filter: blur(40px);
+            border: 1px solid rgba(255,255,255,0.4); border-radius: 16px; padding: 16px; overflow-y: auto;
         }
-        .workflow-card {
-            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
-            border-radius: 16px; padding: 24px; transition: all 0.3s ease;
-            cursor: pointer; min-height: 200px; position: relative;
+        .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 0 0; }
+        .context-chip { font-size: 12px; padding: 4px 8px; border-radius: 999px; background: rgba(123,97,255,0.12); color: #4b5563; border: 1px solid rgba(123,97,255,0.2); }
+        .sidebar-section { margin-bottom: 16px; }
+        .sidebar-title { font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 6px; }
+        
+        .chat-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            text-align: center; background: rgba(255, 255, 255, 0.8);
         }
-        .workflow-card:hover {
-            transform: translateY(-4px); background: rgba(255, 255, 255, 0.9);
-            box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+        .chat-title {
+            font-size: 20px; font-weight: 300; color: #333;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
         }
-        .workflow-header {
-            display: flex; justify-content: space-between; align-items: flex-start;
-            margin-bottom: 16px;
+        .chat-subtitle {
+            font-size: 12px; color: #666; margin-top: 4px;
         }
-        .workflow-icon {
-            width: 50px; height: 50px; border-radius: 12px;
+        
+        .chat-messages {
+            flex: 1; padding: 20px; overflow-y: auto; min-height: 300px;
+            display: flex; flex-direction: column; gap: 16px;
+        }
+        
+        .message {
+            max-width: 85%; padding: 16px 20px; border-radius: 16px; 
+            font-size: 15px; line-height: 1.5; word-wrap: break-word;
+        }
+        .zoe-message { 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            color: white; margin-right: auto; align-self: flex-start;
+        }
+        .user-message {
+            background: rgba(255, 255, 255, 0.8); color: #333; margin-left: auto;
+            align-self: flex-end; border: 1px solid rgba(255, 255, 255, 0.4);
+        }
+        
+        .typing-indicator {
+            display: none; margin-right: auto; align-self: flex-start;
+        }
+        .typing-indicator.active { display: block; }
+        .typing-dots {
             background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            display: flex; align-items: center; justify-content: center;
-            font-size: 20px; color: white; margin-bottom: 12px;
+            color: white; padding: 16px 20px; border-radius: 16px;
+            font-size: 15px;
         }
-        .workflow-name {
-            font-size: 18px; font-weight: 600; color: #333; margin-bottom: 8px;
+        .typing-dots::after {
+            content: '...';
+            animation: typing 1.5s infinite;
         }
-        .workflow-description {
-            font-size: 14px; color: #666; line-height: 1.4; margin-bottom: 16px;
-        }
-        .workflow-status {
-            display: flex; align-items: center; gap: 8px; margin-bottom: 16px;
-        }
-        .status-indicator {
-            width: 8px; height: 8px; border-radius: 50%;
-        }
-        .status-active { background: #22c55e; }
-        .status-inactive { background: #ef4444; }
-        .status-paused { background: #f59e0b; }
-        .status-text {
-            font-size: 12px; font-weight: 500; text-transform: uppercase;
-        }
-        .workflow-details {
-            display: flex; justify-content: space-between; align-items: center;
-            font-size: 12px; color: #888; margin-bottom: 16px;
-        }
-        .workflow-actions {
-            display: flex; gap: 8px; justify-content: flex-end;
-        }
-        .workflow-btn {
-            padding: 8px 16px; border: 1px solid rgba(255, 255, 255, 0.4);
-            border-radius: 8px; background: rgba(255, 255, 255, 0.8);
-            color: #666; font-size: 12px; cursor: pointer;
-            transition: all 0.3s ease; min-height: 36px;
-        }
-        .workflow-btn:hover {
-            background: rgba(123, 97, 255, 0.1); color: #7B61FF;
-        }
-        .workflow-btn.primary {
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            color: white; border-color: transparent;
-        }
-        .workflow-toggle {
-            position: absolute; top: 20px; right: 20px;
-        }
-        .toggle-switch {
-            position: relative; width: 48px; height: 24px;
-            background: #ccc; border-radius: 12px; cursor: pointer;
-            transition: background 0.3s ease;
-        }
-        .toggle-switch.active {
-            background: #22c55e;
-        }
-        .toggle-slider {
-            position: absolute; top: 2px; left: 2px; width: 20px; height: 20px;
-            background: white; border-radius: 50%; transition: transform 0.3s ease;
-        }
-        .toggle-switch.active .toggle-slider {
-            transform: translateX(24px);
+        @keyframes typing {
+            0%, 20% { content: '...'; }
+            40% { content: '....'; }
+            60% { content: '.....'; }
+            80%, 100% { content: '......'; }
         }
 
-        /* Add Workflow Button */
-        .add-workflow-btn {
-            position: fixed; bottom: 30px; right: 30px; width: 64px; height: 64px;
-            border-radius: 50%; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            border: none; color: white; cursor: pointer; display: flex; align-items: center;
-            justify-content: center; font-size: 28px; transition: all 0.3s ease;
-            z-index: 1000; box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        /* Input Area */
+        .chat-input-container {
+            padding: 20px; background: rgba(255, 255, 255, 0.8);
+            border-top: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; gap: 12px; align-items: flex-end;
         }
-        .add-workflow-btn:hover { transform: scale(1.1); box-shadow: 0 6px 16px rgba(123, 97, 255, 0.4); }
-
-        /* Add Workflow Modal */
-        .modal-overlay {
-            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
-            display: none; align-items: center; justify-content: center; z-index: 2000;
-            opacity: 0; transition: all 0.3s ease;
+        
+        .input-wrapper {
+            flex: 1; position: relative;
         }
-        .modal-overlay.active { display: flex; opacity: 1; }
-        .modal-content {
-            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
-            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
-            padding: 30px; max-width: 600px; width: 90%; position: relative;
-            transform: scale(0.8); transition: transform 0.3s ease;
-        }
-        .modal-overlay.active .modal-content { transform: scale(1); }
-        .modal-header {
-            display: flex; justify-content: space-between; align-items: center;
-            margin-bottom: 20px; padding-bottom: 15px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-        }
-        .modal-title {
-            font-size: 20px; font-weight: 500; color: #333;
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        }
-        .modal-close {
-            background: rgba(255, 255, 255, 0.6); border: none;
-            border-radius: 50%; width: 36px; height: 36px;
-            font-size: 18px; cursor: pointer; color: #666;
-        }
-        .form-group {
-            margin-bottom: 20px;
-        }
-        .form-label {
-            display: block; font-size: 13px; font-weight: 500; color: #666;
-            margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;
-        }
-        .form-input, .form-select, .form-textarea {
+        
+        .chat-input {
             width: 100%; padding: 16px 20px; border: 1px solid rgba(255, 255, 255, 0.4);
-            border-radius: 12px; background: rgba(255, 255, 255, 0.9);
-            font-size: 16px; outline: none; transition: all 0.3s ease; min-height: 56px;
+            border-radius: 20px; background: rgba(255, 255, 255, 0.9); 
+            font-size: 16px; outline: none; resize: none; min-height: 56px;
+            max-height: 120px; font-family: inherit;
         }
-        .form-textarea {
-            min-height: 120px; resize: vertical;
-        }
-        .form-input:focus, .form-select:focus, .form-textarea:focus {
+        .chat-input:focus {
             border-color: #7B61FF; box-shadow: 0 0 0 2px rgba(123, 97, 255, 0.1);
         }
-        .form-actions {
-            display: flex; gap: 12px; justify-content: flex-end; margin-top: 24px;
+        
+        .input-actions {
+            display: flex; gap: 8px; align-items: center;
         }
-        .form-btn {
-            padding: 16px 24px; border: none; border-radius: 12px; font-size: 16px;
-            font-weight: 500; cursor: pointer; transition: all 0.3s ease; min-height: 56px;
-            min-width: 120px;
+        
+        .voice-btn, .send-btn {
+            width: 56px; height: 56px; border-radius: 50%; border: none;
+            cursor: pointer; transition: all 0.3s ease; display: flex;
+            align-items: center; justify-content: center; font-size: 20px;
         }
-        .form-btn.primary {
+        
+        .voice-btn {
+            background: rgba(255, 255, 255, 0.6); color: #666;
+        }
+        .voice-btn:hover { background: rgba(255, 255, 255, 0.8); }
+        .voice-btn.recording { 
+            background: #ef4444; color: white; animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        
+        .send-btn {
             background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
             color: white;
         }
-        .form-btn.secondary {
-            background: rgba(255, 255, 255, 0.8); color: #666;
-        }
-
-        /* Empty State */
-        .empty-state {
-            text-align: center; padding: 60px 20px; color: #666;
-        }
-        .empty-icon { font-size: 48px; margin-bottom: 16px; }
-        .empty-title { font-size: 18px; font-weight: 500; margin-bottom: 8px; }
-        .empty-subtitle { font-size: 14px; }
+        .send-btn:hover { transform: scale(1.05); }
+        .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
         /* More Overlay */
         .more-overlay {
@@ -428,7 +395,7 @@
         .more-title {
             font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
             background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
         }
         .more-close {
             position: absolute; top: 15px; right: 15px; 
@@ -451,13 +418,25 @@
         .more-item-label { font-size: 15px; font-weight: 500; }
 
         /* Mobile Responsive */
-        @media (max-width: 900px) {
+        @media (max-width: 800px) {
             .nav-menu { display: none; }
-            .workflows-grid { grid-template-columns: 1fr; }
-            .add-workflow-btn { bottom: 20px; right: 20px; width: 56px; height: 56px; font-size: 24px; }
+            .main-container { padding: 60px 10px 20px; }
+            .chat-input-container { padding: 15px; }
             .more-grid { grid-template-columns: 1fr; }
         }
+
+        /* Streaming cursor animation */
+        .streaming-cursor {
+            animation: blink 1s infinite;
+            font-weight: bold;
+        }
+
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
     </style>
+    <script src="js/auth.js"></script>
         <!-- Zoe Orb Styles -->
         <style>
         .zoe-orb {
@@ -560,9 +539,9 @@
     <!-- Navigation -->
     <div class="nav-bar">
         <div class="nav-left">
-            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
+            <div class="mini-orb" onclick="handleLogout()"></div>
             <div class="nav-menu">
-                <a href="index.html" class="nav-item">Chat</a>
+                <a href="chat.html" class="nav-item active">Chat</a>
                 <a href="dashboard.html" class="nav-item">Dashboard</a>
                 <a href="lists.html" class="nav-item">Lists</a>
                 <a href="calendar.html" class="nav-item">Calendar</a>
@@ -573,11 +552,16 @@
         <div class="nav-right">
             <div class="api-indicator connecting" id="apiStatus">Connecting</div>
             
-            
             <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
             
-            <!-- User Menu -->
-            <div class="user-menu" onclick="toggleUserDropdown()">
+            <!-- Time/Date Display -->
+            <div class="time-date-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+            
+            <!-- User Menu (moved to mini-orb click) -->
+            <div class="user-menu" onclick="toggleUserDropdown()" style="display: none;">
                 <div class="user-avatar" id="userAvatar">?</div>
                 
                 <div class="user-dropdown" id="userDropdown">
@@ -595,73 +579,64 @@
         </div>
     </div>
 
-    <!-- Notifications Panel -->
-    <div class="notifications-panel" id="notificationsPanel">
-        <div class="notifications-header">
-            <h3 class="notifications-title">💬 Notifications</h3>
-            <button class="notifications-close" onclick="closeNotifications()">×</button>
-        </div>
-        <div class="notifications-content" id="notificationsContent">
-            <div class="no-notifications">No notifications</div>
-        </div>
-    </div>
-
     <!-- Main Content -->
     <div class="main-container">
-
-        <!-- Workflows Header -->
-        <div class="workflows-header">
-            <h1 class="workflows-title">Automation Workflows</h1>
-            <p class="workflows-subtitle">Powered by n8n - Automate your daily tasks and routines</p>
-            <div id="mockDataNotice" style="display: none; background: rgba(251, 146, 60, 0.1); color: #ea580c; padding: 8px 16px; border-radius: 8px; font-size: 12px; margin-top: 10px;">
-                📝 Currently showing mock data - n8n integration in progress
-            </div>
-        </div>
-
-        <!-- Workflows Grid -->
-        <div class="workflows-grid" id="workflowsGrid">
-            <!-- Workflow cards will be populated here -->
-        </div>
-    </div>
-
-    <!-- Add Workflow Modal -->
-    <div class="modal-overlay" id="addWorkflowModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2 class="modal-title">Add Workflow</h2>
-                <button class="modal-close" onclick="closeAddModal()">×</button>
+        <div class="chat-wrapper">
+        <!-- Chat Container -->
+        <div class="chat-container">
+            <div class="chat-header">
+                <h1 class="chat-title">Zoe AI Assistant</h1>
+                <p class="chat-subtitle">Your personal AI companion</p>
             </div>
             
-            <form id="workflowForm">
-                <div class="form-group">
-                    <label class="form-label">Workflow Name</label>
-                    <input type="text" class="form-input" id="workflowName" placeholder="Enter workflow name" required>
+            <div class="chat-messages" id="chatMessages">
+                <div class="message zoe-message">
+                    Hi! I'm Zoe, your AI assistant. I can help you with:
+                    <br>• Managing your calendar and events
+                    <br>• Creating and organizing lists
+                    <br>• Journaling and memories
+                    <br>• Home automation
+                    <br>• And much more!
+                    <br><br>What would you like to do today?
                 </div>
-                
-                <div class="form-group">
-                    <label class="form-label">Description</label>
-                    <textarea class="form-textarea" id="workflowDescription" placeholder="Describe what this workflow does..."></textarea>
+            </div>
+            
+            <div class="typing-indicator" id="typingIndicator">
+                <div class="typing-dots">Zoe is typing</div>
+            </div>
+            
+            <div class="chat-input-container">
+                <div class="input-wrapper">
+                    <textarea 
+                        class="chat-input" 
+                        id="chatInput" 
+                        placeholder="Ask me anything..."
+                        onkeydown="handleKeyDown(event)"
+                        oninput="adjustTextareaHeight(this)"
+                    ></textarea>
                 </div>
-                
-                <div class="form-group">
-                    <label class="form-label">Trigger</label>
-                    <select class="form-select" id="workflowTrigger">
-                        <option value="time">Time-based</option>
-                        <option value="event">Event-based</option>
-                        <option value="manual">Manual</option>
-                    </select>
+                <div class="input-actions">
+                    <button class="voice-btn" id="voiceBtn" onclick="toggleVoiceRecording()" title="Voice Input">🎤</button>
+                    <button class="send-btn" id="sendBtn" onclick="sendMessage()" title="Send Message">➤</button>
                 </div>
-                
-                <div class="form-group">
-                    <label class="form-label">Actions</label>
-                    <textarea class="form-textarea" id="workflowActions" placeholder="Describe the actions this workflow will perform..."></textarea>
-                </div>
-                
-                <div class="form-actions">
-                    <button type="button" class="form-btn secondary" onclick="closeAddModal()">Cancel</button>
-                    <button type="submit" class="form-btn primary">Create Workflow</button>
-                </div>
-            </form>
+            </div>
+        </div>
+
+        <!-- Intelligence Sidebar -->
+        <div class="intelligence-sidebar" id="intelSidebar">
+            <div class="sidebar-section">
+                <div class="sidebar-title">💡 Insights</div>
+                <div id="insightsList" style="display:flex; flex-direction:column; gap:8px;"></div>
+            </div>
+            <div class="sidebar-section">
+                <div class="sidebar-title">🔗 Related</div>
+                <div id="relatedList" style="display:flex; flex-direction:column; gap:6px; color:#4b5563; font-size:13px;"></div>
+            </div>
+            <div class="sidebar-section">
+                <div class="sidebar-title">📊 Context</div>
+                <div id="contextCounts" style="font-size:12px; color:#6b7280;"></div>
+            </div>
+        </div>
         </div>
     </div>
 
@@ -677,6 +652,10 @@
                     <div class="more-item-icon">🧠</div>
                     <div class="more-item-label">Memories</div>
                 </div>
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
                     <div class="more-item-label">Settings</div>
@@ -685,246 +664,247 @@
                     <div class="more-item-icon">📊</div>
                     <div class="more-item-label">Analytics</div>
                 </div>
-                <div class="more-item" onclick="alert('Coming soon!')">
-                    <div class="more-item-icon">🔍</div>
-                    <div class="more-item-label">Search</div>
-                </div>
             </div>
         </div>
     </div>
 
-    <!-- Add Workflow Button -->
-    <button class="add-workflow-btn" onclick="openAddModal()" title="Open n8n to create workflows">+</button>
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+    </div>
+</div>
 
-    <script src="js/auth.js"></script>
     <script src="js/common.js"></script>
     <script>
-        let allWorkflows = [];
+        let isRecording = false;
+        let recognition = null;
 
-        // Load workflows from n8n
-        async function loadWorkflows() {
-            try {
-                const session = window.zoeAuth?.getCurrentSession();
-                const response = await apiRequest('/n8n/workflows', {
-                    headers: session ? { 'X-Session-ID': session.session_id } : {}
-                });
-                allWorkflows = response.workflows || [];
-                // Hide mock data notice if we got real data
-                const notice = document.getElementById('mockDataNotice');
-                if (notice) notice.style.display = 'none';
-                displayWorkflows();
-            } catch (error) {
-                console.error('Failed to load workflows:', error);
-                console.log('Using mock data for demonstration...');
-                // Show mock data notice
-                const notice = document.getElementById('mockDataNotice');
-                if (notice) notice.style.display = 'block';
-                
-                // Mock data for demonstration while n8n integration is being fixed
-                allWorkflows = [
-                    {
-                        id: 'mock-1',
-                        name: 'Email Task Extractor',
-                        description: 'Automatically extracts tasks from incoming emails and adds them to your task list',
-                        active: true,
-                        createdAt: new Date().toISOString(),
-                        updatedAt: new Date().toISOString(),
-                        nodes: 5,
-                        icon: '📧'
-                    },
-                    {
-                        id: 'mock-2', 
-                        name: 'Calendar Sync',
-                        description: 'Syncs events between Google Calendar and your personal calendar',
-                        active: false,
-                        createdAt: new Date(Date.now() - 86400000).toISOString(),
-                        updatedAt: new Date(Date.now() - 3600000).toISOString(),
-                        nodes: 3,
-                        icon: '📅'
-                    },
-                    {
-                        id: 'mock-3',
-                        name: 'Weather Notifications',
-                        description: 'Sends daily weather updates and alerts for your location',
-                        active: true,
-                        createdAt: new Date(Date.now() - 172800000).toISOString(),
-                        updatedAt: new Date(Date.now() - 7200000).toISOString(),
-                        nodes: 4,
-                        icon: '🌤️'
-                    }
-                ];
-                displayWorkflows();
+        // Initialize voice recognition if available
+        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.lang = 'en-US';
+
+            recognition.onresult = function(event) {
+                const transcript = event.results[0][0].transcript;
+                document.getElementById('chatInput').value = transcript;
+                adjustTextareaHeight(document.getElementById('chatInput'));
+            };
+
+            recognition.onend = function() {
+                isRecording = false;
+                updateVoiceButton();
+            };
+
+            recognition.onerror = function(event) {
+                console.error('Speech recognition error:', event.error);
+                isRecording = false;
+                updateVoiceButton();
+                showNotification('Voice recognition error. Please try again.', 'error');
+            };
+        }
+
+        function handleKeyDown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
             }
         }
 
-        // Display workflows
-        function displayWorkflows() {
-            const container = document.getElementById('workflowsGrid');
-            
-            if (allWorkflows.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state" style="grid-column: 1/-1;">
-                        <div class="empty-icon">⚡</div>
-                        <div class="empty-title">No workflows yet</div>
-                        <div class="empty-subtitle">Create your first automation workflow</div>
-                    </div>
-                `;
+        function adjustTextareaHeight(textarea) {
+            textarea.style.height = 'auto';
+            textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+        }
+
+        function toggleVoiceRecording() {
+            if (!recognition) {
+                showNotification('Voice recognition not supported in this browser', 'error');
                 return;
             }
-            
-            container.innerHTML = allWorkflows.map(workflow => `
-                <div class="workflow-card" onclick="editWorkflow('${workflow.id}')">
-                    <div class="workflow-toggle">
-                        <div class="toggle-switch ${workflow.active ? 'active' : ''}" 
-                             onclick="event.stopPropagation(); toggleWorkflow('${workflow.id}')">
-                            <div class="toggle-slider"></div>
-                        </div>
-                    </div>
-                    <div class="workflow-header">
-                        <div class="workflow-icon">${workflow.icon || '⚡'}</div>
-                    </div>
-                    <div class="workflow-name">${workflow.name || 'Unnamed Workflow'}</div>
-                    <div class="workflow-description">${workflow.description || 'No description available'}</div>
-                    <div class="workflow-status">
-                        <div class="status-indicator status-${workflow.active ? 'active' : 'inactive'}"></div>
-                        <span class="status-text">${workflow.active ? 'Active' : 'Inactive'}</span>
-                    </div>
-                    <div class="workflow-details">
-                        <span>Created: ${workflow.createdAt ? formatDate(workflow.createdAt) : 'Unknown'}</span>
-                        <span>Updated: ${workflow.updatedAt ? formatDate(workflow.updatedAt) : 'Unknown'}</span>
-                    </div>
-                    <div class="workflow-actions">
-                        <button class="workflow-btn" onclick="event.stopPropagation(); runWorkflow('${workflow.id}')">Run Now</button>
-                        <button class="workflow-btn primary" onclick="event.stopPropagation(); editWorkflow('${workflow.id}')">View</button>
-                    </div>
-                </div>
-            `).join('');
+
+            if (isRecording) {
+                recognition.stop();
+            } else {
+                recognition.start();
+                isRecording = true;
+                updateVoiceButton();
+            }
         }
 
-        // Toggle workflow active state
-        async function toggleWorkflow(id) {
-            const workflow = allWorkflows.find(w => w.id === id);
-            if (!workflow) return;
-            
-            const newState = !workflow.active;
-            workflow.active = newState;
-            
+        function updateVoiceButton() {
+            const voiceBtn = document.getElementById('voiceBtn');
+            if (isRecording) {
+                voiceBtn.classList.add('recording');
+                voiceBtn.title = 'Stop Recording';
+            } else {
+                voiceBtn.classList.remove('recording');
+                voiceBtn.title = 'Voice Input';
+            }
+        }
+
+        // Generate a session ID for this chat session
+        let sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+
+        async function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message) return;
+
+            // Add user message to chat
+            addMessage(message, 'user');
+            input.value = '';
+            adjustTextareaHeight(input);
+
+            // Show typing indicator
+            showTypingIndicator();
+
             try {
-                // Check if it's mock data
-                if (id.startsWith('mock-')) {
-                    // For mock data, just update locally
-                    displayWorkflows();
-                    showNotification(`Workflow ${newState ? 'activated' : 'deactivated'} (mock)`, 'success');
-                    return;
-                }
-                
                 const session = window.zoeAuth?.getCurrentSession();
-                const endpoint = newState ? `/n8n/workflows/${id}/activate` : `/n8n/workflows/${id}/deactivate`;
-                await apiRequest(endpoint, {
-                    method: 'POST',
-                    headers: session ? { 'X-Session-ID': session.session_id } : {}
-                });
+                // Use relative URL with query params
+                const url = `/api/chat/enhanced?user_id=${session?.user_id || 'default'}&stream=true`;
                 
-                displayWorkflows();
-                showNotification(`Workflow ${newState ? 'activated' : 'deactivated'}`, 'success');
-            } catch (error) {
-                console.error('Failed to toggle workflow:', error);
-                // Revert change
-                workflow.active = !newState;
-                displayWorkflows();
-                showNotification('Failed to update workflow', 'error');
-            }
-        }
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                        // X-Session-ID header added automatically by auth.js
+                    },
+                    body: JSON.stringify({ 
+                        message: message,
+                        context: { mode: 'main_chat' },
+                        session_id: sessionId
+                    })
+                });
 
-        // Run workflow manually
-        async function runWorkflow(id) {
-            try {
-                // Check if it's mock data
-                if (id.startsWith('mock-')) {
-                    // For mock data, simulate execution
-                    showNotification('Workflow executed! (mock - n8n integration in progress)', 'success');
-                    return;
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
                 }
-                const session = window.zoeAuth?.getCurrentSession();
+
+                hideTypingIndicator();
+
+                // Create streaming message container
+                const messageDiv = addStreamingMessage();
                 
-                await apiRequest(`/n8n/workflows/${id}/execute`, {
-                    method: 'POST',
-                    headers: session ? { 'X-Session-ID': session.session_id } : {}
-                });
-                
-                showNotification('Workflow executed!', 'success');
-                // Refresh workflows to update last run time
-                loadWorkflows();
+                // Read the stream
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const {value, done} = await reader.read();
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, {stream: true});
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // Keep incomplete line in buffer
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                if (data.type === 'metadata') {
+                                    renderContextMeta({ routing: data.routing, context_breakdown: data.memories ? { events: 0, journals: 0, people: data.memories, projects: 0 } : undefined });
+                                } else if (data.type === 'token') {
+                                    updateStreamingMessage(messageDiv, data.content);
+                                } else if (data.type === 'done') {
+                                    finalizeStreamingMessage(messageDiv);
+                                }
+                            } catch (e) {
+                                console.error('Failed to parse SSE:', e);
+                            }
+                        }
+                    }
+                }
+
             } catch (error) {
-                console.error('Failed to run workflow:', error);
-                showNotification('Failed to run workflow', 'error');
+                hideTypingIndicator();
+                console.error('Chat error:', error);
+                addMessage('Sorry, I encountered an error. Please check your connection and try again.', 'zoe');
             }
         }
 
-        // Edit workflow
-        function editWorkflow(id) {
-            const workflow = allWorkflows.find(w => w.id === id);
-            if (!workflow) return;
-            
-            // For now, just show details in an alert
-            // In a full implementation, you'd open an edit modal or redirect to n8n
-            let details = `Name: ${workflow.name || 'Unnamed Workflow'}\n`;
-            details += `Description: ${workflow.description || 'No description available'}\n`;
-            details += `Status: ${workflow.active ? 'Active' : 'Inactive'}\n`;
-            details += `Created: ${workflow.createdAt ? formatDate(workflow.createdAt) : 'Unknown'}\n`;
-            details += `Updated: ${workflow.updatedAt ? formatDate(workflow.updatedAt) : 'Unknown'}\n`;
-            details += `Nodes: ${workflow.nodes ? workflow.nodes.length : 0}\n`;
-            details += `\nTo edit this workflow, please use the n8n interface.`;
-            
-            alert(details);
+        // Streaming message helpers
+        function addStreamingMessage() {
+            const messagesContainer = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message zoe-message';
+            messageDiv.innerHTML = '<div class="message-context"><div class="chip-row" id="contextChips"></div></div><div class="message-content"><span class="streaming-cursor">▊</span></div>';
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            return messageDiv;
         }
 
-        // Open add modal
-        function openAddModal() {
-            // Instead of opening the modal, redirect to n8n interface
-            window.open('/n8n', '_blank');
+        function updateStreamingMessage(messageDiv, token) {
+            const content = messageDiv.querySelector('.message-content');
+            const cursor = content.querySelector('.streaming-cursor');
+            cursor.before(document.createTextNode(token));
+            messageDiv.parentElement.scrollTop = messageDiv.parentElement.scrollHeight;
         }
 
-        // Close add modal
-        function closeAddModal() {
-            document.getElementById('addWorkflowModal').classList.remove('active');
-            document.getElementById('workflowForm').reset();
+        function finalizeStreamingMessage(messageDiv) {
+            const cursor = messageDiv.querySelector('.streaming-cursor');
+            if (cursor) cursor.remove();
         }
 
-        // Handle form submission
-        document.getElementById('workflowForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            const formData = {
-                name: document.getElementById('workflowName').value.trim(),
-                description: document.getElementById('workflowDescription').value.trim(),
-                trigger: document.getElementById('workflowTrigger').value,
-                actions: document.getElementById('workflowActions').value.trim(),
-                active: false
-            };
-            
+        // Render chips and sidebar from context metadata
+        function renderContextMeta(meta) {
             try {
-                // Note: Creating workflows directly in n8n requires more complex setup
-                // For now, we'll show a message directing users to n8n interface
-                showNotification('To create workflows, please use the n8n interface at /n8n', 'info');
-                closeAddModal();
-            } catch (error) {
-                console.error('Failed to create workflow:', error);
-                showNotification('Failed to create workflow', 'error');
-            }
-        });
+                if (!meta) return;
+                const chips = document.getElementById('contextChips');
+                if (chips) {
+                    chips.innerHTML = '';
+                    const parts = [];
+                    if (meta.context_breakdown) {
+                        const cb = meta.context_breakdown;
+                        parts.push({label: 'Events', val: cb.events||0});
+                        parts.push({label: 'Journals', val: cb.journals||0});
+                        parts.push({label: 'People', val: cb.people||0});
+                        parts.push({label: 'Projects', val: cb.projects||0});
+                    }
+                    if (meta.routing) parts.push({label: 'Route', val: meta.routing});
+                    parts.forEach(p=>{
+                        const span = document.createElement('span');
+                        span.className = 'context-chip';
+                        span.textContent = `${p.label}: ${p.val}`;
+                        chips.appendChild(span);
+                    });
+                }
+                const ctxCounts = document.getElementById('contextCounts');
+                if (ctxCounts && meta.context_breakdown) {
+                    const cb = meta.context_breakdown;
+                    ctxCounts.textContent = `events ${cb.events||0} • journals ${cb.journals||0} • people ${cb.people||0} • projects ${cb.projects||0}`;
+                }
+            } catch(e) {}
+        }
+
+        function addMessage(text, sender) {
+            const messagesContainer = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-message`;
+            messageDiv.innerHTML = text.replace(/\n/g, '<br>');
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function showTypingIndicator() {
+            document.getElementById('typingIndicator').classList.add('active');
+        }
+
+        function hideTypingIndicator() {
+            document.getElementById('typingIndicator').classList.remove('active');
+        }
 
         function navigateToPage(page) {
             window.location.href = page;
         }
 
-        // Initialize
-        document.addEventListener('DOMContentLoaded', () => {
-            loadWorkflows();
-            
-            // Load notifications on page load
-            loadNotifications();
-        });
 
         // Notifications system
         function openNotifications() {
@@ -1030,6 +1010,7 @@
         }
 
         // Authentication functions now handled by auth.js
+        // Removed duplicate logout/switchUser/upgradeSession functions
 
         // Close dropdown when clicking outside
         document.addEventListener('click', function(event) {
@@ -1039,6 +1020,80 @@
             if (userMenu && !userMenu.contains(event.target)) {
                 dropdown.classList.remove('show');
             }
+        });
+
+        // Time/Date Update Functions
+        function updateTimeDate() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            const timeElement = document.getElementById('currentTime');
+            const dateElement = document.getElementById('currentDate');
+            
+            if (timeElement) timeElement.textContent = timeString;
+            if (dateElement) dateElement.textContent = dateString;
+        }
+
+        // Intelligence SSE subscription for sidebar updates
+        function initChatSSE(){
+            // Use relative URL for SSE
+            const url = '/api/intelligence/stream';
+            
+            try {
+                const es = new EventSource(url);
+                
+                es.onopen = () => {
+                    console.log('✅ Chat intelligence SSE connected');
+                };
+                
+                es.onmessage = (evt) => {
+                    try { 
+                        const msg = JSON.parse(evt.data); 
+                        handleIntelEvent(msg); 
+                    } catch(e) {
+                        console.warn('Failed to parse SSE message:', e);
+                    }
+                };
+                
+                es.onerror = () => {
+                    console.warn('Chat intelligence SSE error');
+                };
+            } catch(e) {
+                console.error('Failed to create SSE:', e);
+            }
+        }
+
+        function handleIntelEvent(event){
+            if (event.type === 'proactive_suggestion'){
+                const el = document.getElementById('insightsList');
+                if (el){
+                    const div = document.createElement('div');
+                    div.textContent = `${event.data.title || 'Suggestion'} — ${event.data.message}`;
+                    el.prepend(div);
+                }
+            } else if (event.type === 'memory_update'){
+                const related = document.getElementById('relatedList');
+                if (related){
+                    const d = event.data || {};
+                    const item = document.createElement('div');
+                    item.textContent = `Context changed — route: ${d.routing}`;
+                    related.prepend(item);
+                }
+            }
+        }
+
+        // Focus input on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('chatInput').focus();
+            
+            // Update time/date immediately and every minute
+            updateTimeDate();
+            setInterval(updateTimeDate, 60000);
+            
+            // Load notifications on page load
+            loadNotifications();
+            initChatSSE();
         });
     </script>
     <script>
@@ -1110,12 +1165,11 @@
         addOrbMessage(message, 'user');
         input.value = '';
         
-        // Send to chat API
+        // Send to chat API (uses relative URL, auth.js adds session header)
         fetch('/api/chat/enhanced', {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json',
-                'X-Session-ID': localStorage.getItem('session_id') || 'default'
+                'Content-Type': 'application/json'
             },
             body: JSON.stringify({ message: message, context: {} })
         })
@@ -1143,19 +1197,25 @@
         if (orbWebSocket) return;
         
         try {
+            // Use relative WebSocket URL - nginx will proxy
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/ws/intelligence`;
+            const wsUrl = `${protocol}//${window.location.host}/api/ws/intelligence`;
             orbWebSocket = new WebSocket(wsUrl);
             
             orbWebSocket.onopen = function() {
                 document.getElementById('zoeOrb').classList.add('connected');
                 document.getElementById('zoeOrb').classList.remove('connecting');
+                console.log('✅ Orb WebSocket connected');
             };
             
             orbWebSocket.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                if (data.type === 'proactive_suggestion') {
-                    showOrbNotification(data.data);
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'proactive_suggestion') {
+                        showOrbNotification(data.data);
+                    }
+                } catch(e) {
+                    console.warn('Failed to parse WebSocket message:', e);
                 }
             };
             
@@ -1163,13 +1223,15 @@
                 document.getElementById('zoeOrb').classList.remove('connected');
                 document.getElementById('zoeOrb').classList.add('connecting');
                 orbWebSocket = null;
+                console.log('Orb WebSocket disconnected, will reconnect on reopen');
             };
             
-            orbWebSocket.onerror = function() {
+            orbWebSocket.onerror = function(error) {
                 document.getElementById('zoeOrb').classList.add('error');
+                console.warn('Orb WebSocket error:', error);
             };
         } catch (error) {
-            console.log('WebSocket connection failed', error);
+            console.error('Failed to create WebSocket:', error);
         }
     }
     
@@ -1216,10 +1278,5 @@
     <!-- Zoe Orb -->
     <div class="zoe-orb" id="zoeOrb" title="Click to chat with Zoe" onclick="toggleOrbChat()">
     </div>
-<script>
-if (!document.getElementById("zoeOrb")) {
-    fetch("/components/zoe-orb.html").then(r=>r.text()).then(h=>{const d=document.createElement("div");d.innerHTML=h;while(d.firstChild){document.body.appendChild(d.firstChild);}});
-}
-</script>
 </body>
 </html>

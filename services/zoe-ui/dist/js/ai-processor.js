@@ -102,8 +102,8 @@ class ZoeAIProcessor {
 
     // Dynamic API_BASE getter - always uses the latest value from common.js
     get API_BASE() {
-        // Use window.API_BASE from common.js, or fall back to IP-based URL
-        return window.API_BASE || 'https://192.168.1.60/api';
+        // Use window.API_BASE from common.js, or fall back to relative URL
+        return window.API_BASE || '/api';
     }
 
     // Main processing function

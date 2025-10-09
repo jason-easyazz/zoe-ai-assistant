@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>AG-UI Chat Test - No Cache</title>
+    <style>
+        body { font-family: system-ui; padding: 20px; max-width: 800px; margin: 0 auto; }
+        #output { background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0; min-height: 200px; }
+        input { width: 100%; padding: 12px; font-size: 16px; border: 2px solid #7B61FF; border-radius: 8px; }
+        button { padding: 12px 24px; background: #7B61FF; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; margin-top: 10px; }
+        button:hover { background: #6951e6; }
+        .event { padding: 8px; margin: 4px 0; background: white; border-left: 4px solid #7B61FF; border-radius: 4px; }
+        .success { border-left-color: #22c55e; }
+        .error { border-left-color: #ef4444; color: #ef4444; }
+    </style>
+</head>
+<body>
+    <h1>🧪 AG-UI Chat Test (No Cache)</h1>
+    <p>This page has cache disabled to test the real backend.</p>
+    
+    <input type="text" id="messageInput" placeholder="Type a message and press Enter..." value="Hello, test the AG-UI streaming!">
+    <button onclick="testChat()">Send Test Message</button>
+    
+    <h3>Output:</h3>
+    <div id="output"></div>
+    
+    <script>
+        const output = document.getElementById('output');
+        
+        function log(message, type = 'info') {
+            const div = document.createElement('div');
+            div.className = `event ${type}`;
+            div.textContent = message;
+            output.appendChild(div);
+            output.scrollTop = output.scrollHeight;
+        }
+        
+        async function testChat() {
+            output.innerHTML = '';
+            log('🚀 Starting AG-UI chat test...');
+            
+            const message = document.getElementById('messageInput').value;
+            log(`📤 Sending: "${message}"`);
+            
+            try {
+                // Test session creation
+                log('Creating session...');
+                const sessionResp = await fetch('/api/chat/sessions/', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({user_id: 'test', title: 'Test Session'})
+                });
+                const sessionData = await sessionResp.json();
+                log(`✅ Session created: ${sessionData.session_id}`, 'success');
+                
+                // Test streaming chat
+                log('Starting AG-UI stream...');
+                const response = await fetch(`/api/chat/?user_id=test&stream=true`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        message: message,
+                        session_id: sessionData.session_id
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                log('✅ Chat endpoint connected', 'success');
+                log('📡 Receiving AG-UI events...');
+                
+                // Read stream
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let fullText = '';
+                
+                while (true) {
+                    const {value, done} = await reader.read();
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, {stream: true});
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                
+                                if (data.type === 'session_start') {
+                                    log(`📡 AG-UI: session_start (${data.session_id})`, 'success');
+                                } else if (data.type === 'agent_state_delta') {
+                                    log(`📡 AG-UI: agent_state_delta - ${JSON.stringify(data.state).substring(0, 50)}...`);
+                                } else if (data.type === 'message_delta') {
+                                    fullText += data.delta;
+                                    log(`📡 AG-UI: message_delta - "${data.delta}"`);
+                                } else if (data.type === 'session_end') {
+                                    log(`📡 AG-UI: session_end`, 'success');
+                                } else if (data.type === 'error') {
+                                    log(`❌ AG-UI: error - ${data.error.message}`, 'error');
+                                } else {
+                                    log(`📡 AG-UI: ${data.type}`);
+                                }
+                            } catch (e) {
+                                console.error('Parse error:', e, line);
+                            }
+                        }
+                    }
+                }
+                
+                log(`\n💬 Complete Response: "${fullText}"`, 'success');
+                log('✅ AG-UI streaming test PASSED!', 'success');
+                
+                // Test message save
+                log('\nTesting message save...');
+                const saveResp = await fetch(`/api/chat/sessions/${sessionData.session_id}/messages/?user_id=test`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        session_id: sessionData.session_id,
+                        role: 'user',
+                        content: message
+                    })
+                });
+                const saveData = await saveResp.json();
+                log(`✅ Message saved: message_id ${saveData.message_id}`, 'success');
+                
+            } catch (error) {
+                log(`❌ Error: ${error.message}`, 'error');
+                console.error('Full error:', error);
+            }
+        }
+        
+        // Allow Enter key
+        document.getElementById('messageInput').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') testChat();
+        });
+        
+        // Log file loaded
+        console.log('✅ Test page loaded - cache disabled');
+        log('ℹ️ Ready to test. Click "Send Test Message" or press Enter.');
+    </script>
+</body>
+</html>
+

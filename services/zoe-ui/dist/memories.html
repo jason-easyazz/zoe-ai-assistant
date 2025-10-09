@@ -1219,10 +1219,9 @@
                             const col = collections.find(c => c.id === currentCollection);
                             if (!col) return;
                             
-                            const session = window.zoeAuth?.getCurrentSession();
                             const collectionId = col.id.replace('c', '');
-                            console.log("Making API request to collections-service:", `http://localhost:8011/collections/${collectionId}/tiles`);
-                const response = await fetch(`http://localhost:8011/collections/${collectionId}/tiles`, {
+                            console.log("Creating tile in collection via nginx proxy:", collectionId);
+                const response = await fetch(`/api/collections/${collectionId}/tiles`, {
                                 method: 'POST',
                                 headers: {
                                     'Content-Type': 'application/json',
@@ -1289,10 +1288,9 @@
                         const col = collections.find(c => c.id === currentCollection);
                         if (!col) return;
                         
-                        const session = window.zoeAuth?.getCurrentSession();
                         const collectionId = col.id.replace('c', '');
-                        console.log("Making API request to collections-service:", `http://localhost:8011/collections/${collectionId}/tiles`);
-                const response = await fetch(`http://localhost:8011/collections/${collectionId}/tiles`, {
+                        console.log("Adding tile to collection via nginx proxy:", collectionId);
+                const response = await fetch(`/api/collections/${collectionId}/tiles`, {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json',
@@ -1339,9 +1337,8 @@
         
         async function fetchLinkPreview(url) {
             try {
-                const session = window.zoeAuth?.getCurrentSession();
-                console.log("Making API request to zoe-core:", "http://localhost:8000/api/memories/link-preview");
-                const response = await fetch('http://localhost:8000/api/memories/link-preview', {
+                console.log("Fetching link preview via nginx proxy");
+                const response = await fetch('/api/memories/link-preview', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1368,24 +1365,16 @@
             }
         }
         
-        // Load data from API
+        // Load data from API - use nginx proxy
         async function loadPeople() {
             console.log("=== Loading People ===");
             try {
-                const session = window.zoeAuth?.getCurrentSession();
-                console.log("Making API request to people-service:", "http://localhost:8010/people");
-                const response = await fetch('http://localhost:8010/people', {
-                    headers: session ? { 'Authorization': `Bearer ${session.token}` } : {}
-                });
+                // Use relative URL through nginx proxy to people service
+                const response = await apiRequest('/people');
                 
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                
-                const data = await response.json();
-                console.log("API Response:", data);
-                console.log("Number of people:", data.people ? data.people.length : 0);
-                people = data.people.map(person => ({
+                console.log("API Response:", response);
+                console.log("Number of people:", response.people ? response.people.length : 0);
+                people = response.people.map(person => ({
                     id: `p${person.id}`,
                     type: 'person',
                     category: person.relationship || person.metadata?.category || 'inner',
@@ -1411,17 +1400,9 @@
         
         async function loadCollections() {
             try {
-                const session = window.zoeAuth?.getCurrentSession();
-                console.log("Making API request to collections-service:", "http://localhost:8011/collections");
-                const response = await fetch('http://localhost:8011/collections', {
-                    headers: session ? { 'Authorization': `Bearer ${session.token}` } : {}
-                });
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                
-                const data = await response.json();
+                // Use relative URL through nginx proxy to collections service
+                console.log("Making API request to collections-service via nginx proxy");
+                const data = await apiRequest('/collections');
                 collections = data.collections.map(collection => ({
                     id: `c${collection.id}`,
                     type: 'collection',
@@ -1438,15 +1419,8 @@
                 for (let collection of collections) {
                     const collectionId = collection.id.replace('c', '');
                     try {
-                        const tilesResponse = await fetch(`http://localhost:8011/collections/${collectionId}/tiles`, {
-                            headers: session ? { 'Authorization': `Bearer ${session.token}` } : {}
-                        });
-                        
-                        if (!tilesResponse.ok) {
-                            throw new Error(`HTTP error! status: ${tilesResponse.status}`);
-                        }
-                        
-                        const tilesData = await tilesResponse.json();
+                        // Use nginx proxy for tiles
+                        const tilesData = await apiRequest(`/collections/${collectionId}/tiles`);
                         
                         collection.items = tilesData.tiles.map(tile => ({
                             id: `t${tile.id}`,
@@ -1463,7 +1437,7 @@
                             dbId: tile.id // Store the actual database ID
                         }));
                     } catch (error) {
-                console.error("Error loading people:", error);
+                        console.error("Error loading tiles for collection:", collectionId, error);
                         console.error(`Failed to load tiles for collection ${collectionId}:`, error);
                         collection.items = [];
                     }
@@ -1477,11 +1451,8 @@
         
         async function loadEnhancedPerson(personId) {
             try {
-                const session = window.zoeAuth?.getCurrentSession();
-                console.log("Making API request to people-service:", `http://localhost:8010/people/${personId}/analysis`);
-                const response = await fetch(`http://localhost:8010/people/${personId}/analysis`, {
-                    headers: session ? { 'Authorization': `Bearer ${session.token}` } : {}
-                });
+                console.log("Fetching person analysis via nginx proxy:", personId);
+                const response = await fetch(`/api/people/${personId}/analysis`);
                 
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
@@ -1578,9 +1549,8 @@
             if (!name) return;
             
             try {
-                const session = window.zoeAuth?.getCurrentSession();
-                console.log("Making API request to collections-service:", "http://localhost:8011/collections");
-                const response = await fetch('http://localhost:8011/collections', {
+                console.log("Creating collection via nginx proxy");
+                const response = await fetch('/api/collections', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1624,9 +1594,8 @@
             if (!name) return;
             
             try {
-                const session = window.zoeAuth?.getCurrentSession();
-                console.log("Making API request to people-service:", "http://localhost:8010/people");
-                const response = await fetch('http://localhost:8010/people', {
+                console.log("Creating person via nginx proxy");
+                const response = await fetch('/api/people', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1673,10 +1642,9 @@
             if (!col) return;
             
             try {
-                const session = window.zoeAuth?.getCurrentSession();
                 const collectionId = col.id.replace('c', '');
-                console.log("Making API request to collections-service:", `http://localhost:8011/collections/${collectionId}/tiles`);
-                const response = await fetch(`http://localhost:8011/collections/${collectionId}/tiles`, {
+                console.log("Creating tile in collection via nginx proxy:", collectionId);
+                const response = await fetch(`/api/collections/${collectionId}/tiles`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1901,9 +1869,8 @@
         
         async function saveTile(item) {
             try {
-                const session = window.zoeAuth?.getCurrentSession();
                 const tileId = item.dbId || item.id.replace('t', '');
-                await fetch(`http://localhost:8011/tiles/${tileId}`, {
+                await fetch(`/api/tiles/${tileId}`, {
                     method: 'PUT',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1949,9 +1916,8 @@
                 const session = window.zoeAuth?.getCurrentSession();
                 const item = findItemById(itemId);
                 const tileId = item?.dbId || itemId.replace('t', '');
-                await fetch(`http://localhost:8011/tiles/${tileId}`, {
-                    method: 'DELETE',
-                    headers: session ? { 'Authorization': `Bearer ${session.token}` } : {}
+                await fetch(`/api/tiles/${tileId}`, {
+                    method: 'DELETE'
                 });
                 
                 const col = collections.find(c => c.id === currentCollection);
@@ -3155,5 +3121,10 @@
     <!-- Zoe Orb -->
     <div class="zoe-orb" id="zoeOrb" title="Click to chat with Zoe" onclick="toggleOrbChat()">
     </div>
+<script>
+if (!document.getElementById("zoeOrb")) {
+    fetch("/components/zoe-orb.html").then(r=>r.text()).then(h=>{const d=document.createElement("div");d.innerHTML=h;while(d.firstChild){document.body.appendChild(d.firstChild);}});
+}
+</script>
 </body>
 </html>

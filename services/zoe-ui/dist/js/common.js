@@ -1,94 +1,36 @@
-// Robust API_BASE detection with fallback
+// API_BASE detection - use relative URLs to leverage nginx proxy
 function getApiBase() {
-    const protocol = window.location.protocol;
-    const host = window.location.host;
-    
-    // Always use HTTPS for API calls
-    let apiBase = `https://${host}/api`;
-    
-    // If host is zoe.local and we're not on the server, use IP fallback
-    if (host === 'zoe.local' && window.location.href.includes('zoe.local')) {
-        // Try to detect if we're on the server itself
-        const isServer = window.location.href.includes('192.168.1.60') || 
-                        window.location.href.includes('localhost') ||
-                        window.location.href.includes('127.0.0.1');
-        
-        if (!isServer) {
-            // Use IP address for external access
-            apiBase = `https://192.168.1.60/api`;
-        }
-    }
-    
-    console.log('Debug API_BASE:', {
-        protocol: protocol,
-        host: host,
-        href: window.location.href,
-        apiBase: apiBase,
-        isSecure: protocol === 'https:'
-    });
-    
-    return apiBase;
+    // Use relative URL - nginx will proxy /api to the correct backend service
+    // This works regardless of how the user accesses the site (IP, hostname, external, etc.)
+    return '/api';
 }
 
 const API_BASE = getApiBase();
 
-// Test API connectivity with both protocols
+// Test API connectivity using relative URL
 async function testApiConnectivity() {
-    const host = window.location.host;
-    const protocols = ['https:', 'http:'];
-    
     console.log('Testing API connectivity...');
+    const testUrl = '/api/health';
     
-    // Try the current host first
-    for (const protocol of protocols) {
-        const testUrl = `${protocol}//${host}/api/health`;
-        console.log(`Testing ${protocol}://${host}/api/health`);
-        
-        try {
-            const response = await fetch(testUrl, { 
-                method: 'GET',
-                mode: 'cors',
-                cache: 'no-cache'
-            });
-            console.log(`${protocol} response:`, response.status, response.statusText);
-            if (response.ok) {
-                console.log(`✅ ${protocol} is working!`);
-                return testUrl.replace('/health', '');
-            }
-        } catch (error) {
-            console.log(`❌ ${protocol} failed:`, error.message);
+    try {
+        const response = await fetch(testUrl, { 
+            method: 'GET',
+            cache: 'no-cache'
+        });
+        console.log(`API response:`, response.status, response.statusText);
+        if (response.ok) {
+            console.log(`✅ API is reachable`);
+            return '/api';
         }
+    } catch (error) {
+        console.log(`❌ API failed:`, error.message);
     }
     
-    // If current host fails, try IP address fallback
-    const fallbackHosts = ['192.168.1.60', 'zoe.local'];
-    for (const fallbackHost of fallbackHosts) {
-        for (const protocol of protocols) {
-            const testUrl = `${protocol}//${fallbackHost}/api/health`;
-            console.log(`Testing fallback ${protocol}://${fallbackHost}/api/health`);
-            
-            try {
-                const response = await fetch(testUrl, { 
-                    method: 'GET',
-                    mode: 'cors',
-                    cache: 'no-cache'
-                });
-                console.log(`Fallback ${protocol} response:`, response.status, response.statusText);
-                if (response.ok) {
-                    console.log(`✅ Fallback ${protocol} is working!`);
-                    return testUrl.replace('/health', '');
-                }
-            } catch (error) {
-                console.log(`❌ Fallback ${protocol} failed:`, error.message);
-            }
-        }
-    }
-    
-    console.log('❌ No working protocol found');
+    console.log('❌ API not reachable');
     return null;
 }
 
-// API health check with fallback
+// API health check
 async function checkAPI() {
     try {
         const response = await fetch(`${API_BASE}/health`);
@@ -103,25 +45,11 @@ async function checkAPI() {
             }
         }
     } catch (error) {
-        console.log('Primary API check failed, testing connectivity...');
-        
-        // Try to find a working protocol
-        const workingApiBase = await testApiConnectivity();
-        if (workingApiBase) {
-            console.log('Found working API base:', workingApiBase);
-            // Update the global API_BASE if we found a working one
-            window.API_BASE = workingApiBase;
-            const indicator = document.getElementById('apiStatus');
-            if (indicator) {
-                indicator.textContent = 'Online (Fallback)';
-                indicator.className = 'api-indicator online';
-            }
-        } else {
-            const indicator = document.getElementById('apiStatus');
-            if (indicator) {
-                indicator.textContent = 'Offline';
-                indicator.className = 'api-indicator offline';
-            }
+        console.log('API check failed:', error.message);
+        const indicator = document.getElementById('apiStatus');
+        if (indicator) {
+            indicator.textContent = 'Offline';
+            indicator.className = 'api-indicator offline';
         }
     }
 }
@@ -215,9 +143,9 @@ function getServiceMap() {
         '/homeassistant/states': `${apiBase}/homeassistant/entities`,
         '/homeassistant/service': `${apiBase}/homeassistant/services`,
         
-        // N8N endpoints -> n8n-bridge (direct for now)
-        '/n8n/workflows': 'http://localhost:8009/workflows',
-        '/n8n/executions': 'http://localhost:8009/executions',
+        // N8N endpoints -> n8n-bridge (through nginx proxy)
+        '/n8n/workflows': `${apiBase}/n8n/workflows`,
+        '/n8n/executions': `${apiBase}/n8n/executions`,
         
         // Default to zoe-core for other endpoints
         'default': apiBase
@@ -239,20 +167,8 @@ async function apiRequest(endpoint, options = {}) {
             serviceUrl = SERVICE_MAP[endpoint];
             normalizedEndpoint = '';
         } else {
-            // Check for specific pattern matches only
-            if (endpoint.startsWith('/memories/collections/') && endpoint.includes('/tiles')) {
-                serviceUrl = 'http://localhost:8011';
-                normalizedEndpoint = endpoint.replace('/memories', '');
-            } else if (endpoint.startsWith('/memories/tiles/') && !endpoint.includes('/collections/')) {
-                serviceUrl = 'http://localhost:8011';
-                normalizedEndpoint = endpoint.replace('/memories', '');
-            } else if (endpoint.startsWith('/memories/collections/')) {
-                serviceUrl = 'http://localhost:8011';
-                normalizedEndpoint = endpoint.replace('/memories', '');
-            } else if (endpoint.startsWith('/memories/tiles/')) {
-                serviceUrl = 'http://localhost:8011';
-                normalizedEndpoint = endpoint.replace('/memories', '');
-            }
+            // All collections and tiles routes go through nginx proxy to collections-service
+            // The nginx proxy handles routing /api/memories/collections/* to collections-service
             // All other endpoints go to zoe-core (default)
         }
         

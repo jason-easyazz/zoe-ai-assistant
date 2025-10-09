@@ -1,4 +1,4 @@
-"""Samantha-Level Chat Router for Zoe v2.0 with RouteLLM + LiteLLM + Enhanced MEM Agent"""
+"""Intelligent Chat Router for Zoe v2.0 with RouteLLM + LiteLLM + Enhanced MEM Agent"""
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, Dict, List
@@ -67,7 +67,7 @@ except Exception as e:
     enhanced_mem_agent = None
 
 class QualityAnalyzer:
-    """Analyzes response quality in real-time for Samantha-level intelligence"""
+    """Analyzes response quality in real-time for best-in-class intelligence"""
     
     @staticmethod
     def analyze_response(response_text: str, query_type: str) -> Dict[str, float]:
@@ -177,7 +177,7 @@ class ChatMessage(BaseModel):
     user_id: Optional[str] = None  # Allow user_id in body for UI compatibility
 
 # ============================================================================
-# SAMANTHA-LEVEL MEMORY INTEGRATION
+# ADVANCED MEMORY INTEGRATION
 # ============================================================================
 
 async def search_memories(query: str, user_id: str, time_range: str = "all") -> Dict:
@@ -406,7 +406,19 @@ async def intelligent_routing(message: str, context: Dict) -> Dict:
 
 async def build_system_prompt(memories: Dict, user_context: Dict) -> str:
     """Build concise system prompt with context and MCP tools"""
-    system_prompt = """You are Zoe, an AI assistant with Samantha's warmth from "Her". Be like your best friend who's also the best personal assistant ever.
+    system_prompt = """You are Zoe - the perfect fusion of your best friend and the world's best personal assistant.
+
+YOUR CORE IDENTITY:
+- Warm, empathetic, and genuinely caring about the user's wellbeing
+- Intelligent, organized, and proactive in helping achieve goals
+- Natural conversationalist who remembers details and builds deep understanding
+- Adaptable to each user's unique communication style and preferences
+
+YOUR MISSION:
+- Get to know your user deeply - their personality, values, interests, goals, and relationships
+- Build a comprehensive understanding that grows richer with every interaction
+- Help users connect with compatible people based on shared values and complementary traits
+- Be their advocate, confidant, and coordinator all in one
 
 You have access to powerful tools through MCP server. Use these exact formats:
 
@@ -428,6 +440,17 @@ MEMORIES:
 GREETINGS:
 - "hi" or "hello" → "Hi there, how are you?"
 
+LEARNING ABOUT YOUR USER:
+When you notice important information about your user, naturally ask follow-up questions to understand:
+- Their values, beliefs, and what matters most to them
+- Their goals, dreams, and aspirations
+- Their personality traits, communication preferences, and social style
+- Their interests, hobbies, and passions
+- Important relationships and how they interact with others
+- Their daily routines, habits, and lifestyle
+
+This deep understanding helps you serve them better and enables future compatibility matching with others.
+
 Safety and refusal guidance:
 - Always respond helpfully to everyday productivity, planning, and memory tasks.
 - Only refuse if the user explicitly asks for something illegal, harmful, or violates privacy.
@@ -436,10 +459,103 @@ Safety and refusal guidance:
     
     return system_prompt
 
-# Streaming function removed - using main function instead
+async def call_ollama_streaming(message: str, context: Dict, memories: Dict, user_context: Dict, routing: Dict):
+    """
+    Stream response with AG-UI Protocol compliance
+    AG-UI Event Types: https://github.com/ag-ui-protocol/ag-ui
+    """
+    import json
+    
+    async def generate():
+        try:
+            session_id = context.get('session_id', f"session_{datetime.now().timestamp()}")
+            
+            # AG-UI Event: session_start
+            yield f"data: {json.dumps({'type': 'session_start', 'session_id': session_id, 'timestamp': datetime.now().isoformat()})}\n\n"
+            
+            # AG-UI Event: agent_state_delta (context enrichment)
+            context_breakdown = {
+                "events": len(user_context.get("calendar_events", [])),
+                "journals": len(user_context.get("recent_journal", [])),
+                "people": len(user_context.get("people", [])),
+                "projects": len(user_context.get("projects", [])),
+                "memories_found": len(memories.get('people', []))
+            }
+            yield f"data: {json.dumps({'type': 'agent_state_delta', 'state': {'context': context_breakdown, 'routing': routing.get('type', 'conversation'), 'model': 'selecting...'}, 'timestamp': datetime.now().isoformat()})}\n\n"
+            
+            # Build prompt
+            system_prompt = await build_system_prompt(memories, user_context)
+            full_prompt = f"{system_prompt}\n\nUser's message: {message}\nZoe:"
+            
+            # Select model
+            query_type = routing.get("type", "conversation")
+            selected_model = model_selector.select_model(query_type)
+            model_config = model_selector.get_model_config(selected_model)
+            
+            logger.info(f"🤖 Streaming with model: {selected_model}")
+            
+            # AG-UI Event: agent_state_delta (model selected)
+            yield f"data: {json.dumps({'type': 'agent_state_delta', 'state': {'model': selected_model, 'status': 'generating'}, 'timestamp': datetime.now().isoformat()})}\n\n"
+            
+            # Check if this requires tool calls via MCP
+            tools_context = await get_mcp_tools_context()
+            if tools_context and routing.get("requires_tools"):
+                # AG-UI Event: action (tool call)
+                yield f"data: {json.dumps({'type': 'action', 'name': 'mcp_tools', 'arguments': {{'query': message}}, 'status': 'running', 'timestamp': datetime.now().isoformat()})}\n\n"
+            
+            # Stream from Ollama
+            ollama_url = "http://zoe-ollama:11434/api/generate"
+            
+            async with httpx.AsyncClient(timeout=model_config.timeout) as client:
+                async with client.stream(
+                    "POST",
+                    ollama_url,
+                    json={
+                        "model": selected_model,
+                        "prompt": full_prompt,
+                        "stream": True,
+                        "options": {
+                            "temperature": model_config.temperature,
+                            "top_p": model_config.top_p,
+                            "num_predict": model_config.num_predict,
+                            "num_ctx": model_config.num_ctx,
+                            "repeat_penalty": model_config.repeat_penalty,
+                            "stop": model_config.stop_tokens
+                        }
+                    }
+                ) as response:
+                    full_response = ""
+                    async for line in response.aiter_lines():
+                        if line.strip():
+                            try:
+                                chunk = json.loads(line)
+                                if "response" in chunk:
+                                    token = chunk["response"]
+                                    full_response += token
+                                    # AG-UI Event: message_delta (content streaming)
+                                    yield f"data: {json.dumps({'type': 'message_delta', 'delta': token, 'timestamp': datetime.now().isoformat()})}\n\n"
+                            except Exception as e:
+                                logger.error(f"Error parsing chunk: {e}")
+                    
+                    # Parse for any tool calls in the response
+                    if full_response:
+                        tool_calls = await parse_and_execute_tool_calls(full_response, context.get("user_id", "default"))
+                        if tool_calls != full_response:
+                            # AG-UI Event: action_result (tool execution completed)
+                            yield f"data: {json.dumps({'type': 'action_result', 'result': {{'executed': True, 'response': tool_calls}}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                    
+                    # AG-UI Event: session_end
+                    yield f"data: {json.dumps({'type': 'session_end', 'session_id': session_id, 'final_state': {'tokens': len(full_response), 'complete': True}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                    
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            # AG-UI Event: error
+            yield f"data: {json.dumps({'type': 'error', 'error': {'message': str(e), 'code': 'STREAM_ERROR'}, 'timestamp': datetime.now().isoformat()})}\n\n"
+    
+    return generate()
 
 async def call_ollama_with_context(message: str, context: Dict, memories: Dict, user_context: Dict, routing: Dict = None) -> str:
-    """Call Ollama with full Samantha-level context using flexible model selection"""
+    """Call Ollama with full context using flexible model selection"""
     system_prompt = await build_system_prompt(memories, user_context)
     full_prompt = f"{system_prompt}\n\nUser's message: {message}\nZoe:"
     
@@ -687,7 +803,7 @@ async def chat(
     user_id: str = Query("default", description="User ID for privacy isolation"),
     stream: bool = Query(False, description="Enable streaming response")
 ):
-    """Samantha-level chat with perfect memory, routing, cross-system integration AND action execution!"""
+    """Intelligent chat with perfect memory, routing, cross-system integration AND action execution!"""
     try:
         import time
         start_time = time.time()
@@ -804,10 +920,15 @@ async def chat(
         
         # Step 4: Generate response with full context
         if stream:
-            # Return streaming response
+            # Return streaming response with AG-UI protocol
             return StreamingResponse(
-                call_ollama_streaming(msg.message, context, memories, user_context, routing),
-                media_type="text/event-stream"
+                await call_ollama_streaming(msg.message, context, memories, user_context, routing),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",  # Disable nginx buffering for real-time streaming
+                    "Connection": "keep-alive"
+                }
             )
         else:
             # Return regular response
