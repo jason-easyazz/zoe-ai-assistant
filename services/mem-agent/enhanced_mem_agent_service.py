@@ -65,7 +65,7 @@ class ListExpert:
     """Expert for list management: shopping, tasks, items"""
     
     def __init__(self):
-        self.api_base = "http://zoe-core:8000/api/lists"
+        self.api_base = "http://zoe-core-test:8000/api/lists"
         self.intent_patterns = [
             r"add.*to.*list|add.*shopping|add.*task",
             r"create.*list|new.*list",
@@ -256,7 +256,7 @@ class CalendarExpert:
     """Expert for calendar management: events, scheduling, reminders"""
     
     def __init__(self):
-        self.api_base = "http://zoe-core:8000/api/calendar"
+        self.api_base = "http://zoe-core-test:8000/api/calendar"
         self.intent_patterns = [
             r"calendar|event|schedule|meeting|appointment",
             r"create.*event|add.*event|schedule.*event",
@@ -499,7 +499,7 @@ class PlanningExpert:
     """Expert for goal decomposition and task planning"""
     
     def __init__(self):
-        self.api_base = "http://zoe-core:8000/api/agent"
+        self.api_base = "http://zoe-core-test:8000/api/agent"
         self.intent_patterns = [
             r"plan|organize|help me.*plan",
             r"goal|objective|task.*planning",
@@ -578,6 +578,37 @@ class EnhancedMemAgent:
             "memory": MemoryExpert(),
             "planning": PlanningExpert()
         }
+        
+        # Load additional experts from separate files
+        try:
+            from journal_expert import JournalExpert
+            self.experts["journal"] = JournalExpert()
+            logger.info("✅ JournalExpert loaded")
+        except Exception as e:
+            logger.warning(f"⚠️  JournalExpert not available: {e}")
+        
+        try:
+            from reminder_expert import ReminderExpert
+            self.experts["reminder"] = ReminderExpert()
+            logger.info("✅ ReminderExpert loaded")
+        except Exception as e:
+            logger.warning(f"⚠️  ReminderExpert not available: {e}")
+        
+        try:
+            from homeassistant_expert import HomeAssistantExpert
+            self.experts["homeassistant"] = HomeAssistantExpert()
+            logger.info("✅ HomeAssistantExpert loaded")
+        except Exception as e:
+            logger.warning(f"⚠️  HomeAssistantExpert not available: {e}")
+        
+        try:
+            from improved_birthday_expert import ImprovedBirthdayExpert
+            self.experts["birthday_setup"] = ImprovedBirthdayExpert()
+            logger.info("✅ BirthdayExpert loaded")
+        except Exception as e:
+            logger.warning(f"⚠️  BirthdayExpert not available: {e}")
+        
+        logger.info(f"🎯 Total experts loaded: {len(self.experts)} - {list(self.experts.keys())}")
     
     async def process_request(self, request: EnhancedRequest) -> EnhancedResponse:
         """Process request using appropriate expert(s)"""

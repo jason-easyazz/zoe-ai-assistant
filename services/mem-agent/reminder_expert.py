@@ -16,7 +16,7 @@ class ReminderExpert:
     def __init__(self):
         self.api_base = "http://zoe-core-test:8000/api"
         self.intent_patterns = [
-            r"remind me|reminder|don't forget",
+            r"remind me|reminder|don.?t forget|don.?t let me forget",
             r"alert me|notify me",
             r"what.*reminders|show.*reminders"
         ]
@@ -67,11 +67,8 @@ class ReminderExpert:
             
             # Extract time
             time_match = re.search(r"at (\d{1,2}(?::\d{2})?\s*(?:am|pm)?)", query, re.IGNORECASE)
-            reminder_time = time_match.group(1).strip() if time_match else "09:00"
-            
-            # Normalize time format
-            if reminder_time and not any(x in reminder_time for x in [':', 'am', 'pm']):
-                reminder_time = f"{reminder_time}:00"
+            raw_time = time_match.group(1).strip() if time_match else None
+            reminder_time = self._normalize_time(raw_time)
             
             # Extract date (tomorrow, next week, specific date)
             date_str = None
@@ -85,18 +82,21 @@ class ReminderExpert:
             
             logger.info(f"ReminderExpert: Creating reminder - title='{title}', date={date_str}, time={reminder_time}")
             
-            # Call reminders API
+            # Send due_date and due_time separately as API expects
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.post(
                     f"{self.api_base}/reminders/",
+                    params={"user_id": user_id},
                     headers={"X-Service-Token": "zoe_internal_2025"},
                     json={
                         "title": title,
-                        "reminder_time": reminder_time,
-                        "reminder_date": date_str,
                         "user_id": user_id,
+                        "due_date": date_str,
+                        "due_time": reminder_time,
                         "reminder_type": "once",
-                        "category": "personal"
+                        "category": "personal",
+                        "priority": "medium",
+                        "description": query
                     }
                 )
                 
@@ -123,6 +123,30 @@ class ReminderExpert:
                 "error": str(e),
                 "message": f"❌ Error creating reminder: {e}"
             }
+    
+    def _normalize_time(self, time_str: str) -> str:
+        """Convert natural language time expressions to ISO format."""
+        if not time_str:
+            return "09:00:00"
+        
+        cleaned = time_str.strip().lower().replace(".", "")
+        cleaned = re.sub(r"\s+", "", cleaned)
+        
+        try:
+            if cleaned.endswith("am") or cleaned.endswith("pm"):
+                fmt = "%I:%M%p" if ":" in cleaned else "%I%p"
+                return datetime.strptime(cleaned, fmt).strftime("%H:%M:%S")
+            
+            if ":" in cleaned:
+                return datetime.strptime(cleaned, "%H:%M").strftime("%H:%M:%S")
+            
+            if cleaned.isdigit():
+                hour = int(cleaned) % 24
+                return f"{hour:02d}:00:00"
+        except ValueError:
+            logger.debug(f"ReminderExpert: Failed to parse time '{time_str}', using default", exc_info=True)
+        
+        return "09:00:00"
     
     async def _get_reminders(self, query: str, user_id: str) -> Dict[str, Any]:
         """Get active reminders"""
