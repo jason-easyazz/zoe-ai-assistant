@@ -1389,116 +1389,103 @@
 
         // Intelligence WebSocket client
         let intelligenceWS;
-        let wsCandidateIdx = 0;
-        let wsFailures = 0;
-        function wsCandidates() {
-            const isSecure = location.protocol === 'https:';
-            const wss = isSecure ? 'wss://' : 'ws://';
-            const pageHost = location.host; // e.g., zoe.local
-            const list = [];
-            try {
-                if (typeof API_BASE !== 'undefined' && API_BASE) {
-                    const api = new URL(API_BASE);
-                    const apiHost = api.host; // e.g., 192.168.1.60
-                    const basePath = api.pathname.replace(/\/$/, ''); // e.g., /api
-                    // Prefer same host as page for TLS/SNI with both basePath and root
-                    list.push(`${wss}${pageHost}${basePath}/ws/intelligence`);
-                    list.push(`${wss}${pageHost}/ws/intelligence`);
-                    // Fallback to API host variants
-                    list.push(`${wss}${apiHost}${basePath}/ws/intelligence`);
-                    list.push(`${wss}${apiHost}/ws/intelligence`);
-                } else {
-                    list.push(`${wss}${pageHost}/api/ws/intelligence`);
-                    list.push(`${wss}${pageHost}/ws/intelligence`);
-                }
-            } catch (e) {
-                list.push(`${wss}${pageHost}/ws/intelligence`);
-            }
-            // Deduplicate while preserving order
-            return [...new Set(list)];
-        }
+        let wsRetries = 0;
+        const MAX_WS_RETRIES = 2;
+        
         function initIntelligenceWS() {
-            const candidates = wsCandidates();
             const orb = document.getElementById('zoeOrb');
-            // If API host differs from page host, proxies often block WS. Prefer SSE immediately.
+            
+            // Try WebSocket first, fall back to SSE on failure
+            if (wsRetries >= MAX_WS_RETRIES) {
+                console.log('WebSocket failed after retries, switching to SSE');
+                initIntelligenceSSE();
+                return;
+            }
+            
+            // Use relative WebSocket URL - nginx will proxy
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${location.host}/api/ws/intelligence`;
+            
             try {
-                if (typeof API_BASE !== 'undefined' && API_BASE) {
-                    const api = new URL(API_BASE);
-                    if (api.host !== location.host) {
-                        return initIntelligenceSSE();
-                    }
-                }
-            } catch(e) {}
-            const tryConnect = () => {
-                if (wsFailures >= 2) {
-                    // Switch to SSE fallback under the same API base
-                    initIntelligenceSSE();
-                    return;
-                }
-                if (wsCandidateIdx >= candidates.length) {
-                    wsCandidateIdx = 0;
-                }
-                const url = candidates[wsCandidateIdx++];
-                try {
-                    intelligenceWS = new WebSocket(url);
-                } catch (e) {
-                    wsFailures++;
-                    orb.classList.add('error');
-                    orb.title = 'WS init failed';
-                    return setTimeout(tryConnect, 2500);
-                }
+                intelligenceWS = new WebSocket(wsUrl);
+                
                 intelligenceWS.onopen = () => {
-                    wsFailures = 0;
+                    wsRetries = 0;
                     orb.classList.remove('error', 'connecting');
                     orb.classList.add('connected');
                     orb.title = 'Connected';
+                    console.log('✅ Intelligence WebSocket connected');
                 };
+                
                 intelligenceWS.onmessage = (evt) => {
-                    try { const msg = JSON.parse(evt.data); handleIntelligenceEvent(msg); } catch(e) {}
+                    try { 
+                        const msg = JSON.parse(evt.data); 
+                        handleIntelligenceEvent(msg); 
+                    } catch(e) {
+                        console.warn('Failed to parse WebSocket message:', e);
+                    }
                 };
-                intelligenceWS.onerror = () => {
-                    wsFailures++;
+                
+                intelligenceWS.onerror = (error) => {
+                    console.warn('WebSocket error:', error);
+                    wsRetries++;
                     orb.classList.remove('connected', 'connecting');
                     orb.classList.add('error');
                     orb.title = 'Connection error';
                 };
+                
                 intelligenceWS.onclose = () => {
-                    wsFailures++;
                     orb.classList.remove('connected', 'error');
                     orb.classList.add('connecting');
                     orb.title = 'Reconnecting...';
-                    setTimeout(tryConnect, 2000);
+                    
+                    // Retry with exponential backoff
+                    const delay = Math.min(1000 * Math.pow(2, wsRetries), 10000);
+                    setTimeout(() => initIntelligenceWS(), delay);
                 };
-            };
-            tryConnect();
+            } catch (e) {
+                console.error('Failed to create WebSocket:', e);
+                wsRetries++;
+                orb.classList.add('error');
+                orb.title = 'WS init failed';
+                setTimeout(() => initIntelligenceWS(), 2500);
+            }
         }
 
         function initIntelligenceSSE(){
             const orb = document.getElementById('zoeOrb');
-            let url;
-            try {
-                if (typeof API_BASE !== 'undefined' && API_BASE) {
-                    const api = new URL(API_BASE);
-                    const basePath = api.pathname.replace(/\/$/, '');
-                    url = `${api.origin}${basePath}/intelligence/stream`;
-                } else {
-                    url = `${location.origin}/api/intelligence/stream`;
-                }
-            } catch(e) {
-                url = `${location.origin}/api/intelligence/stream`;
-            }
+            // Use relative URL for SSE
+            const url = '/api/intelligence/stream';
+            
             try {
                 const es = new EventSource(url);
+                
                 es.onopen = () => { 
                     orb.classList.remove('error', 'connecting'); 
                     orb.classList.add('connected');
-                    orb.title = 'Connected (SSE)'; 
+                    orb.title = 'Connected (SSE)';
+                    console.log('✅ Intelligence SSE connected');
                 };
+                
                 es.onmessage = (evt) => {
-                    try { const msg = JSON.parse(evt.data); handleIntelligenceEvent(msg); } catch(e) {}
+                    try { 
+                        const msg = JSON.parse(evt.data); 
+                        handleIntelligenceEvent(msg); 
+                    } catch(e) {
+                        console.warn('Failed to parse SSE message:', e);
+                    }
                 };
-                es.onerror = () => { orb.classList.add('error'); orb.title = 'SSE error'; };
-            } catch(e) { orb.classList.add('error'); orb.title = 'No realtime channel'; }
+                
+                es.onerror = () => { 
+                    orb.classList.add('error'); 
+                    orb.title = 'SSE error';
+                    console.warn('SSE connection error');
+                };
+            } catch(e) { 
+                orb.classList.add('error'); 
+                orb.title = 'No realtime channel';
+                console.error('Failed to create SSE:', e);
+            }
         }
 
         function handleIntelligenceEvent(event) {
