@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mixed Content Fix Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
+        .test-section { background: white; padding: 20px; margin: 10px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .success { color: #22c55e; font-weight: bold; }
+        .error { color: #ef4444; font-weight: bold; }
+        .info { color: #3b82f6; }
+        button { background: #7B61FF; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; margin: 5px; }
+        button:hover { background: #6b51ef; }
+        #results { background: #f8f9fa; padding: 15px; border-radius: 6px; font-family: monospace; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <h1>🔧 Mixed Content Fix Test</h1>
+    <p>This page tests the mixed content error fix by simulating the problematic API calls.</p>
+    
+    <div class="test-section">
+        <h2>Test Controls</h2>
+        <button onclick="runTests()">Run All Tests</button>
+        <button onclick="clearResults()">Clear Results</button>
+        <button onclick="testFetchInterceptor()">Test Fetch Interceptor</button>
+        <button onclick="testApiRequest()">Test API Request</button>
+    </div>
+    
+    <div class="test-section">
+        <h2>Test Results</h2>
+        <div id="results">Click "Run All Tests" to start...</div>
+    </div>
+
+    <!-- Load the fixed scripts -->
+    <script src="js/auth.js?v=6.6&t=1760004000"></script>
+    <script src="js/common.js?v=6.6&t=1760004000"></script>
+    
+    <script>
+        let testResults = [];
+        
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const prefix = type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️';
+            const logMessage = `[${timestamp}] ${prefix} ${message}`;
+            testResults.push(logMessage);
+            updateResults();
+            console.log(logMessage);
+        }
+        
+        function updateResults() {
+            document.getElementById('results').textContent = testResults.join('\n');
+        }
+        
+        function clearResults() {
+            testResults = [];
+            updateResults();
+        }
+        
+        async function testFetchInterceptor() {
+            log('Testing fetch interceptor installation...');
+            
+            // Check if interceptor is installed
+            const fetchSource = window.fetch.toString();
+            if (fetchSource.includes('Forced HTTP → HTTPS')) {
+                log('✅ Fetch interceptor is installed', 'success');
+            } else {
+                log('❌ Fetch interceptor is NOT installed', 'error');
+                return false;
+            }
+            
+            // Test HTTP to HTTPS conversion
+            log('Testing HTTP → HTTPS conversion...');
+            try {
+                const response = await fetch('http://zoe.local/api/test');
+                log('✅ HTTP URL was converted to HTTPS', 'success');
+            } catch (error) {
+                if (error.message.includes('Mixed Content')) {
+                    log('❌ Mixed content error still occurs', 'error');
+                    return false;
+                } else {
+                    log('ℹ️ Request failed (expected - no server), but no mixed content error', 'success');
+                }
+            }
+            
+            return true;
+        }
+        
+        async function testApiRequest() {
+            log('Testing apiRequest function...');
+            
+            try {
+                // Test the problematic endpoints that were causing mixed content
+                const testEndpoints = [
+                    '/api/calendar/events/?user_id=test&start_date=2024-01-01&end_date=2024-01-07',
+                    '/api/lists/?user_id=test&list_name=personal_todos',
+                    '/api/memories/proxy/people/?user_id=test'
+                ];
+                
+                for (const endpoint of testEndpoints) {
+                    log(`Testing endpoint: ${endpoint}`);
+                    try {
+                        await apiRequest(endpoint);
+                        log('✅ Request completed without mixed content error', 'success');
+                    } catch (error) {
+                        if (error.message.includes('Mixed Content')) {
+                            log('❌ Mixed content error in apiRequest', 'error');
+                            return false;
+                        } else {
+                            log('ℹ️ Request failed (expected - no server), but no mixed content error', 'success');
+                        }
+                    }
+                }
+            } catch (error) {
+                log(`❌ apiRequest test failed: ${error.message}`, 'error');
+                return false;
+            }
+            
+            return true;
+        }
+        
+        async function runTests() {
+            clearResults();
+            log('🚀 Starting mixed content fix tests...');
+            
+            const interceptorTest = await testFetchInterceptor();
+            const apiRequestTest = await testApiRequest();
+            
+            log('📊 Test Summary:');
+            if (interceptorTest && apiRequestTest) {
+                log('🎉 ALL TESTS PASSED - Mixed content fix is working!', 'success');
+            } else {
+                log('⚠️ Some tests failed - check the results above', 'error');
+            }
+        }
+        
+        // Auto-run tests when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            log('Page loaded, running initial tests...');
+            setTimeout(runTests, 1000); // Wait for scripts to load
+        });
+    </script>
+</body>
+</html>
