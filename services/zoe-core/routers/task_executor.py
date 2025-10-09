@@ -13,7 +13,7 @@ class TaskExecutor:
     def __init__(self, task_id: str):
         self.task_id = task_id
         self.execution_id = None
-        self.database_path = "/app/data/developer_tasks.db"
+        self.database_path = "/app/data/zoe.db"
         self.backup_dir = Path("/app/backups")
         self.changes_made = []
         self.execution_log = []

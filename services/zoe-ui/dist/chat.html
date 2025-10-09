@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Zoe - AI Chat</title>
     <style>
         * { 
@@ -842,11 +845,11 @@
         </div>
     </div>
 
-    <script src="js/auth.js?v=4.0&t=1759991237"></script>
-    <script src="js/common.js?v=4.0&t=1759991237"></script>
+    <script src="js/auth.js?v=6.5&t=1760004000"></script>
+    <script src="js/common.js?v=6.5&t=1760004000"></script>
     <script>
         // Cache buster - force browser to reload this script
-        console.log('🔄 Chat.html v4.0 - Fixed Sessions & Cache Edition loaded');
+        console.log('🔄 Chat.html v6.5 - Force HTTPS + Debug Logging');
     </script>
     <script>
         // State
@@ -865,6 +868,9 @@
             
             // Create initial session if none exists
             createOrGetCurrentSession();
+            
+            // Generate dynamic suggestions
+            generateDynamicSuggestions();
         }
 
         // Time/Date
@@ -887,7 +893,7 @@
                 const session = window.zoeAuth?.getCurrentSession();
                 const userId = session?.user_id || 'default';
                 
-                const response = await apiRequest(`/chat/sessions/?user_id=${userId}`);
+                const response = await apiRequest(`/api/chat/sessions/?user_id=${userId}`);
                 const sessions = response.sessions || [];
                 
                 const sessionsList = document.getElementById('sessionsList');
@@ -917,7 +923,7 @@
                 const userId = session?.user_id || 'default';
                 
                 try {
-                    const response = await apiRequest('/chat/sessions/', {
+                    const response = await apiRequest('/api/chat/sessions/', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -939,7 +945,7 @@
             const userId = session?.user_id || 'default';
             
             try {
-                const response = await apiRequest('/chat/sessions/', {
+                const response = await apiRequest('/api/chat/sessions/', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -990,16 +996,16 @@
                 const session = window.zoeAuth?.getCurrentSession();
                 const userId = session?.user_id || 'default';
                 
-                const response = await apiRequest(`/chat/sessions/${sessionId}/messages/?user_id=${userId}`);
+                const response = await apiRequest(`/api/chat/sessions/${sessionId}/messages/?user_id=${userId}`);
                 const messages = response.messages || [];
                 
                 const container = document.getElementById('messagesContainer');
                 container.innerHTML = '';
                 
-                // Display all messages
+                // Display all messages (skip saving since they're already in DB)
                 messages.forEach(msg => {
                     if (msg.role === 'user') {
-                        addUserMessage(msg.content);
+                        addUserMessage(msg.content, true); // skipSave = true
                     } else {
                         addAssistantMessage(msg.content);
                     }
@@ -1020,7 +1026,7 @@
                 const session = window.zoeAuth?.getCurrentSession();
                 const userId = session?.user_id || 'default';
                 
-                await apiRequest(`/chat/sessions/${currentSessionId}/messages/?user_id=${userId}`, {
+                await apiRequest(`/api/chat/sessions/${currentSessionId}/messages/?user_id=${userId}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1084,7 +1090,7 @@
             await processWithSubgraphs(message);
         }
 
-        function addUserMessage(text) {
+        function addUserMessage(text, skipSave = false) {
             const container = document.getElementById('messagesContainer');
             const group = document.createElement('div');
             group.className = 'message-group user';
@@ -1099,8 +1105,10 @@
             container.appendChild(group);
             scrollToBottom();
             
-            // Save to session
-            saveMessageToSession('user', text);
+            // Save to session (unless loading history)
+            if (!skipSave) {
+                saveMessageToSession('user', text);
+            }
         }
 
         async function processWithSubgraphs(message) {
@@ -1505,11 +1513,17 @@
             if (!suggestionsContainer) return;
             
             try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId = session?.user_id || 'default';
+                
                 // Get user context from all available services
+                const startDate = new Date().toISOString().split('T')[0];
+                const endDate = new Date(Date.now() + 7*24*60*60*1000).toISOString().split('T')[0];
+                
                 const [calendarData, tasksData, memoriesData] = await Promise.allSettled([
-                    fetch('/api/calendar/events?start_date=' + new Date().toISOString().split('T')[0] + '&end_date=' + new Date(Date.now() + 7*24*60*60*1000).toISOString().split('T')[0]).then(r => r.json()),
-                    fetch('/api/lists/personal_todos').then(r => r.json()),
-                    fetch('/api/memories/proxy/people').then(r => r.json())
+                    apiRequest(`/api/calendar/events/?user_id=${userId}&start_date=${startDate}&end_date=${endDate}`).catch(e => ({events: []})),
+                    apiRequest(`/api/lists/?user_id=${userId}&list_name=personal_todos`).catch(e => ({items: []})),
+                    apiRequest(`/api/memories/proxy/people/?user_id=${userId}`).catch(e => ({people: []}))
                 ]);
                 
                 const suggestions = [];
@@ -1609,6 +1623,4 @@
         document.addEventListener('DOMContentLoaded', init);
     </script>
 </body>
-</html><!-- Cache Bust: 1759988765 -->
-<!-- Cache Bust: 1759990350 -->
-<!-- Cache Bust: 1759990480 -->
+</html><!-- Cache Bust: 1760004000 - v6.5 Force HTTPS -->

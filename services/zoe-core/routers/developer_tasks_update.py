@@ -22,7 +22,7 @@ async def execute_task_async(task_id: str, plan: Dict[str, Any]):
         logger.error(f"Task execution failed: {str(e)}")
         
         # Update task status to failed
-        conn = sqlite3.connect("/app/data/developer_tasks.db")
+        conn = sqlite3.connect("/app/data/zoe.db")
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE dynamic_tasks 

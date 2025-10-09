@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 
 def migrate_tasks():
-    conn = sqlite3.connect('data/developer_tasks.db')
+    conn = sqlite3.connect('data/zoe.db')
     cursor = conn.cursor()
     
     # Get existing tasks

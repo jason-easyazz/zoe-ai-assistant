@@ -66,7 +66,7 @@ async def link_session_to_task(request: TaskLink):
 async def list_aider_sessions():
     """List all Aider sessions"""
     import sqlite3
-    conn = sqlite3.connect("/app/data/aider_conversations.db")
+    conn = sqlite3.connect("/app/data/zoe.db")
     c = conn.cursor()
     
     c.execute("""

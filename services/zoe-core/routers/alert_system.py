@@ -37,7 +37,7 @@ class AlertConfig(BaseModel):
 
 # Initialize database for alerts
 def init_alert_db():
-    conn = sqlite3.connect('/app/data/developer_tasks.db')
+    conn = sqlite3.connect('/app/data/zoe.db')
     cursor = conn.cursor()
     
     # Create alerts table
@@ -95,7 +95,7 @@ init_alert_db()
 async def get_alerts(limit: int = 50, resolved: Optional[bool] = None):
     """Get all alerts with optional filtering"""
     try:
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -127,7 +127,7 @@ async def get_active_alerts():
 async def create_alert(alert: Alert):
     """Create a new alert"""
     try:
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -149,7 +149,7 @@ async def create_alert(alert: Alert):
 async def resolve_alert(alert_id: str):
     """Mark an alert as resolved"""
     try:
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -172,7 +172,7 @@ async def resolve_alert(alert_id: str):
 async def get_alert_rules():
     """Get all alert rules"""
     try:
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -189,7 +189,7 @@ async def get_alert_rules():
 async def create_alert_rule(rule: AlertRule):
     """Create a new alert rule"""
     try:
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -218,7 +218,7 @@ async def run_alert_checks():
     """Run alert checks for all services"""
     try:
         # Get all enabled alert rules
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -276,7 +276,7 @@ async def check_rule(rule: dict, health_data: dict):
             )
             
             # Save alert to database
-            conn = sqlite3.connect('/app/data/developer_tasks.db')
+            conn = sqlite3.connect('/app/data/zoe.db')
             cursor = conn.cursor()
             
             cursor.execute("""
@@ -330,7 +330,7 @@ async def get_metric_value(service_name: str, metric: str, health_data: dict) ->
 async def get_alert_stats():
     """Get alert statistics"""
     try:
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         

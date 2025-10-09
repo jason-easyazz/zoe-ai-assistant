@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class UserContext:
     """User context management system"""
     
-    def __init__(self, db_path: str = "/app/data/developer_tasks.db"):
+    def __init__(self, db_path: str = "/app/data/zoe.db"):
         self.db_path = db_path
         self.default_user_id = "system"
         self._initialize_database()

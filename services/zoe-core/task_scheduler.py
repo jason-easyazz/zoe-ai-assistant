@@ -62,7 +62,7 @@ class ScheduledTask:
 class TaskScheduler:
     """Intelligent task scheduling system"""
     
-    def __init__(self, db_path: str = "/app/data/developer_tasks.db"):
+    def __init__(self, db_path: str = "/app/data/zoe.db"):
         self.db_path = db_path
         self.scheduled_tasks: List[ScheduledTask] = []
         self.execution_queue: List[ScheduledTask] = []

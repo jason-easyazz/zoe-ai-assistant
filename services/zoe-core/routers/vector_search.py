@@ -40,7 +40,7 @@ class VectorSearchEngine:
         self.index = None
         self.metadata = []
         self.embeddings = []
-        self.db_path = "/app/data/vector_search.db"
+        self.db_path = "/app/data/zoe.db"
         self.index_path = "/app/data/faiss_index.pkl"
         self.embeddings_path = "/app/data/embeddings.pkl"
         self.metadata_path = "/app/data/metadata.pkl"
@@ -196,8 +196,8 @@ class VectorSearchEngine:
             self.embeddings = []
             self.metadata = []
             
-            # Get all tasks from developer_tasks.db
-            conn = sqlite3.connect('/app/data/developer_tasks.db')
+            # Get all tasks from zoe.db
+            conn = sqlite3.connect('/app/data/zoe.db')
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             
