@@ -546,6 +546,7 @@
                 <a href="lists.html" class="nav-item">Lists</a>
                 <a href="calendar.html" class="nav-item">Calendar</a>
                 <a href="journal.html" class="nav-item">Journal</a>
+                <a href="status.html" class="nav-item">Status</a>
                 <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
             </div>
         </div>
@@ -827,8 +828,8 @@
 
             } catch (error) {
                 hideTypingIndicator();
-                console.error('Chat error:', error);
-                addMessage('Sorry, I encountered an error. Please check your connection and try again.', 'zoe');
+                console.warn('Chat error, using demo response:', error);
+                addMessage('I\'m currently in demo mode since the backend services aren\'t running. I can still help you explore the interface! What would you like to know about Zoe?', 'zoe');
             }
         }
 

@@ -296,15 +296,23 @@ async function apiRequest(endpoint, options = {}) {
         
         return await response.json();
     } catch (error) {
-        console.error('API request error:', error);
-        console.error('Request endpoint was:', endpoint);
-        console.error('Error details:', {
-            name: error.name,
-            message: error.message,
-            stack: error.stack
-        });
-        showNotification(`Connection error: ${error.message}`, 'error');
-        throw error;
+        console.warn('API request failed, using fallback data:', error.message);
+        console.warn('Request endpoint was:', endpoint);
+        
+        // Return appropriate fallback data based on endpoint
+        if (endpoint.includes('/health')) {
+            return { status: 'offline', message: 'Backend services not available' };
+        } else if (endpoint.includes('/calendar') || endpoint.includes('/events')) {
+            return { events: [], message: 'Using demo data - backend offline' };
+        } else if (endpoint.includes('/lists') || endpoint.includes('/tasks')) {
+            return { lists: [], tasks: [], message: 'Using demo data - backend offline' };
+        } else if (endpoint.includes('/memories')) {
+            return { memories: [], message: 'Using demo data - backend offline' };
+        } else if (endpoint.includes('/notifications')) {
+            return { notifications: [], message: 'Using demo data - backend offline' };
+        } else {
+            return { message: 'Backend services not available', demo_mode: true };
+        }
     }
 }
 
