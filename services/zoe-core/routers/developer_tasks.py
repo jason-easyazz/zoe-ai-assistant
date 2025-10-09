@@ -17,7 +17,7 @@ import subprocess
 import os
 from pathlib import Path
 
-DB_PATH = "/app/data/developer_tasks.db"
+DB_PATH = "/app/data/zoe.db"
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +153,7 @@ class SystemContext:
 
 def init_dynamic_tasks_db():
     """Initialize enhanced database for dynamic tasks"""
-    conn = sqlite3.connect('/app/data/developer_tasks.db')
+    conn = sqlite3.connect('/app/data/zoe.db')
     cursor = conn.cursor()
     
     # Create new dynamic tasks table
@@ -236,7 +236,7 @@ async def create_dynamic_task(requirements: TaskRequirements):
     context_snapshot = SystemContext.get_current_state()
     
     # Store in database
-    conn = sqlite3.connect('/app/data/developer_tasks.db')
+    conn = sqlite3.connect('/app/data/zoe.db')
     cursor = conn.cursor()
     
     cursor.execute('''
@@ -282,7 +282,7 @@ async def analyze_for_execution(task_id: str):
     """Analyze current system and generate execution plan"""
     
     # Get task requirements
-    conn = sqlite3.connect('/app/data/developer_tasks.db')
+    conn = sqlite3.connect('/app/data/zoe.db')
     cursor = conn.cursor()
     cursor.execute('''
         SELECT title, objective, requirements, constraints, acceptance_criteria, context_snapshot
@@ -372,7 +372,7 @@ async def execute_dynamic_task(task_id: str, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="Task not ready for execution")
     
     # Log execution start
-    conn = sqlite3.connect('/app/data/developer_tasks.db')
+    conn = sqlite3.connect('/app/data/zoe.db')
     cursor = conn.cursor()
     
     cursor.execute('''
@@ -449,7 +449,7 @@ async def execute_task_async(task_id: str, execution_id: int, plan: dict):
         # Execute the task with full tracking
         # Generate fresh plan based on task requirements
         gen = PlanGenerator()
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         cursor = conn.cursor()
         cursor.execute('SELECT objective, requirements, constraints FROM dynamic_tasks WHERE id = ?', (task_id,))
         task_data = cursor.fetchone()
@@ -470,7 +470,7 @@ async def execute_task_async(task_id: str, execution_id: int, plan: dict):
         logger.info(f"Task {task_id} execution completed: {result['status']}")
         
         # Update task status based on result
-        conn = sqlite3.connect("/app/data/developer_tasks.db")
+        conn = sqlite3.connect("/app/data/zoe.db")
         cursor = conn.cursor()
         
         if result["status"] == "completed":
@@ -495,7 +495,7 @@ async def execute_task_async(task_id: str, execution_id: int, plan: dict):
         logger.error(f"Task execution failed: {str(e)}")
         
         # Update task status to failed
-        conn = sqlite3.connect("/app/data/developer_tasks.db")
+        conn = sqlite3.connect("/app/data/zoe.db")
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE dynamic_tasks 
@@ -508,7 +508,7 @@ async def execute_task_async(task_id: str, execution_id: int, plan: dict):
 @router.get("/list")
 async def list_dynamic_tasks(status: Optional[str] = None):
     """List all dynamic tasks"""
-    conn = sqlite3.connect('/app/data/developer_tasks.db')
+    conn = sqlite3.connect('/app/data/zoe.db')
     cursor = conn.cursor()
     
     query = '''
@@ -548,7 +548,7 @@ async def list_dynamic_tasks(status: Optional[str] = None):
 @router.get("/{task_id}/history")
 async def get_task_execution_history(task_id: str):
     """Get execution history for a task"""
-    conn = sqlite3.connect('/app/data/developer_tasks.db')
+    conn = sqlite3.connect('/app/data/zoe.db')
     cursor = conn.cursor()
     
     cursor.execute('''

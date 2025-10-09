@@ -856,7 +856,16 @@ Structure is compliant when:
 **A**: `scripts/utilities/` initially, archive after one-time use
 
 **Q**: How do I know if I'm compliant?  
-**A**: Run `python3 tools/audit/enforce_structure.py`
+**A**: Run `python3 tools/audit/enforce_structure.py` AND `python3 tools/audit/validate_databases.py`
+
+**Q**: Can I create a new database for my feature?  
+**A**: NO! Use zoe.db. Only exception is memory.db for Light RAG. See Database Rules above.
+
+**Q**: I found code using auth.db or developer_tasks.db, is that wrong?  
+**A**: YES! These were consolidated. Update to use zoe.db immediately.
+
+**Q**: What if validation fails before commit?  
+**A**: Remove forbidden databases, update code to use zoe.db, then re-run validation
 
 ---
 

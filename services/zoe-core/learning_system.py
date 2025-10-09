@@ -16,7 +16,7 @@ class LearningSystem:
     """System that learns from task execution patterns and improves over time"""
     
     def __init__(self):
-        self.db_path = "/app/data/learning.db"
+        self.db_path = "/app/data/zoe.db"
         self.init_database()
         
     def init_database(self):

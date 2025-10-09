@@ -55,7 +55,7 @@ class ModelRanking:
 class IntelligentModelManager:
     """Self-adapting model management system"""
     
-    def __init__(self, db_path: str = "/app/data/model_performance.db"):
+    def __init__(self, db_path: str = "/app/data/zoe.db"):
         self.db_path = db_path
         self.metrics: Dict[str, PerformanceMetrics] = {}
         self.rankings: List[ModelRanking] = []

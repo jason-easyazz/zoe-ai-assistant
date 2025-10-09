@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class FeatureRequestPipeline:
     """Pipeline for converting user requests to development tasks"""
     
-    def __init__(self, db_path: str = "/app/data/developer_tasks.db"):
+    def __init__(self, db_path: str = "/app/data/zoe.db"):
         self.db_path = db_path
         self.complexity_keywords = {
             "simple": ["add", "create", "implement", "basic", "simple", "quick"],

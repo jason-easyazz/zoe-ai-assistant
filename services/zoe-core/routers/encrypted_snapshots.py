@@ -45,7 +45,7 @@ class SnapshotInfo(BaseModel):
 
 class SnapshotManager:
     def __init__(self):
-        self.db_path = "/app/data/snapshots.db"
+        self.db_path = "/app/data/zoe.db"
         self.config = SnapshotConfig()
         self.encryption_key = None
         self.is_running = False

@@ -271,7 +271,7 @@ def get_system_context() -> str:
     # Get task system status
     try:
         import sqlite3
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM dynamic_tasks WHERE status = 'pending'")
         pending_tasks = cursor.fetchone()[0]
@@ -1971,7 +1971,7 @@ async def get_schedule_report():
     
     try:
         # Get all pending tasks
-        conn = sqlite3.connect("/app/data/developer_tasks.db")
+        conn = sqlite3.connect("/app/data/zoe.db")
         cursor = conn.cursor()
         
         cursor.execute('''
@@ -2024,7 +2024,7 @@ async def analyze_task_dependencies():
     
     try:
         # Get all pending tasks
-        conn = sqlite3.connect("/app/data/developer_tasks.db")
+        conn = sqlite3.connect("/app/data/zoe.db")
         cursor = conn.cursor()
         
         cursor.execute('''
@@ -2086,7 +2086,7 @@ async def get_resource_analysis():
     
     try:
         # Get all pending tasks
-        conn = sqlite3.connect("/app/data/developer_tasks.db")
+        conn = sqlite3.connect("/app/data/zoe.db")
         cursor = conn.cursor()
         
         cursor.execute('''

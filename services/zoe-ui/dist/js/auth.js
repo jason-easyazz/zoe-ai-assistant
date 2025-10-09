@@ -204,9 +204,37 @@
                 options.headers['X-Session-ID'] = sessionId;
             }
             
-            // Remove user_id query parameters (legacy cleanup)
-            if (typeof url === 'string') {
-                url = url.replace(/[?&]user_id=[^&]*/g, '');
+            // Extract URL string (handle Request objects)
+            let urlString = url;
+            if (url instanceof Request) {
+                urlString = url.url;
+            }
+            
+            // Remove user_id query parameters (legacy cleanup) and fix malformed URLs
+            if (typeof urlString === 'string') {
+                // FORCE HTTPS: Convert any http:// to https:// to prevent mixed content
+                if (urlString.startsWith('http://')) {
+                    urlString = urlString.replace(/^http:\/\//, 'https://');
+                    console.log('🔒 Forced HTTP → HTTPS:', urlString);
+                }
+                
+                // Convert absolute HTTPS URLs to relative (cleaner, protocol-independent)
+                if (urlString.startsWith('https://')) {
+                    const relativePath = urlString.replace(/^https:\/\/[^/]+/, '');
+                    console.log('📍 HTTPS → Relative:', urlString, '→', relativePath);
+                    urlString = relativePath;
+                }
+                
+                // Remove user_id parameter, handling different positions
+                urlString = urlString.replace(/\?user_id=[^&]*&/, '?');  // ?user_id=xxx& -> ?
+                urlString = urlString.replace(/&user_id=[^&]*&/, '&');   // &user_id=xxx& -> &
+                urlString = urlString.replace(/\?user_id=[^&]*$/, '');   // ?user_id=xxx (end) -> (empty)
+                urlString = urlString.replace(/&user_id=[^&]*$/, '');    // &user_id=xxx (end) -> (empty)
+                // Clean up any trailing ? or &
+                urlString = urlString.replace(/[?&]$/, '');
+                
+                // Use the cleaned URL
+                url = urlString;
             }
             
             // Make request

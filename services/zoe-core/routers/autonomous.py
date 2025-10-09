@@ -45,7 +45,7 @@ async def get_system_overview():
 async def get_tasks(status: Optional[str] = None, limit: int = 50):
     """Get developer tasks from database"""
     try:
-        conn = sqlite3.connect("/app/data/developer_tasks.db")
+        conn = sqlite3.connect("/app/data/zoe.db")
         cursor = conn.cursor()
         
         if status:
