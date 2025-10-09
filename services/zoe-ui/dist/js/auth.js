@@ -8,9 +8,7 @@
     
     const AUTH_CONFIG = {
         sessionKey: 'zoe_session',
-        authBaseUrl: window.location.protocol === 'https:' 
-            ? `https://${window.location.hostname}/api/auth`
-            : 'http://localhost:8002/api/auth'
+        authBaseUrl: '/api/auth'  // Use relative URL for nginx proxy
     };
 
     // Get session ID from localStorage
@@ -139,29 +137,13 @@
         // Get session for debugging
         const session = getSessionObject();
         console.log('🔐 Auth check on:', currentPath);
-        console.log('📦 Session data:', session);
-        
-        if (!session) {
-            console.error('❌ AUTH FAILED - No session found in localStorage');
-            console.error('   localStorage key:', AUTH_CONFIG.sessionKey);
-            console.error('   localStorage value:', localStorage.getItem(AUTH_CONFIG.sessionKey));
-        } else if (!session.session_id) {
-            console.error('❌ AUTH FAILED - Session exists but has no session_id');
-            console.error('   Session object:', session);
-        } else if (session.expires_at && new Date(session.expires_at) < new Date()) {
-            console.error('❌ AUTH FAILED - Session expired');
-            console.error('   Expires at:', session.expires_at);
-            console.error('   Current time:', new Date().toISOString());
-        }
+        console.log('📦 Session data:', session ? '(exists)' : '(none)');
         
         // Check if user has valid session using isAuthenticated
         if (!isAuthenticated()) {
-            console.error('❌ REDIRECTING TO LOGIN');
+            console.warn('⚠️ No valid session - redirecting to login');
             
-            // Show immediate alert
-            alert(`AUTH FAILED!\n\nSession: ${JSON.stringify(session, null, 2)}\n\nCheck browser console for details.`);
-            
-            // Show visible error message on page (wait for DOM to be ready)
+            // Show user-friendly message
             const showError = () => {
                 const errorDiv = document.createElement('div');
                 errorDiv.style.cssText = `
@@ -170,28 +152,30 @@
                     left: 0;
                     width: 100%;
                     height: 100%;
-                    background: rgba(0,0,0,0.9);
+                    background: rgba(0,0,0,0.95);
                     color: white;
                     display: flex;
                     flex-direction: column;
                     align-items: center;
                     justify-content: center;
                     z-index: 999999;
-                    font-family: monospace;
+                    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
                     padding: 20px;
                 `;
                 errorDiv.innerHTML = `
-                    <h1>🔐 Authentication Failed</h1>
-                    <pre style="background: #222; padding: 20px; border-radius: 8px; max-width: 800px; overflow: auto;">
-Session Data: ${JSON.stringify(session, null, 2)}
-
-Session ID: ${session ? session.session_id : 'NONE'}
-Expires At: ${session ? session.expires_at : 'NONE'}
-Is Expired: ${session && session.expires_at ? (new Date(session.expires_at) < new Date()) : 'N/A'}
-
-Redirecting to login in 5 seconds...
-</pre>
-                    <button onclick="localStorage.removeItem('zoe_session'); window.location.href='/index.html';" style="margin-top: 20px; padding: 10px 20px; font-size: 16px; cursor: pointer;">Go to Login Now</button>
+                    <div style="text-align: center; max-width: 500px;">
+                        <div style="font-size: 64px; margin-bottom: 20px;">🔐</div>
+                        <h1 style="font-size: 32px; margin-bottom: 10px; font-weight: 300;">Session Expired</h1>
+                        <p style="font-size: 16px; color: #ccc; margin-bottom: 30px;">
+                            Your session has expired or is invalid. Please log in again to continue.
+                        </p>
+                        <button onclick="localStorage.removeItem('zoe_session'); window.location.href='/auth.html';" 
+                                style="background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+                                       border: none; color: white; padding: 16px 32px; font-size: 16px; 
+                                       border-radius: 12px; cursor: pointer; font-weight: 600;">
+                            Go to Login
+                        </button>
+                    </div>
                 `;
                 document.body.appendChild(errorDiv);
             };
@@ -202,51 +186,41 @@ Redirecting to login in 5 seconds...
             } else {
                 document.addEventListener('DOMContentLoaded', showError);
             }
-            
-            // DISABLED: No auto-redirect - user must click button
-            // setTimeout(() => {
-            //     logout();
-            // }, 5000);
         } else {
             console.log('✅ Session valid - access granted');
         }
     }
 
-    // Intercept fetch to add auth headers
+    // Setup fetch interceptor - but ONLY after DOM is ready to avoid race conditions
     const originalFetch = window.fetch;
-    window.fetch = function(url, options = {}) {
-        // Initialize options
-        options.headers = options.headers || {};
-        
-        // Add session ID header if available
-        const sessionId = getSession();
-        if (sessionId) {
-            options.headers['X-Session-ID'] = sessionId;
-            console.log('🔑 Adding session ID to request:', url);
-            console.log('   Session ID:', sessionId);
-        } else {
-            console.warn('⚠️ No session ID available for request:', url);
-        }
-        
-        // Remove user_id query parameters (legacy cleanup)
-        if (typeof url === 'string') {
-            url = url.replace(/[?&]user_id=[^&]*/g, '');
-        }
-        
-        // Make request
-        return originalFetch(url, options).then(response => {
-            // Handle 401 - DON'T clear session, just reject
-            // Let enforceAuth handle the actual logout/redirect
-            if (response.status === 401) {
-                console.warn('⚠️ 401 Unauthorized response from:', url);
-                console.warn('   This usually means session is invalid or expired');
-                // Don't call logout() here - it causes race conditions
-                // Just return the error and let the page handle it
-                return Promise.reject(new Error('Unauthorized'));
+    function setupFetchInterceptor() {
+        window.fetch = function(url, options = {}) {
+            // Initialize options
+            options.headers = options.headers || {};
+            
+            // Add session ID header if available
+            const sessionId = getSession();
+            if (sessionId) {
+                options.headers['X-Session-ID'] = sessionId;
             }
-            return response;
-        });
-    };
+            
+            // Remove user_id query parameters (legacy cleanup)
+            if (typeof url === 'string') {
+                url = url.replace(/[?&]user_id=[^&]*/g, '');
+            }
+            
+            // Make request
+            return originalFetch(url, options).then(response => {
+                // Handle 401 - just log and reject
+                // Let enforceAuth handle the actual logout/redirect
+                if (response.status === 401) {
+                    console.warn('⚠️ 401 Unauthorized response from:', url);
+                    return Promise.reject(new Error('Unauthorized'));
+                }
+                return response;
+            });
+        };
+    }
 
     // Expose auth functions globally
     window.zoeAuth = {
@@ -264,8 +238,17 @@ Redirecting to login in 5 seconds...
     // Also expose as ZoeAuth for backwards compatibility
     window.ZoeAuth = window.zoeAuth;
 
-    // Enforce auth IMMEDIATELY before any other code runs
-    enforceAuth();
-
-    console.log('✅ Zoe Auth initialized');
+    // Initialize auth AFTER DOM is ready to avoid race conditions
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            setupFetchInterceptor();
+            enforceAuth();
+            console.log('✅ Zoe Auth initialized (DOMContentLoaded)');
+        });
+    } else {
+        // DOM already loaded
+        setupFetchInterceptor();
+        enforceAuth();
+        console.log('✅ Zoe Auth initialized (immediate)');
+    }
 })();

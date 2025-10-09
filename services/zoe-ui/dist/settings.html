@@ -3590,5 +3590,10 @@
     <!-- Zoe Orb -->
     <div class="zoe-orb" id="zoeOrb" title="Click to chat with Zoe" onclick="toggleOrbChat()">
     </div>
+<script>
+if (!document.getElementById("zoeOrb")) {
+    fetch("/components/zoe-orb.html").then(r=>r.text()).then(h=>{const d=document.createElement("div");d.innerHTML=h;while(d.firstChild){document.body.appendChild(d.firstChild);}});
+}
+</script>
 </body>
 </html>

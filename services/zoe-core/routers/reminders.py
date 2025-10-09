@@ -136,10 +136,16 @@ def init_reminders_db():
         )
     """)
     
-    # Create indexes
+    # Create indexes (only if columns exist)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_reminders_user_active ON reminders(user_id, is_active)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_reminders_time ON reminders(reminder_time)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(is_read)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_reminders_time ON reminders(due_date, due_time)")
+    # Check if is_delivered column exists before creating index
+    try:
+        cursor.execute("SELECT is_delivered FROM notifications LIMIT 1")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_delivered ON notifications(is_delivered)")
+    except sqlite3.OperationalError:
+        # Column doesn't exist, skip index
+        pass
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)")
     
     conn.commit()
@@ -162,15 +168,15 @@ async def create_reminder(reminder: ReminderCreate, user_id: str = Query("defaul
             # Default to tomorrow at 9am if not specified
             reminder_timestamp = (datetime.now() + timedelta(days=1)).replace(hour=9, minute=0, second=0).isoformat()
         
-        # Insert reminder
+        # Insert reminder (removed reminder_time column as it doesn't exist in schema)
         cursor.execute("""
             INSERT INTO reminders (
-                user_id, title, description, reminder_time, reminder_type, category, priority,
+                user_id, title, description, reminder_type, category, priority,
                 due_date, due_time, recurring_pattern, linked_list_id, linked_list_item_id,
                 family_member, snooze_minutes, requires_acknowledgment
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            user_id, reminder.title, reminder.description, reminder_timestamp,
+            user_id, reminder.title, reminder.description,
             reminder.reminder_type.value, reminder.category.value, reminder.priority.value,
             reminder.due_date, reminder.due_time.isoformat() if reminder.due_time else None, 
             json.dumps(reminder.recurring_pattern) if reminder.recurring_pattern else None,
@@ -215,7 +221,8 @@ async def get_reminders(
         query = "SELECT * FROM reminders WHERE user_id = ? AND is_active = ?"
         params = [user_id, is_active]
         
-        query += " ORDER BY reminder_time ASC LIMIT ?"
+        # Order by due_date and due_time (not reminder_time which doesn't exist in schema)
+        query += " ORDER BY due_date ASC, due_time ASC LIMIT ?"
         params.append(limit)
         
         cursor.execute(query, params)
@@ -492,15 +499,15 @@ async def get_pending_notifications(user_id: str = Query("default")):
         for row in cursor.fetchall():
             notification = {
                 "id": row["id"],
-                "title": row["title"],
+                "title": row["title"] if "title" in row.keys() else "",
                 "message": row["message"],
                 "notification_type": row["notification_type"],
                 "is_read": bool(row["is_read"]),
-                "priority": row["priority"],
-                "action_url": row["action_url"],
-                "dismissible": bool(row["dismissible"]),
+                "is_delivered": bool(row["is_read"]),  # Map is_read to is_delivered for compatibility
+                "priority": row["priority"] if row["priority"] else "medium",
+                "action_url": row["action_url"] if "action_url" in row.keys() else None,
                 "created_at": row["created_at"],
-                "read_at": row["read_at"]
+                "read_at": row["read_at"] if "read_at" in row.keys() else None
             }
             notifications.append(notification)
         
@@ -521,9 +528,9 @@ async def mark_notification_delivered(
         
         cursor.execute("""
             UPDATE notifications 
-            SET is_delivered = TRUE 
+            SET is_read = TRUE, read_at = ? 
             WHERE id = ? AND user_id = ?
-        """, (notification_id, user_id))
+        """, (datetime.now().isoformat(), notification_id, user_id))
         
         if cursor.rowcount == 0:
             conn.close()

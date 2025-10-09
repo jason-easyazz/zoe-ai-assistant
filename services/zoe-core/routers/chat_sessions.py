@@ -1,178 +1,300 @@
-"""Chat Session Management for Developer Enhanced Router"""
-from typing import Dict, List, Optional, Any
+"""
+Chat Sessions Management
+Implements session persistence for AG-UI chat interface
+"""
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
 from datetime import datetime
+import sqlite3
 import json
-import uuid
+import os
 
-class ChatSession:
-    """Manages a conversation session with requirement extraction"""
+router = APIRouter(prefix="/api/chat/sessions", tags=["chat-sessions"])
+
+DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
+
+class SessionCreate(BaseModel):
+    user_id: str
+    title: Optional[str] = "New Chat"
+    initial_message: Optional[str] = None
+
+class SessionUpdate(BaseModel):
+    title: Optional[str] = None
+
+class MessageCreate(BaseModel):
+    session_id: str
+    role: str  # 'user' or 'assistant'
+    content: str
+    metadata: Optional[Dict[str, Any]] = None
+
+def init_sessions_db():
+    """Initialize chat sessions tables"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
     
-    def __init__(self, session_id: str = None):
-        self.session_id = session_id or str(uuid.uuid4())
-        self.messages = []
-        self.extracted_requirements = []
-        self.extracted_constraints = []
-        self.extracted_criteria = []
-        self.created_at = datetime.now()
-        self.task_ready = False
-        
-    def add_message(self, role: str, content: str):
-        """Add a message to the session"""
-        self.messages.append({
-            "role": role,
-            "content": content,
-            "timestamp": datetime.now().isoformat()
-        })
-        
-    def extract_requirements(self, message: str, response: str):
-        """Extract requirements from conversation"""
-        # Keywords that indicate requirements
-        req_keywords = ['need', 'should', 'must', 'require', 'want', 'implement', 
-                       'add', 'create', 'build', 'integrate']
-        constraint_keywords = ['not break', 'maintain', 'preserve', 'keep', 'avoid', 
-                              'without breaking', 'backward compatible']
-        
-        # Extract from user message
-        for keyword in req_keywords:
-            if keyword in message.lower():
-                sentences = message.split('.')
-                for sent in sentences:
-                    if keyword in sent.lower():
-                        clean_sent = sent.strip()
-                        if clean_sent and len(clean_sent) > 10 and clean_sent not in self.extracted_requirements:
-                            self.extracted_requirements.append(clean_sent)
-        
-        # Extract structured requirements from AI response
-        if any(phrase in response.lower() for phrase in ["we'll need to", "here's what", "steps:", "will need"]):
-            lines = response.split('\n')
-            for line in lines:
-                line = line.strip()
-                if line and any(line.startswith(p) for p in ['1.', '2.', '3.', '4.', '5.', '-', '*', '•']):
-                    # Clean the line
-                    import re
-                    clean_line = re.sub(r'^[\d\.\-\*\•\s]+', '', line)
-                    if clean_line and len(clean_line) > 10 and clean_line not in self.extracted_requirements:
-                        self.extracted_requirements.append(clean_line)
-        
-        # Extract constraints
-        for keyword in constraint_keywords:
-            if keyword in message.lower() or keyword in response.lower():
-                context = message if keyword in message.lower() else response
-                sentences = context.split('.')
-                for sent in sentences:
-                    if keyword in sent.lower():
-                        clean_sent = sent.strip()
-                        if clean_sent and clean_sent not in self.extracted_constraints:
-                            self.extracted_constraints.append(clean_sent)
-        
-        # Check if we have enough for a task
-        self.task_ready = len(self.extracted_requirements) >= 2
+    # Chat sessions table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            title TEXT DEFAULT 'New Chat',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            message_count INTEGER DEFAULT 0,
+            metadata JSON
+        )
+    """)
     
-    def can_create_task(self) -> bool:
-        """Check if we have enough info to create a task"""
-        return self.task_ready and len(self.extracted_requirements) >= 2
+    # Chat messages table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            metadata JSON,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+        )
+    """)
     
-    def to_task_data(self, title: str = None) -> Dict[str, Any]:
-        """Convert session to task data for the Dynamic Task System"""
-        if not title:
-            # Generate title from first requirement
-            title = self.extracted_requirements[0][:50] if self.extracted_requirements else "New Task"
-            if len(title) == 50:
-                title += "..."
+    # Create indexes
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON chat_sessions(user_id, updated_at DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_session ON chat_messages(session_id, created_at ASC)")
+    
+    conn.commit()
+    conn.close()
+
+@router.post("/", response_model=Dict[str, Any])
+async def create_session(session: SessionCreate):
+    """Create a new chat session"""
+    try:
+        session_id = f"session_{int(datetime.now().timestamp() * 1000)}"
         
-        # Generate objective
-        objective = "Implement: " + "; ".join(self.extracted_requirements[:3])
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
         
-        # Generate acceptance criteria if not set
-        if not self.extracted_criteria:
-            self.extracted_criteria = [
-                f"Verify: {req}" for req in self.extracted_requirements[:3]
-            ]
-            self.extracted_criteria.extend([
-                "All tests pass",
-                "No existing functionality broken",
-                "Code follows project patterns"
-            ])
+        cursor.execute("""
+            INSERT INTO chat_sessions (id, user_id, title, metadata)
+            VALUES (?, ?, ?, ?)
+        """, (session_id, session.user_id, session.title, json.dumps({})))
+        
+        # Add initial message if provided
+        if session.initial_message:
+            cursor.execute("""
+                INSERT INTO chat_messages (session_id, role, content)
+                VALUES (?, ?, ?)
+            """, (session_id, 'user', session.initial_message))
+            
+            cursor.execute("""
+                UPDATE chat_sessions SET message_count = 1 WHERE id = ?
+            """, (session_id,))
+        
+        conn.commit()
+        conn.close()
         
         return {
-            "title": title,
-            "objective": objective,
-            "requirements": self.extracted_requirements,
-            "constraints": self.extracted_constraints,
-            "acceptance_criteria": self.extracted_criteria,
-            "chat_context": self.messages[-10:],  # Last 10 messages
-            "session_id": self.session_id,
-            "priority": "medium",
-            "assigned_to": "zack"
+            "session_id": session_id,
+            "message": "Session created successfully"
         }
-    
-    def get_summary(self) -> Dict[str, Any]:
-        """Get session summary"""
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/", response_model=Dict[str, Any])
+async def get_sessions(
+    user_id: str = Query("default"),
+    limit: int = Query(50)
+):
+    """Get user's chat sessions"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT * FROM chat_sessions
+            WHERE user_id = ?
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """, (user_id, limit))
+        
+        sessions = []
+        for row in cursor.fetchall():
+            sessions.append({
+                "id": row["id"],
+                "user_id": row["user_id"],
+                "title": row["title"],
+                "message_count": row["message_count"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"]
+            })
+        
+        conn.close()
+        return {"sessions": sessions, "count": len(sessions)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{session_id}/messages/", response_model=Dict[str, Any])
+@router.get("/{session_id}/messages", response_model=Dict[str, Any])
+async def get_session_messages(
+    session_id: str,
+    user_id: str = Query("default")
+):
+    """Get all messages in a session"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Verify session belongs to user
+        cursor.execute("""
+            SELECT * FROM chat_sessions WHERE id = ? AND user_id = ?
+        """, (session_id, user_id))
+        
+        session = cursor.fetchone()
+        if not session:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Get messages
+        cursor.execute("""
+            SELECT * FROM chat_messages
+            WHERE session_id = ?
+            ORDER BY created_at ASC
+        """, (session_id,))
+        
+        messages = []
+        for row in cursor.fetchall():
+            messages.append({
+                "id": row["id"],
+                "role": row["role"],
+                "content": row["content"],
+                "metadata": json.loads(row["metadata"]) if row["metadata"] else None,
+                "created_at": row["created_at"]
+            })
+        
+        conn.close()
         return {
-            "session_id": self.session_id,
-            "message_count": len(self.messages),
-            "requirements_count": len(self.extracted_requirements),
-            "constraints_count": len(self.extracted_constraints),
-            "can_create_task": self.can_create_task(),
-            "created_at": self.created_at.isoformat(),
-            "last_message": self.messages[-1]["content"][:100] if self.messages else None
+            "session": {
+                "id": session["id"],
+                "title": session["title"],
+                "message_count": session["message_count"]
+            },
+            "messages": messages
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-# Global session storage
-chat_sessions: Dict[str, ChatSession] = {}
+@router.post("/{session_id}/messages/", response_model=Dict[str, Any])
+@router.post("/{session_id}/messages", response_model=Dict[str, Any])
+async def add_message(
+    session_id: str,
+    message: MessageCreate,
+    user_id: str = Query("default")
+):
+    """Add a message to a session"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # Verify session exists and belongs to user
+        cursor.execute("""
+            SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?
+        """, (session_id, user_id))
+        
+        if not cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        # Add message
+        cursor.execute("""
+            INSERT INTO chat_messages (session_id, role, content, metadata)
+            VALUES (?, ?, ?, ?)
+        """, (session_id, message.role, message.content, json.dumps(message.metadata) if message.metadata else None))
+        
+        message_id = cursor.lastrowid
+        
+        # Update session message count and timestamp
+        cursor.execute("""
+            UPDATE chat_sessions 
+            SET message_count = message_count + 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (session_id,))
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            "message_id": message_id,
+            "message": "Message added successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-def get_or_create_session(session_id: Optional[str] = None) -> ChatSession:
-    """Get existing session or create new one"""
-    if not session_id:
-        session_id = str(uuid.uuid4())
-    
-    if session_id not in chat_sessions:
-        chat_sessions[session_id] = ChatSession(session_id)
-    
-    return chat_sessions[session_id]
+@router.put("/{session_id}", response_model=Dict[str, Any])
+async def update_session(
+    session_id: str,
+    update: SessionUpdate,
+    user_id: str = Query("default")
+):
+    """Update session (e.g., rename)"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        if update.title:
+            cursor.execute("""
+                UPDATE chat_sessions 
+                SET title = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ?
+            """, (update.title, session_id, user_id))
+        
+        if cursor.rowcount == 0:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        conn.commit()
+        conn.close()
+        
+        return {"message": "Session updated successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-def create_task_from_session(session_id: str, title: Optional[str] = None) -> Dict[str, Any]:
-    """Convert a chat session into a task"""
-    if session_id not in chat_sessions:
-        raise ValueError(f"Session {session_id} not found")
-    
-    session = chat_sessions[session_id]
-    if not session.can_create_task():
-        raise ValueError("Session doesn't have enough requirements to create a task")
-    
-    # Get task data
-    task_data = session.to_task_data(title)
-    
-    # Generate task ID
-    task_id = str(uuid.uuid4())[:8]
-    
-    # Add task metadata
-    task_data["id"] = task_id
-    task_data["created_from_chat"] = True
-    task_data["created_at"] = datetime.now().isoformat()
-    
-    return task_data
+@router.delete("/{session_id}", response_model=Dict[str, Any])
+async def delete_session(
+    session_id: str,
+    user_id: str = Query("default")
+):
+    """Delete a session and all its messages"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            DELETE FROM chat_sessions WHERE id = ? AND user_id = ?
+        """, (session_id, user_id))
+        
+        if cursor.rowcount == 0:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Session not found")
+        
+        conn.commit()
+        conn.close()
+        
+        return {"message": "Session deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-def analyze_message_for_implementation(message: str) -> bool:
-    """Check if message is discussing implementation"""
-    impl_keywords = [
-        'implement', 'add', 'create', 'build', 'integrate', 
-        'feature', 'redis', 'cache', 'authentication', 'database', 
-        'api', 'endpoint', 'frontend', 'backend', 'docker',
-        'need to', 'want to', 'should we', 'how to'
-    ]
-    
-    message_lower = message.lower()
-    return any(kw in message_lower for kw in impl_keywords)
+# Initialize database on startup
+init_sessions_db()
 
-def suggest_task_creation(session: ChatSession) -> str:
-    """Generate suggestion to create task if appropriate"""
-    if session.can_create_task() and len(session.messages) >= 4:
-        return f"""
-
-💡 **I have enough information to create a task for this.**
-- Requirements identified: {len(session.extracted_requirements)}
-- Constraints identified: {len(session.extracted_constraints)}
-
-Would you like me to create a task from this discussion? Reply 'yes' or 'create task', or continue discussing to add more details."""
-    return ""

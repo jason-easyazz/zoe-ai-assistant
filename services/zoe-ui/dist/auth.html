@@ -480,8 +480,8 @@
     <script>
         class ZoeAuth {
             constructor() {
-                this.apiBase = window.location.hostname === 'localhost' ? 
-                    'http://localhost:8002' : 'http://zoe-auth:8002';
+                // Use relative URL for auth API (nginx will proxy)
+                this.apiBase = '/api/auth';
                 this.currentSession = null;
                 this.deviceType = 'web';
                 this.deviceId = this.generateDeviceId();
