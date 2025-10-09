@@ -15,7 +15,7 @@ class AiderTaskIntegration:
     """Integration between Aider and the dynamic task system"""
     
     def __init__(self):
-        self.db_path = "/app/data/developer_tasks.db"
+        self.db_path = "/app/data/zoe.db"
         self.workspace_root = "/app"
         
     def get_task_context(self, task_id: str = None) -> Dict[str, Any]:
@@ -172,7 +172,7 @@ class AiderTaskIntegration:
         
         if "database" in task_content or "db" in task_content:
             context_files.extend([
-                "/app/data/developer_tasks.db"
+                "/app/data/zoe.db"
             ])
         
         if "ui" in task_content or "frontend" in task_content:

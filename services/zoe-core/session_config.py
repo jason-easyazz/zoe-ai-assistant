@@ -12,7 +12,7 @@ class SessionConfig:
     """Configuration for session management"""
     
     # Database configuration
-    db_path: str = "data/sessions.db"
+    db_path: str = "data/zoe.db"
     
     # Session timeout configuration
     default_timeout: int = 3600  # 1 hour

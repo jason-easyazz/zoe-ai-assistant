@@ -40,7 +40,7 @@ app.add_middleware(
 def init_db():
     """Initialize SQLite database"""
     os.makedirs("data", exist_ok=True)
-    conn = sqlite3.connect("data/auth.db")
+    conn = sqlite3.connect("data/zoe.db")
     conn.row_factory = sqlite3.Row
     
     # Create tables
@@ -110,7 +110,7 @@ class RegisterRequest(BaseModel):
 
 # Helper functions
 def get_db_connection():
-    conn = sqlite3.connect("data/auth.db")
+    conn = sqlite3.connect("data/zoe.db")
     conn.row_factory = sqlite3.Row
     return conn
 

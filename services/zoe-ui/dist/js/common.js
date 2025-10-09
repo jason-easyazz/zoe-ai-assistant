@@ -167,9 +167,15 @@ async function apiRequest(endpoint, options = {}) {
             serviceUrl = SERVICE_MAP[endpoint];
             normalizedEndpoint = '';
         } else {
-            // All collections and tiles routes go through nginx proxy to collections-service
-            // The nginx proxy handles routing /api/memories/collections/* to collections-service
-            // All other endpoints go to zoe-core (default)
+            // If endpoint already starts with /api, use it as-is (don't prepend serviceUrl)
+            if (endpoint.startsWith('/api/')) {
+                serviceUrl = '';
+                normalizedEndpoint = endpoint;
+            } else {
+                // All collections and tiles routes go through nginx proxy to collections-service
+                // The nginx proxy handles routing /api/memories/collections/* to collections-service
+                // All other endpoints go to zoe-core (default)
+            }
         }
         
         // Ensure endpoint starts with / if it's not empty

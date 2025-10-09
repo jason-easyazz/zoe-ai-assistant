@@ -60,7 +60,7 @@ class SatisfactionMetrics:
 class UserSatisfactionSystem:
     """System for measuring and tracking user satisfaction"""
     
-    def __init__(self, db_path: str = "/app/data/satisfaction.db"):
+    def __init__(self, db_path: str = "/app/data/zoe.db"):
         self.db_path = db_path
         self.implicit_weights = {
             "response_time": 0.3,

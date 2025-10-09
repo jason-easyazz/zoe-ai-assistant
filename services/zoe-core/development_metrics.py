@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class DevelopmentMetrics:
     """Development metrics tracking and reporting system"""
     
-    def __init__(self, db_path: str = "/app/data/developer_tasks.db"):
+    def __init__(self, db_path: str = "/app/data/zoe.db"):
         self.db_path = db_path
         self.metrics_cache = {}
         self.cache_ttl = 300  # 5 minutes

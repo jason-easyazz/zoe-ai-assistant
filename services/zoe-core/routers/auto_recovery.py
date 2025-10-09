@@ -30,7 +30,7 @@ class RecoveryConfig(BaseModel):
 
 # Initialize database for recovery tracking
 def init_recovery_db():
-    conn = sqlite3.connect('/app/data/developer_tasks.db')
+    conn = sqlite3.connect('/app/data/zoe.db')
     cursor = conn.cursor()
     
     # Create recovery attempts table
@@ -76,7 +76,7 @@ init_recovery_db()
 async def get_recovery_config():
     """Get current recovery configuration"""
     try:
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -106,7 +106,7 @@ async def get_recovery_config():
 async def update_recovery_config(config: RecoveryConfig):
     """Update recovery configuration"""
     try:
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -130,7 +130,7 @@ async def update_recovery_config(config: RecoveryConfig):
 async def get_recovery_attempts(service: Optional[str] = None, limit: int = 50):
     """Get recovery attempts with optional filtering"""
     try:
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -283,7 +283,7 @@ async def restart_service_task(service: str):
         )
         
         # Save attempt to database
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         cursor = conn.cursor()
         
         cursor.execute("""
