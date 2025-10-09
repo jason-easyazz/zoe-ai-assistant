@@ -161,7 +161,7 @@ MODEL_CONFIGS = {
 class ModelSelector:
     """Enhanced intelligent model selection with quality monitoring and learning integration"""
     
-    def __init__(self, db_path: str = "/app/data/model_performance.db"):
+    def __init__(self, db_path: str = "/app/data/zoe.db"):
         self.current_model = "gemma3:1b"  # Default to fastest model
         self.performance_history = {}
         self.db_path = db_path

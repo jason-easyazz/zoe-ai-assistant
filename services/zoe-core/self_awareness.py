@@ -112,7 +112,7 @@ class ConsciousnessState:
 class SelfAwarenessSystem:
     """Core self-awareness system for Zoe - User-scoped for privacy"""
     
-    def __init__(self, db_path: str = "/home/pi/zoe/data/self_awareness.db"):
+    def __init__(self, db_path: str = "/app/data/zoe.db"):
         self.db_path = db_path
         self.identity = SelfIdentity()
         self.consciousness = None

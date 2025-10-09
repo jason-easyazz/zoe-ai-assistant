@@ -35,7 +35,7 @@ class Session:
 class SessionManager:
     """Manages user sessions with token-based authentication"""
     
-    def __init__(self, db_path: str = "data/sessions.db", default_timeout: int = 3600):
+    def __init__(self, db_path: str = "data/zoe.db", default_timeout: int = 3600):
         """
         Initialize session manager
         

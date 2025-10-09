@@ -9,7 +9,7 @@ from .auth import get_current_user
 
 
 DB_PATH = "/app/data/zoe.db"
-LEGACY_DB_PATH = "/app/data/developer_tasks.db"
+LEGACY_DB_PATH = "/app/data/zoe.db"
 
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])

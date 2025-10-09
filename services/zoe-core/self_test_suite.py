@@ -236,7 +236,7 @@ class SelfTestSuite:
         
         # Test developer tasks database
         try:
-            conn = sqlite3.connect('/app/data/developer_tasks.db')
+            conn = sqlite3.connect('/app/data/zoe.db')
             cursor = conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM dynamic_tasks")
             count = cursor.fetchone()[0]
@@ -258,7 +258,7 @@ class SelfTestSuite:
         
         # Test database write operations
         try:
-            conn = sqlite3.connect('/app/data/developer_tasks.db')
+            conn = sqlite3.connect('/app/data/zoe.db')
             cursor = conn.cursor()
             cursor.execute("SELECT 1")
             conn.close()

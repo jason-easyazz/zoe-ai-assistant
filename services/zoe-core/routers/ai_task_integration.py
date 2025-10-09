@@ -80,7 +80,7 @@ async def create_task_from_chat(
         task_data = create_task_from_session(session_id, title)
         
         # Save to database
-        conn = sqlite3.connect("/app/data/developer_tasks.db")
+        conn = sqlite3.connect("/app/data/zoe.db")
         cursor = conn.cursor()
         
         # Ensure table exists
@@ -137,7 +137,7 @@ async def analyze_task_with_ai(task_id: str):
     """Generate implementation plan using AI"""
     
     # Get task from database
-    conn = sqlite3.connect("/app/data/developer_tasks.db")
+    conn = sqlite3.connect("/app/data/zoe.db")
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, title, objective, requirements, constraints, 

@@ -129,7 +129,7 @@ class AgentMessage(BaseModel):
     response_deadline: Optional[datetime] = None
 
 # Database setup
-DB_PATH = "/app/data/agent_planning.db"
+DB_PATH = "/app/data/zoe.db"
 
 def init_agent_db():
     """Initialize agent planning database"""

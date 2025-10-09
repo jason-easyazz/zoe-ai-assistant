@@ -21,8 +21,8 @@ sys.path.append('/home/pi/zoe/tools/aider-env/lib/python3.11/site-packages')
 class AiderWebService:
     def __init__(self):
         self.sessions = {}
-        self.task_db = "/app/data/tasks.db"
-        self.conversation_db = "/app/data/aider_conversations.db"
+        self.task_db = "/app/data/zoe.db"
+        self.conversation_db = "/app/data/zoe.db"
         self.setup_database()
         
     def setup_database(self):

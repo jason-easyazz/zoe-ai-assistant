@@ -32,7 +32,7 @@ class TaskPhaseAssignment(BaseModel):
 async def get_phases():
     """Get all roadmap phases"""
     try:
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -58,7 +58,7 @@ async def get_phases():
 async def get_phase(phase_id: str):
     """Get specific phase with tasks"""
     try:
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -98,7 +98,7 @@ async def get_phase(phase_id: str):
 async def create_phase(phase: PhaseCreate):
     """Create new roadmap phase"""
     try:
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         cursor = conn.cursor()
         
         phase_id = f"phase_{phase.phase_number}"
@@ -122,7 +122,7 @@ async def create_phase(phase: PhaseCreate):
 async def update_phase(phase_id: str, phase_update: PhaseUpdate):
     """Update roadmap phase"""
     try:
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         cursor = conn.cursor()
         
         # Build dynamic update query
@@ -166,7 +166,7 @@ async def update_phase(phase_id: str, phase_update: PhaseUpdate):
 async def get_roadmap_status():
     """Get overall roadmap progress"""
     try:
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
@@ -219,7 +219,7 @@ async def get_roadmap_status():
 async def assign_task_to_phase(assignment: TaskPhaseAssignment):
     """Assign task to phase"""
     try:
-        conn = sqlite3.connect('/app/data/developer_tasks.db')
+        conn = sqlite3.connect('/app/data/zoe.db')
         cursor = conn.cursor()
         
         # Update task with phase assignment

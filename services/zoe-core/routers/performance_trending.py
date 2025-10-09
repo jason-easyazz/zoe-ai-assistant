@@ -41,7 +41,7 @@ class PerformanceReport(BaseModel):
 
 class PerformanceCollector:
     def __init__(self):
-        self.db_path = "/app/data/performance.db"
+        self.db_path = "/app/data/zoe.db"
         self.collection_interval = 30  # seconds
         self.is_collecting = False
         self.collection_thread = None

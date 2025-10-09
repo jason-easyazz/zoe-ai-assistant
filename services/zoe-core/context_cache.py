@@ -53,7 +53,7 @@ class ContextSummary:
 class ContextCacheSystem:
     """Intelligent context summarization and caching system"""
     
-    def __init__(self, db_path: str = "/app/data/context_cache.db"):
+    def __init__(self, db_path: str = "/app/data/zoe.db"):
         self.db_path = db_path
         self.default_ttl_hours = 24  # Default cache TTL
         self.max_cache_size = 1000  # Maximum number of cached summaries
