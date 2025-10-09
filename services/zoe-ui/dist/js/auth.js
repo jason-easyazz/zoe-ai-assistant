@@ -191,9 +191,10 @@
         }
     }
 
-    // Setup fetch interceptor - but ONLY after DOM is ready to avoid race conditions
+    // Setup fetch interceptor - install IMMEDIATELY to catch all requests
     const originalFetch = window.fetch;
     function setupFetchInterceptor() {
+        console.log('🔧 Installing fetch interceptor immediately...');
         window.fetch = function(url, options = {}) {
             // Initialize options
             options.headers = options.headers || {};
@@ -248,6 +249,7 @@
                 return response;
             });
         };
+        console.log('✅ Fetch interceptor installed successfully');
     }
 
     // Expose auth functions globally
@@ -266,16 +268,17 @@
     // Also expose as ZoeAuth for backwards compatibility
     window.ZoeAuth = window.zoeAuth;
 
+    // Install fetch interceptor IMMEDIATELY to catch all requests
+    setupFetchInterceptor();
+    
     // Initialize auth AFTER DOM is ready to avoid race conditions
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
-            setupFetchInterceptor();
             enforceAuth();
             console.log('✅ Zoe Auth initialized (DOMContentLoaded)');
         });
     } else {
         // DOM already loaded
-        setupFetchInterceptor();
         enforceAuth();
         console.log('✅ Zoe Auth initialized (immediate)');
     }

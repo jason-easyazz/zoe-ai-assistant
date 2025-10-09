@@ -152,6 +152,27 @@ function getServiceMap() {
     };
 }
 
+// URL normalization helper to prevent mixed content errors
+function normalizeUrl(url) {
+    if (typeof url !== 'string') return url;
+    
+    // Force HTTPS for any HTTP URLs
+    if (url.startsWith('http://')) {
+        const httpsUrl = url.replace(/^http:\/\//, 'https://');
+        console.log('🛡️ URL normalization: HTTP → HTTPS:', url, '→', httpsUrl);
+        return httpsUrl;
+    }
+    
+    // Convert absolute HTTPS URLs to relative
+    if (url.startsWith('https://')) {
+        const relativeUrl = url.replace(/^https:\/\/[^/]+/, '');
+        console.log('🛡️ URL normalization: HTTPS → Relative:', url, '→', relativeUrl);
+        return relativeUrl;
+    }
+    
+    return url;
+}
+
 // API request helper with microservices support
 async function apiRequest(endpoint, options = {}) {
     try {
@@ -183,7 +204,11 @@ async function apiRequest(endpoint, options = {}) {
             normalizedEndpoint = `/${normalizedEndpoint}`;
         }
         
-        const fullUrl = `${serviceUrl}${normalizedEndpoint}`;
+        let fullUrl = `${serviceUrl}${normalizedEndpoint}`;
+        
+        // Apply URL normalization as backup safety measure
+        fullUrl = normalizeUrl(fullUrl);
+        
         console.log('Making API request to:', fullUrl);
         console.log('Original endpoint:', endpoint);
         console.log('Service URL:', serviceUrl);
