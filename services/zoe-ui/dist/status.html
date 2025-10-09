@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe System Status</title>
+    <style>
+        * { 
+            margin: 0; padding: 0; box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            min-height: 100vh; color: #fff;
+            font-size: clamp(14px, 1.6vw, 16px);
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        .title {
+            font-size: clamp(32px, 6vw, 48px);
+            font-weight: 300;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .subtitle {
+            font-size: clamp(16px, 2.5vw, 20px);
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 20px;
+        }
+        
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+        
+        .status-card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 16px;
+            padding: 24px;
+            transition: all 0.3s ease;
+        }
+        
+        .status-card:hover {
+            background: rgba(255, 255, 255, 0.15);
+            transform: translateY(-2px);
+        }
+        
+        .status-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        
+        .status-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+        
+        .status-icon.online {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+        }
+        
+        .status-icon.offline {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+        
+        .status-icon.warning {
+            background: rgba(251, 146, 60, 0.2);
+            color: #ea580c;
+        }
+        
+        .status-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #fff;
+        }
+        
+        .status-description {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 14px;
+            line-height: 1.5;
+            margin-bottom: 12px;
+        }
+        
+        .status-details {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.5);
+            font-family: monospace;
+        }
+        
+        .actions {
+            text-align: center;
+            margin-top: 40px;
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            margin: 0 10px;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.3);
+        }
+        
+        .btn.secondary {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .btn.secondary:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 class="title">Zoe System Status</h1>
+            <p class="subtitle">Current system health and service availability</p>
+        </div>
+        
+        <div class="status-grid" id="statusGrid">
+            <!-- Status cards will be loaded here -->
+        </div>
+        
+        <div class="actions">
+            <a href="/dashboard.html" class="btn">Go to Dashboard</a>
+            <a href="/index.html" class="btn secondary">Back to Login</a>
+        </div>
+    </div>
+
+    <script src="js/common.js"></script>
+    <script>
+        const services = [
+            {
+                name: 'Zoe Core API',
+                description: 'Main backend service handling core functionality',
+                endpoint: '/api/health',
+                port: 8000
+            },
+            {
+                name: 'Authentication Service',
+                description: 'User authentication and session management',
+                endpoint: '/api/auth/health',
+                port: 8002
+            },
+            {
+                name: 'People Service',
+                description: 'People and relationship management',
+                endpoint: '/api/people/health',
+                port: 8001
+            },
+            {
+                name: 'Collections Service',
+                description: 'Data collections and organization',
+                endpoint: '/api/collections/health',
+                port: 8005
+            },
+            {
+                name: 'Home Assistant Bridge',
+                description: 'Home automation integration',
+                endpoint: '/api/homeassistant/health',
+                port: 8007
+            },
+            {
+                name: 'N8N Bridge',
+                description: 'Workflow automation integration',
+                endpoint: '/api/n8n/health',
+                port: 8009
+            }
+        ];
+
+        async function checkServiceStatus(service) {
+            try {
+                const response = await fetch(service.endpoint, {
+                    method: 'GET',
+                    timeout: 5000
+                });
+                
+                if (response.ok) {
+                    return {
+                        status: 'online',
+                        message: 'Service is running',
+                        responseTime: Date.now()
+                    };
+                } else {
+                    return {
+                        status: 'warning',
+                        message: `Service responded with ${response.status}`,
+                        responseTime: Date.now()
+                    };
+                }
+            } catch (error) {
+                return {
+                    status: 'offline',
+                    message: 'Service is not responding',
+                    error: error.message
+                };
+            }
+        }
+
+        async function loadStatus() {
+            const statusGrid = document.getElementById('statusGrid');
+            
+            for (const service of services) {
+                const status = await checkServiceStatus(service);
+                
+                const card = document.createElement('div');
+                card.className = 'status-card';
+                
+                const iconClass = status.status === 'online' ? 'online' : 
+                                 status.status === 'warning' ? 'warning' : 'offline';
+                
+                const icon = status.status === 'online' ? '✅' : 
+                           status.status === 'warning' ? '⚠️' : '❌';
+                
+                card.innerHTML = `
+                    <div class="status-header">
+                        <div class="status-icon ${iconClass}">${icon}</div>
+                        <div class="status-title">${service.name}</div>
+                    </div>
+                    <div class="status-description">${service.description}</div>
+                    <div class="status-details">
+                        Port: ${service.port} | ${status.message}
+                        ${status.error ? `<br>Error: ${status.error}` : ''}
+                    </div>
+                `;
+                
+                statusGrid.appendChild(card);
+            }
+        }
+
+        // Load status on page load
+        document.addEventListener('DOMContentLoaded', loadStatus);
+        
+        // Refresh status every 30 seconds
+        setInterval(loadStatus, 30000);
+    </script>
+</body>
+</html>

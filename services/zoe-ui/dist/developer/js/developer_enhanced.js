@@ -1,7 +1,7 @@
 // Enhanced developer.js - Preserves existing design
-const API_BASE = window.location.hostname === 'localhost' 
-    ? 'http://localhost:8000' 
-    : `http://${window.location.hostname}:8000`;
+const API_BASE = window.location.protocol === 'https:' 
+    ? `https://${window.location.hostname}/api`
+    : `http://${window.location.hostname}/api`;
 
 let currentPlan = null;
 let currentConversationId = null;

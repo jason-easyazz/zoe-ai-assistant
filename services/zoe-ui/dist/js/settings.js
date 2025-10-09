@@ -1,5 +1,7 @@
 // Settings page functionality
-const API_BASE = 'http://localhost:8000';
+const API_BASE = window.location.protocol === 'https:' 
+    ? `https://${window.location.hostname}/api`
+    : `http://${window.location.hostname}/api`;
 
 // Load current settings
 async function loadSettings() {

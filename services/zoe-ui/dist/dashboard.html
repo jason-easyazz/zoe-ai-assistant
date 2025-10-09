@@ -808,6 +808,7 @@
                 <a href="lists.html" class="nav-item">Lists</a>
                 <a href="calendar.html" class="nav-item">Calendar</a>
                 <a href="journal.html" class="nav-item">Journal</a>
+                <a href="status.html" class="nav-item">Status</a>
                 <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
             </div>
         </div>
@@ -1068,14 +1069,14 @@
                     throw new Error('API not available');
                 }
             } catch (error) {
-                console.error('API connection failed:', error);
+                console.warn('API connection failed, using demo data:', error);
                 document.getElementById('apiStatus').className = 'api-indicator offline';
-                document.getElementById('apiStatus').textContent = 'Offline';
+                document.getElementById('apiStatus').textContent = 'Demo Mode';
                 
                 // Keep demo data
                 document.getElementById('eventCount').textContent = '3 events today';
                 updateTaskCount();
-                document.getElementById('homeStatus').textContent = 'All systems normal';
+                document.getElementById('homeStatus').textContent = 'Demo Mode - Backend Offline';
             }
         }
 
