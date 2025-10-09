@@ -152,34 +152,33 @@ async def create_reminder(reminder: ReminderCreate, user_id: str = Query("defaul
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
+        # Calculate reminder_time from due_date and due_time
+        reminder_timestamp = None
+        if reminder.due_date and reminder.due_time:
+            reminder_timestamp = datetime.combine(reminder.due_date, reminder.due_time).isoformat()
+        elif reminder.due_date:
+            reminder_timestamp = datetime.combine(reminder.due_date, datetime.min.time()).isoformat()
+        else:
+            # Default to tomorrow at 9am if not specified
+            reminder_timestamp = (datetime.now() + timedelta(days=1)).replace(hour=9, minute=0, second=0).isoformat()
+        
         # Insert reminder
         cursor.execute("""
             INSERT INTO reminders (
-                user_id, title, description, reminder_type, category, priority,
+                user_id, title, description, reminder_time, reminder_type, category, priority,
                 due_date, due_time, recurring_pattern, linked_list_id, linked_list_item_id,
                 family_member, snooze_minutes, requires_acknowledgment
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            user_id, reminder.title, reminder.description, reminder.reminder_type.value,
-            reminder.category.value, reminder.priority.value, reminder.due_date,
-            reminder.due_time.isoformat() if reminder.due_time else None, 
+            user_id, reminder.title, reminder.description, reminder_timestamp,
+            reminder.reminder_type.value, reminder.category.value, reminder.priority.value,
+            reminder.due_date, reminder.due_time.isoformat() if reminder.due_time else None, 
             json.dumps(reminder.recurring_pattern) if reminder.recurring_pattern else None,
             reminder.linked_list_id, reminder.linked_list_item_id, reminder.family_member,
             reminder.snooze_minutes, reminder.requires_acknowledgment
         ))
         
         reminder_id = cursor.lastrowid
-        
-        # Create initial notification if due date/time is set
-        if reminder.due_date and reminder.due_time:
-            notification_time = datetime.combine(reminder.due_date, reminder.due_time)
-            cursor.execute("""
-                INSERT INTO notifications (user_id, reminder_id, notification_time, message, priority)
-                VALUES (?, ?, ?, ?, ?)
-            """, (
-                user_id, reminder_id, notification_time.isoformat(),
-                f"Reminder: {reminder.title}", reminder.priority.value
-            ))
         
         conn.commit()
         conn.close()

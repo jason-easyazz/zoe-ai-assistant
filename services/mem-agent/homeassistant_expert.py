@@ -61,35 +61,31 @@ class HomeAssistantExpert:
     async def _turn_on(self, query: str, user_id: str) -> Dict[str, Any]:
         """Turn on a device"""
         try:
-            # Extract device name
-            device_match = re.search(r"turn on (?:the )?(.+?)(?:\s+light|$)", query, re.IGNORECASE)
-            device = device_match.group(1).strip() if device_match else "light"
+            service, entity_id, friendly_name = self._prepare_service_call(query, "turn_on")
             
-            # Call Home Assistant API via MCP
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.post(
-                    f"{self.api_base}/homeassistant/control",
+                    f"{self.api_base}/homeassistant/service",
                     headers={"X-Service-Token": "zoe_internal_2025"},
                     json={
-                        "action": "turn_on",
-                        "device": device,
-                        "user_id": user_id
-                    },
-                    timeout=5.0
+                        "service": service,
+                        "entity_id": entity_id,
+                        "data": {"source_user": user_id}
+                    }
                 )
                 
                 if response.status_code == 200:
                     return {
                         "success": True,
                         "action": "turn_on_device",
-                        "device": device,
-                        "message": f"✅ Turned on {device}"
+                        "device": friendly_name,
+                        "message": f"✅ Turned on {friendly_name}"
                     }
                 else:
                     return {
                         "success": False,
                         "error": f"API returned {response.status_code}",
-                        "message": f"❌ Couldn't control {device}"
+                        "message": f"❌ Couldn't control {friendly_name}"
                     }
         except Exception as e:
             logger.error(f"HA control failed: {e}")
@@ -102,33 +98,31 @@ class HomeAssistantExpert:
     async def _turn_off(self, query: str, user_id: str) -> Dict[str, Any]:
         """Turn off a device"""
         try:
-            device_match = re.search(r"turn off (?:the )?(.+?)(?:\s+light|$)", query, re.IGNORECASE)
-            device = device_match.group(1).strip() if device_match else "light"
+            service, entity_id, friendly_name = self._prepare_service_call(query, "turn_off")
             
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.post(
-                    f"{self.api_base}/homeassistant/control",
+                    f"{self.api_base}/homeassistant/service",
                     headers={"X-Service-Token": "zoe_internal_2025"},
                     json={
-                        "action": "turn_off",
-                        "device": device,
-                        "user_id": user_id
-                    },
-                    timeout=5.0
+                        "service": service,
+                        "entity_id": entity_id,
+                        "data": {"source_user": user_id}
+                    }
                 )
                 
                 if response.status_code == 200:
                     return {
                         "success": True,
                         "action": "turn_off_device",
-                        "device": device,
-                        "message": f"✅ Turned off {device}"
+                        "device": friendly_name,
+                        "message": f"✅ Turned off {friendly_name}"
                     }
                 else:
                     return {
                         "success": False,
                         "error": f"API returned {response.status_code}",
-                        "message": f"❌ Couldn't control {device}"
+                        "message": f"❌ Couldn't control {friendly_name}"
                     }
         except Exception as e:
             logger.error(f"HA control failed: {e}")
@@ -144,16 +138,15 @@ class HomeAssistantExpert:
             temp_match = re.search(r"(\d+)\s*(?:degrees?|°)?", query, re.IGNORECASE)
             temperature = int(temp_match.group(1)) if temp_match else 72
             
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.post(
-                    f"{self.api_base}/homeassistant/control",
+                    f"{self.api_base}/homeassistant/service",
                     headers={"X-Service-Token": "zoe_internal_2025"},
                     json={
-                        "action": "set_temperature",
-                        "temperature": temperature,
-                        "user_id": user_id
-                    },
-                    timeout=5.0
+                        "service": "climate.set_temperature",
+                        "entity_id": "climate.home",
+                        "data": {"temperature": temperature, "source_user": user_id}
+                    }
                 )
                 
                 if response.status_code == 200:
@@ -224,4 +217,25 @@ class HomeAssistantExpert:
             "message": f"🏠 Processing home control: {query[:50]}...",
             "mcp_delegate": True  # Signal to use MCP tools
         }
+    
+    def _prepare_service_call(self, query: str, action: str) -> tuple:
+        """Infer Home Assistant service and entity from the query."""
+        query_lower = query.lower()
+        
+        if "light" in query_lower or "lamp" in query_lower:
+            domain = "light"
+            name_match = re.search(rf"turn (?:on|off) (?:the )?(.+?)(?:\s+light|\s+lights|$)", query_lower)
+        elif "fan" in query_lower:
+            domain = "fan"
+            name_match = re.search(rf"turn (?:on|off) (?:the )?(.+?)(?:\s+fan|$)", query_lower)
+        else:
+            domain = "switch"
+            name_match = re.search(rf"turn (?:on|off) (?:the )?(.+?)$", query_lower)
+        
+        friendly_name = name_match.group(1).strip() if name_match else domain
+        slug = re.sub(r"[^a-z0-9]+", "_", friendly_name.lower()).strip("_") or domain
+        entity_id = f"{domain}.{slug}"
+        
+        service = f"{domain}.{action}"
+        return service, entity_id, friendly_name.title()
 
