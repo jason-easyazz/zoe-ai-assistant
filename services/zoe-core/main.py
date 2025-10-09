@@ -27,7 +27,7 @@ from routers import touch_panel_config
 # Import missing routers for complete API functionality
 from routers import calendar, memories, lists, reminders, developer, homeassistant, weather, developer_tasks, settings, journal, family, enhanced_calendar, event_permissions, system, self_awareness, birthday_calendar, birthday_memories, test_memories, public_memories
 from routers import vector_search, notifications
-from routers import proactive_insights, agent_planner, tool_registry
+from routers import proactive_insights, agent_planner, tool_registry, onboarding, chat_sessions
 
 # Import metrics middleware
 from middleware.metrics import MetricsMiddleware, get_metrics
@@ -89,6 +89,8 @@ app.include_router(notifications.ws_router)
 app.include_router(proactive_insights.router)
 app.include_router(agent_planner.router)
 app.include_router(tool_registry.router)
+app.include_router(onboarding.router)
+app.include_router(chat_sessions.router)
 
 # Home Assistant proxy endpoints
 import httpx

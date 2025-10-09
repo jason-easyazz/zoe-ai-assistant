@@ -31,7 +31,7 @@
         .mini-orb:hover { transform: scale(1.1); }
         .nav-menu { display: flex; gap: 20px; }
         .nav-item { 
-            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400;
             transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
             min-height: 44px; display: flex; align-items: center;
         }
@@ -404,7 +404,7 @@
             0%, 50% { opacity: 1; }
             51%, 100% { opacity: 0; }
         }
-
+        
         /* Input Area */
         .input-area {
             padding: 20px;
@@ -728,7 +728,7 @@
                 display: none !important;
             }
         }
-        </style>
+    </style>
 </head>
 <body>
     <!-- Navigation -->
@@ -750,8 +750,8 @@
                 <div class="current-date" id="currentDate">Oct 7</div>
             </div>
         </div>
-            </div>
-            
+    </div>
+
     <!-- Expand Button (shown when collapsed) -->
     <button class="expand-btn" onclick="toggleSessions()">📋</button>
 
@@ -763,28 +763,28 @@
                 <!-- Welcome Section -->
                 <div class="welcome-section" id="welcomeSection">
                     <h1 class="welcome-title">Chat with Zoe</h1>
-                    <p class="welcome-subtitle">Intelligent AI Assistant</p>
-                    <div class="suggestion-chips" id="dynamicSuggestions">
-                        <div class="suggestion-chip" onclick="tryPrompt('Help me plan my day')">
-                            <div class="suggestion-icon">🌅</div>
+                    <p class="welcome-subtitle">AI assistant powered by LangGraph subgraphs</p>
+                    <div class="suggestion-chips">
+                        <div class="suggestion-chip" onclick="tryPrompt('Plan my day based on my calendar and tasks')">
+                            <div class="suggestion-icon">📅</div>
                             <div class="suggestion-label">Plan My Day</div>
                         </div>
-                        <div class="suggestion-chip" onclick="tryPrompt('What should I focus on today?')">
-                            <div class="suggestion-icon">🎯</div>
-                            <div class="suggestion-label">Daily Focus</div>
+                        <div class="suggestion-chip" onclick="tryPrompt('Design an N8N workflow to send daily summaries')">
+                            <div class="suggestion-icon">🔧</div>
+                            <div class="suggestion-label">Design Workflow</div>
                         </div>
-                        <div class="suggestion-chip" onclick="tryPrompt('Review my tasks and priorities')">
-                            <div class="suggestion-icon">📋</div>
-                            <div class="suggestion-label">Task Review</div>
+                        <div class="suggestion-chip" onclick="tryPrompt('Analyze my productivity patterns')">
+                            <div class="suggestion-icon">📊</div>
+                            <div class="suggestion-label">Productivity Analysis</div>
                         </div>
-                        <div class="suggestion-chip" onclick="tryPrompt('Give me smart insights about my routine')">
-                            <div class="suggestion-icon">💡</div>
-                            <div class="suggestion-label">Smart Insights</div>
+                        <div class="suggestion-chip" onclick="tryPrompt('Create a shopping list from my meal plan')">
+                            <div class="suggestion-icon">🛒</div>
+                            <div class="suggestion-label">Smart Shopping</div>
                         </div>
                     </div>
                 </div>
             </div>
-            
+
             <!-- Input Area -->
             <div class="input-area">
                 <div class="input-wrapper">
@@ -798,16 +798,16 @@
                     ></textarea>
                     <button class="send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
                 </div>
-                </div>
             </div>
+        </div>
 
         <!-- Sessions Panel -->
         <div class="sessions-panel">
             <div class="sessions-header">
                 <div class="sessions-title">💬 Sessions</div>
                 <button class="collapse-btn" onclick="toggleSessions()" title="Collapse">→</button>
-        </div>
-
+            </div>
+            
             <button class="new-session-btn" onclick="createNewSession()">+ New Chat</button>
             
             <div class="sessions-list" id="sessionsList">
@@ -817,37 +817,33 @@
                     <div class="session-meta">
                         <span>0 messages</span>
                         <span>Now</span>
+                    </div>
+                </div>
             </div>
-        </div>
-    </div>
-
+            
             <!-- Quick Actions -->
             <div class="quick-actions">
                 <div class="quick-actions-title">Quick Actions</div>
                 <div class="action-chips">
                     <div class="action-chip" onclick="tryPrompt('Plan my day')">
                         📅 Plan Day
-            </div>
-                    <div class="action-chip" onclick="tryPrompt('What smart actions can you help me with?')">
-                        🎯 Smart Actions
-                </div>
+                    </div>
+                    <div class="action-chip" onclick="tryPrompt('Design workflow')">
+                        🔧 Design Workflow
+                    </div>
                     <div class="action-chip" onclick="tryPrompt('Analyze productivity')">
                         📊 Productivity
-                </div>
+                    </div>
                     <div class="action-chip" onclick="tryPrompt('Review week')">
                         📝 Weekly Review
-                </div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="js/auth.js?v=4.0&t=1759991237"></script>
-    <script src="js/common.js?v=4.0&t=1759991237"></script>
-    <script>
-        // Cache buster - force browser to reload this script
-        console.log('🔄 Chat.html v4.0 - Fixed Sessions & Cache Edition loaded');
-    </script>
+    <script src="js/auth.js"></script>
+    <script src="js/common.js"></script>
     <script>
         // State
         let isStreaming = false;
@@ -860,11 +856,8 @@
             setInterval(updateTimeDate, 60000);
             document.getElementById('chatInput').focus();
             
-            // Load sessions from backend
-            loadSessions();
-            
-            // Create initial session if none exists
-            createOrGetCurrentSession();
+            // TODO: Load sessions from backend
+            // loadSessions();
         }
 
         // Time/Date
@@ -882,168 +875,16 @@
         }
 
         // Session Management
-        async function loadSessions() {
-            try {
-                const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_id || 'default';
-                
-                const response = await apiRequest(`/chat/sessions/?user_id=${userId}`);
-                const sessions = response.sessions || [];
-                
-                const sessionsList = document.getElementById('sessionsList');
-                sessionsList.innerHTML = sessions.map((s, idx) => `
-                    <div class="session-item ${idx === 0 ? 'active' : ''}" onclick="loadSession('${s.id}')">
-                        <div class="session-title">${s.title}</div>
-                        <div class="session-meta">
-                            <span>${s.message_count} messages</span>
-                            <span>${formatSessionTime(s.updated_at)}</span>
-                        </div>
-                    </div>
-                `).join('');
-                
-                // Load most recent session if exists
-                if (sessions.length > 0 && !currentSessionId) {
-                    currentSessionId = sessions[0].id;
-                    await loadSessionMessages(currentSessionId);
-                }
-            } catch (error) {
-                console.error('Failed to load sessions:', error);
-            }
-        }
-
-        async function createOrGetCurrentSession() {
-            if (!currentSessionId) {
-                const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_id || 'default';
-                
-                try {
-                    const response = await apiRequest('/chat/sessions/', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            user_id: userId,
-                            title: 'New Chat'
-                        })
-                    });
-                    currentSessionId = response.session_id;
-                    console.log('✅ Created new session:', currentSessionId);
-                } catch (error) {
-                    console.error('Failed to create session:', error);
-                    currentSessionId = `session_${Date.now()}`;
-                }
-            }
-        }
-
-        async function createNewSession() {
-            const session = window.zoeAuth?.getCurrentSession();
-            const userId = session?.user_id || 'default';
-            
-            try {
-                const response = await apiRequest('/chat/sessions/', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        user_id: userId,
-                        title: `Chat ${new Date().toLocaleString()}`
-                    })
-                });
-                
-                currentSessionId = response.session_id;
-                messageCount = 0;
-                
-                document.getElementById('messagesContainer').innerHTML = `
-                    <div class="welcome-section" id="welcomeSection">
-                        <h1 class="welcome-title">New Chat</h1>
-                        <p class="welcome-subtitle">Start a fresh conversation</p>
-                    </div>
-                `;
-                
-                // Reload sessions list
-            await loadSessions();
-            
-            // Generate intelligent suggestions
-            await generateDynamicSuggestions();
-        } catch (error) {
-                console.error('Failed to create new session:', error);
-            }
-        }
-
-        async function loadSession(sessionId) {
-            try {
-                currentSessionId = sessionId;
-                
-                // Update UI to show active session
-                document.querySelectorAll('.session-item').forEach(item => {
-                    item.classList.remove('active');
-                });
-                event.target.closest('.session-item').classList.add('active');
-                
-                // Load session messages
-                await loadSessionMessages(sessionId);
-            } catch (error) {
-                console.error('Failed to load session:', error);
-            }
-        }
-
-        async function loadSessionMessages(sessionId) {
-            try {
-                const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_id || 'default';
-                
-                const response = await apiRequest(`/chat/sessions/${sessionId}/messages/?user_id=${userId}`);
-                const messages = response.messages || [];
-                
-                const container = document.getElementById('messagesContainer');
-                container.innerHTML = '';
-                
-                // Display all messages
-                messages.forEach(msg => {
-                    if (msg.role === 'user') {
-                        addUserMessage(msg.content);
-                    } else {
-                        addAssistantMessage(msg.content);
-                    }
-                });
-                
-                messageCount = messages.length;
-            } catch (error) {
-                console.error('Failed to load session messages:', error);
-            }
-        }
-
-        async function saveMessageToSession(role, content) {
-            if (!currentSessionId) {
-                await createOrGetCurrentSession();
-            }
-            
-            try {
-                const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_id || 'default';
-                
-                await apiRequest(`/chat/sessions/${currentSessionId}/messages/?user_id=${userId}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        session_id: currentSessionId,
-                        role: role,
-                        content: content
-                    })
-                });
-            } catch (error) {
-                console.error('Failed to save message:', error);
-            }
-        }
-
-        function formatSessionTime(timestamp) {
-            const date = new Date(timestamp);
-            const now = new Date();
-            const diffMs = now - date;
-            const diffMins = Math.floor(diffMs / 60000);
-            
-            if (diffMins < 1) return 'just now';
-            if (diffMins < 60) return `${diffMins}m ago`;
-            if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`;
-            return date.toLocaleDateString();
+        function createNewSession() {
+            // TODO: API call to create session
+            console.log('Creating new session...');
+            messageCount = 0;
+            document.getElementById('messagesContainer').innerHTML = `
+                <div class="welcome-section">
+                    <h1 class="welcome-title">New Chat</h1>
+                    <p class="welcome-subtitle">Start a fresh conversation</p>
+                </div>
+            `;
         }
 
         // Input Handling
@@ -1098,9 +939,6 @@
             `;
             container.appendChild(group);
             scrollToBottom();
-            
-            // Save to session
-            saveMessageToSession('user', text);
         }
 
         async function processWithSubgraphs(message) {
@@ -1217,7 +1055,7 @@
             addAssistantMessage("Let me analyze your productivity patterns!");
             await sleep(500);
 
-            const subgraph = createSubgraphCard('🧠', 'Intelligence Analysis', 'Examining your patterns...');
+            const subgraph = createSubgraphCard('📊', 'Productivity Analysis Subgraph', 'Examining your work patterns...');
             container.appendChild(subgraph);
             scrollToBottom();
 
@@ -1297,7 +1135,7 @@
                     <div class="message-avatar">🤖</div>
                     <div class="message-name">Zoe</div>
                     <div class="message-time">just now</div>
-                    </div>
+                </div>
                 <div class="message-content"></div>
             `;
             container.appendChild(group);
@@ -1306,17 +1144,15 @@
 
             try {
                 const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_id || 'default';
                 
                 // Call REAL streaming API with AG-UI protocol
-                const response = await fetch(`/api/chat/?user_id=${userId}&stream=true`, {
+                const response = await fetch(`/api/chat/?user_id=${session?.user_id || 'default'}&stream=true`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
                         message: message,
-                        user_id: userId,
                         context: { mode: 'main_chat' },
                         session_id: currentSessionId || `session_${Date.now()}`
                     })
@@ -1344,35 +1180,17 @@
                         if (line.startsWith('data: ')) {
                             try {
                                 const data = JSON.parse(line.slice(6));
-                                console.log('📡 AG-UI Event:', data.type, data);
                                 
-                                // AG-UI Protocol Event Handlers
-                                if (data.type === 'session_start') {
-                                    console.log('🎯 Session started:', data.session_id);
-                                    currentSessionId = data.session_id;
-                                } else if (data.type === 'agent_state_delta') {
-                                    console.log('🔄 Agent state:', data.state);
-                                } else if (data.type === 'action') {
-                                    console.log('🔧 Tool executing:', data.name);
-                                } else if (data.type === 'action_result') {
-                                    console.log('✅ Tool completed');
-                                } else if (data.type === 'message_delta') {
-                                    // AG-UI standard: message_delta for content streaming
-                                    streamingText += data.delta;
+                                if (data.type === 'token') {
+                                    streamingText += data.content;
                                     contentEl.innerHTML = streamingText.replace(/\n/g, '<br>') + 
                                                         '<span class="streaming-cursor"></span>';
                                     scrollToBottom();
-                                } else if (data.type === 'session_end') {
-                                    console.log('✅ Session ended:', data.session_id);
+                                } else if (data.type === 'done') {
                                     contentEl.innerHTML = streamingText.replace(/\n/g, '<br>');
-                                    // Save assistant message to session
-                                    saveMessageToSession('assistant', streamingText);
-                                } else if (data.type === 'error') {
-                                    console.error('❌ AG-UI Error:', data.error);
-                                    contentEl.innerHTML = `<span style="color: #ef4444;">Error: ${data.error.message}</span>`;
                                 }
                             } catch (e) {
-                                console.error('Failed to parse AG-UI event:', e, line);
+                                console.error('Failed to parse SSE:', e);
                             }
                         }
                     }
@@ -1411,9 +1229,9 @@
                     <div class="subgraph-title">
                         <div class="subgraph-icon">${icon}</div>
                         <span>${title}</span>
-                </div>
-                    <div class="subgraph-status running">Running...</div>
                     </div>
+                    <div class="subgraph-status running">Running...</div>
+                </div>
                 <div class="subgraph-body">${description}</div>
                 <div class="subgraph-steps"></div>
             `;
@@ -1499,116 +1317,8 @@
             return new Promise(resolve => setTimeout(resolve, ms));
         }
 
-        // Intelligent Proactive Assistant
-        async function generateDynamicSuggestions() {
-            const suggestionsContainer = document.getElementById('dynamicSuggestions');
-            if (!suggestionsContainer) return;
-            
-            try {
-                // Get user context from all available services
-                const [calendarData, tasksData, memoriesData] = await Promise.allSettled([
-                    fetch('/api/calendar/events?start_date=' + new Date().toISOString().split('T')[0] + '&end_date=' + new Date(Date.now() + 7*24*60*60*1000).toISOString().split('T')[0]).then(r => r.json()),
-                    fetch('/api/lists/personal_todos').then(r => r.json()),
-                    fetch('/api/memories/proxy/people').then(r => r.json())
-                ]);
-                
-                const suggestions = [];
-                
-                // Analyze calendar for day planning
-                if (calendarData.status === 'fulfilled' && calendarData.value?.events?.length > 0) {
-                    const todayEvents = calendarData.value.events.filter(e => 
-                        new Date(e.start_time).toDateString() === new Date().toDateString()
-                    );
-                    if (todayEvents.length > 0) {
-                        suggestions.push({
-                            icon: '📅',
-                            label: 'Plan My Day',
-                            prompt: `I have ${todayEvents.length} events today. Help me plan my day around them and any tasks I need to complete.`,
-                            priority: 'high'
-                        });
-                    }
-                }
-                
-                // Analyze tasks for productivity insights
-                if (tasksData.status === 'fulfilled' && tasksData.value?.items?.length > 0) {
-                    const pendingTasks = tasksData.value.items.filter(t => !t.completed);
-                    if (pendingTasks.length > 3) {
-                        suggestions.push({
-                            icon: '📋',
-                            label: 'Task Review',
-                            prompt: `I have ${pendingTasks.length} pending tasks. Help me prioritize and schedule them effectively.`,
-                            priority: 'medium'
-                        });
-                    }
-                }
-                
-                // Analyze memories for relationship insights
-                if (memoriesData.status === 'fulfilled' && memoriesData.value?.people?.length > 0) {
-                    suggestions.push({
-                        icon: '👥',
-                        label: 'People Insights',
-                        prompt: 'Help me review my relationships and suggest ways to strengthen connections.',
-                        priority: 'low'
-                    });
-                }
-                
-                // Default intelligent suggestions
-                if (suggestions.length === 0) {
-                    suggestions.push(
-                        {
-                            icon: '🌅',
-                            label: 'Morning Planning',
-                            prompt: 'Help me plan my day with productivity insights and goal alignment.',
-                            priority: 'high'
-                        },
-                        {
-                            icon: '🎯',
-                            label: 'Goal Review',
-                            prompt: 'Review my current goals and suggest actionable steps for this week.',
-                            priority: 'medium'
-                        },
-                        {
-                            icon: '💡',
-                            label: 'Smart Insights',
-                            prompt: 'Analyze my patterns and suggest improvements for my daily routine.',
-                            priority: 'low'
-                        }
-                    );
-                }
-                
-                // Sort by priority and render
-                suggestions.sort((a, b) => {
-                    const priorityOrder = { high: 0, medium: 1, low: 2 };
-                    return priorityOrder[a.priority] - priorityOrder[b.priority];
-                });
-                
-                suggestionsContainer.innerHTML = suggestions.slice(0, 4).map(suggestion => `
-                    <div class="suggestion-chip" onclick="tryPrompt('${suggestion.prompt}')">
-                        <div class="suggestion-icon">${suggestion.icon}</div>
-                        <div class="suggestion-label">${suggestion.label}</div>
-                    </div>
-                `).join('');
-                
-            } catch (error) {
-                console.error('Error generating dynamic suggestions:', error);
-                // Fallback to default suggestions
-                suggestionsContainer.innerHTML = `
-                    <div class="suggestion-chip" onclick="tryPrompt('Help me plan my day')">
-                        <div class="suggestion-icon">🌅</div>
-                        <div class="suggestion-label">Plan My Day</div>
-                    </div>
-                    <div class="suggestion-chip" onclick="tryPrompt('What should I focus on today?')">
-                        <div class="suggestion-icon">🎯</div>
-                        <div class="suggestion-label">Daily Focus</div>
-                    </div>
-                `;
-            }
-        }
-        
         // Initialize
         document.addEventListener('DOMContentLoaded', init);
     </script>
 </body>
-</html><!-- Cache Bust: 1759988765 -->
-<!-- Cache Bust: 1759990350 -->
-<!-- Cache Bust: 1759990480 -->
+</html>
