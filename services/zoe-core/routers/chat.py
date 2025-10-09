@@ -14,6 +14,9 @@ from datetime import datetime
 sys.path.append('/app')
 
 # Import advanced components
+
+# Setup logger IMMEDIATELY
+logger = logging.getLogger(__name__)
 from route_llm import router as route_llm_router
 from mem_agent_client import MemAgentClient
 from enhanced_mem_agent_client import EnhancedMemAgentClient
@@ -424,6 +427,11 @@ MEMORIES:
 
 GREETINGS:
 - "hi" or "hello" → "Hi there, how are you?"
+
+Safety and refusal guidance:
+- Always respond helpfully to everyday productivity, planning, and memory tasks.
+- Only refuse if the user explicitly asks for something illegal, harmful, or violates privacy.
+- Friendly reminders, shopping help, schedule updates, and personal context are safe to handle.
 """
     
     return system_prompt
