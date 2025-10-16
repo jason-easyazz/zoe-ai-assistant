@@ -1,6 +1,10 @@
 # Data and databases
 data/*.db
 data/*.sqlite
+# Allow the three official databases
+!data/zoe.db
+!data/memory.db
+!data/training.db
 data/billing/
 data/logs/
 data/backup/
@@ -35,7 +39,6 @@ services/zoe-ui/*.backup
 # Project-wide exclusions
 # Large directories (moved to backups/)
 models/
-tools/
 aider_env/
 
 # Development and backup files
