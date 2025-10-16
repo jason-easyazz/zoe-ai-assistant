@@ -1,0 +1,53 @@
+# LiveKit Server Configuration for Zoe Voice AI
+# Optimized for Raspberry Pi 5 deployment
+
+port: 7880
+bind_addresses:
+  - ""
+
+rtc:
+  # UDP ports for WebRTC media
+  port_range_start: 50000
+  port_range_end: 50200
+  # Use STUN for NAT traversal
+  use_external_ip: true
+  # ICE servers for connectivity
+  stun_servers:
+    - stun.l.google.com:19302
+    - stun1.l.google.com:19302
+
+# Redis for distributed state (optional, using in-memory for Pi)
+# redis:
+#   address: zoe-redis:6379
+
+# Room settings
+room:
+  # Auto-create rooms when agents connect
+  auto_create: true
+  # Empty room timeout (30 minutes)
+  empty_timeout: 1800
+  # Max participants per room
+  max_participants: 10
+
+# Logging
+logging:
+  level: info
+  # Log to stdout for Docker
+  json: false
+
+# Keys - 32+ character secret required for security
+keys:
+  devkey: secretsecretsecretsecretsecretsecret
+
+# Webhook for room events (optional)
+# webhook:
+#   urls:
+#     - http://zoe-voice-agent:9003/webhook
+#   api_key: ${LIVEKIT_API_KEY}
+
+# Region for distributed deployment (single instance for Pi)
+region: local
+
+# Node settings
+# Development mode - use defaults
+

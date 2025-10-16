@@ -1,0 +1,36 @@
+# FastAPI and server dependencies
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.9
+
+# NeuTTS Air core dependencies
+phonemizer==3.3.0
+segments==2.2.1
+librosa==0.10.2
+soundfile==0.12.1
+numpy==1.26.4
+scipy==1.13.1
+
+# LLM backbone support (GGUF)
+llama-cpp-python==0.2.90
+
+# ONNX runtime for codec decoder
+onnxruntime==1.19.2
+
+# Audio processing
+pydub==0.25.1
+
+# Utilities
+python-json-logger==2.0.7
+
+
+
+
+
+
+
+
+
+
+
+

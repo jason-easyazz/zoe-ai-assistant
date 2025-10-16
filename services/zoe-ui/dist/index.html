@@ -1263,8 +1263,8 @@
                 }
             } catch (error) {
                 // Demo mode fallback
-                if ((selectedUsername === 'admin' && currentPin === 'admin') || 
-                    (selectedUsername === 'user' && currentPin === 'user') ||
+                if ((selectedUsername.toLowerCase() === 'admin' && currentPin === 'admin') || 
+                    (selectedUsername.toLowerCase() === 'user' && currentPin === 'user') ||
                     (selectedUserId === 'guest')) {
                     
                     const demoSession = {
@@ -1310,8 +1310,8 @@
                 }
             } catch (error) {
                 // Demo mode fallback
-                if ((selectedUsername === 'admin' && password === 'admin') || 
-                    (selectedUsername === 'user' && password === 'user')) {
+                if ((selectedUsername.toLowerCase() === 'admin' && password === 'admin') || 
+                    (selectedUsername.toLowerCase() === 'user' && password === 'user')) {
                     
                     const demoSession = {
                         success: true,

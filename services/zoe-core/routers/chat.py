@@ -9,6 +9,8 @@ import sqlite3
 import json
 import re
 import statistics
+import asyncio
+import time
 from datetime import datetime
 
 sys.path.append('/app')
@@ -21,6 +23,27 @@ from route_llm import router as route_llm_router
 from mem_agent_client import MemAgentClient
 from enhanced_mem_agent_client import EnhancedMemAgentClient
 from model_config import model_selector, ModelConfig
+
+# Import training data collector
+from training_engine.data_collector import training_collector
+
+# Import enhanced prompts
+from prompt_templates import build_enhanced_prompt
+
+# Import RAG enhancements
+from rag_enhancements import hybrid_search_engine, query_expander, reranker
+
+# Import context optimization
+from context_optimizer import context_selector, context_compressor, context_budgeter
+
+# Import memory consolidation
+from memory_consolidation import memory_consolidator
+
+# Import graph engine
+from graph_engine import graph_engine
+
+# Import preference learning
+from preference_learner import preference_learner
 
 # Import temporal memory integration
 sys.path.append('/home/pi/zoe')
@@ -36,6 +59,16 @@ try:
 except ImportError as e:
     logger.warning(f"⚠️ Temporal memory integration not available: {e}")
     TEMPORAL_MEMORY_AVAILABLE = False
+
+# Import user satisfaction tracking
+try:
+    from user_satisfaction import satisfaction_system
+    SATISFACTION_TRACKING_AVAILABLE = True
+    logger.info("✅ User satisfaction tracking loaded successfully")
+except ImportError as e:
+    logger.warning(f"⚠️ User satisfaction tracking not available: {e}")
+    SATISFACTION_TRACKING_AVAILABLE = False
+    satisfaction_system = None
     
     # Fallback functions
     async def start_chat_episode(user_id: str, context_type: str = "chat"):
@@ -181,8 +214,16 @@ class ChatMessage(BaseModel):
 # ============================================================================
 
 async def search_memories(query: str, user_id: str, time_range: str = "all") -> Dict:
-    """Search all memory sources using mem-agent with temporal awareness"""
+    """Search all memory sources using hybrid search with reranking and graph expansion"""
     memories = {"people": [], "projects": [], "notes": [], "conversations": [], "semantic_results": [], "temporal_results": []}
+    
+    # ✅ NEW: Query expansion for better retrieval
+    try:
+        expanded_queries = await query_expander.expand_query(query)
+        logger.info(f"🔍 Query expanded: {query} → {expanded_queries[:3]}")
+    except Exception as e:
+        logger.warning(f"Query expansion failed: {e}")
+        expanded_queries = [query]
     
     # Enhanced temporal memory search
     if TEMPORAL_MEMORY_AVAILABLE:
@@ -234,13 +275,24 @@ async def search_memories(query: str, user_id: str, time_range: str = "all") -> 
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # Search people
-        cursor.execute("""
-            SELECT name, relationship, notes, last_interaction 
-            FROM people WHERE user_id = ? AND (name LIKE ? OR notes LIKE ?)
-            ORDER BY last_interaction DESC LIMIT 5
-        """, (user_id, f"%{query}%", f"%{query}%"))
-        memories["people"] = [{"name": r[0], "relationship": r[1], "notes": r[2]} for r in cursor.fetchall()]
+        # Search people (use expanded queries)
+        for exp_query in expanded_queries[:2]:  # Top 2 expansions
+            cursor.execute("""
+                SELECT name, profile, facts FROM people 
+                WHERE user_id = ? AND name LIKE ?
+                ORDER BY updated_at DESC LIMIT 5
+            """, (user_id, f"%{exp_query}%"))
+            for r in cursor.fetchall():
+                profile = json.loads(r[1]) if r[1] else {}
+                facts = json.loads(r[2]) if r[2] else {}
+                if r[0] not in [p.get('name') for p in memories["people"]]:  # Deduplicate
+                    notes = str(facts.get("notes", ""))
+                    memories["people"].append({
+                        "name": r[0], 
+                        "relationship": profile.get("relationship", "contact"),
+                        "notes": notes,
+                        "content": notes
+                    })
         
         # Search projects
         cursor.execute("""
@@ -248,7 +300,7 @@ async def search_memories(query: str, user_id: str, time_range: str = "all") -> 
             WHERE user_id = ? AND (name LIKE ? OR description LIKE ?)
             LIMIT 5
         """, (user_id, f"%{query}%", f"%{query}%"))
-        memories["projects"] = [{"name": r[0], "description": r[1], "status": r[2]} for r in cursor.fetchall()]
+        memories["projects"] = [{"name": r[0], "description": r[1], "status": r[2], "content": f"{r[0]} - {r[1]}"} for r in cursor.fetchall()]
         
         # Search notes
         cursor.execute("""
@@ -262,31 +314,60 @@ async def search_memories(query: str, user_id: str, time_range: str = "all") -> 
     except Exception as e:
         logger.error(f"SQLite search error: {e}")
     
+    # ✅ NEW: Rerank all semantic results for better relevance
+    try:
+        all_semantic = (
+            memories.get("semantic_results", []) + 
+            memories.get("people", []) + 
+            memories.get("projects", []) +
+            memories.get("notes", [])
+        )
+        
+        if all_semantic:
+            reranked = reranker.rerank(query, all_semantic, top_k=10)
+            memories["semantic_results"] = reranked
+            logger.info(f"🎯 Reranked to {len(reranked)} best results")
+    except Exception as e:
+        logger.warning(f"Reranking failed: {e}")
+    
     return memories
 
-async def get_user_context(user_id: str) -> Dict:
-    """Get comprehensive user context from all integrated systems"""
+async def get_user_context(user_id: str, query: str = "") -> Dict:
+    """Get comprehensive user context with smart selection"""
     db_path = "/app/data/zoe.db"
     context = {
         "calendar_events": [],
         "active_lists": [],
         "recent_journal": [],
         "people": [],
-        "projects": []
+        "projects": [],
+        "consolidated_summary": ""
     }
     
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
+        # ✅ NEW: Get consolidated summary instead of all raw data (when available)
+        try:
+            consolidated = await memory_consolidator.get_consolidated_context(user_id, days_back=7)
+            if consolidated:
+                context["consolidated_summary"] = consolidated
+                logger.info(f"✅ Using consolidated context ({len(consolidated)} chars)")
+        except Exception as e:
+            logger.warning(f"Consolidation not available: {e}")
+        
         # Get recent calendar events (this week)
         try:
             cursor.execute("""
-                SELECT title, start_date, description FROM events 
+                SELECT title, start_date, start_time, description, created_at FROM events 
                 WHERE user_id = ? AND start_date >= date('now', '-7 days')
-                ORDER BY start_date DESC LIMIT 5
+                ORDER BY start_date DESC LIMIT 10
             """, (user_id,))
-            context["calendar_events"] = [{"title": r[0], "date": r[1], "desc": r[2]} for r in cursor.fetchall()]
+            context["calendar_events"] = [
+                {"title": r[0], "date": r[1], "start_time": r[2], "desc": r[3], "created_at": r[4]} 
+                for r in cursor.fetchall()
+            ]
             logger.info(f"Found {len(context['calendar_events'])} calendar events")
         except Exception as e:
             logger.error(f"Calendar events error: {e}")
@@ -294,7 +375,7 @@ async def get_user_context(user_id: str) -> Dict:
         # Get active lists
         try:
             cursor.execute("""
-                SELECT name, type FROM lists WHERE user_id = ? LIMIT 5
+                SELECT name, list_type FROM lists WHERE user_id = ? LIMIT 5
             """, (user_id,))
             context["active_lists"] = [{"name": r[0], "type": r[1]} for r in cursor.fetchall()]
         except Exception as e:
@@ -314,10 +395,16 @@ async def get_user_context(user_id: str) -> Dict:
         # Get key people
         try:
             cursor.execute("""
-                SELECT name, relationship FROM people 
-                WHERE user_id = ? ORDER BY last_interaction DESC LIMIT 5
+                SELECT name, profile FROM people 
+                WHERE user_id = ? ORDER BY updated_at DESC LIMIT 5
             """, (user_id,))
-            context["people"] = [{"name": r[0], "relationship": r[1]} for r in cursor.fetchall()]
+            context["people"] = []
+            for r in cursor.fetchall():
+                profile = json.loads(r[1]) if r[1] else {}
+                context["people"].append({
+                    "name": r[0], 
+                    "relationship": profile.get("relationship", "contact")
+                })
             logger.info(f"Found {len(context['people'])} people")
         except Exception as e:
             logger.error(f"People error: {e}")
@@ -336,6 +423,25 @@ async def get_user_context(user_id: str) -> Dict:
         conn.close()
     except Exception as e:
         logger.error(f"Context fetch error: {e}")
+    
+    # ✅ NEW: Apply smart context selection if query provided
+    if query:
+        try:
+            selected_context = context_selector.select_best_context(
+                query=query,
+                calendar_events=context.get("calendar_events", []),
+                journal_entries=context.get("recent_journal", []),
+                people=context.get("people", []),
+                projects=context.get("projects", []),
+                memories=[],  # Handled separately in search_memories
+                max_items_per_category=5
+            )
+            
+            # Replace with smartly selected items
+            context.update(selected_context)
+            logger.info(f"🎯 Context optimized with smart selection")
+        except Exception as e:
+            logger.warning(f"Smart context selection failed: {e}")
     
     return context
 
@@ -356,12 +462,24 @@ async def intelligent_routing(message: str, context: Dict) -> Dict:
         # Enhanced action detection with MCP integration
         message_lower = message.lower()
         
-        # Direct action patterns that should trigger MCP tools
+        # Comprehensive action patterns including natural language variants
         action_patterns = [
+            # Direct commands
             'add to', 'add ', 'create ', 'schedule ', 'remind ', 'set ', 'turn on', 'turn off',
             'list ', 'show ', 'get ', 'find ', 'search ', 'delete ', 'remove ', 'update ',
-            'shopping list', 'todo list', 'calendar', 'event', 'task', 'note', 'remember',
-            'who are', 'contacts', 'people', 'appointment', 'meeting', 'call', 'text'
+            # Natural language variants
+            "don't let me forget", "don't forget", "i need to buy", "i need to get",
+            "put on my list", "put on the list", "add it to", "put it on",
+            "i should buy", "i should get", "need to pick up", "pick up some",
+            "grab some", "get some", "buy some", "purchase",
+            # Shopping specific
+            'shopping list', 'shopping', 'grocery list', 'groceries',
+            # Calendar specific  
+            'todo list', 'calendar', 'event', 'task', 'appointment', 'meeting',
+            # People/contacts
+            'who are', 'contacts', 'people', 'call', 'text', 'phone',
+            # Memory operations
+            'note', 'remember', 'save', 'store', 'keep track'
         ]
         
         memory_patterns = ['remember', 'who is', 'what did', 'recall', 'when did', 'how did']
@@ -392,10 +510,14 @@ async def intelligent_routing(message: str, context: Dict) -> Dict:
         }
     except Exception as e:
         logger.warning(f"RouteLLM routing failed, using fallback: {e}")
-        # Enhanced fallback heuristics
+        # Enhanced fallback heuristics with comprehensive patterns
         message_lower = message.lower()
-        action_patterns = ['add to', 'add ', 'create ', 'schedule ', 'remind ', 'shopping list', 'todo list', 'remember', 'who are', 'contacts', 'people', 'appointment', 'meeting']
-        memory_patterns = ['remember', 'who is', 'what did', 'when did', 'recall']
+        action_patterns = [
+            'add to', 'add ', 'create ', 'schedule ', 'remind ', 'shopping list', 'shopping',
+            'todo list', 'remember', 'who are', 'contacts', 'people', 'appointment', 'meeting',
+            "don't let me forget", "i need to buy", "put on my list", "buy some", "get some"
+        ]
+        memory_patterns = ['remember', 'who is', 'what did', 'when did', 'recall', 'what is my', "what's my"]
         
         if any(pattern in message_lower for pattern in action_patterns):
             return {"model": "llama3.2:1b", "type": "action", "requires_memory": False, "mcp_tools_needed": True}
@@ -404,60 +526,20 @@ async def intelligent_routing(message: str, context: Dict) -> Dict:
         else:
             return {"model": "zoe-chat", "type": "conversation", "requires_memory": True, "mcp_tools_needed": False}
 
-async def build_system_prompt(memories: Dict, user_context: Dict) -> str:
-    """Build concise system prompt with context and MCP tools"""
-    system_prompt = """You are Zoe - the perfect fusion of your best friend and the world's best personal assistant.
-
-YOUR CORE IDENTITY:
-- Warm, empathetic, and genuinely caring about the user's wellbeing
-- Intelligent, organized, and proactive in helping achieve goals
-- Natural conversationalist who remembers details and builds deep understanding
-- Adaptable to each user's unique communication style and preferences
-
-YOUR MISSION:
-- Get to know your user deeply - their personality, values, interests, goals, and relationships
-- Build a comprehensive understanding that grows richer with every interaction
-- Help users connect with compatible people based on shared values and complementary traits
-- Be their advocate, confidant, and coordinator all in one
-
-You have access to powerful tools through MCP server. Use these exact formats:
-
-SHOPPING LISTS:
-- "add [item] to shopping list" → [TOOL_CALL:add_to_list:{"list_name":"shopping","task_text":"[item]","priority":"medium"}]
-- "add [item] to [list name] list" → [TOOL_CALL:add_to_list:{"list_name":"[list name]","task_text":"[item]","priority":"medium"}]
-
-CALENDAR EVENTS:
-- "schedule [event] on [date]" → [TOOL_CALL:create_calendar_event:{"title":"[event]","date":"[date]","time":"10:00"}]
-- "what's my schedule" → [TOOL_CALL:get_calendar_events:{"start_date":"today","end_date":"next_week"}]
-
-PEOPLE:
-- "add [name] as [relationship]" → [TOOL_CALL:create_person:{"name":"[name]","relationship":"[relationship]"}]
-- "who are my contacts" → [TOOL_CALL:get_people:{}]
-
-MEMORIES:
-- "remember [something]" → [TOOL_CALL:search_memories:{"query":"[something]","max_results":5}]
-
-GREETINGS:
-- "hi" or "hello" → "Hi there, how are you?"
-
-LEARNING ABOUT YOUR USER:
-When you notice important information about your user, naturally ask follow-up questions to understand:
-- Their values, beliefs, and what matters most to them
-- Their goals, dreams, and aspirations
-- Their personality traits, communication preferences, and social style
-- Their interests, hobbies, and passions
-- Important relationships and how they interact with others
-- Their daily routines, habits, and lifestyle
-
-This deep understanding helps you serve them better and enables future compatibility matching with others.
-
-Safety and refusal guidance:
-- Always respond helpfully to everyday productivity, planning, and memory tasks.
-- Only refuse if the user explicitly asks for something illegal, harmful, or violates privacy.
-- Friendly reminders, shopping help, schedule updates, and personal context are safe to handle.
-"""
+async def build_system_prompt(memories: Dict, user_context: Dict, routing_type: str = "conversation", user_id: str = "default") -> str:
+    """Build enhanced system prompt with few-shot learning, context, learned preferences, and conversation history"""
+    # ✅ NEW: Get user preferences
+    try:
+        user_preferences = await preference_learner.get_preferences(user_id)
+    except:
+        user_preferences = None
     
-    return system_prompt
+    # ✅ NEW: Extract episode context from memories for temporal continuity
+    episode_context = memories.get("episode_context", {})
+    recent_episodes = episode_context.get("recent_episodes", [])
+    
+    # ✅ NEW: Use enhanced prompts with examples, preferences, and conversation history
+    return build_enhanced_prompt(memories, user_context, routing_type, user_preferences, recent_episodes)
 
 async def call_ollama_streaming(message: str, context: Dict, memories: Dict, user_context: Dict, routing: Dict):
     """
@@ -483,8 +565,9 @@ async def call_ollama_streaming(message: str, context: Dict, memories: Dict, use
             }
             yield f"data: {json.dumps({'type': 'agent_state_delta', 'state': {'context': context_breakdown, 'routing': routing.get('type', 'conversation'), 'model': 'selecting...'}, 'timestamp': datetime.now().isoformat()})}\n\n"
             
-            # Build prompt
-            system_prompt = await build_system_prompt(memories, user_context)
+            # Build prompt with routing-specific template and user preferences
+            user_id_for_prompt = context.get("user_id", "default")
+            system_prompt = await build_system_prompt(memories, user_context, routing.get("type", "conversation"), user_id_for_prompt)
             full_prompt = f"{system_prompt}\n\nUser's message: {message}\nZoe:"
             
             # Select model
@@ -556,7 +639,9 @@ async def call_ollama_streaming(message: str, context: Dict, memories: Dict, use
 
 async def call_ollama_with_context(message: str, context: Dict, memories: Dict, user_context: Dict, routing: Dict = None) -> str:
     """Call Ollama with full context using flexible model selection"""
-    system_prompt = await build_system_prompt(memories, user_context)
+    routing_type = routing.get("type", "conversation") if routing else "conversation"
+    user_id_for_prompt = context.get("user_id", "default")
+    system_prompt = await build_system_prompt(memories, user_context, routing_type, user_id_for_prompt)
     full_prompt = f"{system_prompt}\n\nUser's message: {message}\nZoe:"
     
     # Select the best model based on routing and performance
@@ -808,6 +893,25 @@ async def chat(
         import time
         start_time = time.time()
         
+        # ✅ NEW: Wrap entire request in timeout to prevent hangs
+        try:
+            async with asyncio.timeout(60):  # 60s max for entire request (increased for Pi 5 testing)
+                return await _chat_handler(msg, user_id, stream, start_time)
+        except asyncio.TimeoutError:
+            logger.warning(f"Chat request timed out after 60s for user {user_id}")
+            return {
+                "response": "I'm processing a lot right now. Could you try that again? I want to make sure I give you a complete answer.",
+                "response_time": 60.0,
+                "routing": "timeout",
+                "error": "request_timeout"
+            }
+    except Exception as e:
+        logger.error(f"Chat error: {str(e)}", exc_info=True)
+        return {"response": "I'm here to help! Could you rephrase that for me? I want to make sure I understand exactly what you need. 😊"}
+
+async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time: float):
+    """Internal chat handler with timeout protection"""
+    try:
         # Use provided user_id from query param or body (for UI compatibility)
         actual_user_id = user_id if user_id != "default" else msg.user_id or "default"
         
@@ -829,6 +933,19 @@ async def chat(
         else:
             logger.info("📝 Temporal memory not available, skipping episode creation")
         
+        # Step 0: Detect if this needs orchestration (planning requests)
+        needs_orchestration = _is_planning_request(msg.message)
+        
+        if needs_orchestration and stream:
+            logger.info(f"🎯 Detected planning request, using orchestrator: {msg.message}")
+            from cross_agent_collaboration import orchestrator
+            
+            async def orchestration_stream():
+                async for event in orchestrator.stream_orchestration(actual_user_id, msg.message, context):
+                    yield f"data: {json_module.dumps(event, default=str)}\n\n"
+            
+            return StreamingResponse(orchestration_stream(), media_type="text/event-stream")
+        
         # Step 1: Try Enhanced MEM Agent for action execution first
         if enhanced_mem_agent:
             try:
@@ -842,21 +959,124 @@ async def chat(
                 # Check if actions were executed
                 if memories.get("actions_executed", 0) > 0:
                     logger.info(f"✅ Enhanced MEM Agent executed {memories['actions_executed']} actions")
+                    logger.info(f"📊 Enhanced MEM Agent response keys: {list(memories.keys())}")
+                    logger.info(f"📊 Semantic results count: {len(memories.get('semantic_results', []))}")
                     
-                    # Return expert success message directly
-                    expert_messages = []
-                    for result in memories.get("semantic_results", []):
-                        if result.get("success") and result.get("content"):
-                            expert_messages.append(result["content"])
+                    # Extract response AND data from expert results
+                    response = None
+                    expert_data = None
+                    primary_expert = memories.get("primary_expert", "")
                     
-                    if expert_messages:
-                        # Use the expert's success message directly
-                        response = expert_messages[0]
-                    else:
-                        # Fallback to execution summary
-                        response = memories.get("execution_summary", "Action completed successfully.")
+                    # Get response and data from results
+                    results_list = memories.get("results", [])
+                    if results_list and len(results_list) > 0:
+                        first_result = results_list[0]
+                        logger.info(f"📊 First result keys: {first_result.keys() if isinstance(first_result, dict) else 'not dict'}")
+                        
+                        if isinstance(first_result, dict):
+                            response = first_result.get("content", "")
+                            expert_data = first_result.get("data", {})
+                            logger.info(f"📊 Expert data found: {bool(expert_data)}, keys: {expert_data.keys() if expert_data else 'none'}")
                     
-                    # Record this conversation turn in temporal memory
+                    if not response:
+                        response = memories.get("execution_summary", "Action completed.")
+                    
+                    # FORMAT actual data for user display
+                    logger.info(f"📊 Primary expert: {primary_expert}, has data: {bool(expert_data)}")
+                    
+                    if expert_data and ("calendar" in primary_expert.lower() or "calendar" in msg.message.lower()):
+                        # Use data from Enhanced MEM Agent (it already queried the calendar)
+                        try:
+                            logger.info(f"📊 Formatting calendar data from expert...")
+                            today_events = expert_data.get("today_events", [])
+                            upcoming_events = expert_data.get("upcoming_events", [])
+                            total = expert_data.get("total_events", 0)
+                            
+                            logger.info(f"📊 Expert data: {len(today_events)} today, {len(upcoming_events)} upcoming")
+                            
+                            if today_events:
+                                response += "\n\n📅 **Today's Events:**\n"
+                                for event in today_events:
+                                    # Get time from start_time field (format: "HH:MM")
+                                    time_str = event.get("start_time", "All day")
+                                    if time_str and time_str != "All day":
+                                        # Format as 12-hour time
+                                        try:
+                                            hour = int(time_str.split(":")[0])
+                                            minute = time_str.split(":")[1] if ":" in time_str else "00"
+                                            ampm = "AM" if hour < 12 else "PM"
+                                            hour_12 = hour % 12 or 12
+                                            time_str = f"{hour_12}:{minute} {ampm}"
+                                        except:
+                                            pass
+                                    title = event.get("title", "Untitled")
+                                    response += f"• {time_str} - {title}\n"
+                            else:
+                                response += "\n\n📅 Your calendar is clear for today!"
+                            
+                            if upcoming_events:
+                                response += "\n\n📆 **Upcoming Events:**\n"
+                                for event in upcoming_events:
+                                    date_str = event.get("start_date", "")
+                                    title = event.get("title", "Untitled")
+                                    response += f"• {date_str} - {title}\n"
+                        except Exception as e:
+                            logger.error(f"❌ Failed to format calendar data: {e}", exc_info=True)
+                    
+                    elif expert_data and ("planning" in primary_expert.lower() or "plan" in msg.message.lower()):
+                        # Format planning data from expert
+                        try:
+                            logger.info(f"📊 Formatting planning data from expert...")
+                            steps = expert_data.get("steps", [])
+                            
+                            if steps:
+                                response += "\n\n📋 **Your Plan:**\n"
+                                for i, step in enumerate(steps[:10], 1):
+                                    # Handle different step formats
+                                    if isinstance(step, dict):
+                                        step_text = step.get("description", step.get("title", step.get("step", str(step))))
+                                        priority = step.get("priority", "")
+                                        if priority:
+                                            response += f"{i}. {step_text} [{priority}]\n"
+                                        else:
+                                            response += f"{i}. {step_text}\n"
+                                    else:
+                                        response += f"{i}. {step}\n"
+                                
+                                response += "\n💡 **Tips:**\n"
+                                response += "• Start with highest priority items\n"
+                                response += "• Schedule breaks between tasks\n"
+                                response += "• Review progress at end of day"
+                        except Exception as e:
+                            logger.error(f"❌ Failed to format planning data: {e}", exc_info=True)
+                    
+                    elif expert_data and ("list" in primary_expert.lower() or "shopping" in msg.message.lower() or "add" in msg.message.lower()):
+                        # Format list data from expert
+                        try:
+                            logger.info(f"📊 Formatting list data from expert...")
+                            current_items = expert_data.get("current_items", [])
+                            items_data = expert_data.get("items", [])
+                            
+                            # Use whichever data is available
+                            items_to_show = current_items if current_items else items_data
+                            
+                            logger.info(f"📊 List data: {len(items_to_show)} items")
+                            
+                            if items_to_show:
+                                response += f"\n\n🛒 **Shopping List** ({len(items_to_show)} items):\n"
+                                for item in items_to_show[:15]:
+                                    if isinstance(item, dict):
+                                        status = "✅" if item.get("completed") else "○"
+                                        text = item.get("text", item.get("name", "Item"))
+                                        response += f"{status} {text}\n"
+                                    else:
+                                        response += f"○ {item}\n"
+                            else:
+                                response += "\n\n🛒 Your shopping list is currently empty."
+                        except Exception as e:
+                            logger.error(f"❌ Failed to format list data: {e}", exc_info=True)
+                    
+                    # Record in temporal memory
                     if TEMPORAL_MEMORY_AVAILABLE:
                         try:
                             await add_chat_turn(actual_user_id, msg.message, response, "chat")
@@ -864,20 +1084,96 @@ async def chat(
                         except Exception as e:
                             logger.warning(f"Failed to record temporal memory: {e}")
                     
-                    return {
-                        "response": response,
-                        "response_time": time.time() - start_time,
-                        "routing": "action_executed",
-                        "actions_executed": memories.get("actions_executed", 0),
-                        "memories_used": len(memories.get("semantic_results", [])),
-                        "episode_id": episode_id,
-                        "context_breakdown": {
-                            "events": 0,
-                            "journals": 0,
-                            "people": 0,
-                            "projects": 0
+                    # ✅ NEW: Log action execution for training
+                    interaction_id = None
+                    try:
+                        interaction_id = await training_collector.log_interaction({
+                            "message": msg.message,
+                            "response": response,
+                            "context": context,
+                            "routing_type": "action_executed",
+                            "model_used": "enhanced_mem_agent",
+                            "user_id": actual_user_id
+                        })
+                        logger.debug(f"📝 Logged action training interaction {interaction_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to log action training: {e}")
+                    
+                    # ✅ NEW: Record satisfaction for action-executed responses
+                    if SATISFACTION_TRACKING_AVAILABLE and satisfaction_system:
+                        try:
+                            response_time_action = time.time() - start_time
+                            final_interaction_id = interaction_id or f"interaction_{int(time.time() * 1000)}"
+                            asyncio.create_task(
+                                asyncio.to_thread(
+                                    satisfaction_system.record_interaction,
+                                    final_interaction_id,
+                                    actual_user_id,
+                                    msg.message,
+                                    response,
+                                    response_time_action,
+                                    {"routing": "action_executed", "actions": memories.get("actions_executed", 0)}
+                                )
+                            )
+                            logger.debug(f"📊 Queued satisfaction tracking for action interaction {final_interaction_id}")
+                        except Exception as e:
+                            logger.warning(f"Failed to queue satisfaction tracking for action: {e}")
+                    
+                    # CRITICAL FIX: Support streaming for action responses
+                    if stream:
+                        # Stream the action response using AG-UI protocol
+                        async def stream_action_response():
+                            import asyncio  # Import here for async streaming
+                            try:
+                                session_id = msg.session_id or f"session_{int(time.time() * 1000)}"
+                                
+                                # Event: session_start
+                                yield f"data: {json.dumps({'type': 'session_start', 'session_id': session_id, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                
+                                # Event: agent_state_delta (action executed)
+                                yield f"data: {json.dumps({'type': 'agent_state_delta', 'state': {'routing': 'action_executed', 'actions': memories.get('actions_executed', 0)}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                
+                                # Event: action
+                                yield f"data: {json.dumps({'type': 'action', 'name': 'enhanced_mem_agent', 'status': 'complete', 'timestamp': datetime.now().isoformat()})}\n\n"
+                                
+                                # Event: message_delta (stream response word by word)
+                                words = response.split(' ')
+                                for i, word in enumerate(words):
+                                    yield f"data: {json.dumps({'type': 'message_delta', 'delta': word + (' ' if i < len(words) - 1 else ''), 'timestamp': datetime.now().isoformat()})}\n\n"
+                                    await asyncio.sleep(0.05)  # Smooth streaming
+                                
+                                # Event: session_end
+                                yield f"data: {json.dumps({'type': 'session_end', 'session_id': session_id, 'final_state': {'complete': True}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                            except Exception as e:
+                                logger.error(f"Action streaming error: {e}")
+                                yield f"data: {json.dumps({'type': 'error', 'error': {'message': str(e)}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                        
+                        return StreamingResponse(
+                            stream_action_response(),
+                            media_type="text/event-stream",
+                            headers={
+                                "Cache-Control": "no-cache",
+                                "X-Accel-Buffering": "no",
+                                "Connection": "keep-alive"
+                            }
+                        )
+                    else:
+                        # Non-streaming response (JSON)
+                        return {
+                            "response": response,
+                            "interaction_id": interaction_id,  # ✅ NEW: For feedback
+                            "response_time": time.time() - start_time,
+                            "routing": "action_executed",
+                            "actions_executed": memories.get("actions_executed", 0),
+                            "memories_used": len(memories.get("semantic_results", [])),
+                            "episode_id": episode_id,
+                            "context_breakdown": {
+                                "events": 0,
+                                "journals": 0,
+                                "people": 0,
+                                "projects": 0
+                            }
                         }
-                    }
                 else:
                     logger.info("🔄 Enhanced MEM Agent found no actions to execute, falling back to conversation")
             except Exception as e:
@@ -887,16 +1183,22 @@ async def chat(
         # Intelligent routing decision
         routing = await intelligent_routing(msg.message, context)
         
-        # OPTIMIZATION: Run memory search and context gathering in parallel
+        # OPTIMIZATION: Run memory search and context gathering in parallel with timeout
         import asyncio
-        if routing.get("requires_memory"):
-            memories, user_context = await asyncio.gather(
-                search_memories(msg.message, actual_user_id),
-                get_user_context(actual_user_id)
-            )
-        else:
+        try:
+            async with asyncio.timeout(15):  # 15s max for memory search (increased for Pi 5 testing)
+                if routing.get("requires_memory"):
+                    memories, user_context = await asyncio.gather(
+                        search_memories(msg.message, actual_user_id),
+                        get_user_context(actual_user_id, query=msg.message)  # ✅ Pass query for smart selection
+                    )
+                else:
+                    memories = {}
+                    user_context = await get_user_context(actual_user_id, query=msg.message)  # ✅ Pass query
+        except asyncio.TimeoutError:
+            logger.warning(f"Memory search timed out after 15s, using empty context")
             memories = {}
-            user_context = await get_user_context(actual_user_id)
+            user_context = {"calendar_events": [], "active_lists": [], "recent_journal": [], "people": [], "projects": []}
 
         # Step 3: Emit intelligence stream context update
         try:
@@ -957,8 +1259,51 @@ async def chat(
                 except Exception as e:
                     logger.warning(f"Failed to record temporal memory: {e}")
             
+            # ✅ NEW: Log interaction for training
+            interaction_id = None
+            try:
+                # Determine which model was used
+                model_used = model_selector.select_model(routing.get("type", "conversation"))
+                
+                interaction_id = await training_collector.log_interaction({
+                    "message": msg.message,
+                    "response": response,
+                    "context": context,
+                    "routing_type": routing.get("type"),
+                    "model_used": model_used,
+                    "user_id": actual_user_id
+                })
+                
+                # Update with quality scores
+                quality_scores = QualityAnalyzer.analyze_response(response, routing.get("type", "conversation"))
+                await training_collector.update_interaction_quality(interaction_id, quality_scores)
+                
+                logger.debug(f"📝 Logged training interaction {interaction_id}")
+            except Exception as e:
+                logger.warning(f"Failed to log training interaction: {e}")
+            
+            # ✅ NEW: Record user satisfaction (fire-and-forget, don't block response)
+            if SATISFACTION_TRACKING_AVAILABLE and satisfaction_system:
+                try:
+                    final_interaction_id = interaction_id or f"interaction_{int(time.time() * 1000)}"
+                    asyncio.create_task(
+                        asyncio.to_thread(
+                            satisfaction_system.record_interaction,
+                            final_interaction_id,
+                            actual_user_id,
+                            msg.message,
+                            response,
+                            response_time,
+                            {"routing": routing.get("type"), "memories_used": memory_count}
+                        )
+                    )
+                    logger.debug(f"📊 Queued satisfaction tracking for interaction {final_interaction_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to queue satisfaction tracking: {e}")
+            
             return {
                 "response": response,
+                "interaction_id": interaction_id,  # ✅ NEW: For feedback tracking
                 "response_time": response_time,
                 "routing": routing.get("type"),
                 "memories_used": memory_count,
@@ -970,9 +1315,8 @@ async def chat(
                     "projects": len(user_context.get("projects", []))
                 }
             }
-        
     except Exception as e:
-        logger.error(f"Chat error: {str(e)}", exc_info=True)
+        logger.error(f"Chat handler error: {str(e)}", exc_info=True)
         return {"response": "I'm here to help! Could you rephrase that for me? I want to make sure I understand exactly what you need. 😊"}
 
 @router.get("/api/models/performance")
@@ -1016,4 +1360,79 @@ async def get_quality_metrics():
         }
     except Exception as e:
         logger.error(f"Quality metrics error: {e}")
+        return {"error": str(e)}
+
+# Helper Functions
+def _is_planning_request(message: str) -> bool:
+    """Detect if message needs full orchestration (planning requests and complex multi-step tasks)"""
+    orchestration_patterns = [
+        # Planning requests
+        "plan my day", "plan day", "help me plan", "organize my day",
+        "organize my week", "plan my week", "what should i do",
+        "how should i plan", "help plan", "organize day", "plan my",
+        # Multi-step tasks
+        "and then", "and also", "after that",
+        # Multiple systems (calendar + lists, etc.)
+        "calendar and", "list and", "remind and", "schedule and",
+        "add to list and", "create event and",
+        # Complex queries
+        "all my", "show me everything", "what do i have",
+        "plan my morning", "plan my afternoon", "plan my evening"
+    ]
+    message_lower = message.lower()
+    return any(phrase in message_lower for phrase in orchestration_patterns)
+
+# ============================================================================
+# FEEDBACK & TRAINING ENDPOINTS
+# ============================================================================
+
+@router.post("/api/chat/feedback/{interaction_id}")
+async def provide_feedback(
+    interaction_id: str,
+    feedback_type: str = Query(..., description="thumbs_up, thumbs_down, or correction"),
+    corrected_response: Optional[str] = None,
+    user_id: str = Query("default")
+):
+    """Allow user to rate/correct Zoe's responses for training"""
+    try:
+        if feedback_type == "correction":
+            if not corrected_response:
+                return {"error": "corrected_response required for correction feedback"}
+            await training_collector.record_correction(interaction_id, corrected_response)
+            return {
+                "status": "correction_recorded",
+                "message": "Thanks! Zoe will learn from this tonight."
+            }
+        elif feedback_type == "thumbs_up":
+            await training_collector.record_positive_feedback(interaction_id)
+            return {
+                "status": "positive_feedback_recorded",
+                "message": "Great! This will reinforce Zoe's learning."
+            }
+        elif feedback_type == "thumbs_down":
+            await training_collector.record_negative_feedback(interaction_id)
+            return {
+                "status": "negative_feedback_recorded",
+                "message": "Thanks for the feedback. Zoe will improve."
+            }
+        else:
+            return {"error": "Invalid feedback_type"}
+    except Exception as e:
+        logger.error(f"Feedback recording error: {e}")
+        return {"error": str(e)}
+
+@router.get("/api/chat/training-stats")
+async def get_training_stats(user_id: str = Query("default")):
+    """Get training statistics for display in UI"""
+    try:
+        stats = await training_collector.get_stats(user_id)
+        return {
+            "examples_collected_today": stats.get("today_count", 0),
+            "corrections_this_week": stats.get("corrections", 0),
+            "next_training_run": stats.get("next_training", "Not scheduled"),
+            "current_adapter_score": stats.get("adapter_score", 0),
+            "adapter_deployed": stats.get("adapter_deployed", False)
+        }
+    except Exception as e:
+        logger.error(f"Training stats error: {e}")
         return {"error": str(e)}
