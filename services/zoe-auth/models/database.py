@@ -138,8 +138,9 @@ class ServiceAccount:
 class AuthDatabase:
     """Enhanced database manager for authentication system"""
     
-    def __init__(self, db_path: str = "/app/data/zoe_auth.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: str = None):
+        # Use environment variable or default to consolidated zoe.db
+        self.db_path = db_path or os.getenv("DATABASE_PATH", "/app/data/zoe.db")
         self.ensure_directory()
         self.init_database()
         self.setup_default_roles()

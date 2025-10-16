@@ -288,6 +288,11 @@ async def get_user(request: Request):
         "email": user["email"]
     }
 
+@app.get("/api/auth/profile")
+async def get_profile(request: Request):
+    """Get current user profile (alias for /user for UI compatibility)"""
+    return await get_user(request)
+
 @app.post("/api/auth/logout")
 async def logout(request: Request):
     """Logout user"""
