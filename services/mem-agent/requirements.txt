@@ -4,4 +4,5 @@ pydantic==2.5.0
 httpx==0.25.2
 aiohttp==3.9.1
 python-multipart==0.0.6
+tenacity==8.2.3
 

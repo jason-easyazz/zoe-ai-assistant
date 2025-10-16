@@ -1,5 +1,65 @@
 # Changelog - Zoe AI Assistant
 
+## [2.3.0] - 2025-10-12 - "Advanced Widget System" Release
+
+### 🎨 Unified Widget System
+- **Modular Architecture** - MagicMirror²-inspired widget system with registry, lifecycle management
+- **Cross-Platform Support** - Same widgets work on desktop and touch dashboards
+- **8 Core Widgets** - Events, Tasks, Time, Weather, Home, System, Notes, Zoe AI
+- **AI Widget Generation** - Create custom widgets by describing them to Zoe
+- **Widget Marketplace** - Browse, install, rate, and share community widgets
+- **Layout Persistence** - Layouts saved per user per device (SQLite backend)
+- **Developer API** - Comprehensive API for building custom widgets
+- **Drag & Drop** - Rearrange widgets on both desktop and touch interfaces
+- **4 Widget Sizes** - Small, Medium, Large, XLarge with responsive grid
+- **Auto-Updates** - Widget versioning with update notifications
+
+### 📁 New Files
+- `/services/zoe-ui/dist/js/widget-system.js` - Core widget registry and manager
+- `/services/zoe-ui/dist/js/widget-base.js` - WidgetModule base class
+- `/services/zoe-ui/dist/js/widgets/core/*.js` - 8 core widget modules
+- `/services/zoe-core/routers/widget_builder.py` - Backend API for widgets
+- `/services/zoe-core/db/schema/widgets.sql` - Database schema for marketplace
+- `/docs/guides/widget-development.md` - Comprehensive developer guide
+
+### 🔄 Modified Files
+- `/services/zoe-ui/dist/dashboard.html` - Replaced with widget-based system
+- `/services/zoe-ui/dist/touch/dashboard.html` - Updated to use shared widget modules
+- `/services/zoe-core/main.py` - Added widget_builder routers
+- `README.md` - Added widget system documentation
+
+### 🗑️ Removed Files
+- `/services/zoe-ui/dist/dashboard-widget.html` - Consolidated into dashboard.html
+
+### 📊 New API Endpoints
+- `GET /api/widgets/marketplace` - Browse available widgets
+- `POST /api/widgets/marketplace` - Publish custom widget
+- `POST /api/widgets/install/{widget_id}` - Install widget from marketplace
+- `DELETE /api/widgets/uninstall/{widget_id}` - Uninstall widget
+- `GET /api/widgets/my-widgets` - Get user's installed widgets
+- `POST /api/user/layout` - Save widget layout
+- `GET /api/user/layout` - Get widget layout
+- `DELETE /api/user/layout` - Delete widget layout
+- `POST /api/widgets/generate` - AI widget generation
+- `POST /api/widgets/rate` - Rate a widget
+- `GET /api/widgets/updates` - Check for widget updates
+- `POST /api/widgets/analytics/track` - Track widget usage
+
+### 🎯 Widget Features
+- **AI Generation Templates** - StatWidget, ChartWidget, ListWidget, GaugeWidget, MediaWidget, IframeWidget
+- **Security Sandboxing** - Widgets restricted to approved APIs, no eval/Function constructor
+- **Event System** - Widgets can communicate via custom events
+- **Helper Methods** - setLoading(), setError(), emit(), on() for easier development
+- **Responsive Grid** - Automatically adapts to screen size (mobile, tablet, desktop)
+- **Edit Mode** - Toggle controls visibility for clean viewing vs editing
+
+### 🔧 Technical Details
+- **Database** - 5 new tables for widget marketplace, ratings, layouts, analytics
+- **Widget Registry Pattern** - Centralized module registration and discovery
+- **Lifecycle Management** - init(), update(), destroy(), resize() hooks
+- **Version Control** - Semantic versioning with update tracking
+- **Data Binding** - Async fetch API with error handling patterns
+
 ## [2.2.0] - 2025-01-04 - "Light RAG Intelligence" Release
 
 ### 🧠 Light RAG Intelligence System

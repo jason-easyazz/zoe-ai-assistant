@@ -1,0 +1,356 @@
+<!-- Zoe Orb Chat Component - Include this on all pages -->
+
+<!-- Zoe Orb Button - inline handler for immediate functionality -->
+<div class="zoe-orb" id="zoeOrb" title="Click to chat with Zoe" onclick="if(typeof toggleOrbChat==='function'){toggleOrbChat()}">
+</div>
+
+<!-- Orb Toast for Notifications -->
+<div class="orb-toast" id="orbToast" style="display:none;"></div>
+
+<!-- Orb Chat Window -->
+<div class="orb-chat-window" id="orbChatWindow">
+    <div class="orb-chat-header">
+        <div class="orb-chat-title">
+            Chat with Zoe
+        </div>
+        <button class="orb-chat-close" id="orbChatClose" onclick="if(typeof closeOrbChat==='function'){closeOrbChat()}">×</button>
+    </div>
+    <div class="orb-chat-messages" id="orbChatMessages">
+        <div class="orb-chat-message assistant">
+            Hi! I'm Zoe, your AI assistant. I can help you explore ideas, discuss suggestions, or just chat about anything. What's on your mind?
+        </div>
+    </div>
+    <div class="orb-chat-input-area">
+        <textarea class="orb-chat-input" id="orbChatInput" placeholder="Type your message..." rows="1"></textarea>
+        <button class="orb-chat-send" id="orbChatSend" onclick="if(typeof sendOrbMessage==='function'){sendOrbMessage()}">→</button>
+    </div>
+</div>
+
+<style>
+/* Zoe Orb Styles - Complete */
+.zoe-orb {
+    position: fixed; bottom: 24px; right: 24px; width: 70px; height: 70px;
+    border-radius: 50%; cursor: pointer; transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94); 
+    z-index: 1200; display: flex; align-items: center; justify-content: center; 
+    overflow: hidden;
+    animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
+    background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 50%, #A855F7 100%);
+    background-size: 200% 200%;
+    box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
+}
+
+.zoe-orb::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 20px;
+    height: 20px;
+    background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    animation: orb-inner-glow 2s ease-in-out infinite alternate;
+}
+
+.zoe-orb:hover { 
+    transform: scale(1.12); 
+    box-shadow: 0 8px 25px rgba(123, 97, 255, 0.5), 0 0 50px rgba(123, 97, 255, 0.3);
+    animation-duration: 8s, 3s;
+}
+
+.zoe-orb:active { transform: scale(0.95); }
+
+/* State-based colors */
+.zoe-orb.connecting { 
+    background: linear-gradient(135deg, #7B61FF 0%, #6366F1 50%, #8B5CF6 100%);
+    background-size: 200% 200%;
+    box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
+}
+
+.zoe-orb.connected { 
+    background: linear-gradient(135deg, #7B61FF 0%, #10B981 50%, #34D399 100%);
+    background-size: 200% 200%;
+    box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(16, 185, 129, 0.2);
+}
+
+.zoe-orb.thinking { 
+    background: linear-gradient(135deg, #7B61FF 0%, #F59E0B 50%, #FBBF24 100%);
+    background-size: 200% 200%;
+    box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(245, 158, 11, 0.2);
+    animation: orb-thinking-gentle 3s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
+}
+
+.zoe-orb.proactive { 
+    background: linear-gradient(135deg, #7B61FF 0%, #EC4899 50%, #F472B6 100%);
+    background-size: 200% 200%;
+    box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(236, 72, 153, 0.2);
+    animation: orb-proactive-gentle 4s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
+}
+
+.zoe-orb.error { 
+    background: linear-gradient(135deg, #7B61FF 0%, #EF4444 50%, #F87171 100%);
+    background-size: 200% 200%;
+    box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(239, 68, 68, 0.2);
+    animation: orb-error-shake 0.5s ease-in-out infinite, orb-liquid-swirl 3s ease-in-out infinite;
+}
+
+.zoe-orb.chatting {
+    background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 50%, #06B6D4 100%);
+    background-size: 200% 200%;
+    box-shadow: 0 8px 25px rgba(123, 97, 255, 0.6), 0 0 60px rgba(123, 97, 255, 0.4);
+    animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
+}
+
+.zoe-orb.badge::after {
+    content: ''; position: absolute; top: 8px; right: 8px; width: 12px; height: 12px; 
+    background: #F59E0B; border-radius: 50%; border: 2px solid white; 
+    box-shadow: 0 0 12px rgba(245, 158, 11, 0.8);
+    animation: badge-pulse 2s ease-in-out infinite;
+}
+
+/* Orb Toast */
+.orb-toast {
+    position: fixed; bottom: 102px; right: 24px; background: rgba(255,255,255,0.95); color: #111;
+    border-radius: 12px; padding: 12px 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.15); z-index: 1300;
+    max-width: 320px; border: 1px solid rgba(0,0,0,0.06);
+}
+
+/* Orb Chat Window */
+.orb-chat-window {
+    position: fixed; bottom: 102px; right: 24px; width: 320px; max-height: 420px;
+    background: rgba(255,255,255,0.98); backdrop-filter: blur(20px);
+    border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.12), 0 0 0 1px rgba(255,255,255,0.2); 
+    z-index: 1400; overflow: hidden;
+    transform: translateY(20px) scale(0.95); opacity: 0;
+    transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    display: flex; flex-direction: column;
+}
+
+.orb-chat-window.open {
+    transform: translateY(0) scale(1); opacity: 1;
+}
+
+.orb-chat-header {
+    padding: 8px 12px; background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 100%);
+    color: white; display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.orb-chat-title {
+    font-weight: 500; font-size: 12px; display: flex; align-items: center; gap: 5px;
+}
+
+.orb-chat-title::before {
+    content: '';
+    width: 4px;
+    height: 4px;
+    background: rgba(255,255,255,0.9);
+    border-radius: 50%;
+    animation: chat-status-pulse 2s ease-in-out infinite;
+}
+
+.orb-chat-close {
+    background: rgba(255,255,255,0.1); border: none; color: white; cursor: pointer; 
+    padding: 3px; border-radius: 50%; transition: all 0.2s;
+    width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 300;
+}
+
+.orb-chat-close:hover { 
+    background: rgba(255,255,255,0.2); 
+    transform: scale(1.05);
+}
+
+.orb-chat-messages {
+    flex: 1; padding: 16px; overflow-y: auto; max-height: 300px;
+    display: flex; flex-direction: column; gap: 12px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(123, 97, 255, 0.2) transparent;
+}
+
+.orb-chat-messages::-webkit-scrollbar {
+    width: 3px;
+}
+
+.orb-chat-messages::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.orb-chat-messages::-webkit-scrollbar-thumb {
+    background: rgba(123, 97, 255, 0.2);
+    border-radius: 2px;
+}
+
+.orb-chat-message {
+    padding: 12px 16px; border-radius: 16px; max-width: 85%;
+    word-wrap: break-word; line-height: 1.4; font-size: 13px;
+}
+
+.orb-chat-message.user {
+    background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 100%);
+    color: white; align-self: flex-end; margin-left: auto;
+    box-shadow: 0 2px 8px rgba(123, 97, 255, 0.25);
+}
+
+.orb-chat-message.assistant {
+    background: rgba(248, 250, 252, 0.9); color: #334155; align-self: flex-start;
+    border: 1px solid rgba(226, 232, 240, 0.6);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+
+.orb-chat-input-area {
+    padding: 12px 16px; border-top: 1px solid rgba(226, 232, 240, 0.3);
+    display: flex; gap: 8px; align-items: center;
+    background: rgba(248, 250, 252, 0.5);
+    position: relative;
+}
+
+.orb-chat-input {
+    flex: 1; border: 1px solid rgba(226, 232, 240, 0.8); border-radius: 24px;
+    padding: 10px 16px; font-size: 12px; resize: none; min-height: 36px; max-height: 120px;
+    background: rgba(255,255,255,0.95); transition: all 0.3s ease;
+    font-family: inherit; line-height: 1.4; overflow: hidden;
+}
+
+.orb-chat-input:focus {
+    outline: none; border-color: #7B61FF; background: white;
+    box-shadow: 0 0 0 2px rgba(123, 97, 255, 0.08);
+}
+
+.orb-chat-input::placeholder {
+    color: rgba(107, 114, 128, 0.7);
+    font-size: 12px;
+}
+
+.orb-chat-send {
+    background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 100%);
+    border: none; border-radius: 50%; width: 32px; height: 32px;
+    color: white; cursor: pointer; transition: all 0.2s;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: bold;
+    box-shadow: 0 2px 6px rgba(123, 97, 255, 0.2);
+    flex-shrink: 0;
+}
+
+.orb-chat-send:hover { 
+    transform: scale(1.05); 
+    box-shadow: 0 3px 8px rgba(123, 97, 255, 0.3);
+}
+
+.orb-chat-send:disabled { 
+    opacity: 0.4; cursor: not-allowed; transform: none; 
+    box-shadow: 0 1px 3px rgba(123, 97, 255, 0.1);
+}
+
+/* Chat typing indicator */
+.orb-chat-typing {
+    display: flex; align-items: center; gap: 4px; padding: 8px 12px;
+    background: rgba(123, 97, 255, 0.1); border-radius: 12px;
+    color: #666; font-size: 12px; align-self: flex-start;
+}
+
+.orb-chat-typing-dots {
+    display: flex; gap: 2px;
+}
+
+.orb-chat-typing-dot {
+    width: 4px; height: 4px; background: #7B61FF; border-radius: 50%;
+    animation: typing-dot 1.4s ease-in-out infinite;
+}
+
+.orb-chat-typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.orb-chat-typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+/* Animations */
+@keyframes orb-liquid-swirl {
+    0%, 100% { 
+        background-position: 0% 50%;
+        border-radius: 50% 45% 55% 50%;
+    }
+    25% { 
+        background-position: 100% 50%;
+        border-radius: 55% 50% 45% 55%;
+    }
+    50% { 
+        background-position: 100% 100%;
+        border-radius: 45% 55% 50% 45%;
+    }
+    75% { 
+        background-position: 0% 100%;
+        border-radius: 50% 45% 55% 50%;
+    }
+}
+
+@keyframes orb-breathe { 
+    0%, 100% { transform: scale(1); } 
+    50% { transform: scale(1.04); } 
+}
+
+@keyframes orb-thinking-gentle {
+    0%, 100% { 
+        transform: scale(1);
+        box-shadow: 0 6px 20px rgba(245, 158, 11, 0.4), 0 0 40px rgba(245, 158, 11, 0.2);
+    }
+    50% { 
+        transform: scale(1.02);
+        box-shadow: 0 7px 22px rgba(245, 158, 11, 0.5), 0 0 45px rgba(245, 158, 11, 0.3);
+    }
+}
+
+@keyframes orb-proactive-gentle {
+    0%, 100% { 
+        box-shadow: 0 6px 20px rgba(236, 72, 153, 0.4), 0 0 40px rgba(236, 72, 153, 0.2);
+    }
+    50% { 
+        box-shadow: 0 7px 25px rgba(236, 72, 153, 0.5), 0 0 50px rgba(236, 72, 153, 0.3);
+    }
+}
+
+@keyframes orb-error-shake {
+    0%, 100% { transform: translateX(0) scale(1); }
+    25% { transform: translateX(-2px) scale(0.98); }
+    75% { transform: translateX(2px) scale(0.98); }
+}
+
+@keyframes badge-pulse {
+    0%, 100% { 
+        transform: scale(1);
+        opacity: 1;
+    }
+    50% { 
+        transform: scale(1.3);
+        opacity: 0.8;
+    }
+}
+
+@keyframes orb-inner-glow {
+    0% { 
+        opacity: 0.3;
+        transform: translate(-50%, -50%) scale(1);
+    }
+    100% { 
+        opacity: 0.6;
+        transform: translate(-50%, -50%) scale(1.2);
+    }
+}
+
+@keyframes chat-status-pulse {
+    0%, 100% { 
+        opacity: 0.8;
+        transform: scale(1);
+    }
+    50% { 
+        opacity: 1;
+        transform: scale(1.1);
+    }
+}
+
+@keyframes typing-dot {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-8px); opacity: 1; }
+}
+</style>
+
+<!-- Load the Zoe Orb JavaScript -->
+<script src="/js/zoe-orb.js"></script>
+

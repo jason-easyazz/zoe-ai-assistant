@@ -152,6 +152,19 @@ function getServiceMap() {
     };
 }
 
+// URL normalization helper - Force HTTPS
+function normalizeToHttps(url) {
+    try {
+        const normalized = new URL(url, window.location.origin);
+        normalized.protocol = 'https:';
+        return normalized.toString();
+    } catch (e) {
+        // If URL construction fails, return as-is (likely already relative)
+        console.warn('[common] URL normalization failed for:', url, e);
+        return url;
+    }
+}
+
 // API request helper with microservices support
 async function apiRequest(endpoint, options = {}) {
     try {
@@ -204,7 +217,12 @@ async function apiRequest(endpoint, options = {}) {
             }
         }
         
-        const response = await fetch(fullUrl, {
+        // CRITICAL: Normalize URL to HTTPS before calling fetch
+        // This is a backup to the auth.js interceptor
+        const sanitizedUrl = normalizeToHttps(fullUrl);
+        console.log('[common] 🔧 Sanitized URL:', sanitizedUrl);
+        
+        const response = await fetch(sanitizedUrl, {
             ...options,
             headers
         });

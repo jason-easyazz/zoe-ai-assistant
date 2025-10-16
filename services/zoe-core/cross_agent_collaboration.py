@@ -33,6 +33,7 @@ class ExpertType(Enum):
     DEVELOPMENT = "development"
     WEATHER = "weather"
     HOMEASSISTANT = "homeassistant"
+    TTS = "tts"
 
 @dataclass
 class TaskDependency:
@@ -86,10 +87,23 @@ class ExpertOrchestrator:
             ExpertType.PLANNING: "/api/developer/tasks",
             ExpertType.DEVELOPMENT: "/api/developer",
             ExpertType.WEATHER: "/api/weather",
-            ExpertType.HOMEASSISTANT: "/api/homeassistant"
+            ExpertType.HOMEASSISTANT: "/api/homeassistant",
+            ExpertType.TTS: "/api/tts"
         }
         self.active_orchestrations = {}
         self.task_timeout = 30  # Default timeout in seconds
+        
+        # Expert emoji mapping for display
+        self.expert_emojis = {
+            "calendar": "🗓️",
+            "lists": "📝",
+            "memory": "🧠",
+            "planning": "📊",
+            "reminder": "⏰",
+            "weather": "🌤️",
+            "homeassistant": "🏠",
+            "tts": "🔊"
+        }
     
     async def orchestrate_task(self, user_id: str, request: str, 
                              context: Dict[str, Any] = None) -> OrchestrationResult:
@@ -457,6 +471,405 @@ class ExpertOrchestrator:
             summary += f". Experts involved: {', '.join(synthesis['results'].keys())}"
         
         return summary
+    
+    async def stream_orchestration(self, user_id: str, request: str, context: Dict[str, Any] = None):
+        """Stream orchestration progress with AG-UI protocol for real-time updates"""
+        orchestration_id = str(uuid.uuid4())
+        start_time = datetime.now()
+        
+        try:
+            # Session start
+            yield {
+                "type": "session_start",
+                "session_id": orchestration_id,
+                "timestamp": start_time.isoformat()
+            }
+            
+            # Step 1: Decompose task
+            yield {
+                "type": "agent_state_delta",
+                "state": {"status": "decomposing", "message": "🔄 Breaking down your request..."}
+            }
+            
+            # Use Enhanced MEM Agent for intelligent task decomposition
+            decomposed_tasks = await self._decompose_with_enhanced_mem_agent(request, user_id)
+            
+            # Show planned experts
+            expert_list = "\n".join([
+                f"   {i+1}. {self.expert_emojis.get(task['expert'], '🤖')} {task['expert'].title()} expert → {task['description']}"
+                for i, task in enumerate(decomposed_tasks)
+            ])
+            
+            yield {
+                "type": "message_delta",
+                "delta": f"\n📋 I'll coordinate {len(decomposed_tasks)} experts:\n{expert_list}\n\n"
+            }
+            
+            # Step 2: Execute each expert task
+            results = []
+            for i, task in enumerate(decomposed_tasks):
+                expert_name = task['expert']
+                expert_emoji = self.expert_emojis.get(expert_name, '🤖')
+                
+                # Show expert starting
+                yield {
+                    "type": "action",
+                    "action": {
+                        "type": "expert_call",
+                        "expert": expert_name,
+                        "description": task['description']
+                    }
+                }
+                
+                yield {
+                    "type": "message_delta",
+                    "delta": f"\n{expert_emoji} {expert_name.title()} expert working...\n"
+                }
+                
+                # Execute expert
+                result = await self._execute_expert_for_orchestration(expert_name, task, user_id)
+                results.append(result)
+                
+                # Show result
+                if result.get('success'):
+                    summary = self._format_expert_result(expert_name, result.get('data', {}))
+                    yield {
+                        "type": "message_delta",
+                        "delta": f"   ✅ {summary}\n"
+                    }
+                else:
+                    yield {
+                        "type": "message_delta",
+                        "delta": f"   ⚠️ Could not complete this step\n"
+                    }
+            
+            # Step 3: Create actionable cards (if applicable)
+            action_cards = await self._create_actionable_cards(results, user_id)
+            
+            if action_cards:
+                yield {
+                    "type": "message_delta",
+                    "delta": "\n\n💡 **Suggested Actions:**\n"
+                }
+                
+                yield {
+                    "type": "action_cards",
+                    "cards": action_cards
+                }
+            
+            # Step 4: Synthesize final result
+            final_plan = await self._synthesize_daily_plan(results, request)
+            
+            yield {
+                "type": "message_delta",
+                "delta": f"\n\n🎉 All done! Here's your plan:\n\n{final_plan}\n"
+            }
+            
+            # Session end
+            yield {
+                "type": "session_end",
+                "final_result": final_plan,
+                "timestamp": datetime.now().isoformat(),
+                "session_id": orchestration_id
+            }
+            
+        except Exception as e:
+            logger.error(f"Streaming orchestration error: {e}", exc_info=True)
+            yield {
+                "type": "error",
+                "error": str(e),
+                "message": f"❌ Orchestration failed: {e}"
+            }
+            yield {
+                "type": "session_end",
+                "timestamp": datetime.now().isoformat(),
+                "session_id": orchestration_id
+            }
+    
+    async def _decompose_with_enhanced_mem_agent(self, request: str, user_id: str) -> List[Dict]:
+        """Use Enhanced MEM Agent to intelligently decompose the request"""
+        # For "plan my day" type requests, always query all relevant experts
+        request_lower = request.lower()
+        
+        if any(phrase in request_lower for phrase in ["plan my day", "plan day", "organize my day", "help me plan"]):
+            # Comprehensive daily planning = query ALL experts
+            return [
+                {"expert": "calendar", "description": "Get today's events and identify free time slots", "action": "read"},
+                {"expert": "lists", "description": "Get pending tasks from all lists", "action": "read"},
+                {"expert": "reminder", "description": "Get reminders due today", "action": "read"},
+                {"expert": "memory", "description": "Search for important upcoming events (birthdays, calls to make)", "action": "read"},
+                {"expert": "planning", "description": "Synthesize all info into a comprehensive plan", "action": "write"}
+            ]
+        else:
+            # For other requests, use keyword-based decomposition
+            tasks = []
+            
+            if any(word in request_lower for word in ["calendar", "event", "schedule", "meeting"]):
+                tasks.append({"expert": "calendar", "description": "Handle calendar request", "action": "write"})
+            
+            if any(word in request_lower for word in ["list", "task", "todo", "shopping"]):
+                tasks.append({"expert": "lists", "description": "Handle list request", "action": "write"})
+            
+            if any(word in request_lower for word in ["remind", "reminder"]):
+                tasks.append({"expert": "reminder", "description": "Handle reminder request", "action": "write"})
+            
+            if any(word in request_lower for word in ["remember", "memory", "who", "what"]):
+                tasks.append({"expert": "memory", "description": "Search memories", "action": "read"})
+            
+            return tasks if tasks else [{"expert": "planning", "description": "Process general request", "action": "write"}]
+    
+    async def _execute_expert_for_orchestration(self, expert_name: str, task: Dict, user_id: str) -> Dict:
+        """Execute a specific expert for orchestration"""
+        try:
+            # Call Enhanced MEM Agent with the expert query
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Map to the appropriate action based on expert
+                if expert_name == "calendar" and task.get("action") == "read":
+                    query = "show me my calendar and free time today"
+                elif expert_name == "lists" and task.get("action") == "read":
+                    query = "show me my pending tasks"
+                elif expert_name == "reminder" and task.get("action") == "read":
+                    query = "show me my reminders for today"
+                elif expert_name == "memory" and task.get("action") == "read":
+                    query = "show me upcoming important events and birthdays"
+                elif expert_name == "planning":
+                    query = "help me plan my day"
+                else:
+                    query = task.get("description", "")
+                
+                # Call Enhanced MEM Agent
+                response = await client.post(
+                    "http://mem-agent:11435/search",
+                    json={
+                        "query": query,
+                        "user_id": user_id,
+                        "execute_actions": True
+                    },
+                    timeout=30.0
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    # Extract data from first expert result
+                    experts = result.get("experts", [])
+                    if experts:
+                        first_expert = experts[0]
+                        expert_result = first_expert.get("result", {})
+                        return {
+                            "success": expert_result.get("success", True),
+                            "expert": expert_name,
+                            "data": expert_result.get("data", {}),
+                            "message": expert_result.get("message", "")
+                        }
+                
+                return {"success": False, "expert": expert_name, "error": f"API error: {response.status_code}"}
+                
+        except Exception as e:
+            logger.error(f"Expert {expert_name} execution error: {e}", exc_info=True)
+            return {"success": False, "expert": expert_name, "error": str(e)}
+    
+    def _format_expert_result(self, expert_name: str, data: Dict) -> str:
+        """Format expert result for display"""
+        if expert_name == "calendar":
+            events = len(data.get("today_events", []))
+            free_hours = data.get("total_free_hours", 0)
+            return f"Found {events} events, {free_hours:.1f} hours free today"
+        elif expert_name == "lists":
+            total = data.get("total_pending", 0)
+            high = len(data.get("high_priority", []))
+            return f"Found {total} pending tasks ({high} high priority)"
+        elif expert_name == "reminder":
+            count = len(data.get("reminders", []))
+            return f"Found {count} reminders for today"
+        elif expert_name == "memory":
+            birthdays = len(data.get("upcoming_birthdays", []))
+            calls = len(data.get("people_to_call", []))
+            return f"Found {birthdays} upcoming birthdays, {calls} people to call"
+        elif expert_name == "planning":
+            steps = len(data.get("steps", []))
+            return f"Created plan with {steps} steps"
+        return "Completed"
+    
+    async def _create_actionable_cards(self, results: List[Dict], user_id: str) -> List[Dict]:
+        """Create interactive action cards from expert results"""
+        cards = []
+        
+        # Extract data from each expert (safely handle failed results)
+        calendar_data = next((r.get('data', {}) for r in results if r.get('expert') == 'calendar' and r.get('success')), {})
+        lists_data = next((r.get('data', {}) for r in results if r.get('expert') == 'lists' and r.get('success')), {})
+        memory_data = next((r.get('data', {}) for r in results if r.get('expert') == 'memory' and r.get('success')), {})
+        
+        # Get free time slots from calendar
+        free_slots = calendar_data.get('free_slots', [])
+        
+        # Create cards for high-priority tasks with time slot suggestions
+        high_priority_tasks = lists_data.get('high_priority', [])
+        for i, task in enumerate(high_priority_tasks[:3]):  # Top 3 tasks
+            task_duration = task.get('estimated_duration', 60)
+            
+            # Find matching free slots
+            matching_slots = [
+                slot for slot in free_slots 
+                if slot.get('duration_minutes', 0) >= task_duration
+            ]
+            
+            actions = [{
+                "type": "add_to_calendar_with_slots",
+                "label": "📅 Add to Calendar",
+                "data": {
+                    "title": task.get('text', 'Task'),
+                    "task_id": task.get('id'),
+                    "duration_minutes": task_duration,
+                    "available_slots": matching_slots,
+                    "all_slots": free_slots
+                }
+            }, {
+                "type": "set_reminder",
+                "label": "⏰ Remind Me",
+                "data": {
+                    "title": task.get('text', 'Task'),
+                    "task_id": task.get('id')
+                }
+            }]
+            
+            cards.append({
+                "id": f"task_{task.get('id', i)}",
+                "type": "task",
+                "icon": "🎯",
+                "priority": task.get('priority', 'medium'),
+                "title": task.get('text', 'Task'),
+                "description": f"{task.get('priority', 'Medium')} priority - Est. {task_duration} min",
+                "actions": actions
+            })
+        
+        # Create cards for upcoming birthdays
+        upcoming_birthdays = memory_data.get('upcoming_birthdays', [])
+        for birthday in upcoming_birthdays[:3]:  # Top 3
+            cards.append({
+                "id": f"birthday_{birthday.get('person_id')}",
+                "type": "reminder",
+                "icon": "🎂",
+                "title": f"{birthday.get('name')}'s birthday - {birthday.get('birthday')}",
+                "description": "Don't forget!",
+                "actions": [{
+                    "type": "add_to_calendar",
+                    "label": "📅 Add to Calendar",
+                    "data": {
+                        "title": f"{birthday.get('name')}'s Birthday",
+                        "start_date": birthday.get('birthday'),
+                        "all_day": True
+                    }
+                }, {
+                    "type": "add_to_list",
+                    "label": "🎁 Add Gift to Shopping",
+                    "data": {
+                        "text": f"Buy birthday gift for {birthday.get('name')}",
+                        "list_name": "Shopping",
+                        "priority": "high"
+                    }
+                }]
+            })
+        
+        # Create cards for people to call
+        people_to_call = memory_data.get('people_to_call', [])
+        for person in people_to_call[:2]:  # Top 2
+            cards.append({
+                "id": f"call_{person.get('person_id')}",
+                "type": "reminder",
+                "icon": "📞",
+                "title": f"Call {person.get('name')}",
+                "description": person.get('reason', 'Important'),
+                "actions": [{
+                    "type": "add_to_calendar",
+                    "label": "📅 Schedule Call",
+                    "data": {
+                        "title": f"Call {person.get('name')}",
+                        "duration": 30
+                    }
+                }, {
+                    "type": "set_reminder",
+                    "label": "⏰ Remind Me Today",
+                    "data": {
+                        "title": f"Call {person.get('name')}",
+                        "remind_at": "today_evening"
+                    }
+                }]
+            })
+        
+        return cards
+    
+    async def _synthesize_daily_plan(self, results: List[Dict], request: str) -> str:
+        """Synthesize all expert results into a comprehensive daily plan"""
+        # Extract data from experts (safely handle failed results)
+        calendar_data = next((r.get('data', {}) for r in results if r.get('expert') == 'calendar' and r.get('success')), {})
+        lists_data = next((r.get('data', {}) for r in results if r.get('expert') == 'lists' and r.get('success')), {})
+        reminders_data = next((r.get('data', {}) for r in results if r.get('expert') == 'reminder' and r.get('success')), {})
+        memory_data = next((r.get('data', {}) for r in results if r.get('expert') == 'memory' and r.get('success')), {})
+        
+        plan = "**Your Daily Plan**\n\n"
+        
+        # Today's schedule
+        today_events = calendar_data.get('today_events', [])
+        if today_events:
+            plan += "📅 **Today's Schedule:**\n"
+            for event in today_events[:10]:  # Max 10 events
+                time_str = event.get('start_time', 'All day')
+                if time_str and time_str != "All day":
+                    # Format as 12-hour time
+                    try:
+                        hour = int(time_str.split(":")[0])
+                        minute = time_str.split(":")[1] if ":" in time_str else "00"
+                        ampm = "AM" if hour < 12 else "PM"
+                        hour_12 = hour % 12 or 12
+                        time_str = f"{hour_12}:{minute} {ampm}"
+                    except:
+                        pass
+                title = event.get('title', 'Untitled')
+                plan += f"• {time_str} - {title}\n"
+            plan += "\n"
+        
+        # Free time suggestions
+        free_slots = calendar_data.get('free_slots', [])
+        if free_slots:
+            plan += "⏰ **Available Time:**\n"
+            for slot in free_slots[:5]:  # Max 5 slots
+                start = slot.get('start_time', '')
+                end = slot.get('end_time', '')
+                duration = slot.get('duration_minutes', 0) / 60
+                plan += f"• {start} - {end} ({duration:.1f}h free)\n"
+            plan += "\n"
+        
+        # Priority tasks
+        high_priority = lists_data.get('high_priority', [])
+        if high_priority:
+            plan += "🎯 **High Priority Tasks:**\n"
+            for task in high_priority[:5]:
+                plan += f"• {task.get('text', 'Task')}\n"
+            plan += "\n"
+        
+        # Reminders
+        if reminders_data and isinstance(reminders_data, dict):
+            reminders = reminders_data.get('reminders', [])
+            if reminders:
+                plan += "⏰ **Reminders:**\n"
+                for reminder in reminders[:5]:
+                    plan += f"• {reminder.get('title', 'Reminder')}\n"
+                plan += "\n"
+        
+        # Important notes from memory
+        upcoming_birthdays = memory_data.get('upcoming_birthdays', [])
+        if upcoming_birthdays:
+            plan += "🎂 **Upcoming Events:**\n"
+            for birthday in upcoming_birthdays[:3]:
+                plan += f"• {birthday.get('name')}'s birthday - {birthday.get('birthday')}\n"
+        
+        people_to_call = memory_data.get('people_to_call', [])
+        if people_to_call:
+            plan += "\n📞 **Don't Forget:**\n"
+            for person in people_to_call[:3]:
+                plan += f"• Call {person.get('name')} - {person.get('reason', '')}\n"
+        
+        return plan if len(plan) > 30 else "Your schedule is clear! Great time to tackle those pending tasks or enjoy some free time. 😊"
     
     async def get_orchestration_status(self, orchestration_id: str) -> Optional[OrchestrationResult]:
         """Get status of a specific orchestration"""

@@ -174,6 +174,25 @@ def init_calendar_db():
     except Exception:
         pass
     
+    # Event attendees table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS event_attendees (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            person_id INTEGER NOT NULL,
+            role TEXT DEFAULT 'participant',
+            notes TEXT,
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+            UNIQUE(event_id, person_id)
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_event_attendees 
+        ON event_attendees(event_id)
+    """)
+    
     conn.commit()
     conn.close()
 
@@ -194,6 +213,10 @@ class EventCreate(BaseModel):
     all_day: Optional[bool] = False
     recurring: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+    get_ready_time: Optional[int] = 0
+    travel_time: Optional[int] = 0
+    prep_items: Optional[List[Dict[str, Any]]] = []
+    attendee_ids: Optional[List[int]] = []
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
@@ -208,6 +231,9 @@ class EventUpdate(BaseModel):
     all_day: Optional[bool] = None
     recurring: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
+    get_ready_time: Optional[int] = None
+    travel_time: Optional[int] = None
+    prep_items: Optional[List[Dict[str, Any]]] = None
 
 class ReminderCreate(BaseModel):
     title: str
@@ -411,6 +437,15 @@ async def create_event(event: EventCreate, user_id: str = Query("default")):
         end_date = end_dt.date().isoformat()
         end_time = end_dt.time().strftime("%H:%M")
     
+    # Build metadata with new fields
+    metadata = event.metadata or {}
+    if event.get_ready_time:
+        metadata['get_ready_time'] = event.get_ready_time
+    if event.travel_time:
+        metadata['travel_time'] = event.travel_time
+    if event.prep_items:
+        metadata['prep_items'] = event.prep_items
+    
     cursor.execute("""
         INSERT INTO events (user_id, title, description, start_date, start_time, 
                           end_date, end_time, duration, category, location, all_day, recurring, metadata)
@@ -418,10 +453,23 @@ async def create_event(event: EventCreate, user_id: str = Query("default")):
     """, (
         user_id, event.title, event.description, event.start_date, event.start_time,
         end_date, end_time, event.duration, event.category, event.location, 
-        event.all_day, event.recurring, json.dumps(event.metadata) if event.metadata else None
+        event.all_day, event.recurring, json.dumps(metadata) if metadata else None
     ))
     
     event_id = cursor.lastrowid
+    
+    # Add attendees if provided
+    if event.attendee_ids:
+        for person_id in event.attendee_ids:
+            try:
+                cursor.execute("""
+                    INSERT INTO event_attendees (event_id, person_id, role)
+                    VALUES (?, ?, 'participant')
+                """, (event_id, person_id))
+            except Exception:
+                # Skip duplicate or invalid person_id
+                pass
+    
     conn.commit()
     conn.close()
     
@@ -439,7 +487,11 @@ async def create_event(event: EventCreate, user_id: str = Query("default")):
         "location": event.location,
         "all_day": event.all_day,
         "recurring": event.recurring,
-        "metadata": event.metadata
+        "metadata": metadata,
+        "get_ready_time": event.get_ready_time,
+        "travel_time": event.travel_time,
+        "prep_items": event.prep_items,
+        "attendee_ids": event.attendee_ids
     }}
 
 @router.get("/events/{event_id}")
@@ -484,9 +536,10 @@ async def update_event(event_id: int, event_update: EventUpdate, user_id: str = 
     conn = get_connection()
     cursor = conn.cursor()
     
-    # Check if event exists
-    cursor.execute("SELECT id FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
-    if not cursor.fetchone():
+    # Check if event exists and get current metadata
+    cursor.execute("SELECT id, metadata FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
+    existing = cursor.fetchone()
+    if not existing:
         conn.close()
         raise HTTPException(status_code=404, detail="Event not found")
     
@@ -511,6 +564,24 @@ async def update_event(event_id: int, event_update: EventUpdate, user_id: str = 
                 end_dt = start_dt + timedelta(minutes=duration)
                 update_data["end_date"] = end_dt.date().isoformat()
                 update_data["end_time"] = end_dt.time().strftime("%H:%M")
+    
+    # Handle metadata updates for new fields
+    if any(k in update_data for k in ['get_ready_time', 'travel_time', 'prep_items', 'metadata']):
+        try:
+            current_metadata = json.loads(existing[1]) if existing[1] else {}
+        except Exception:
+            current_metadata = {}
+        
+        if 'get_ready_time' in update_data:
+            current_metadata['get_ready_time'] = update_data.pop('get_ready_time')
+        if 'travel_time' in update_data:
+            current_metadata['travel_time'] = update_data.pop('travel_time')
+        if 'prep_items' in update_data:
+            current_metadata['prep_items'] = update_data.pop('prep_items')
+        if 'metadata' in update_data and update_data['metadata']:
+            current_metadata.update(update_data.pop('metadata'))
+        
+        update_data['metadata'] = current_metadata
     
     for field, value in update_data.items():
         if field == "metadata" and value is not None:
@@ -560,6 +631,485 @@ async def delete_event(event_id: int, user_id: str = Query("default")):
     conn.close()
     
     return {"message": "Event deleted successfully"}
+
+# Event Attendees Endpoints
+
+class AttendeeCreate(BaseModel):
+    person_id: int
+    role: Optional[str] = "participant"
+    notes: Optional[str] = None
+
+@router.post("/events/{event_id}/attendees")
+async def add_attendee(event_id: int, attendee: AttendeeCreate, user_id: str = Query("default")):
+    """Add an attendee to an event"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Verify event exists and belongs to user
+    cursor.execute("SELECT id FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    # Verify person exists (check in memories database)
+    try:
+        memories_conn = sqlite3.connect(DB_PATH)
+        memories_cursor = memories_conn.cursor()
+        memories_cursor.execute("SELECT id, name, email, phone FROM people WHERE id = ?", (attendee.person_id,))
+        person = memories_cursor.fetchone()
+        memories_conn.close()
+        
+        if not person:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Person not found")
+    except Exception as e:
+        conn.close()
+        raise HTTPException(status_code=500, detail=f"Error checking person: {str(e)}")
+    
+    # Add attendee
+    try:
+        cursor.execute("""
+            INSERT INTO event_attendees (event_id, person_id, role, notes)
+            VALUES (?, ?, ?, ?)
+        """, (event_id, attendee.person_id, attendee.role, attendee.notes))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Attendee already added to this event")
+    
+    conn.close()
+    
+    return {
+        "message": "Attendee added successfully",
+        "attendee": {
+            "person_id": attendee.person_id,
+            "name": person[1],
+            "email": person[2],
+            "phone": person[3],
+            "role": attendee.role,
+            "notes": attendee.notes
+        }
+    }
+
+@router.get("/events/{event_id}/attendees")
+async def get_attendees(event_id: int, user_id: str = Query("default")):
+    """Get all attendees for an event"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Verify event exists and belongs to user
+    cursor.execute("SELECT id FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    # Get attendees
+    cursor.execute("""
+        SELECT person_id, role, notes, added_at
+        FROM event_attendees
+        WHERE event_id = ?
+    """, (event_id,))
+    
+    attendee_rows = cursor.fetchall()
+    conn.close()
+    
+    # Get person details from memories database
+    attendees = []
+    memories_conn = sqlite3.connect(DB_PATH)
+    memories_cursor = memories_conn.cursor()
+    
+    for row in attendee_rows:
+        person_id, role, notes, added_at = row
+        memories_cursor.execute("""
+            SELECT id, name, email, phone, relationship
+            FROM people WHERE id = ?
+        """, (person_id,))
+        person = memories_cursor.fetchone()
+        
+        if person:
+            attendees.append({
+                "person_id": person[0],
+                "name": person[1],
+                "email": person[2],
+                "phone": person[3],
+                "relationship": person[4],
+                "role": role,
+                "notes": notes,
+                "added_at": added_at
+            })
+    
+    memories_conn.close()
+    
+    return {
+        "event_id": event_id,
+        "attendees": attendees,
+        "count": len(attendees)
+    }
+
+@router.delete("/events/{event_id}/attendees/{person_id}")
+async def remove_attendee(event_id: int, person_id: int, user_id: str = Query("default")):
+    """Remove an attendee from an event"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Verify event exists and belongs to user
+    cursor.execute("SELECT id FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    # Remove attendee
+    cursor.execute("""
+        DELETE FROM event_attendees
+        WHERE event_id = ? AND person_id = ?
+    """, (event_id, person_id))
+    
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Attendee not found for this event")
+    
+    conn.commit()
+    conn.close()
+    
+    return {"message": "Attendee removed successfully"}
+
+# Prep Items Endpoints
+
+class PrepItemCreate(BaseModel):
+    text: str
+    list_type: Optional[str] = "personal"
+    deadline_offset: Optional[int] = 1
+    deadline_unit: Optional[str] = "days"
+    auto_add_to_list: Optional[bool] = False
+
+@router.post("/events/{event_id}/prep-items")
+async def add_prep_item(event_id: int, prep_item: PrepItemCreate, user_id: str = Query("default")):
+    """Add a prep item to an event"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Get event and its metadata
+    cursor.execute("SELECT metadata FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    try:
+        metadata = json.loads(row[0]) if row[0] else {}
+    except Exception:
+        metadata = {}
+    
+    # Get or create prep_items list
+    prep_items = metadata.get('prep_items', [])
+    
+    # Create new prep item with UUID
+    import uuid
+    new_item = {
+        "id": str(uuid.uuid4()),
+        "text": prep_item.text,
+        "list_type": prep_item.list_type,
+        "deadline_offset": prep_item.deadline_offset,
+        "deadline_unit": prep_item.deadline_unit,
+        "auto_add_to_list": prep_item.auto_add_to_list,
+        "completed": False,
+        "project_compatible": True
+    }
+    
+    prep_items.append(new_item)
+    metadata['prep_items'] = prep_items
+    
+    # Update event metadata
+    cursor.execute("""
+        UPDATE events SET metadata = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+    """, (json.dumps(metadata), event_id, user_id))
+    
+    conn.commit()
+    conn.close()
+    
+    return {
+        "message": "Prep item added successfully",
+        "prep_item": new_item
+    }
+
+@router.get("/events/{event_id}/prep-items")
+async def get_prep_items(event_id: int, user_id: str = Query("default")):
+    """Get all prep items for an event"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Get event metadata
+    cursor.execute("SELECT metadata FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    try:
+        metadata = json.loads(row[0]) if row[0] else {}
+    except Exception:
+        metadata = {}
+    
+    conn.close()
+    
+    prep_items = metadata.get('prep_items', [])
+    
+    return {
+        "event_id": event_id,
+        "prep_items": prep_items,
+        "count": len(prep_items)
+    }
+
+@router.put("/events/{event_id}/prep-items/{item_id}")
+async def update_prep_item(event_id: int, item_id: str, prep_item: PrepItemCreate, user_id: str = Query("default")):
+    """Update a prep item"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Get event metadata
+    cursor.execute("SELECT metadata FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    try:
+        metadata = json.loads(row[0]) if row[0] else {}
+    except Exception:
+        metadata = {}
+    
+    prep_items = metadata.get('prep_items', [])
+    
+    # Find and update item
+    item_found = False
+    for item in prep_items:
+        if item['id'] == item_id:
+            item['text'] = prep_item.text
+            item['list_type'] = prep_item.list_type
+            item['deadline_offset'] = prep_item.deadline_offset
+            item['deadline_unit'] = prep_item.deadline_unit
+            item['auto_add_to_list'] = prep_item.auto_add_to_list
+            item_found = True
+            break
+    
+    if not item_found:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Prep item not found")
+    
+    metadata['prep_items'] = prep_items
+    
+    # Update event metadata
+    cursor.execute("""
+        UPDATE events SET metadata = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+    """, (json.dumps(metadata), event_id, user_id))
+    
+    conn.commit()
+    conn.close()
+    
+    return {"message": "Prep item updated successfully"}
+
+@router.delete("/events/{event_id}/prep-items/{item_id}")
+async def delete_prep_item(event_id: int, item_id: str, user_id: str = Query("default")):
+    """Delete a prep item"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Get event metadata
+    cursor.execute("SELECT metadata FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    try:
+        metadata = json.loads(row[0]) if row[0] else {}
+    except Exception:
+        metadata = {}
+    
+    prep_items = metadata.get('prep_items', [])
+    
+    # Find and remove item
+    initial_length = len(prep_items)
+    prep_items = [item for item in prep_items if item['id'] != item_id]
+    
+    if len(prep_items) == initial_length:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Prep item not found")
+    
+    metadata['prep_items'] = prep_items
+    
+    # Update event metadata
+    cursor.execute("""
+        UPDATE events SET metadata = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+    """, (json.dumps(metadata), event_id, user_id))
+    
+    conn.commit()
+    conn.close()
+    
+    return {"message": "Prep item deleted successfully"}
+
+@router.post("/events/{event_id}/prep-items/{item_id}/complete")
+async def complete_prep_item(event_id: int, item_id: str, user_id: str = Query("default")):
+    """Mark a prep item as complete or incomplete"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Get event metadata
+    cursor.execute("SELECT metadata FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    try:
+        metadata = json.loads(row[0]) if row[0] else {}
+    except Exception:
+        metadata = {}
+    
+    prep_items = metadata.get('prep_items', [])
+    
+    # Find and toggle completion
+    item_found = False
+    for item in prep_items:
+        if item['id'] == item_id:
+            item['completed'] = not item.get('completed', False)
+            item_found = True
+            break
+    
+    if not item_found:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Prep item not found")
+    
+    metadata['prep_items'] = prep_items
+    
+    # Update event metadata
+    cursor.execute("""
+        UPDATE events SET metadata = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+    """, (json.dumps(metadata), event_id, user_id))
+    
+    conn.commit()
+    conn.close()
+    
+    return {"message": "Prep item status updated successfully"}
+
+# Event Reminders Endpoints
+
+class EventReminderCreate(BaseModel):
+    offset_minutes: int  # Minutes before event
+    message: Optional[str] = None
+
+@router.post("/events/{event_id}/reminders")
+async def create_event_reminder(event_id: int, reminder: EventReminderCreate, user_id: str = Query("default")):
+    """Create a reminder for an event"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Get event
+    cursor.execute("""
+        SELECT start_date, start_time, title FROM events 
+        WHERE id = ? AND user_id = ?
+    """, (event_id, user_id))
+    event = cursor.fetchone()
+    
+    if not event:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    start_date, start_time, title = event
+    
+    # Calculate reminder time
+    try:
+        from datetime import datetime, timedelta
+        event_dt = datetime.strptime(f"{start_date} {start_time}", "%Y-%m-%d %H:%M")
+        reminder_dt = event_dt - timedelta(minutes=reminder.offset_minutes)
+        
+        # Create reminder
+        reminder_title = reminder.message or f"Reminder: {title}"
+        cursor.execute("""
+            INSERT INTO reminders (
+                user_id, title, reminder_type, category, priority,
+                due_date, due_time, requires_acknowledgment, linked_list_id
+            ) VALUES (?, ?, 'once', 'personal', 'medium', ?, ?, FALSE, ?)
+        """, (
+            user_id, reminder_title, reminder_dt.date().isoformat(),
+            reminder_dt.time().strftime("%H:%M"), event_id
+        ))
+        
+        reminder_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        
+        return {
+            "message": "Event reminder created successfully",
+            "reminder_id": reminder_id,
+            "reminder_time": reminder_dt.isoformat(),
+            "offset_minutes": reminder.offset_minutes
+        }
+    except Exception as e:
+        conn.close()
+        raise HTTPException(status_code=500, detail=f"Error creating reminder: {str(e)}")
+
+@router.get("/events/{event_id}/reminders")
+async def get_event_reminders(event_id: int, user_id: str = Query("default")):
+    """Get all reminders for an event"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Verify event exists
+    cursor.execute("SELECT id FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    # Get reminders linked to this event (using linked_list_id as event_id)
+    cursor.execute("""
+        SELECT id, title, due_date, due_time, priority, created_at
+        FROM reminders
+        WHERE user_id = ? AND linked_list_id = ? AND is_active = TRUE
+    """, (user_id, event_id))
+    
+    reminders = []
+    for row in cursor.fetchall():
+        reminders.append({
+            "id": row[0],
+            "title": row[1],
+            "due_date": row[2],
+            "due_time": row[3],
+            "priority": row[4],
+            "created_at": row[5]
+        })
+    
+    conn.close()
+    
+    return {
+        "event_id": event_id,
+        "reminders": reminders,
+        "count": len(reminders)
+    }
+
+@router.delete("/reminders/{reminder_id}")
+async def delete_reminder(reminder_id: int, user_id: str = Query("default")):
+    """Delete a reminder"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        UPDATE reminders SET is_active = FALSE
+        WHERE id = ? AND user_id = ?
+    """, (reminder_id, user_id))
+    
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Reminder not found")
+    
+    conn.commit()
+    conn.close()
+    
+    return {"message": "Reminder deleted successfully"}
 
 # Smart Scheduling Integration
 

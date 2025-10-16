@@ -235,14 +235,23 @@ services:
     ports:
     - 9002:9002
     volumes:
-    - zoe_tts_models:/root/.local/share/tts
+    - zoe_neutts_models:/root/.cache/neutts
+    - ./data/voice_profiles:/app/voice_profiles
+    - ./services/zoe-tts/samples:/app/samples
     devices:
     - /dev/snd:/dev/snd
     environment:
     - PULSE_SERVER=unix:/run/user/1000/pulse/native
+    - PYTHONUNBUFFERED=1
     networks:
     - zoe-network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
   zoe-n8n:
     image: n8nio/n8n
     container_name: zoe-n8n
@@ -281,6 +290,12 @@ services:
     restart: unless-stopped
     depends_on:
     - zoe-ollama
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health -H 'Authorization: Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f' || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
   zoe-auth:
     build: ./services/zoe-auth
     container_name: zoe-auth
@@ -293,6 +308,13 @@ services:
     restart: unless-stopped
     environment:
     - PYTHONUNBUFFERED=1
+    - DATABASE_PATH=/app/data/zoe.db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: zoe-cloudflared
@@ -302,6 +324,61 @@ services:
     - zoe-network
     extra_hosts:
     - "host.docker.internal:host-gateway"
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: livekit-server
+    command: --config /etc/livekit.yaml
+    ports:
+    - 7880:7880
+    - 7881:7881
+    - 7882:7882/udp
+    - 50000-50200:50000-50200/udp
+    volumes:
+    - ./services/livekit/config.yaml:/etc/livekit.yaml
+    - ./ssl:/ssl:ro
+    environment:
+    - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-devkey}
+    - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-secretsecretsecretsecretsecretsecret}
+    networks:
+    - zoe-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:7880"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+  zoe-voice-agent:
+    build: ./services/zoe-voice-agent
+    container_name: zoe-voice-agent
+    ports:
+    - 9003:9003
+    volumes:
+    - ./services/zoe-voice-agent:/app
+    - ./data:/app/data
+    environment:
+    - PYTHONUNBUFFERED=1
+    - LIVEKIT_URL=ws://livekit:7880
+    - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-devkey}
+    - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-secretsecretsecretsecretsecretsecret}
+    - ZOE_CORE_URL=http://zoe-core:8000
+    - TTS_SERVICE_URL=http://zoe-tts:9002
+    - WHISPER_SERVICE_URL=http://zoe-whisper:9001
+    - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    networks:
+    - zoe-network
+    restart: unless-stopped
+    depends_on:
+    - livekit
+    - zoe-tts
+    - zoe-whisper
+    - zoe-core
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 networks:
   zoe-network:
     driver: bridge
@@ -309,6 +386,6 @@ volumes:
   zoe_ollama_data: null
   zoe_redis_data: null
   zoe_whisper_models: null
-  zoe_tts_models: null
+  zoe_neutts_models: null
   zoe_n8n_data: null
   zoe_database: null

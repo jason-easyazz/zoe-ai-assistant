@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe TTS Demo - Ultra-Realistic Voice</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 {
+            text-align: center;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        textarea {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            font-size: 16px;
+            resize: vertical;
+            min-height: 120px;
+            margin-bottom: 15px;
+        }
+        textarea:focus { outline: none; border-color: #667eea; }
+        select, button {
+            padding: 15px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            font-size: 16px;
+            width: 100%;
+            margin-bottom: 15px;
+        }
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .status {
+            text-align: center;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            font-weight: 500;
+        }
+        .status.generating { background: #fef3c7; color: #d97706; }
+        .status.ready { background: #d1fae5; color: #059669; }
+        .status.error { background: #fee2e2; color: #dc2626; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔊 Zoe TTS Demo</h1>
+        <p class="subtitle">Ultra-Realistic Voice with NeuTTS Air</p>
+        
+        <textarea id="textInput" placeholder="Enter text for Zoe to speak...">Hello! I'm Zoe, your AI assistant. I now have an incredibly realistic voice powered by NeuTTS Air!</textarea>
+        
+        <select id="voiceSelect">
+            <option value="dave">Dave (British Male) - Tested ✅</option>
+            <option value="jo">Jo (Female) - Tested ✅</option>
+            <option value="default">Default Voice</option>
+        </select>
+        
+        <button id="generateBtn">🎤 Generate & Play Voice</button>
+        
+        <div id="status" class="status" style="display:none;">Ready</div>
+        
+        <audio id="audioPlayer" controls style="width: 100%; margin-top: 20px; display:none;"></audio>
+    </div>
+    
+    <script>
+        const textInput = document.getElementById('textInput');
+        const voiceSelect = document.getElementById('voiceSelect');
+        const generateBtn = document.getElementById('generateBtn');
+        const statusDiv = document.getElementById('status');
+        const audioPlayer = document.getElementById('audioPlayer');
+        
+        generateBtn.addEventListener('click', async () => {
+            const text = textInput.value.trim();
+            if (!text) {
+                alert('Please enter some text!');
+                return;
+            }
+            
+            const voice = voiceSelect.value;
+            
+            // Show status
+            generateBtn.disabled = true;
+            statusDiv.style.display = 'block';
+            statusDiv.className = 'status generating';
+            statusDiv.textContent = `Generating with ${voice} voice... (50-70 seconds on Pi 5)`;
+            audioPlayer.style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/tts/synthesize', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text, voice, speed: 1.0 })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+                }
+                
+                const blob = await response.blob();
+                const audioUrl = URL.createObjectURL(blob);
+                
+                audioPlayer.src = audioUrl;
+                audioPlayer.style.display = 'block';
+                audioPlayer.play();
+                
+                statusDiv.className = 'status ready';
+                statusDiv.textContent = '✅ Ready! Audio playing...';
+                
+            } catch (error) {
+                console.error('Error:', error);
+                statusDiv.className = 'status error';
+                statusDiv.textContent = `❌ Error: ${error.message}`;
+            } finally {
+                generateBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
+
+
+
+
+
+

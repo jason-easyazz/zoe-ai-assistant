@@ -146,10 +146,21 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat()
-    }
+    """Health check endpoint for Docker (no auth required)"""
+    try:
+        # Quick database check
+        conn = get_db_connection()
+        conn.execute("SELECT 1").fetchone()
+        conn.close()
+        return {
+            "status": "healthy",
+            "service": "zoe-auth",
+            "database": "connected",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        raise HTTPException(status_code=503, detail=f"Service unhealthy: {str(e)}")
 
 @app.get("/api/auth/profiles")
 async def get_profiles():

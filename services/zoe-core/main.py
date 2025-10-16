@@ -24,10 +24,23 @@ from routers import auth, tasks, chat
 # Import new touch panel router
 from routers import touch_panel_config
 
+# Import widget builder router
+from routers import widget_builder
+
 # Import missing routers for complete API functionality
 from routers import calendar, memories, lists, reminders, developer, homeassistant, weather, developer_tasks, settings, journal, family, enhanced_calendar, event_permissions, system, self_awareness, birthday_calendar, birthday_memories, test_memories, public_memories
 from routers import vector_search, notifications
 from routers import proactive_insights, agent_planner, tool_registry, onboarding, chat_sessions
+from routers import location, media, journeys  # Journal enhancement routers
+from routers import tts  # NeuTTS Air voice synthesis
+
+# Optional LiveKit voice agent (requires livekit package)
+try:
+    from routers import voice_agent  # LiveKit real-time voice
+    VOICE_AGENT_AVAILABLE = True
+except ImportError:
+    print("⚠️  LiveKit voice agent not available (livekit package not installed)")
+    VOICE_AGENT_AVAILABLE = False
 
 # Import metrics middleware
 from middleware.metrics import MetricsMiddleware, get_metrics
@@ -40,14 +53,14 @@ app = FastAPI(
     version="5.1"
 )
 
-# CORS middleware - handled by nginx proxy
-# app.add_middleware(
-#     CORSMiddleware,
-#     allow_origins=["*"],
-#     allow_credentials=True,
-#     allow_methods=["*"],
-#     allow_headers=["*"],
-# )
+# CORS middleware - enable for frontend access
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins (can restrict to specific domains in production)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Metrics middleware
 app.add_middleware(MetricsMiddleware)
@@ -60,6 +73,8 @@ app.include_router(tasks.router)
 app.include_router(chat.router)  # Original chat
 # Enhanced chat functionality integrated into existing chat router above
 app.include_router(touch_panel_config.router)
+app.include_router(widget_builder.router)  # Widget system
+app.include_router(widget_builder.user_layout_router)  # User layout endpoints (/api/user/layout)
 
 # Include missing routers for complete API functionality
 app.include_router(calendar.router)
@@ -91,6 +106,24 @@ app.include_router(agent_planner.router)
 app.include_router(tool_registry.router)
 app.include_router(onboarding.router)
 app.include_router(chat_sessions.router)
+
+# Journal enhancement routers
+app.include_router(location.router)
+app.include_router(media.router)
+app.include_router(journeys.router)
+
+# TTS router (NeuTTS Air voice synthesis)
+app.include_router(tts.router)
+
+# Voice agent router (LiveKit real-time voice)
+if VOICE_AGENT_AVAILABLE:
+    app.include_router(voice_agent.router)
+
+# Mount static files for uploads
+import pathlib
+uploads_dir = pathlib.Path(os.getenv("UPLOAD_DIR", "/app/data/uploads"))
+uploads_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
 
 # Home Assistant proxy endpoints
 import httpx
@@ -145,7 +178,11 @@ async def health_check():
             "reminders_system",
             "developer_tools",
             "family_groups",
-            "self_awareness"
+            "self_awareness",
+            "journal_with_journeys",
+            "photo_uploads_heic",
+            "location_services",
+            "journal_prompts"
         ]
     }
 

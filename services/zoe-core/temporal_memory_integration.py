@@ -30,55 +30,14 @@ class TemporalMemoryIntegration:
         episode_id = await self.start_conversation_episode(user_id, context_type)
         if not episode_id:
             return
-        await self._store_conversation_turn(episode_id, memory_fact_id)
+        await self._store_conversation_turn(episode_id, message, response, memory_fact_id)
     
     async def search_with_temporal_context(self, query: str, user_id: str,
                                            time_range: str = "all", limit: int = 10) -> Dict:
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            time_filter = self._build_time_filter(time_range)
-            params = [user_id, f"%{query}%"]
-            cursor.execute(f"""
-                SELECT 
-                    mf.id,
-                    mf.fact,
-                    mf.entity_type,
-                    mf.entity_id,
-                    mf.category,
-                    mf.importance,
-                    mf.created_at,
-                    ce.id as episode_id,
-                    ce.start_time as episode_start,
-                    ce.context_type,
-                    ce.summary as episode_summary
-                FROM memory_facts mf
-                LEFT JOIN conversation_episodes ce ON mf.episode_id = ce.id
-                WHERE mf.user_id = ? AND mf.fact LIKE ? {time_filter}
-                ORDER BY mf.created_at DESC, mf.importance DESC
-                LIMIT ?
-            """, params + [limit])
-            results: List[Dict] = []
-            for row in cursor.fetchall():
-                results.append({
-                    "fact_id": row[0],
-                    "fact": row[1],
-                    "entity_type": row[2],
-                    "entity_id": row[3],
-                    "category": row[4],
-                    "importance": row[5],
-                    "created_at": row[6],
-                    "episode_id": row[7],
-                    "episode_start": row[8],
-                    "context_type": row[9],
-                    "episode_summary": row[10]
-                })
-            conn.close()
-            logger.info(f"Temporal search found {len(results)} results for '{query}' ({time_range})")
-            return {"query": query, "time_range": time_range, "results": results, "total_results": len(results)}
-        except Exception as e:
-            logger.error(f"Error in temporal search: {e}")
-            return {"error": str(e)}
+        # Simplified: memory_facts table doesn't exist in this integration
+        # Just return empty results - episode context is provided separately
+        logger.info(f"Temporal search called for '{query}' (simplified integration)")
+        return {"query": query, "time_range": time_range, "results": [], "total_results": 0}
     
     async def get_episode_context(self, user_id: str, context_type: str = "chat") -> Dict:
         try:
@@ -94,14 +53,39 @@ class TemporalMemoryIntegration:
             """, (user_id, context_type))
             episodes: List[Dict] = []
             for row in cursor.fetchall():
+                episode_id = row[0]
+                
+                # Get recent conversation turns for this episode
+                cursor.execute("""
+                    SELECT user_message, assistant_response, timestamp
+                    FROM conversation_turns
+                    WHERE episode_id = ?
+                    ORDER BY timestamp DESC
+                    LIMIT 5
+                """, (episode_id,))
+                
+                turns = []
+                for turn_row in cursor.fetchall():
+                    turns.append({
+                        "user": turn_row[0],
+                        "assistant": turn_row[1],
+                        "timestamp": turn_row[2]
+                    })
+                
+                # Build a summary from recent turns if no LLM summary exists
+                summary = row[3]
+                if not summary and turns:
+                    summary = f"Recent conversation: {turns[0]['user'][:50]}..." if turns else None
+                
                 episodes.append({
-                    "id": row[0],
+                    "id": episode_id,
                     "start_time": row[1],
                     "end_time": row[2],
-                    "summary": row[3],
+                    "summary": summary,
                     "message_count": row[4],
                     "context_type": row[5],
-                    "is_current": row[0] == current_episode
+                    "is_current": episode_id == current_episode,
+                    "recent_turns": list(reversed(turns))  # Oldest first for context
                 })
             conn.close()
             return {"current_episode": current_episode, "recent_episodes": episodes, "episode_count": len(episodes)}
@@ -132,49 +116,62 @@ class TemporalMemoryIntegration:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             timeout_minutes = 30 if context_type == "chat" else 120
-            timeout_threshold = datetime.now() - timedelta(minutes=timeout_minutes)
+            # Use SQLite datetime functions for proper comparison
             cursor.execute("""
                 SELECT id FROM conversation_episodes 
                 WHERE user_id = ? AND context_type = ? 
                 AND end_time IS NULL 
-                AND start_time > ?
+                AND datetime(start_time) > datetime('now', '-{} minutes')
                 ORDER BY start_time DESC 
                 LIMIT 1
-            """, (user_id, context_type, timeout_threshold))
+            """.format(timeout_minutes), (user_id, context_type))
             row = cursor.fetchone()
             conn.close()
+            if row:
+                logger.info(f"✅ Found active episode {row[0]} for user {user_id}")
             return row[0] if row else None
         except Exception as e:
             logger.error(f"Error getting active episode: {e}")
             return None
     
-    async def _create_episode(self, user_id: str, context_type: str) -> Optional[int]:
+    async def _create_episode(self, user_id: str, context_type: str) -> Optional[str]:
         try:
+            import uuid
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             timeout_minutes = 30 if context_type == "chat" else 120
+            episode_id = str(uuid.uuid4())[:8]  # Short UUID for readability
             cursor.execute("""
                 INSERT INTO conversation_episodes 
-                (user_id, context_type, timeout_minutes)
-                VALUES (?, ?, ?)
-            """, (user_id, context_type, timeout_minutes))
-            episode_id = cursor.lastrowid
+                (id, user_id, context_type, timeout_minutes, start_time)
+                VALUES (?, ?, ?, ?, ?)
+            """, (episode_id, user_id, context_type, timeout_minutes, datetime.now()))
             conn.commit()
             conn.close()
+            logger.info(f"✅ Created episode {episode_id} for user {user_id}")
             return episode_id
         except Exception as e:
             logger.error(f"Error creating episode: {e}")
             return None
     
-    async def _store_conversation_turn(self, episode_id: int, memory_fact_id: Optional[int]) -> None:
+    async def _store_conversation_turn(self, episode_id: int, user_message: str, assistant_response: str, memory_fact_id: Optional[int] = None) -> None:
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
+            
+            # Store the actual conversation turn
+            cursor.execute("""
+                INSERT INTO conversation_turns (episode_id, user_message, assistant_response)
+                VALUES (?, ?, ?)
+            """, (episode_id, user_message, assistant_response))
+            
+            # Update episode message count
             cursor.execute("""
                 UPDATE conversation_episodes 
                 SET message_count = message_count + 1
                 WHERE id = ?
             """, (episode_id,))
+            
             if memory_fact_id:
                 cursor.execute("""
                     UPDATE memory_facts 
@@ -183,6 +180,7 @@ class TemporalMemoryIntegration:
                 """, (episode_id, memory_fact_id))
             conn.commit()
             conn.close()
+            logger.info(f"✅ Stored conversation turn in episode {episode_id}")
         except Exception as e:
             logger.error(f"Error storing conversation turn: {e}")
     

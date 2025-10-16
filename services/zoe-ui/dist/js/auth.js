@@ -191,9 +191,16 @@
         }
     }
 
-    // Setup fetch interceptor - but ONLY after DOM is ready to avoid race conditions
+    // Setup fetch interceptor - Install IMMEDIATELY to avoid race conditions
     const originalFetch = window.fetch;
+    
     function setupFetchInterceptor() {
+        // Idempotent guard - only install once
+        if (window.fetch.__zoeInterceptorApplied) {
+            console.log('[auth] Interceptor already active, skipping');
+            return;
+        }
+        
         window.fetch = function(url, options = {}) {
             // Initialize options
             options.headers = options.headers || {};
@@ -218,20 +225,22 @@
                     console.log('🔒 Forced HTTP → HTTPS:', urlString);
                 }
                 
-                // Convert absolute HTTPS URLs to relative (cleaner, protocol-independent)
-                if (urlString.startsWith('https://')) {
-                    const relativePath = urlString.replace(/^https:\/\/[^/]+/, '');
-                    console.log('📍 HTTPS → Relative:', urlString, '→', relativePath);
-                    urlString = relativePath;
-                }
-                
-                // Remove user_id parameter, handling different positions
+                // Remove user_id parameter FIRST, then log final URL
                 urlString = urlString.replace(/\?user_id=[^&]*&/, '?');  // ?user_id=xxx& -> ?
                 urlString = urlString.replace(/&user_id=[^&]*&/, '&');   // &user_id=xxx& -> &
                 urlString = urlString.replace(/\?user_id=[^&]*$/, '');   // ?user_id=xxx (end) -> (empty)
                 urlString = urlString.replace(/&user_id=[^&]*$/, '');    // &user_id=xxx (end) -> (empty)
                 // Clean up any trailing ? or &
                 urlString = urlString.replace(/[?&]$/, '');
+                
+                // Log the FINAL URL that will be used
+                if (urlString.startsWith('https://')) {
+                    console.log('✅ Final HTTPS URL:', urlString);
+                } else if (urlString.startsWith('http://')) {
+                    console.error('❌ ERROR: URL still HTTP after processing:', urlString);
+                } else {
+                    console.log('📍 Final relative URL:', urlString);
+                }
                 
                 // Use the cleaned URL
                 url = urlString;
@@ -248,6 +257,13 @@
                 return response;
             });
         };
+        
+        // Mark interceptor as installed
+        window.fetch.__zoeInterceptorApplied = { 
+            appliedAt: Date.now(), 
+            original: originalFetch 
+        };
+        console.log('[auth] ✅ Fetch interceptor installed');
     }
 
     // Expose auth functions globally
@@ -266,16 +282,19 @@
     // Also expose as ZoeAuth for backwards compatibility
     window.ZoeAuth = window.zoeAuth;
 
-    // Initialize auth AFTER DOM is ready to avoid race conditions
+    // CRITICAL: Install fetch interceptor IMMEDIATELY (before any API calls)
+    // This prevents race condition where DOMContentLoaded triggers both
+    // the interceptor installation AND the first API calls
+    setupFetchInterceptor();
+    
+    // Auth enforcement can wait for DOM (needs UI elements)
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => {
-            setupFetchInterceptor();
             enforceAuth();
             console.log('✅ Zoe Auth initialized (DOMContentLoaded)');
         });
     } else {
         // DOM already loaded
-        setupFetchInterceptor();
         enforceAuth();
         console.log('✅ Zoe Auth initialized (immediate)');
     }

@@ -64,6 +64,7 @@ def init_lists_db():
     conn = get_connection()
     cursor = conn.cursor()
     
+    # Create lists table (without items column - items are in separate table)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS lists (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +72,7 @@ def init_lists_db():
             list_type TEXT NOT NULL,
             list_category TEXT DEFAULT 'personal',
             name TEXT NOT NULL,
-            items JSON,
+            description TEXT,
             metadata JSON,
             shared_with JSON,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -79,12 +80,43 @@ def init_lists_db():
         )
     """)
     
+    # Create list_items table for storing actual list items
     cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_lists_category 
-        ON lists(category, user_id)
+        CREATE TABLE IF NOT EXISTS list_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            list_id INTEGER NOT NULL,
+            task_text TEXT NOT NULL,
+            priority TEXT DEFAULT 'medium',
+            completed BOOLEAN DEFAULT 0,
+            completed_at TIMESTAMP,
+            metadata JSON,
+            journey_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (list_id) REFERENCES lists(id) ON DELETE CASCADE
+        )
     """)
     
-    # Migration code removed - table doesn't have list_type column
+    # Add columns if they don't exist
+    try:
+        cursor.execute("ALTER TABLE list_items ADD COLUMN metadata JSON")
+    except:
+        pass
+    
+    try:
+        cursor.execute("ALTER TABLE list_items ADD COLUMN journey_id INTEGER")
+    except:
+        pass
+    
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_lists_category 
+        ON lists(list_category, user_id)
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_list_items_list_id
+        ON list_items(list_id)
+    """)
     
     conn.commit()
     conn.close()
@@ -144,18 +176,18 @@ async def get_all_tasks(user_id: str = Query("default")):
     try:
         # Get personal todos
         cursor.execute("""
-            SELECT id, name, category, description, created_at, updated_at
+            SELECT id, name, list_category, description, created_at, updated_at
             FROM lists 
-            WHERE category = 'personal' AND user_id = ?
+            WHERE list_category = 'personal' AND user_id = ?
             ORDER BY updated_at DESC
         """, (user_id,))
         personal_lists = cursor.fetchall()
         
         # Get work todos
         cursor.execute("""
-            SELECT id, name, category, description, created_at, updated_at
+            SELECT id, name, list_category, description, created_at, updated_at
             FROM lists 
-            WHERE category = 'work' AND user_id = ?
+            WHERE list_category = 'work' AND user_id = ?
             ORDER BY updated_at DESC
         """, (user_id,))
         work_lists = cursor.fetchall()
@@ -746,18 +778,18 @@ async def get_lists(
     
     if category:
         cursor.execute("""
-            SELECT l.id, l.name, l.category, l.description, l.created_at, l.updated_at
+            SELECT l.id, l.name, l.list_type, l.list_category, l.description, l.created_at, l.updated_at
             FROM lists l
-            WHERE l.category = ? AND l.user_id = ?
+            WHERE l.list_type = ? AND l.list_category = ? AND l.user_id = ?
             ORDER BY l.updated_at DESC
-        """, (category, user_id))
+        """, (list_type, category, user_id))
     else:
         cursor.execute("""
-            SELECT l.id, l.name, l.category, l.description, l.created_at, l.updated_at
+            SELECT l.id, l.name, l.list_type, l.list_category, l.description, l.created_at, l.updated_at
             FROM lists l
-            WHERE l.user_id = ?
+            WHERE l.list_type = ? AND l.user_id = ?
             ORDER BY l.updated_at DESC
-        """, (user_id,))
+        """, (list_type, user_id))
     
     rows = cursor.fetchall()
     
@@ -789,11 +821,12 @@ async def get_lists(
         lists.append({
             "id": row[0],
             "name": row[1],
-            "category": row[2],
-            "description": row[3],
+            "list_type": row[2],
+            "category": row[3],
+            "description": row[4],
             "items": items,
-            "created_at": row[4],
-            "updated_at": row[5]
+            "created_at": row[5],
+            "updated_at": row[6]
         })
     
     conn.close()
@@ -857,14 +890,20 @@ async def create_list(
     # Normalize list type for backward compatibility
     normalized_type = normalize_list_type(list_type, list_data.category)
     
-    items_json = json.dumps([item.dict() for item in list_data.items])
-    
     cursor.execute("""
-        INSERT INTO lists (user_id, list_type, list_category, name, items)
-        VALUES (?, ?, ?, ?, ?)
-    """, (user_id, normalized_type, list_data.category, list_data.name, items_json))
+        INSERT INTO lists (user_id, list_type, list_category, name)
+        VALUES (?, ?, ?, ?)
+    """, (user_id, normalized_type, list_data.category, list_data.name))
     
     list_id = cursor.lastrowid
+    
+    # Add items to list_items table
+    for item in list_data.items:
+        cursor.execute("""
+            INSERT INTO list_items (list_id, task_text, priority, completed)
+            VALUES (?, ?, ?, ?)
+        """, (list_id, item.text, item.priority or "medium", item.completed))
+    
     conn.commit()
     conn.close()
     
@@ -894,23 +933,31 @@ async def update_list(
         updates.append("name = ?")
         params.append(update_data.name)
     
-    if update_data.items is not None:
-        updates.append("items = ?")
-        params.append(json.dumps([item.dict() for item in update_data.items]))
-    
     if update_data.category:
         updates.append("list_category = ?")
         params.append(update_data.category)
     
-    updates.append("updated_at = CURRENT_TIMESTAMP")
+    if updates:
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        params.extend([list_id, list_type, user_id])
+        
+        cursor.execute(f"""
+            UPDATE lists 
+            SET {', '.join(updates)}
+            WHERE id = ? AND list_type = ? AND user_id = ?
+        """, params)
     
-    params.extend([list_id, list_type, user_id])
-    
-    cursor.execute(f"""
-        UPDATE lists 
-        SET {', '.join(updates)}
-        WHERE id = ? AND list_type = ? AND user_id = ?
-    """, params)
+    # Update items if provided
+    if update_data.items is not None:
+        # Delete existing items
+        cursor.execute("DELETE FROM list_items WHERE list_id = ?", (list_id,))
+        
+        # Add new items
+        for item in update_data.items:
+            cursor.execute("""
+                INSERT INTO list_items (list_id, task_text, priority, completed)
+                VALUES (?, ?, ?, ?)
+            """, (list_id, item.text, item.priority or "medium", item.completed))
     
     conn.commit()
     conn.close()

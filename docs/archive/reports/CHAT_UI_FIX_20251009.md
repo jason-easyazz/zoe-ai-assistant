@@ -145,3 +145,4 @@ curl -s -k -X POST "https://localhost/api/chat/?user_id=default&stream=false" \
 **Tested:** API endpoints verified working  
 **Deployed:** Yes (volume-mounted, live immediately)
 
+

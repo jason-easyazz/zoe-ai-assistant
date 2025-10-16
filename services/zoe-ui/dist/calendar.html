@@ -1105,6 +1105,114 @@
             flex-shrink: 0;
         }
         
+        /* Attendees, Reminders, Prep Items Styles */
+        .attendees-list, .reminders-list, .prep-items-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .attendee-item, .reminder-item, .prep-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px;
+            background: rgba(123, 97, 255, 0.05);
+            border: 1px solid rgba(123, 97, 255, 0.15);
+            border-radius: 6px;
+            font-size: 13px;
+        }
+        
+        .attendee-info, .reminder-info, .prep-info {
+            flex: 1;
+        }
+        
+        .attendee-name {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .attendee-details, .reminder-details, .prep-details {
+            font-size: 11px;
+            color: #666;
+            margin-top: 2px;
+        }
+        
+        .btn-remove {
+            padding: 4px 8px;
+            background: rgba(239, 68, 68, 0.1);
+            color: #EF4444;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        
+        .btn-remove:hover {
+            background: rgba(239, 68, 68, 0.2);
+        }
+        
+        .prep-item.completed {
+            opacity: 0.6;
+        }
+        
+        .prep-item.completed .prep-info {
+            text-decoration: line-through;
+        }
+        
+        /* Event indicators (badges) */
+        .event-indicators {
+            display: flex;
+            gap: 4px;
+            margin-top: 4px;
+            flex-wrap: wrap;
+        }
+        
+        .event-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            padding: 2px 6px;
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+        
+        /* Time blocks for get-ready and travel time */
+        .time-block {
+            position: absolute;
+            left: 4px;
+            right: 4px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: rgba(0, 0, 0, 0.5);
+            font-weight: 500;
+            overflow: hidden;
+            transition: all 0.2s ease;
+        }
+        
+        .time-block:hover {
+            transform: translateX(2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            z-index: 50;
+        }
+        
+        .time-block.get-ready {
+            opacity: 0.3;
+            border: 1px solid currentColor;
+        }
+        
+        .time-block.travel {
+            opacity: 0.2;
+            border: 2px dashed currentColor;
+        }
+        
         .completion-summary {
             padding: 12px;
             background: rgba(123, 97, 255, 0.1);
@@ -1644,33 +1752,53 @@
             <button class="close-panel" onclick="closeEventPanel()">×</button>
         </div>
         <div class="event-panel-content">
+            <!-- Basic Section (Always Visible) -->
             <div class="form-group">
                 <label class="form-label">Event Title</label>
                 <input type="text" class="form-input" id="editTitle" placeholder="Event title">
-                </div>
+            </div>
                 
             <div class="form-row">
                 <div class="form-group">
                     <label class="form-label">Date</label>
                     <input type="date" class="form-input" id="editDate">
-                    </div>
+                </div>
                 <div class="form-group">
                     <label class="form-label">Start Time</label>
                     <input type="time" class="form-input" id="editTime">
-                    </div>
-                        </div>
+                </div>
+            </div>
             
-            <div class="form-row">
-                <div class="form-group">
-                    <label class="form-label">Duration</label>
-                    <select class="form-select" id="editDuration">
+            <!-- Duration/End Time Toggle -->
+            <div class="form-group">
+                <label class="form-label">Time Mode</label>
+                <div class="time-mode-group" style="display: flex; gap: 15px; margin-bottom: 10px;">
+                    <label style="display: flex; align-items: center; gap: 5px;">
+                        <input type="radio" name="timeMode" value="duration" checked onchange="switchTimeMode('duration')"> 
+                        Duration
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 5px;">
+                        <input type="radio" name="timeMode" value="endtime" onchange="switchTimeMode('endtime')"> 
+                        End Time
+                    </label>
+                </div>
+                <div id="durationInput">
+                    <select class="form-select" id="editDuration" onchange="updateFromDuration()">
                         <option value="15">15 minutes</option>
-                        <option value="30" selected>30 minutes</option>
+                        <option value="30">30 minutes</option>
                         <option value="60">1 hour</option>
                         <option value="90">1.5 hours</option>
                         <option value="120">2 hours</option>
+                        <option value="180">3 hours</option>
+                        <option value="240">4 hours</option>
                     </select>
-                        </div>
+                </div>
+                <div id="endTimeInput" style="display:none">
+                    <input type="time" class="form-input" id="editEndTime" onchange="updateFromEndTime()">
+                </div>
+            </div>
+            
+            <div class="form-row">
                 <div class="form-group">
                     <label class="form-label">Category</label>
                     <select class="form-select" id="editCategory">
@@ -1683,15 +1811,67 @@
                         <option value="bucket">Bucket</option>
                         <option value="shopping">Shopping</option>
                     </select>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Description</label>
+                <textarea class="form-input" id="editDescription" rows="3" placeholder="Event description (optional)"></textarea>
+            </div>
+            
+            <!-- Advanced Section Toggle -->
+            <button type="button" class="btn-toggle-advanced" onclick="toggleAdvancedSection()" style="width: 100%; margin: 15px 0; padding: 10px; background: rgba(123, 97, 255, 0.1); border: 1px solid rgba(123, 97, 255, 0.3); border-radius: 8px; color: #7B61FF; font-weight: 500; cursor: pointer;">
+                <span id="advancedToggleText">▼ Show Advanced Options</span>
+            </button>
+            
+            <!-- Advanced Section (Collapsible) -->
+            <div id="advancedSection" style="display: none;">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Get Ready Time (minutes)</label>
+                        <input type="number" class="form-input" id="getReadyTime" min="0" value="0" placeholder="0">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Travel Time (minutes)</label>
+                        <input type="number" class="form-input" id="travelTime" min="0" value="0" placeholder="0">
                     </div>
                 </div>
-            
-            <div class="form-group" id="linkedTasksGroup" style="display: none;">
-                <label class="form-label">Linked Tasks</label>
-                <div id="completionSummary" class="completion-summary" style="display: none;"></div>
-                <div class="linked-tasks-list" id="linkedTasksList"></div>
+                
+                <div class="form-group">
+                    <label class="form-label">Location</label>
+                    <input type="text" class="form-input" id="editLocation" placeholder="Event location (optional)">
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Attendees</label>
+                    <div id="attendeesList" class="attendees-list" style="margin-bottom: 10px;"></div>
+                    <div style="display: flex; gap: 10px;">
+                        <select class="form-select" id="addAttendeeSelect" style="flex: 1;">
+                            <option value="">-- Select person --</option>
+                        </select>
+                        <button type="button" class="btn btn-secondary" onclick="addAttendee()">Add</button>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Event Reminders</label>
+                    <div id="remindersList" class="reminders-list" style="margin-bottom: 10px;"></div>
+                    <button type="button" class="btn btn-secondary" onclick="addReminderRow()">+ Add Reminder</button>
+                </div>
+                
+                <div class="form-group">
+                    <label class="form-label">Preparation Items</label>
+                    <div id="prepItemsList" class="prep-items-list" style="margin-bottom: 10px;"></div>
+                    <button type="button" class="btn btn-secondary" onclick="addPrepItemRow()">+ Add Prep Item</button>
+                </div>
+                
+                <div class="form-group" id="linkedTasksGroup" style="display: none;">
+                    <label class="form-label">Linked Tasks</label>
+                    <div id="completionSummary" class="completion-summary" style="display: none;"></div>
+                    <div class="linked-tasks-list" id="linkedTasksList"></div>
+                </div>
             </div>
-            </div>
+        </div>
         <div class="event-panel-actions">
             <button class="btn btn-danger" onclick="deleteEvent()">Delete</button>
             <button class="btn btn-complete" id="completeBtn" onclick="completeEvent()" style="display: none;">Complete Event</button>
@@ -2455,6 +2635,16 @@
                     }
                 });
                 
+                // Add click handler to create new event
+                line.addEventListener('click', (e) => {
+                    if (e.target === line) {
+                        const hour = parseInt(line.dataset.hour);
+                        const time = `${hour.toString().padStart(2, '0')}:00`;
+                        const date = new Date(line.dataset.date);
+                        openNewEventPanel(date, time);
+                    }
+                });
+                
                 container.appendChild(line);
             }
             
@@ -2476,6 +2666,7 @@
                 console.log(`Event "${event.title}" at ${event.time} → hours:${hoursNum}, minutes:${minutesNum}, top:${top}px`);
                 const eventEl = createEventElement(event, top);
                 container.appendChild(eventEl);
+                createTimeBlocks(event, top, container); // Add time blocks for get-ready and travel
             });
             // Arrange overlapping events horizontally
             layoutOverlappingEvents(container);
@@ -2550,6 +2741,16 @@
                         }
                     });
                     
+                    // Add click handler to create new event
+                    line.addEventListener('click', (e) => {
+                        if (e.target === line) {
+                            const hour = parseInt(line.dataset.hour);
+                            const time = `${hour.toString().padStart(2, '0')}:00`;
+                            const date = new Date(line.dataset.date);
+                            openNewEventPanel(date, time);
+                        }
+                    });
+                    
                     slots.appendChild(line);
                 }
                 
@@ -2568,6 +2769,7 @@
                     const top = (parseInt(hours) * 60) + parseInt(minutes);
                     const eventEl = createEventElement(event, top);
                     slots.appendChild(eventEl);
+                    createTimeBlocks(event, top, slots); // Add time blocks for get-ready and travel
                 });
                 // Arrange overlapping events horizontally within this day column
                 layoutOverlappingEvents(slots);
@@ -2621,6 +2823,15 @@
                     }
                 });
                 
+                // Add click handler to create new event
+                line.addEventListener('click', (e) => {
+                    if (e.target === line) {
+                        const hour = parseInt(line.dataset.hour);
+                        const time = `${hour.toString().padStart(2, '0')}:00`;
+                        openNewEventPanel(currentDate, time);
+                    }
+                });
+                
                 container.appendChild(line);
             }
             
@@ -2639,6 +2850,7 @@
                 const top = (parseInt(hours) * 60) + parseInt(minutes);
                 const eventEl = createEventElement(event, top);
                 container.appendChild(eventEl);
+                createTimeBlocks(event, top, container); // Add time blocks for get-ready and travel
             });
             // Arrange overlapping events horizontally in day view
             layoutOverlappingEvents(container);
@@ -2842,6 +3054,58 @@
             }
         }
         
+        function createTimeBlocks(event, top, container) {
+            // Create time blocks for get-ready and travel time (only for events, not reminders)
+            if (event.type === 'reminder') return;
+            
+            const metadata = event.metadata || {};
+            const getReadyTime = metadata.get_ready_time || 0;
+            const travelTime = metadata.travel_time || 0;
+            
+            if (getReadyTime > 0 || travelTime > 0) {
+                const categoryColor = getCategoryColor(event.category);
+                
+                // Calculate positions
+                let currentTop = top;
+                
+                // Travel time block (furthest back)
+                if (travelTime > 0) {
+                    currentTop -= travelTime;
+                    const travelBlock = document.createElement('div');
+                    travelBlock.className = 'time-block travel';
+                    travelBlock.style.top = currentTop + 'px';
+                    travelBlock.style.height = travelTime + 'px';
+                    travelBlock.style.color = categoryColor;
+                    travelBlock.style.borderColor = categoryColor;
+                    travelBlock.innerHTML = `🚗 ${travelTime}m`;
+                    travelBlock.title = `Travel time: ${travelTime} minutes`;
+                    travelBlock.onclick = () => {
+                        const eventData = events.find(e => e.id === event.id);
+                        openEventPanel(eventData);
+                    };
+                    container.appendChild(travelBlock);
+                }
+                
+                // Get ready time block
+                if (getReadyTime > 0) {
+                    currentTop = top - getReadyTime;
+                    const readyBlock = document.createElement('div');
+                    readyBlock.className = 'time-block get-ready';
+                    readyBlock.style.top = currentTop + 'px';
+                    readyBlock.style.height = getReadyTime + 'px';
+                    readyBlock.style.color = categoryColor;
+                    readyBlock.style.borderColor = categoryColor;
+                    readyBlock.innerHTML = `⏰ ${getReadyTime}m`;
+                    readyBlock.title = `Get ready: ${getReadyTime} minutes`;
+                    readyBlock.onclick = () => {
+                        const eventData = events.find(e => e.id === event.id);
+                        openEventPanel(eventData);
+                    };
+                    container.appendChild(readyBlock);
+                }
+            }
+        }
+        
         function createEventElement(event, top) {
             const eventEl = document.createElement('div');
             const isReminder = event.type === 'reminder';
@@ -2854,6 +3118,14 @@
             } else {
                 // Event styling
                 eventEl.className = `calendar-event ${event.category}`;
+                
+                // Add visual indicators for enhanced features
+                const metadata = event.metadata || {};
+                const indicators = [];
+                if (event.recurring) indicators.push('🔁');
+                if (metadata.prep_items && metadata.prep_items.length > 0) indicators.push('📝');
+                if (metadata.get_ready_time > 0 || metadata.travel_time > 0) indicators.push('⏰');
+                event.indicatorsHtml = indicators.length > 0 ? `<span style="font-size: 10px;">${indicators.join(' ')}</span>` : '';
             }
             
             eventEl.style.top = top + 'px';
@@ -2868,9 +3140,10 @@
             
             const timeDisplay = isReminder ? event.time : `${event.time} (${event.duration}m)`;
             const icon = isReminder ? '🔔' : '';
+            const indicators = event.indicatorsHtml || '';
             
             eventEl.innerHTML = `
-                <div class="event-title">${icon} ${event.title}</div>
+                <div class="event-title">${icon} ${event.title} ${indicators}</div>
                 <div class="event-time">${timeDisplay}</div>
                 ${taskCountHtml}
                 ${!isReminder ? '<div class="resize-handle bottom"></div>' : ''}
@@ -3224,13 +3497,102 @@
             updateView();
         }
         
-        function openEventPanel(event) {
+        function openNewEventPanel(date, time) {
+            editingEventId = null; // Indicates we're creating a new event
+            document.getElementById('editTitle').value = '';
+            document.getElementById('editDate').value = formatDateISO(date);
+            document.getElementById('editTime').value = time;
+            document.getElementById('editDuration').value = '60'; // Default 1 hour
+            document.getElementById('editCategory').value = 'personal'; // Default category
+            document.getElementById('editDescription').value = '';
+            document.getElementById('editLocation').value = '';
+            document.getElementById('getReadyTime').value = '0';
+            document.getElementById('travelTime').value = '0';
+            
+            // Reset advanced section
+            document.getElementById('advancedSection').style.display = 'none';
+            document.getElementById('advancedToggleText').textContent = '▼ Show Advanced Options';
+            
+            // Reset time mode to duration
+            document.querySelector('input[name="timeMode"][value="duration"]').checked = true;
+            switchTimeMode('duration');
+            
+            // Reset lists
+            currentAttendees = [];
+            currentReminders = [];
+            currentPrepItems = [];
+            renderAttendeesList();
+            renderRemindersList();
+            renderPrepItemsList();
+            
+            const linkedTasksGroup = document.getElementById('linkedTasksGroup');
+            linkedTasksGroup.style.display = 'none';
+            document.getElementById('completeBtn').style.display = 'none';
+            
+            // Hide delete button for new events
+            const deleteBtn = document.querySelector('.btn-danger');
+            if (deleteBtn) deleteBtn.style.display = 'none';
+            
+            // Change panel title and save button text to indicate new event
+            document.querySelector('.panel-title').textContent = 'New Event';
+            document.querySelector('.btn-primary').textContent = 'Create Event';
+            
+            document.getElementById('eventPanel').classList.add('open');
+            document.getElementById('overlay').classList.add('active');
+        }
+        
+        async function openEventPanel(event) {
             editingEventId = event.id;
             document.getElementById('editTitle').value = event.title;
             document.getElementById('editDate').value = event.date.toISOString().split('T')[0];
             document.getElementById('editTime').value = event.time;
             document.getElementById('editDuration').value = event.duration;
             document.getElementById('editCategory').value = event.category;
+            document.getElementById('editDescription').value = event.description || '';
+            document.getElementById('editLocation').value = event.location || '';
+            
+            // Load metadata fields
+            const metadata = event.metadata || {};
+            document.getElementById('getReadyTime').value = metadata.get_ready_time || 0;
+            document.getElementById('travelTime').value = metadata.travel_time || 0;
+            
+            // Reset time mode
+            document.querySelector('input[name="timeMode"][value="duration"]').checked = true;
+            switchTimeMode('duration');
+            
+            // Load prep items
+            currentPrepItems = metadata.prep_items || [];
+            renderPrepItemsList();
+            
+            // Load attendees
+            try {
+                const data = await authedApiRequest(`/calendar/events/${event.id}/attendees`);
+                currentAttendees = data.attendees || [];
+                renderAttendeesList();
+            } catch (error) {
+                console.error('Error loading attendees:', error);
+                currentAttendees = [];
+                renderAttendeesList();
+            }
+            
+            // Load reminders
+            try {
+                const data = await authedApiRequest(`/calendar/events/${event.id}/reminders`);
+                currentReminders = (data.reminders || []).map(r => ({
+                    id: r.id,
+                    offset_minutes: calculateReminderOffset(event, r),
+                    message: r.title
+                }));
+                renderRemindersList();
+            } catch (error) {
+                console.error('Error loading reminders:', error);
+                currentReminders = [];
+                renderRemindersList();
+            }
+            
+            // Reset advanced section
+            document.getElementById('advancedSection').style.display = 'none';
+            document.getElementById('advancedToggleText').textContent = '▼ Show Advanced Options';
             
             const linkedTasksGroup = document.getElementById('linkedTasksGroup');
             
@@ -3242,8 +3604,28 @@
                 document.getElementById('completeBtn').style.display = 'none';
             }
             
+            // Show delete button for existing events
+            const deleteBtn = document.querySelector('.btn-danger');
+            if (deleteBtn) deleteBtn.style.display = '';
+            
+            // Change panel title and save button text to indicate editing
+            document.querySelector('.panel-title').textContent = 'Event Details';
+            document.querySelector('.btn-primary').textContent = 'Save';
+            
             document.getElementById('eventPanel').classList.add('open');
             document.getElementById('overlay').classList.add('active');
+        }
+        
+        function calculateReminderOffset(event, reminder) {
+            // Calculate offset from event start time
+            try {
+                const eventTime = new Date(`${event.date.toISOString().split('T')[0]} ${event.time}`);
+                const reminderTime = new Date(`${reminder.due_date} ${reminder.due_time}`);
+                const diffMinutes = Math.floor((eventTime - reminderTime) / 1000 / 60);
+                return diffMinutes;
+            } catch {
+                return 15; // Default to 15 minutes
+            }
         }
         
         function closeEventPanel() {
@@ -3252,39 +3634,417 @@
             editingEventId = null;
         }
         
-        async function saveEvent() {
-            const event = events.find(e => e.id === editingEventId);
-            if (!event) return;
+        // Advanced Section Toggle
+        function toggleAdvancedSection() {
+            const section = document.getElementById('advancedSection');
+            const toggleText = document.getElementById('advancedToggleText');
             
+            if (section.style.display === 'none') {
+                section.style.display = 'block';
+                toggleText.textContent = '▲ Hide Advanced Options';
+            } else {
+                section.style.display = 'none';
+                toggleText.textContent = '▼ Show Advanced Options';
+            }
+        }
+        
+        // Time Mode Switching
+        function switchTimeMode(mode) {
+            const durationInput = document.getElementById('durationInput');
+            const endTimeInput = document.getElementById('endTimeInput');
+            
+            if (mode === 'duration') {
+                durationInput.style.display = 'block';
+                endTimeInput.style.display = 'none';
+                updateFromDuration();
+            } else {
+                durationInput.style.display = 'none';
+                endTimeInput.style.display = 'block';
+                updateFromEndTime();
+            }
+        }
+        
+        function updateFromDuration() {
+            const startTime = document.getElementById('editTime').value;
+            const duration = parseInt(document.getElementById('editDuration').value);
+            
+            if (startTime) {
+                const endTime = calculateEndTime(startTime, duration);
+                document.getElementById('editEndTime').value = endTime;
+            }
+        }
+        
+        function updateFromEndTime() {
+            const startTime = document.getElementById('editTime').value;
+            const endTime = document.getElementById('editEndTime').value;
+            
+            if (startTime && endTime) {
+                const duration = calculateDuration(startTime, endTime);
+                document.getElementById('editDuration').value = duration;
+            }
+        }
+        
+        function calculateEndTime(startTime, durationMinutes) {
+            const [hours, minutes] = startTime.split(':').map(Number);
+            const totalMinutes = hours * 60 + minutes + durationMinutes;
+            const endHours = Math.floor(totalMinutes / 60) % 24;
+            const endMinutes = totalMinutes % 60;
+            return `${String(endHours).padStart(2, '0')}:${String(endMinutes).padStart(2, '0')}`;
+        }
+        
+        function calculateDuration(startTime, endTime) {
+            const [startHours, startMinutes] = startTime.split(':').map(Number);
+            const [endHours, endMinutes] = endTime.split(':').map(Number);
+            const startTotalMinutes = startHours * 60 + startMinutes;
+            const endTotalMinutes = endHours * 60 + endMinutes;
+            return endTotalMinutes - startTotalMinutes;
+        }
+        
+        // Load People List
+        let peopleList = [];
+        async function loadPeopleList() {
+            try {
+                const data = await authedApiRequest('/memories/people');
+                peopleList = data.people || [];
+                
+                const select = document.getElementById('addAttendeeSelect');
+                select.innerHTML = '<option value="">-- Select person --</option>';
+                peopleList.forEach(person => {
+                    const option = document.createElement('option');
+                    option.value = person.id;
+                    option.textContent = person.name;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Error loading people:', error);
+            }
+        }
+        
+        // Attendees Management
+        let currentAttendees = [];
+        
+        async function addAttendee() {
+            const select = document.getElementById('addAttendeeSelect');
+            const personId = parseInt(select.value);
+            
+            if (!personId) return;
+            
+            // Check if already added
+            if (currentAttendees.some(a => a.person_id === personId)) {
+                showNotification('Person already added as attendee', 'error');
+                return;
+            }
+            
+            const person = peopleList.find(p => p.id === personId);
+            if (person) {
+                currentAttendees.push({
+                    person_id: person.id,
+                    name: person.name,
+                    email: person.email,
+                    phone: person.phone,
+                    role: 'participant'
+                });
+                renderAttendeesList();
+                select.value = '';
+            }
+        }
+        
+        function removeAttendee(personId) {
+            currentAttendees = currentAttendees.filter(a => a.person_id !== personId);
+            renderAttendeesList();
+        }
+        
+        function renderAttendeesList() {
+            const container = document.getElementById('attendeesList');
+            
+            if (currentAttendees.length === 0) {
+                container.innerHTML = '<div style="color: #666; font-size: 12px;">No attendees added</div>';
+                return;
+            }
+            
+            container.innerHTML = currentAttendees.map(attendee => `
+                <div class="attendee-item">
+                    <div class="attendee-info">
+                        <div class="attendee-name">${attendee.name}</div>
+                        <div class="attendee-details">${attendee.email || attendee.phone || 'No contact info'}</div>
+                    </div>
+                    <button class="btn-remove" onclick="removeAttendee(${attendee.person_id})">Remove</button>
+                </div>
+            `).join('');
+        }
+        
+        // Event Reminders Management
+        let currentReminders = [];
+        
+        function addReminderRow() {
+            const reminderId = Date.now();
+            currentReminders.push({
+                id: reminderId,
+                offset_minutes: 15,
+                message: ''
+            });
+            renderRemindersList();
+        }
+        
+        function removeReminderRow(reminderId) {
+            currentReminders = currentReminders.filter(r => r.id !== reminderId);
+            renderRemindersList();
+        }
+        
+        function updateReminder(reminderId, field, value) {
+            const reminder = currentReminders.find(r => r.id === reminderId);
+            if (reminder) {
+                reminder[field] = value;
+            }
+        }
+        
+        function renderRemindersList() {
+            const container = document.getElementById('remindersList');
+            
+            if (currentReminders.length === 0) {
+                container.innerHTML = '<div style="color: #666; font-size: 12px;">No reminders set</div>';
+                return;
+            }
+            
+            container.innerHTML = currentReminders.map(reminder => `
+                <div class="reminder-item">
+                    <div class="reminder-info">
+                        <select class="form-select" style="margin-bottom: 5px;" onchange="updateReminder(${reminder.id}, 'offset_minutes', parseInt(this.value))">
+                            <option value="15" ${reminder.offset_minutes === 15 ? 'selected' : ''}>15 minutes before</option>
+                            <option value="30" ${reminder.offset_minutes === 30 ? 'selected' : ''}>30 minutes before</option>
+                            <option value="60" ${reminder.offset_minutes === 60 ? 'selected' : ''}>1 hour before</option>
+                            <option value="120" ${reminder.offset_minutes === 120 ? 'selected' : ''}>2 hours before</option>
+                            <option value="1440" ${reminder.offset_minutes === 1440 ? 'selected' : ''}>1 day before</option>
+                            <option value="2880" ${reminder.offset_minutes === 2880 ? 'selected' : ''}>2 days before</option>
+                        </select>
+                        <input type="text" class="form-input" placeholder="Custom message (optional)" 
+                               value="${reminder.message}" 
+                               onchange="updateReminder(${reminder.id}, 'message', this.value)">
+                    </div>
+                    <button class="btn-remove" onclick="removeReminderRow(${reminder.id})">Remove</button>
+                </div>
+            `).join('');
+        }
+        
+        // Prep Items Management
+        let currentPrepItems = [];
+        
+        function addPrepItemRow() {
+            const itemId = Date.now();
+            currentPrepItems.push({
+                id: itemId,
+                text: '',
+                list_type: 'personal',
+                deadline_offset: 1,
+                deadline_unit: 'days',
+                auto_add_to_list: false,
+                completed: false
+            });
+            renderPrepItemsList();
+        }
+        
+        function removePrepItemRow(itemId) {
+            currentPrepItems = currentPrepItems.filter(item => item.id !== itemId);
+            renderPrepItemsList();
+        }
+        
+        function updatePrepItem(itemId, field, value) {
+            const item = currentPrepItems.find(i => i.id === itemId);
+            if (item) {
+                item[field] = value;
+            }
+        }
+        
+        function togglePrepItemComplete(itemId) {
+            const item = currentPrepItems.find(i => i.id === itemId);
+            if (item) {
+                item.completed = !item.completed;
+                renderPrepItemsList();
+            }
+        }
+        
+        function renderPrepItemsList() {
+            const container = document.getElementById('prepItemsList');
+            
+            if (currentPrepItems.length === 0) {
+                container.innerHTML = '<div style="color: #666; font-size: 12px;">No prep items added</div>';
+                return;
+            }
+            
+            container.innerHTML = currentPrepItems.map(item => `
+                <div class="prep-item ${item.completed ? 'completed' : ''}">
+                    <div class="prep-info" style="flex: 1;">
+                        <input type="text" class="form-input" placeholder="Prep item description" 
+                               value="${item.text}" 
+                               onchange="updatePrepItem(${item.id}, 'text', this.value)"
+                               style="margin-bottom: 5px;">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px;">
+                            <input type="number" class="form-input" min="1" value="${item.deadline_offset}" 
+                                   onchange="updatePrepItem(${item.id}, 'deadline_offset', parseInt(this.value))"
+                                   style="padding: 6px;">
+                            <select class="form-select" onchange="updatePrepItem(${item.id}, 'deadline_unit', this.value)"
+                                    style="padding: 6px;">
+                                <option value="hours" ${item.deadline_unit === 'hours' ? 'selected' : ''}>hours</option>
+                                <option value="days" ${item.deadline_unit === 'days' ? 'selected' : ''}>days</option>
+                                <option value="weeks" ${item.deadline_unit === 'weeks' ? 'selected' : ''}>weeks</option>
+                            </select>
+                            <select class="form-select" onchange="updatePrepItem(${item.id}, 'list_type', this.value)"
+                                    style="padding: 6px;">
+                                <option value="personal" ${item.list_type === 'personal' ? 'selected' : ''}>Personal</option>
+                                <option value="work" ${item.list_type === 'work' ? 'selected' : ''}>Work</option>
+                                <option value="shopping" ${item.list_type === 'shopping' ? 'selected' : ''}>Shopping</option>
+                                <option value="bucket" ${item.list_type === 'bucket' ? 'selected' : ''}>Bucket</option>
+                            </select>
+                        </div>
+                        <label style="display: flex; align-items: center; gap: 5px; margin-top: 5px; font-size: 11px;">
+                            <input type="checkbox" ${item.auto_add_to_list ? 'checked' : ''} 
+                                   onchange="updatePrepItem(${item.id}, 'auto_add_to_list', this.checked)">
+                            Auto-add to list
+                        </label>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 5px;">
+                        <button class="btn-remove" onclick="removePrepItemRow(${item.id})">Remove</button>
+                        <button class="btn-remove" style="background: rgba(16, 185, 129, 0.1); color: #10B981; border-color: rgba(16, 185, 129, 0.2);" 
+                                onclick="togglePrepItemComplete(${item.id})">${item.completed ? 'Undo' : 'Done'}</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        async function saveEvent() {
             const title = document.getElementById('editTitle').value;
             const date = document.getElementById('editDate').value;
             const time = document.getElementById('editTime').value;
             const duration = parseInt(document.getElementById('editDuration').value);
             const category = document.getElementById('editCategory').value;
+            const description = document.getElementById('editDescription').value;
+            const location = document.getElementById('editLocation').value;
+            const getReadyTime = parseInt(document.getElementById('getReadyTime').value) || 0;
+            const travelTime = parseInt(document.getElementById('travelTime').value) || 0;
             
+            if (!title.trim()) {
+                showNotification('Please enter an event title', 'error');
+                return;
+            }
+            
+            // Prepare event data with enhanced fields
             const eventData = {
                 title,
+                description,
                 start_date: date,
                 start_time: time,
                 duration,
                 category,
-                metadata: {
-                    linked_tasks: JSON.stringify(event.linkedTasks || [])
+                location,
+                get_ready_time: getReadyTime,
+                travel_time: travelTime,
+                prep_items: currentPrepItems,
+                attendee_ids: currentAttendees.map(a => a.person_id)
+            };
+            
+            if (editingEventId) {
+                // Update existing event
+                const event = events.find(e => e.id === editingEventId);
+                if (!event) return;
+                
+                // Keep existing linked tasks
+                if (event.linkedTasks && event.linkedTasks.length > 0) {
+                    if (!eventData.metadata) eventData.metadata = {};
+                    eventData.metadata.linked_tasks = JSON.stringify(event.linkedTasks);
                 }
-                };
                 
                 try {
-                await authedApiRequest(`/calendar/events/${event.id}`, {
-                    method: 'PUT',
-                    body: JSON.stringify(eventData)
-                });
-                
-                await loadEvents();
-                closeEventPanel();
-                showNotification('Event saved successfully');
+                    // Update event
+                    await authedApiRequest(`/calendar/events/${event.id}`, {
+                        method: 'PUT',
+                        body: JSON.stringify(eventData)
+                    });
+                    
+                    // Save attendees
+                    await saveEventAttendees(event.id);
+                    
+                    // Save reminders
+                    await saveEventReminders(event.id);
+                    
+                    await loadEvents();
+                    closeEventPanel();
+                    showNotification('Event saved successfully');
                 } catch (error) {
-                console.error('Error saving event:', error);
-                showNotification('Failed to save event', 'error');
+                    console.error('Error saving event:', error);
+                    showNotification('Failed to save event', 'error');
+                }
+            } else {
+                // Create new event
+                try {
+                    const result = await authedApiRequest('/calendar/events', {
+                        method: 'POST',
+                        body: JSON.stringify(eventData)
+                    });
+                    
+                    const newEventId = result.event.id;
+                    
+                    // Save attendees
+                    await saveEventAttendees(newEventId);
+                    
+                    // Save reminders
+                    await saveEventReminders(newEventId);
+                    
+                    await loadEvents();
+                    closeEventPanel();
+                    showNotification('Event created successfully');
+                } catch (error) {
+                    console.error('Error creating event:', error);
+                    showNotification('Failed to create event', 'error');
+                }
+            }
+        }
+        
+        async function saveEventAttendees(eventId) {
+            // First, get existing attendees and remove those not in current list
+            try {
+                const data = await authedApiRequest(`/calendar/events/${eventId}/attendees`);
+                const existingAttendees = data.attendees || [];
+                
+                // Remove attendees that were removed
+                for (const existing of existingAttendees) {
+                    if (!currentAttendees.some(a => a.person_id === existing.person_id)) {
+                        await authedApiRequest(`/calendar/events/${eventId}/attendees/${existing.person_id}`, {
+                            method: 'DELETE'
+                        });
+                    }
+                }
+                
+                // Add new attendees
+                for (const attendee of currentAttendees) {
+                    if (!existingAttendees.some(e => e.person_id === attendee.person_id)) {
+                        await authedApiRequest(`/calendar/events/${eventId}/attendees`, {
+                            method: 'POST',
+                            body: JSON.stringify({
+                                person_id: attendee.person_id,
+                                role: attendee.role || 'participant'
+                            })
+                        });
+                    }
+                }
+            } catch (error) {
+                console.error('Error saving attendees:', error);
+            }
+        }
+        
+        async function saveEventReminders(eventId) {
+            // Create reminders for the event
+            try {
+                for (const reminder of currentReminders) {
+                    await authedApiRequest(`/calendar/events/${eventId}/reminders`, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            offset_minutes: reminder.offset_minutes,
+                            message: reminder.message
+                        })
+                    });
+                }
+            } catch (error) {
+                console.error('Error saving reminders:', error);
             }
         }
         
@@ -3419,6 +4179,7 @@
             // Load data
             await loadLists();
             await loadEvents();
+            await loadPeopleList(); // Load people for attendees dropdown
             loadNotifications();
             
             // Update time/date display
@@ -3429,185 +4190,34 @@
             updateView();
         });
     </script>
+    
+        <!-- Load Zoe Orb Component -->
     <script>
-    // Zoe Orb Functions
-    let orbChatOpen = false;
-    let orbWebSocket = null;
-    
-    function toggleOrbChat() {
-        if (!orbChatOpen) {
-            openOrbChat();
-        } else {
-            closeOrbChat();
-        }
-    }
-    
-    function openOrbChat() {
-        // Create chat window if it doesn't exist
-        if (!document.getElementById('orbChatWindow')) {
-            const chatWindow = document.createElement('div');
-            chatWindow.id = 'orbChatWindow';
-            chatWindow.className = 'orb-chat-window';
-            chatWindow.innerHTML = `
-                <div class="orb-chat-header">
-                    <div class="orb-chat-title">Chat with Zoe</div>
-                    <button class="orb-chat-close" onclick="closeOrbChat()">×</button>
-                </div>
-                <div class="orb-chat-messages" id="orbChatMessages">
-                    <div class="orb-chat-message assistant">
-                        Hi! I'm Zoe, your AI assistant. How can I help you today?
-                    </div>
-                </div>
-                <div class="orb-chat-input-area">
-                    <textarea class="orb-chat-input" id="orbChatInput" placeholder="Type your message..." rows="1"></textarea>
-                    <button class="orb-chat-send" id="orbChatSend" onclick="sendOrbMessage()">→</button>
-                </div>
-            `;
-            document.body.appendChild(chatWindow);
-        }
-        
-        document.getElementById('orbChatWindow').style.display = 'block';
-        document.getElementById('orbChatInput').focus();
-        orbChatOpen = true;
-        document.getElementById('zoeOrb').classList.add('chatting');
-        
-        // Connect to intelligence WebSocket
-        connectOrbWebSocket();
-    }
-    
-    function closeOrbChat() {
-        if (document.getElementById('orbChatWindow')) {
-            document.getElementById('orbChatWindow').style.display = 'none';
-        }
-        orbChatOpen = false;
-        document.getElementById('zoeOrb').classList.remove('chatting');
-        
-        // Disconnect WebSocket
-        if (orbWebSocket) {
-            orbWebSocket.close();
-            orbWebSocket = null;
-        }
-    }
-    
-    function sendOrbMessage() {
-        const input = document.getElementById('orbChatInput');
-        const message = input.value.trim();
-        if (!message) return;
-        
-        // Add user message
-        addOrbMessage(message, 'user');
-        input.value = '';
-        
-        // Send to chat API
-        fetch('/api/chat/enhanced', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Session-ID': localStorage.getItem('session_id') || 'default'
-            },
-            body: JSON.stringify({ message: message, context: {} })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.response) {
-                addOrbMessage(data.response, 'assistant');
-            }
-        })
-        .catch(error => {
-            addOrbMessage('Sorry, I encountered an error. Please try again.', 'assistant');
-        });
-    }
-    
-    function addOrbMessage(message, sender) {
-        const messagesDiv = document.getElementById('orbChatMessages');
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `orb-chat-message ${sender}`;
-        messageDiv.textContent = message;
-        messagesDiv.appendChild(messageDiv);
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
-    }
-    
-    function connectOrbWebSocket() {
-        if (orbWebSocket) return;
-        
-        try {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/ws/intelligence`;
-            orbWebSocket = new WebSocket(wsUrl);
-            
-            orbWebSocket.onopen = function() {
-                document.getElementById('zoeOrb').classList.add('connected');
-                document.getElementById('zoeOrb').classList.remove('connecting');
-            };
-            
-            orbWebSocket.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                if (data.type === 'proactive_suggestion') {
-                    showOrbNotification(data.data);
-                }
-            };
-            
-            orbWebSocket.onclose = function() {
-                document.getElementById('zoeOrb').classList.remove('connected');
-                document.getElementById('zoeOrb').classList.add('connecting');
-                orbWebSocket = null;
-            };
-            
-            orbWebSocket.onerror = function() {
-                document.getElementById('zoeOrb').classList.add('error');
-            };
-        } catch (error) {
-            console.log('WebSocket connection failed', error);
-        }
-    }
-    
-    function showOrbNotification(notification) {
-        // Add badge to orb
-        document.getElementById('zoeOrb').classList.add('badge');
-        
-        // Show toast notification
-        const toast = document.createElement('div');
-        toast.className = 'orb-toast';
-        toast.innerHTML = `
-            <div class="orb-toast-content">
-                <div class="orb-toast-title">${notification.title}</div>
-                <div class="orb-toast-message">${notification.message}</div>
-            </div>
-        `;
-        document.body.appendChild(toast);
-        
-        // Auto-remove after 5 seconds
-        setTimeout(() => {
-            if (toast.parentNode) {
-                toast.parentNode.removeChild(toast);
-            }
-        }, 5000);
-    }
-    
-    // Initialize orb on page load
-    document.addEventListener('DOMContentLoaded', function() {
-        // Set initial state
-        document.getElementById('zoeOrb').classList.add('connecting');
-        
-        // Try to connect WebSocket
-        connectOrbWebSocket();
-        
-        // Add Enter key support for chat input
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && orbChatOpen) {
-                e.preventDefault();
-                sendOrbMessage();
-            }
-        });
-    });
+        // Load the JavaScript first
+        const orbScript = document.createElement('script');
+        orbScript.src = '/js/zoe-orb.js';
+        orbScript.onload = function() {
+            // Then load the HTML component
+            fetch('/components/zoe-orb-complete.html')
+                .then(r => r.text())
+                .then(html => {
+                    const div = document.createElement('div');
+                    div.innerHTML = html;
+                    // Remove the script tag from the HTML (we already loaded it)
+                    const scripts = div.querySelectorAll('script');
+                    scripts.forEach(s => s.remove());
+                    // Append all elements
+                    while (div.firstChild) {
+                        document.body.appendChild(div.firstChild);
+                    }
+                    // Initialize
+                    if (typeof initOrbChat === 'function') {
+                        initOrbChat();
+                    }
+                })
+                .catch(err => console.error('Failed to load Zoe orb:', err));
+        };
+        document.head.appendChild(orbScript);
     </script>
-    <!-- Zoe Orb -->
-    <div class="zoe-orb" id="zoeOrb" title="Click to chat with Zoe" onclick="toggleOrbChat()">
-    </div>
-<script>
-if (!document.getElementById("zoeOrb")) {
-    fetch("/components/zoe-orb.html").then(r=>r.text()).then(h=>{const d=document.createElement("div");d.innerHTML=h;while(d.firstChild){document.body.appendChild(d.firstChild);}});
-}
-</script>
 </body>
 </html>
