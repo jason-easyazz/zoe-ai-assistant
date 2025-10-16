@@ -133,3 +133,5 @@ homeassistant/*.db
 homeassistant/*.db-shm
 homeassistant/*.db-wal
 homeassistant/*.log*
+core
+services/zoe-voice-agent/core

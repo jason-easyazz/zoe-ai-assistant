@@ -164,7 +164,8 @@ class EnhancedMemAgentClient:
                     "content": result.get("message", ""),
                     "score": expert_data.get("confidence", 0.5),
                     "action": result.get("action", ""),
-                    "success": result.get("success", False)
+                    "success": result.get("success", False),
+                    "data": result.get("data", {})  # CRITICAL: Include actual data from expert
                 })
         
         return results

@@ -214,6 +214,25 @@ def init_memories_db():
         )
     """)
     
+    # Shared goals table for person-based goal tracking
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS person_shared_goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT DEFAULT 'default',
+            person_id INTEGER NOT NULL,
+            goal_text TEXT NOT NULL,
+            goal_type TEXT DEFAULT 'general',
+            status TEXT DEFAULT 'active',
+            target_date DATE,
+            journey_id INTEGER,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP,
+            FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE,
+            FOREIGN KEY (journey_id) REFERENCES journeys(id)
+        )
+    """)
+    
     # Create indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_people_user ON people(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id)")
@@ -226,6 +245,19 @@ def init_memories_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_conversations_person ON person_conversations(person_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_gifts_person ON person_gifts(person_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_dates_person ON person_important_dates(person_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_shared_goals_person ON person_shared_goals(person_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_shared_goals_status ON person_shared_goals(status, user_id)")
+    
+    # Add columns to person_activities for catch-up tracking
+    try:
+        cursor.execute("ALTER TABLE person_activities ADD COLUMN last_prompted_journal TIMESTAMP")
+    except:
+        pass
+    
+    try:
+        cursor.execute("ALTER TABLE person_activities ADD COLUMN calendar_event_id INTEGER")
+    except:
+        pass
     
     conn.commit()
     conn.close()
@@ -659,6 +691,7 @@ async def delete_memory(
 
 # Advanced Memory System Endpoints
 
+@router.get("/search")
 @router.post("/search")
 async def search_memories(query: str = Query(..., description="Search query")):
     """Search across all memories using semantic search"""
@@ -1276,6 +1309,50 @@ async def get_enhanced_person(
     return {"person": person_data}
 
 # Dedicated people endpoint
+@router.get("/people")
+async def get_people(
+    session: AuthenticatedSession = Depends(validate_session),
+    limit: int = Query(100, description="Maximum number of people to return")
+):
+    """Get all people for the user"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    # Get all available columns dynamically
+    cursor.execute("PRAGMA table_info(people)")
+    columns = [col[1] for col in cursor.fetchall()]
+    
+    # Build SELECT statement with available columns
+    select_cols = ", ".join(columns)
+    
+    cursor.execute(f"""
+        SELECT {select_cols}
+        FROM people 
+        WHERE user_id = ?
+        ORDER BY name ASC
+        LIMIT ?
+    """, (session.user_id, limit))
+    
+    people = []
+    for row in cursor.fetchall():
+        person = {}
+        for col in columns:
+            value = row[col]
+            # Parse JSON fields
+            if col in ['tags', 'metadata'] and value:
+                try:
+                    person[col] = json.loads(value)
+                except:
+                    person[col] = [] if col == 'tags' else {}
+            else:
+                person[col] = value
+        people.append(person)
+    
+    conn.close()
+    
+    return {"people": people, "count": len(people)}
+
 @router.post("/people")
 async def create_person(
     person: PersonCreate,

@@ -1,8 +1,8 @@
-# 🤖 Zoe AI Assistant v2.2 - "Samantha Enhanced with Light RAG"
+# 🤖 Zoe AI Assistant v2.3 - "Advanced Widget System"
 
-> **A "Samantha from Her" level AI companion** with perfect memory, beautiful UI, production-grade monitoring, **Multi-Expert Model with Action Execution**, and **Light RAG Intelligence**.
+> **A "Samantha from Her" level AI companion** with perfect memory, beautiful UI, production-grade monitoring, **Multi-Expert Model with Action Execution**, **Light RAG Intelligence**, and **AI-Powered Widget System**.
 
-[![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)](CHANGELOG.md)
 [![Tests](https://img.shields.io/badge/tests-26/37_passing-green.svg)](tests/)
 [![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com)
@@ -75,6 +75,16 @@
 - **Lists** - Shopping, todos, projects with Pomodoro
 - **Tasks** - Project management with auto-linking
 - **Chat** - AI conversations with full context
+
+### 🎨 Advanced Widget System (NEW!)
+- **Modular Widgets** - Drag, resize, customize your dashboard
+- **AI Widget Generation** - Create widgets by describing them to Zoe
+- **Widget Marketplace** - Share and discover community widgets
+- **Developer API** - Build custom widgets with documented API
+- **Cross-Platform** - Same widgets work on desktop and touch devices
+- **Layout Sync** - Layouts saved per user per device
+- **Core Widgets** - Events, Tasks, Time, Weather, Home, System, Notes, Zoe AI
+- **Versioning** - Automatic widget updates and version management
 
 ### 🔒 Production-Ready
 - **Secure Authentication** - JWT with user isolation
