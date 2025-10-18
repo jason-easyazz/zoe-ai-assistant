@@ -140,3 +140,5 @@ fi
 echo ""
 echo -e "${GREEN}Ready to use Zoe!${NC}"
 
+
+

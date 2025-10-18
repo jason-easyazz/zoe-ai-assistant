@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies including Docker CLI
+# Install system dependencies including Docker CLI and OpenCV requirements (for memvid)
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
@@ -12,6 +12,13 @@ RUN apt-get update && apt-get install -y \
     procps \
     net-tools \
     iputils-ping \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    ffmpeg \
     && curl -fsSL https://get.docker.com -o get-docker.sh \
     && sh get-docker.sh \
     && rm get-docker.sh \

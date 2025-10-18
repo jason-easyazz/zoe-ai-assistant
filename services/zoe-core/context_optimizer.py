@@ -271,6 +271,49 @@ context_compressor = ContextCompressor()
 context_budgeter = DynamicContextBudgeter()
 
 
+# ================================================================================
+# Fresh Project Context (Phase 2: gitingest alternative)
+# ================================================================================
+
+def get_fresh_project_context() -> str:
+    """
+    Load fresh project digest for AI context awareness.
+    Generated nightly by fresh_context.sh cron job.
+    """
+    import os
+    
+    digest_path = "/app/data/project_digest_trimmed.txt"
+    
+    if not os.path.exists(digest_path):
+        return ""
+    
+    try:
+        with open(digest_path, 'r') as f:
+            content = f.read()
+        
+        # Return first 5000 chars for context
+        return content[:5000]
+    except Exception as e:
+        logger.error(f"Error loading project digest: {e}")
+        return ""
+
+
+def should_include_project_context(query: str) -> bool:
+    """
+    Determine if query needs project context.
+    Only include for developer-related queries to avoid token bloat.
+    """
+    developer_keywords = [
+        "project", "structure", "file", "code", "router", "service",
+        "database", "table", "schema", "endpoint", "api", "implement",
+        "where is", "how does", "what does", "show me", "list",
+        "architecture", "system", "container", "docker"
+    ]
+    
+    query_lower = query.lower()
+    return any(keyword in query_lower for keyword in developer_keywords)
+
+
 
 
 

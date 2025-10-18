@@ -16,6 +16,9 @@ from enum import Enum
 import httpx
 import uuid
 
+# Phase 3: Persistent agent memory integration
+from persistent_agent_memory import agent_memory
+
 logger = logging.getLogger(__name__)
 
 class TaskStatus(Enum):
@@ -168,6 +171,19 @@ class ExpertOrchestrator:
                                      user_id: str) -> List[ExpertTask]:
         """Decompose task using LLM-based analysis"""
         try:
+            # Phase 3 Enhancement: Recall learned patterns for better decomposition
+            learned_context = ""
+            for expert_type in ExpertType:
+                patterns = await agent_memory.recall(
+                    agent_type=expert_type.value,
+                    user_id=user_id,
+                    task_description=request,
+                    limit=3
+                )
+                if patterns:
+                    learned_context += f"\n{expert_type.value} expert learned patterns:\n"
+                    learned_context += "\n".join(f"  - {p}" for p in patterns[:3])
+            
             # Create LLM prompt for task decomposition
             prompt = f"""
             Analyze this user request and decompose it into specific tasks for different experts.
@@ -180,6 +196,8 @@ class ExpertOrchestrator:
             - development: Code generation, debugging, technical tasks
             - weather: Weather information and forecasts
             - homeassistant: Smart home control and automation
+            
+            {learned_context if learned_context else ""}
             
             User Request: {request}
             Context: {json.dumps(context, indent=2)}
@@ -396,19 +414,63 @@ class ExpertOrchestrator:
                     task.result = response.json()
                     task.status = TaskStatus.COMPLETED
                     task.completed_at = datetime.now().isoformat()
+                    
+                    # Phase 3: Remember successful pattern
+                    await agent_memory.remember(
+                        agent_type=task.expert_type.value,
+                        user_id=user_id,
+                        orchestration_id=task.id,
+                        task_description=task.task_description,
+                        success=True,
+                        result=task.result
+                    )
+                    
                     return True
                 else:
                     task.error_message = f"HTTP {response.status_code}: {response.text}"
+                    
+                    # Phase 3: Remember failure
+                    await agent_memory.remember(
+                        agent_type=task.expert_type.value,
+                        user_id=user_id,
+                        orchestration_id=task.id,
+                        task_description=task.task_description,
+                        success=False,
+                        result={"error": task.error_message}
+                    )
+                    
                     return False
                     
         except asyncio.TimeoutError:
             task.status = TaskStatus.TIMEOUT
             task.error_message = f"Task timed out after {task.timeout_seconds} seconds"
+            
+            # Phase 3: Remember timeout
+            await agent_memory.remember(
+                agent_type=task.expert_type.value,
+                user_id=user_id,
+                orchestration_id=task.id,
+                task_description=task.task_description,
+                success=False,
+                result={"error": task.error_message}
+            )
+            
             return False
         
         except Exception as e:
             task.status = TaskStatus.FAILED
             task.error_message = str(e)
+            
+            # Phase 3: Remember failure
+            await agent_memory.remember(
+                agent_type=task.expert_type.value,
+                user_id=user_id,
+                orchestration_id=task.id,
+                task_description=task.task_description,
+                success=False,
+                result={"error": task.error_message}
+            )
+            
             return False
     
     async def _synthesize_results(self, tasks: List[ExpertTask], 
