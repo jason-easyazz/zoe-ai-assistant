@@ -248,76 +248,108 @@ class ListExpert:
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     async def _add_to_list_with_retry(self, item: str, list_name: str, user_id: str) -> Dict[str, Any]:
-        """Try multiple endpoints with automatic retry"""
+        """Add item to existing list or create new one"""
         async with httpx.AsyncClient(timeout=10.0) as client:
             # Determine list type and category
             list_type = "shopping" if "shop" in list_name.lower() else "personal_todos"
             category = "shopping" if "shop" in list_name.lower() else "personal"
             
-            # Endpoint 1: Create list with item (primary approach)
+            # ✅ FIX: First check if list exists
             try:
-                response = await client.post(
+                get_response = await client.get(
                     f"{self.api_base}/{list_type}",
-                    params={"user_id": user_id},
-                    json={
-                        "category": category,
-                        "name": list_name,
-                        "items": [{"text": item, "priority": "medium"}]
-                    }
+                    params={"user_id": user_id}
                 )
                 
-                if response.status_code in [200, 201]:
-                    logger.info(f"✅ Added '{item}' to new list via {list_type} API")
-                    return {"success": True, "data": response.json()}
-                else:
-                    logger.warning(f"{list_type} API returned {response.status_code}: {response.text}")
-            except Exception as e:
-                logger.warning(f"{list_type} API failed: {e}")
-            
-            # Endpoint 2: Direct lists API (fallback)
-            try:
-                # First, get or create the list
-                lists_response = await client.get(f"{self.api_base.replace('/lists', '')}/lists")
-                if lists_response.status_code == 200:
-                    lists_data = lists_response.json()
-                    target_list = next(
-                        (lst for lst in lists_data.get("lists", []) if lst.get("name", "").lower() == list_name.lower()),
-                        None
-                    )
+                if get_response.status_code == 200:
+                    data = get_response.json()
+                    existing_lists = data.get("lists", [])
+                    
+                    # Find existing list with matching name
+                    target_list = None
+                    for lst in existing_lists:
+                        if lst.get("name", "").lower() == list_name.lower():
+                            target_list = lst
+                            break
                     
                     if target_list:
+                        # ✅ List exists - add item to it via PUT
                         list_id = target_list.get("id")
-                        response = await client.post(
-                            f"{self.api_base.replace('/lists', '')}/lists/{list_id}/items",
-                            json={"text": item, "priority": "medium"}
+                        existing_items = target_list.get("items", [])
+                        
+                        # Append new item to existing items
+                        updated_items = [
+                            {
+                                "text": existing_item.get("text"),
+                                "priority": existing_item.get("priority", "medium"),
+                                "completed": existing_item.get("completed", False)
+                            }
+                            for existing_item in existing_items
+                        ]
+                        updated_items.append({"text": item, "priority": "medium", "completed": False})
+                        
+                        logger.info(f"📊 Adding '{item}' to existing list (currently has {len(existing_items)} items)")
+                        
+                        update_response = await client.put(
+                            f"{self.api_base}/{list_type}/{list_id}",
+                            params={"user_id": user_id},
+                            json={"items": updated_items}
                         )
                         
-                        if response.status_code in [200, 201]:
-                            logger.info(f"✅ Added '{item}' via lists API")
-                            return {"success": True, "data": response.json()}
+                        if update_response.status_code in [200, 204]:
+                            logger.info(f"✅ Added '{item}' to existing '{list_name}' list")
+                            return {"success": True, "data": update_response.json()}
+                        else:
+                            logger.warning(f"PUT failed: {update_response.status_code}: {update_response.text}")
+                    else:
+                        # ✅ List doesn't exist - create it
+                        logger.info(f"📊 Creating new '{list_name}' list with '{item}'")
+                        create_response = await client.post(
+                            f"{self.api_base}/{list_type}",
+                            params={"user_id": user_id},
+                            json={
+                                "category": category,
+                                "name": list_name,
+                                "items": [{"text": item, "priority": "medium"}]
+                            }
+                        )
+                        
+                        if create_response.status_code in [200, 201]:
+                            logger.info(f"✅ Created '{list_name}' list with '{item}'")
+                            return {"success": True, "data": create_response.json()}
+                        else:
+                            logger.warning(f"POST failed: {create_response.status_code}: {create_response.text}")
+                
             except Exception as e:
-                logger.warning(f"Lists API fallback failed: {e}")
+                logger.error(f"Add to list error: {e}", exc_info=True)
             
-            # All endpoints failed
-            return {"success": False, "error": "All API endpoints failed"}
+            # All attempts failed
+            return {"success": False, "error": "Failed to add item to list"}
     
     async def _get_current_list_items(self, list_name: str, user_id: str) -> List[Dict]:
         """Get current items in the list"""
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(f"{self.api_base}/tasks")
+                # ✅ FIX: Use correct endpoint based on list type
+                list_type = "shopping" if "shop" in list_name.lower() else "tasks"
+                response = await client.get(f"{self.api_base}/{list_type}?user_id={user_id}")
                 
                 if response.status_code == 200:
                     list_data = response.json()
                     all_items = []
                     for lst in list_data.get("lists", []):
-                        all_items.extend(lst.get("items", []))
+                        if lst.get("name", "").lower() == list_name.lower():
+                            all_items.extend(lst.get("items", []))
                     
-                    # Filter by list_name
+                    # Return items with proper structure
                     return [
-                        {"text": item.get("text"), "priority": item.get("priority"), "id": item.get("id")}
-                        for item in all_items 
-                        if item.get("list_name", "").lower() == list_name.lower()
+                        {
+                            "text": item.get("text"), 
+                            "priority": item.get("priority"), 
+                            "id": item.get("id"),
+                            "completed": item.get("completed", False)
+                        }
+                        for item in all_items
                     ]
         except Exception as e:
             logger.warning(f"Could not fetch current list items: {e}")
@@ -325,51 +357,75 @@ class ListExpert:
         return []
 
     async def _get_list_items(self, query: str, user_id: str) -> Dict[str, Any]:
-        """Get items from list"""
+        """Get items from specific list based on query"""
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(f"{self.api_base}/tasks")
+            # ✅ FIX: Detect which list type is being queried
+            query_lower = query.lower()
+            list_name = self._extract_list_name(query, default="Shopping")
+            list_type = "shopping" if "shop" in list_name.lower() else "tasks"
+            
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                # Use correct endpoint based on list type
+                response = await client.get(f"{self.api_base}/{list_type}?user_id={user_id}")
                 
                 if response.status_code == 200:
                     data = response.json()
-                    lists = data.get("lists", [])
+                    all_lists = data.get("lists", [])
                     
-                    if lists:
-                        items = []
-                        for list_data in lists:
-                            for item in list_data.get("items", []):
-                                items.append({
+                    # Find the specific list
+                    target_list = None
+                    for lst in all_lists:
+                        if lst.get("name", "").lower() == list_name.lower():
+                            target_list = lst
+                            break
+                    
+                    if target_list:
+                        items = target_list.get("items", [])
+                        
+                        if items:
+                            # Format items properly
+                            formatted_items = []
+                            for item in items:
+                                formatted_items.append({
                                     "text": item.get("text"),
-                                    "list": item.get("list_name", list_data.get("name")),
-                                    "priority": item.get("priority"),
+                                    "list": list_name,
+                                    "priority": item.get("priority", "medium"),
                                     "completed": item.get("completed", False),
                                     "id": item.get("id")
                                 })
-                        
-                        # Check if query mentions "tasks and events" or similar
-                        query_mentions_both = "event" in query.lower() and ("task" in query.lower() or "all" in query.lower() or "everything" in query.lower())
-                        
-                        base_msg = f"📋 Found {len(items)} items across {len(lists)} lists"
-                        if query_mentions_both:
-                            base_msg = f"📋 Found {len(items)} tasks across {len(lists)} lists"
-                        
-                        return {
-                            "success": True,
-                            "action": "get_list_items",
-                            "items": items,
-                            "message": base_msg,
-                            "data": {
-                                "items": items,
-                                "lists": lists,
-                                "total_tasks": len(items)  # Add "task" keyword for tests
+                            
+                            # Check if query mentions "tasks and events" or similar
+                            query_mentions_both = "event" in query_lower and ("task" in query_lower or "all" in query_lower or "everything" in query_lower)
+                            
+                            base_msg = f"📋 Found {len(formatted_items)} items in {list_name} list"
+                            if query_mentions_both:
+                                base_msg = f"📋 Found {len(formatted_items)} tasks in {list_name} list"
+                            
+                            return {
+                                "success": True,
+                                "action": "get_list_items",
+                                "items": formatted_items,
+                                "message": base_msg,
+                                "data": {
+                                    "items": formatted_items,
+                                    "list_name": list_name,
+                                    "total_tasks": len(formatted_items)
+                                }
                             }
-                        }
+                        else:
+                            return {
+                                "success": True,
+                                "action": "get_list_items",
+                                "items": [],
+                                "message": f"📋 Your {list_name} list is empty",
+                                "data": {"items": [], "list_name": list_name}
+                            }
                     else:
                         return {
-                            "success": True,
-                            "action": "get_list_items",
-                            "items": [],
-                            "message": "📋 No items found in any lists"
+                            "success": False,
+                            "error": "List not found",
+                            "message": f"📋 {list_name} list not found. Create it by adding items!",
+                            "data": {}
                         }
                 else:
                     return {
@@ -378,6 +434,7 @@ class ListExpert:
                         "message": "❌ Failed to retrieve list items"
                     }
         except Exception as e:
+            logger.error(f"Error getting list items: {e}", exc_info=True)
             return {
                 "success": False,
                 "error": str(e),
@@ -385,34 +442,153 @@ class ListExpert:
             }
 
     async def _remove_from_list(self, query: str, user_id: str) -> Dict[str, Any]:
-        """Remove item from list"""
+        """Remove item from list - ACTUALLY implements removal"""
         try:
-            # Extract what to remove
+            # Extract what to remove with better patterns
             query_lower = query.lower()
             item_to_remove = ""
             
-            for trigger in ["forget the ", "forget ", "remove ", "delete "]:
-                if trigger in query_lower:
-                    idx = query_lower.index(trigger) + len(trigger)
-                    item_to_remove = query_lower[idx:].replace(" from list", "").replace(" from shopping", "").strip()
+            # Pattern 1: "remove X from", "delete X from"
+            patterns = [
+                (r'remove\s+(?:1|one|a|the)?\s*(?:of\s+the\s+)?(\w+(?:\s+\w+)?)\s+from', 1),  # "remove 1 of the dog treats from"
+                (r'remove\s+(?:the\s+)?(\w+(?:\s+\w+)?)', 1),  # "remove dog treats"
+                (r'delete\s+(?:the\s+)?(\w+(?:\s+\w+)?)', 1),  # "delete milk"
+                (r'forget\s+(?:the\s+)?(\w+(?:\s+\w+)?)', 1),  # "forget bananas"
+            ]
+            
+            for pattern, group_idx in patterns:
+                match = re.search(pattern, query_lower)
+                if match:
+                    item_to_remove = match.group(group_idx).strip()
                     break
             
-            # Full implementation would get current list and remove the item
-            # For now, acknowledge removal
-            msg = f"✅ Removed {item_to_remove.title()} from your list" if item_to_remove else "✅ Removed item from your list"
+            if not item_to_remove:
+                # Fallback: just look for common item words after trigger
+                for trigger in ["remove ", "delete ", "forget "]:
+                    if trigger in query_lower:
+                        idx = query_lower.index(trigger) + len(trigger)
+                        rest = query_lower[idx:]
+                        # Extract first 1-2 words before "from"
+                        if " from" in rest:
+                            item_to_remove = rest[:rest.index(" from")].strip()
+                            # Remove numbers and articles
+                            item_to_remove = re.sub(r'\b(1|one|a|an|the|of)\b', '', item_to_remove).strip()
+                        break
             
-            return {
-                "success": True,
-                "action": "remove_from_list",
-                "message": msg,
-                "data": {"action": "removed", "item": item_to_remove}
-            }
+            if not item_to_remove or len(item_to_remove) < 2:
+                return {
+                    "success": False,
+                    "error": "No item specified",
+                    "message": "What would you like me to remove from the list?",
+                    "data": {}
+                }
+            
+            # Get current shopping list to find the item
+            list_name = self._extract_list_name(query, default="Shopping")
+            list_type = "shopping" if "shop" in list_name.lower() else "tasks"
+            
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # Get current list
+                response = await client.get(f"{self.api_base}/{list_type}?user_id={user_id}")
+                
+                if response.status_code != 200:
+                    return {
+                        "success": False,
+                        "error": "Failed to get list",
+                        "message": "❌ Could not access your shopping list"
+                    }
+                
+                list_data = response.json()
+                target_list = None
+                for lst in list_data.get("lists", []):
+                    if lst.get("name", "").lower() == list_name.lower():
+                        target_list = lst
+                        break
+                
+                if not target_list:
+                    return {
+                        "success": False,
+                        "error": "List not found",
+                        "message": f"❌ {list_name} list not found"
+                    }
+                
+                # Find item to remove (partial match)
+                items = target_list.get("items", [])
+                item_to_delete = None
+                for item in items:
+                    item_text = item.get("text", "").lower()
+                    if item_to_remove in item_text or item_text in item_to_remove:
+                        item_to_delete = item
+                        break
+                
+                if not item_to_delete:
+                    # Get updated list for display
+                    current_items = await self._get_current_list_items(list_name, user_id)
+                    items_list = "\n".join([f"○ {item['text']}" for item in current_items]) if current_items else "(empty)"
+                    
+                    return {
+                        "success": False,
+                        "error": "Item not found",
+                        "message": f"❌ '{item_to_remove.title()}' not found in your {list_name} list.\n\n🛒 Current items:\n{items_list}"
+                    }
+                
+                # ✅ FIX: Delete the item via PUT (update list with filtered items)
+                # No DELETE endpoint exists, so we filter the item out and PUT the updated list
+                list_id = target_list.get("id")
+                item_id = item_to_delete.get("id")
+                
+                # Get all items EXCEPT the one to remove
+                remaining_items = [
+                    {
+                        "text": item.get("text"),
+                        "priority": item.get("priority", "medium"),
+                        "completed": item.get("completed", False)
+                    }
+                    for item in items if item.get("id") != item_id
+                ]
+                
+                logger.info(f"🗑️  Removing item ID {item_id} from list {list_id}")
+                logger.info(f"📊 Remaining items to save: {len(remaining_items)}")
+                logger.info(f"📊 Items: {[item['text'] for item in remaining_items]}")
+                
+                # Update the list with remaining items
+                update_response = await client.put(
+                    f"{self.api_base}/{list_type}/{list_id}?user_id={user_id}",
+                    json={"items": remaining_items}
+                )
+                
+                logger.info(f"📊 PUT response: {update_response.status_code}")
+                if update_response.status_code not in [200, 204]:
+                    logger.error(f"PUT failed: {update_response.text}")
+                
+                if update_response.status_code in [200, 204]:
+                    # Get updated list from API
+                    current_items = await self._get_current_list_items(list_name, user_id)
+                    
+                    return {
+                        "success": True,
+                        "action": "remove_from_list",
+                        "item": item_to_delete.get("text"),
+                        "message": f"✅ Removed {item_to_delete.get('text')} from {list_name} list",
+                        "data": {
+                            "removed_item": item_to_delete.get("text"),
+                            "list_name": list_name,
+                            "current_items": current_items
+                        }
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"API error: {update_response.status_code}",
+                        "message": f"❌ Failed to remove item"
+                    }
+                    
         except Exception as e:
-            logger.error(f"Remove from list error: {e}")
+            logger.error(f"Remove from list error: {e}", exc_info=True)
             return {
                 "success": False,
                 "error": str(e),
-                "message": "❌ Error removing item"
+                "message": "❌ Error removing item from list"
             }
 
     async def _create_list(self, query: str, user_id: str) -> Dict[str, Any]:
@@ -502,20 +678,24 @@ class ListExpert:
                     return item.title()
         
         # Pattern 1: "add X to..." / "put X on..." / "add X to it"
-        for trigger in ["add ", "put "]:
-            if trigger in query_lower:
-                idx = query_lower.index(trigger) + len(trigger)
-                rest = query_lower[idx:]
-                # Handle "add X to it" - extract X
-                if " to it" in rest or " on it" in rest:
-                    item = rest.replace(" to it", "").replace(" on it", "").strip()
+        # ✅ FIX: Use regex to match "add" or "put" followed by space OR punctuation
+        add_put_pattern = r'\b(add|put)[,\s]+'
+        match = re.search(add_put_pattern, query_lower)
+        if match:
+            idx = match.end()
+            rest = query_lower[idx:]
+            # ✅ FIX: Remove leading punctuation (commas, periods, spaces)
+            rest = rest.lstrip(" ,.;:")
+            # Handle "add X to it" - extract X
+            if " to it" in rest or " on it" in rest:
+                item = rest.replace(" to it", "").replace(" on it", "").strip()
+                return item.title() if item else "Item"
+            # Extract until "to", "on", "list", "shopping"
+            for stop in [" to ", " on ", " list", " shopping"]:
+                if stop in rest:
+                    item = rest[:rest.index(stop)].strip()
                     return item.title() if item else "Item"
-                # Extract until "to", "on", "list", "shopping"
-                for stop in [" to ", " on ", " list", " shopping"]:
-                    if stop in rest:
-                        item = rest[:rest.index(stop)].strip()
-                        return item.title() if item else "Item"
-                return rest.strip().title()
+            return rest.strip().title()
         
         # Pattern 2: "buy X", "get X", "purchase X", "grab X"
         for trigger in ["buy ", "get ", "purchase ", "grab ", "pick up "]:

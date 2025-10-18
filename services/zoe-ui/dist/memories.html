@@ -1452,7 +1452,10 @@
         async function loadEnhancedPerson(personId) {
             try {
                 console.log("Fetching person analysis via nginx proxy:", personId);
-                const response = await fetch(`/api/people/${personId}/analysis`);
+                // ✅ FIX: Include user_id for proper isolation
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId = session?.user_id || 'default';
+                const response = await fetch(`/api/people/${personId}/analysis?user_id=${userId}`);
                 
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
@@ -1595,7 +1598,9 @@
             
             try {
                 console.log("Creating person via nginx proxy");
-                const response = await fetch('/api/people', {
+                // ✅ FIX: Include user_id in request
+                const userId = session?.user_id || 'default';
+                const response = await fetch(`/api/people?user_id=${userId}`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',

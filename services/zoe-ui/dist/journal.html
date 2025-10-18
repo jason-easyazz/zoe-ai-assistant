@@ -1772,7 +1772,10 @@
                     process: async (fieldName, file, metadata, load, error, progress, abort) => {
                         const formData = new FormData();
                         formData.append('files', file);
-                        formData.append('user_id', 'default');
+                        // ✅ FIX: Use authenticated user, not hardcoded 'default'
+                        const session = window.zoeAuth?.getCurrentSession();
+                        const userId = session?.user_id || 'default';
+                        formData.append('user_id', userId);
                         
                         try {
                             const xhr = new XMLHttpRequest();

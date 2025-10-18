@@ -1,5 +1,21 @@
 # 🌟 Zoe AI Assistant - Quick Start
 
+## 🆕 First-Time Setup (New Installations)
+
+If this is your first time installing Zoe, initialize the databases:
+
+```bash
+cd /home/pi/zoe
+
+# Initialize databases from schemas
+./scripts/setup/init_databases.sh
+
+# Optional: Add demo data for testing
+./scripts/setup/init_databases.sh --with-seed-data
+```
+
+**Note**: Existing installations don't need this step - your databases already exist!
+
 ## 🚀 How to Start Zoe
 
 ```bash
@@ -68,6 +84,46 @@ cd /home/pi/zoe
 - `/home/pi/zoe/services/zoe-auth/` - Authentication service
 - `/home/pi/zoe/services/zoe-ui/dist/` - Web interface
 - `/tmp/zoe-*.log` - Log files
+
+## 🔄 For Developers
+
+### Conventional Commits (Required)
+
+All commits must follow the format: `type(scope): description`
+
+```bash
+git commit -m "feat(chat): Add voice command support"
+git commit -m "fix(calendar): Fix timezone handling"
+git commit -m "docs: Update API documentation"
+```
+
+**See**: `docs/guides/CHANGE_MANAGEMENT.md` for full details
+
+### Database Changes
+
+After modifying database schema:
+
+```bash
+# Export updated schema
+./scripts/maintenance/export_schema.sh
+
+# Commit schema files
+git add data/schema/*.sql
+git commit -m "db: Add user_preferences table"
+```
+
+### Change Tracking
+
+```bash
+# See this week's changes
+./tools/reports/weekly_summary.sh
+
+# Check repository health
+python3 tools/reports/repo_health.py
+
+# Generate CHANGELOG for release
+python3 tools/generators/generate_changelog.py --version v2.4.0
+```
 
 ---
 **The authentication system is now fully working with no mixed content issues!** 🎉

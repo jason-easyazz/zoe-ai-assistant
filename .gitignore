@@ -1,10 +1,13 @@
-# Data and databases
+# Data and databases - DO NOT TRACK DATABASE FILES
+# Databases are excluded from git. Use schema files in data/schema/ instead.
+# To initialize databases: ./scripts/setup/init_databases.sh
 data/*.db
 data/*.sqlite
-# Allow the three official databases
-!data/zoe.db
-!data/memory.db
-!data/training.db
+data/*.db-shm
+data/*.db-wal
+# But DO track schema files
+!data/schema/
+!data/schema/*.sql
 data/billing/
 data/logs/
 data/backup/
@@ -54,6 +57,10 @@ aider_env/
 *.sh
 !scripts/maintenance/*.sh
 !scripts/permanent/*.sh
+!scripts/setup/*.sh
+!verify_updates.sh
+!start-zoe.sh
+!stop-zoe.sh
 
 # Python cache
 __pycache__/
