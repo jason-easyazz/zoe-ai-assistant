@@ -323,6 +323,7 @@ services:
     volumes:
     - ./config/cloudflared-config.yml:/etc/cloudflared/config.yml:ro
     - ./config/cloudflared-credentials.json:/etc/cloudflared/9343ddcf-c140-4919-9922-abff8bc02856.json:ro
+    - ./config/cert.pem:/etc/cloudflared/cert.pem:ro
     networks:
     - zoe-network
     extra_hosts:

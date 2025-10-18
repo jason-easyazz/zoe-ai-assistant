@@ -949,6 +949,45 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
         if msg.context:
             context.update(msg.context)
         
+        # Check for developer session queries (Phase 1: beads-inspired)
+        session_query_patterns = [
+            "what was i working on",
+            "where was i",
+            "what did i do",
+            "resume work",
+            "last session",
+            "previous work",
+            "what were you doing",
+            "restore session"
+        ]
+        
+        is_session_query = any(pattern in msg.message.lower() for pattern in session_query_patterns)
+        if is_session_query:
+            logger.info(f"🔍 Detected developer session query: {msg.message}")
+            try:
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        "http://localhost:8000/api/developer/tasks/sessions/what-was-i-doing",
+                        params={"user_id": actual_user_id},
+                        timeout=5.0
+                    )
+                    if response.status_code == 200:
+                        session_data = response.json()
+                        if session_data.get("found"):
+                            summary = session_data.get("summary", "")
+                            if not stream:
+                                return {"response": summary}
+                            else:
+                                async def session_stream():
+                                    yield f"data: {json_module.dumps({'type': 'session_start', 'timestamp': datetime.now().isoformat()})}\n\n"
+                                    yield f"data: {json_module.dumps({'type': 'message_delta', 'delta': summary})}\n\n"
+                                    yield f"data: {json_module.dumps({'type': 'session_end', 'timestamp': datetime.now().isoformat()})}\n\n"
+                                return StreamingResponse(session_stream(), media_type="text/event-stream")
+            except Exception as e:
+                logger.error(f"Error retrieving developer session: {e}")
+                # Fall through to normal chat if session query fails
+        
         # Start temporal memory episode for this conversation (ALWAYS ACTIVE)
         episode_id = await start_chat_episode(actual_user_id, "chat")
         if episode_id:

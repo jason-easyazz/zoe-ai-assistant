@@ -10,8 +10,10 @@ import sqlite3
 import psutil
 import os
 import platform
+import logging
 from datetime import datetime
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/system", tags=["system"])
 
 class SystemStatus(BaseModel):
@@ -206,3 +208,80 @@ async def log_feedback(payload: FeedbackPayload):
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Phase 4 Enhancement: Storage monitoring endpoint
+@router.get("/storage")
+async def get_storage_analysis():
+    """
+    Get comprehensive storage analysis.
+    Shows Docker images, databases, Ollama models (monitoring only), and logs.
+    """
+    try:
+        # Import inline to handle path correctly
+        import subprocess
+        
+        # Get database sizes
+        db_sizes = {}
+        for db_file in ["zoe.db", "memory.db", "training.db"]:
+            db_path = f"/app/data/{db_file}"
+            if os.path.exists(db_path):
+                size_bytes = os.path.getsize(db_path)
+                db_sizes[db_file] = {
+                    "size_bytes": size_bytes,
+                    "size_mb": round(size_bytes / (1024 * 1024), 2)
+                }
+        
+        total_db_size = sum(db['size_mb'] for db in db_sizes.values())
+        
+        # Get disk usage
+        try:
+            disk_result = subprocess.run(
+                ["df", "-h", "/app/data"],
+                capture_output=True,
+                text=True
+            )
+            disk_lines = disk_result.stdout.strip().split('\n')
+            disk_info = {}
+            if len(disk_lines) > 1:
+                parts = disk_lines[1].split()
+                disk_info = {
+                    "size": parts[1],
+                    "used": parts[2],
+                    "available": parts[3],
+                    "use_percent": parts[4]
+                }
+        except:
+            disk_info = {"available": False}
+        
+        # Get Ollama models (if accessible)
+        model_info = {"note": "Monitoring only - NO deletion (user requirement)"}
+        try:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                response = await client.get("http://zoe-ollama:11434/api/tags", timeout=5.0)
+                if response.status_code == 200:
+                    data = response.json()
+                    models = data.get("models", [])
+                    model_info = {
+                        "count": len(models),
+                        "models": [{"name": m.get("name"), "size_gb": round(m.get("size", 0) / (1024**3), 2)} for m in models[:10]],
+                        "note": "Monitoring only - NO deletion (user requirement)"
+                    }
+        except:
+            pass
+        
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "databases": {
+                "files": db_sizes,
+                "total_size_mb": round(total_db_size, 2)
+            },
+            "total_disk": disk_info,
+            "ollama_models": model_info,
+            "recommendations": []
+        }
+        
+    except Exception as e:
+        logger.error(f"Storage analysis failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Storage analysis failed: {str(e)}")

@@ -638,6 +638,202 @@ async def claim_task(task_id: str):
     
     return {"message": f"Task {task_id} claimed", "status": "analyzing"}
 
+# ================================================================================
+# Developer Session Management (Phase 1: beads-inspired)
+# ================================================================================
+
+class DeveloperSession(BaseModel):
+    """Developer work session for context restoration"""
+    session_id: str
+    files_changed: List[str] = []
+    last_command: Optional[str] = None
+    current_task: Optional[str] = None
+    next_steps: List[str] = []
+    breadcrumbs: List[str] = []
+    context_snapshot: Optional[str] = None
+    user_id: str = "system"
+
+@router.post("/sessions/save")
+async def save_developer_session(session: DeveloperSession):
+    """Save current developer session for context restoration"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            INSERT OR REPLACE INTO developer_sessions 
+            (session_id, files_changed, last_command, current_task, next_steps, 
+             breadcrumbs, context_snapshot, user_id, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            session.session_id,
+            json.dumps(session.files_changed),
+            session.last_command,
+            session.current_task,
+            json.dumps(session.next_steps),
+            json.dumps(session.breadcrumbs),
+            session.context_snapshot,
+            session.user_id,
+            datetime.now().isoformat()
+        ))
+        
+        conn.commit()
+        return {
+            "message": "Session saved successfully",
+            "session_id": session.session_id,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error saving session: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save session: {str(e)}")
+    finally:
+        conn.close()
+
+@router.get("/sessions/restore")
+async def restore_developer_session(user_id: str = "system"):
+    """Restore most recent developer session"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT session_id, files_changed, last_command, current_task, 
+                   next_steps, breadcrumbs, context_snapshot, timestamp
+            FROM developer_sessions
+            WHERE user_id = ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """, (user_id,))
+        
+        row = cursor.fetchone()
+        if not row:
+            return {
+                "message": "No previous session found",
+                "session": None
+            }
+        
+        return {
+            "message": "Session restored",
+            "session": {
+                "session_id": row[0],
+                "files_changed": json.loads(row[1]) if row[1] else [],
+                "last_command": row[2],
+                "current_task": row[3],
+                "next_steps": json.loads(row[4]) if row[4] else [],
+                "breadcrumbs": json.loads(row[5]) if row[5] else [],
+                "context_snapshot": row[6],
+                "timestamp": row[7]
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error restoring session: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to restore session: {str(e)}")
+    finally:
+        conn.close()
+
+@router.get("/sessions/what-was-i-doing")
+async def what_was_i_doing(user_id: str = "system"):
+    """Get human-readable summary of last work session"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT current_task, files_changed, next_steps, breadcrumbs, timestamp
+            FROM developer_sessions
+            WHERE user_id = ?
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """, (user_id,))
+        
+        row = cursor.fetchone()
+        if not row:
+            return {
+                "summary": "No previous work session found. Starting fresh!",
+                "found": False
+            }
+        
+        current_task = row[0]
+        files_changed = json.loads(row[1]) if row[1] else []
+        next_steps = json.loads(row[2]) if row[2] else []
+        breadcrumbs = json.loads(row[3]) if row[3] else []
+        timestamp = row[4]
+        
+        # Build human-readable summary
+        summary = f"Last worked: {timestamp}\n\n"
+        
+        if current_task:
+            summary += f"📋 You were working on: {current_task}\n\n"
+        
+        if files_changed:
+            summary += f"📝 Files you modified ({len(files_changed)}):\n"
+            for f in files_changed[:5]:  # Show top 5
+                summary += f"  • {f}\n"
+            if len(files_changed) > 5:
+                summary += f"  ... and {len(files_changed) - 5} more\n"
+            summary += "\n"
+        
+        if next_steps:
+            summary += f"➡️  Next steps:\n"
+            for step in next_steps[:3]:  # Show top 3
+                summary += f"  {step}\n"
+            summary += "\n"
+        
+        if breadcrumbs:
+            summary += f"🔍 Recent actions ({len(breadcrumbs)}):\n"
+            for crumb in breadcrumbs[-5:]:  # Show last 5
+                summary += f"  • {crumb}\n"
+        
+        return {
+            "summary": summary,
+            "found": True,
+            "raw_data": {
+                "current_task": current_task,
+                "files_changed": files_changed,
+                "next_steps": next_steps,
+                "breadcrumbs": breadcrumbs,
+                "timestamp": timestamp
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error retrieving session summary: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get session summary: {str(e)}")
+    finally:
+        conn.close()
+
+@router.get("/sessions/history")
+async def get_session_history(user_id: str = "system", limit: int = 10):
+    """Get history of recent developer sessions"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT session_id, current_task, timestamp
+            FROM developer_sessions
+            WHERE user_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (user_id, limit))
+        
+        sessions = []
+        for row in cursor.fetchall():
+            sessions.append({
+                "session_id": row[0],
+                "current_task": row[1],
+                "timestamp": row[2]
+            })
+        
+        return {
+            "sessions": sessions,
+            "count": len(sessions)
+        }
+    except Exception as e:
+        logger.error(f"Error getting session history: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get session history: {str(e)}")
+    finally:
+        conn.close()
+
 @router.websocket("/ws/tasks")
 async def tasks_websocket(websocket: WebSocket):
     """WebSocket for real-time task updates"""

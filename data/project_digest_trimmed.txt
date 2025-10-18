@@ -1,0 +1,123 @@
+================================================================================
+ZOE AI ASSISTANT - PROJECT DIGEST
+Generated: 2025-10-18 14:28:42
+================================================================================
+
+## Project Structure
+
+.
+├── backups
+│   ├── local
+│   └── remote
+├── checkpoints
+│   └── backup_20250820_221526
+│       ├── zoe-core
+│       ├── zoe-ui
+│       └── docker-compose.yml
+├── config
+│   ├── archive
+│   │   └── 20251008_121422
+│   ├── cloudflared-config.yml
+│   ├── cloudflared-credentials.json
+│   ├── final-config.yml
+│   ├── final-tunnel-config.yml
+│   ├── grafana-dashboard.json
+│   ├── litellm_config.yaml
+│   ├── nginx-auth.conf
+│   ├── prometheus.yml
+│   ├── simple-config.yml
+│   ├── simple-tunnel-config.yml
+│   ├── tunnel-config.yml
+│   ├── working-config.yml
+│   └── working-tunnel-config.yml
+├── configs
+├── docs
+│   ├── api
+│   ├── architecture
+│   │   ├── ACTION_PLAN_PROGRESS.md
+│   │   ├── API_VERSIONING_STRATEGY.md
+│   │   ├── ARCHITECTURE_PROTECTION.md
+│   │   ├── ARCHITECTURE_REVIEW.md
+│   │   ├── CHAT_INTEGRATION_DIAGNOSIS.md
+│   │   ├── DATABASE_CONSOLIDATION_PLAN.md
+│   │   ├── DESKTOP_DASHBOARD_FIXES_COMPLETE.md
+│   │   ├── ERROR_HANDLING_STANDARD.md
+│   │   ├── FIXES_COMPLETED.md
+│   │   ├── IMPLEMENTATION_SUMMARY.md
+│   │   ├── LIST_ISOLATION_BUG_FIX.md
+│   │   ├── LISTS_CALENDAR_ERRORS_FIX.md
+│   │   ├── LISTS_DATABASE_FIX.md
+│   │   ├── PAGE_HEALTH_REPORT.md
+│   │   ├── PERSON_EXPERT_RECOMMENDATION.md
+│   │   ├── ROUTER_CONSOLIDATION_PLAN.md
+│   │   ├── SERVICE_HEALTH_FIX.md
+│   │   ├── SESSION_SUMMARY.md
+│   │   ├── TOUCH_DASHBOARD_UPGRADE_PLAN.md
+│   │   └── ZOE_ORB_SYSTEM.md
+│   ├── archive
+│   │   ├── guides
+│   │   ├── instructions
+│   │   ├── other
+│   │   ├── reports
+│   │   ├── routers
+│   │   ├── technical
+│   │   ├── tests
+│   │   └── ui-prototypes
+│   ├── consolidation
+│   │   ├── CONSOLIDATION_SUCCESS.md
+│   │   ├── DATABASE_MIGRATION_SUMMARY.md
+│   │   ├── DOUBLE_CHECK_COMPLETE.md
+│   │   ├── READY_FOR_YOUR_REVIEW.md
+│   │   └── VERIFICATION_REPORT.md
+│   ├── developer
+│   │   └── SMART_CONTINUATION_PROMPT.txt
+│   ├── features
+│   ├── guides
+│   │   ├── ALL_DOCUMENTATION_INDEX.md
+│   │   ├── CHANGE_MANAGEMENT.md
+│   │   ├── CURSOR_BEST_PRACTICES.md
+│   │   ├── FILE_TAGGING_SYSTEM.md
+│   │   ├── jetson-upgrade-checklist.md
+│   │   ├── MIGRATION_TO_V2.4.md
+│   │   ├── pre-jetson-implementation-tracking.md
+│   │   ├── project-evaluation-implementation.md
+│   │   ├── QUICK-FIX-SUMMARY.md
+│   │   ├── QUICK-START-INTELLIGENCE.md
+│   │   ├── UNSLOTH_INSTALLATION.md
+│   │   ├── voice-agent-setup.md
+│   │   ├── widget-development.md
+│   │   ├── widget-quick-start.md
+│   │   └── ZOE_ORB_COMPONENT_FIX.md
+│   ├── reports
+│   │   ├── CHAT_COMPLETE_V8.4_FINAL.md
+│   │   ├── CHAT_FIX_V8_CLEAN_FINAL.md
+│   │   ├── CHAT_INTERFACE_FINAL_V8.2.md
+│   │   ├── CURSOR_FIX_V7_FINAL.md
+│   │   ├── EXPERT_SYSTEM_IMPROVEMENTS_COMPLETED.md
+│   │   └── ZOE_IDENTITY_AND_MATCHMAKING_SYSTEM.md
+│   ├── ENVIRONMENT_VARIABLES.md
+│   ├── EXPERT_ARCHITECTURE.md
+│   ├── GOVERNANCE_IMPLEMENTATION_COMPLETE.md
+│   ├── HOME_DIRECTORY_RULES.md
+│   ├── IMPLEMENTATION_SUMMARY_V2.4.0.md
+│   ├── INTEGRATION_WITH_LLMS_AND_MCP.md
+│   ├── README.md
+│   ├── START_HERE.md
+│   └── TRAINING_OPTIONS.md
+├── documentation
+│   ├── core
+│   ├── dynamic
+│   │   ├── install_log.txt
+│   │   ├── proven_solutions.md
+│   │   └── things_to_avoid.md
+│   ├── working_versions
+│   ├── DOCUMENTATION_INDEX.md
+│   └── FILE_TAGGING_SYSTEM.md
+├── homeassistant
+│   ├── blueprints
+│   │   ├── automation
+│   │   └── script
+│   ├── deps
+│   ├── tts
+│   ├── automations.yaml
+│   ├──

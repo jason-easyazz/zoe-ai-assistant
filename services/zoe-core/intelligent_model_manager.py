@@ -404,6 +404,49 @@ class IntelligentModelManager:
             "models_tracked": len(self.metrics),
             "last_adaptation": self.rankings[0].last_ranked.isoformat() if self.rankings else None
         }
+    
+    async def analyze_model_performance_history(self, user_id: str = "system") -> Dict:
+        """
+        Phase 6B: Analyze model performance from complete archive history.
+        
+        Uses memvid archives to understand which models work best for which queries.
+        """
+        try:
+            from unified_learner import unified_learner
+            
+            # Get complete chat history
+            history = await unified_learner.analyze_complete_history(user_id)
+            
+            if not history.get('patterns'):
+                return {
+                    "analyzed": False,
+                    "message": "No archive data yet - using current performance metrics only"
+                }
+            
+            patterns = history['patterns']
+            
+            # Extract model performance patterns
+            if 'communication_style' in patterns:
+                comm = patterns['communication_style']
+                model_usage = comm.get('preferred_models', {})
+                
+                logger.info(f"📊 Historical model analysis: {len(model_usage)} models used")
+                
+                return {
+                    "analyzed": True,
+                    "historical_models": model_usage,
+                    "archives_analyzed": history.get('archives_analyzed', 0),
+                    "message": "Model selection optimized from historical performance"
+                }
+            
+            return {
+                "analyzed": False,
+                "message": "Insufficient model performance data in archives"
+            }
+            
+        except Exception as e:
+            logger.error(f"Historical model analysis failed: {e}")
+            return {"analyzed": False, "error": str(e)}
 
 # Global instance
 intelligent_manager = IntelligentModelManager()

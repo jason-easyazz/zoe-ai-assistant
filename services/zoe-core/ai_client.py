@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 # Import the intelligent RouteLLM
 from route_llm import router as route_llm_router
 from llm_models import LLMModelManager
+from context_optimizer import get_fresh_project_context, should_include_project_context
+
 manager = LLMModelManager()
 
 async def handle_calendar_request(message: str, context: Dict) -> bool:
@@ -66,6 +68,13 @@ async def get_ai_response(message: str, context: Dict = None) -> str:
         
         # Fetch relevant user data and add to context
         await fetch_user_data_context(message, context)
+        
+        # Add fresh project context for developer queries (Phase 2 enhancement)
+        if should_include_project_context(message):
+            project_context = get_fresh_project_context()
+            if project_context:
+                context['project_state'] = project_context
+                logger.info("📚 Added fresh project context to AI query")
         
         # Decide route using RouteLLM-backed router
         routing_decision = route_llm_router.classify_query(message, context)
