@@ -869,6 +869,100 @@ Structure is compliant when:
 
 ---
 
+## 🔄 Git Commit Standards (NEW in v2.4.0)
+
+### Conventional Commits (ENFORCED)
+
+All commit messages MUST follow Conventional Commits format:
+
+```
+type(scope): description
+
+[optional body]
+[optional footer]
+```
+
+**Valid Types**:
+- `feat` - New feature
+- `fix` - Bug fix  
+- `db` - Database changes
+- `docs` - Documentation
+- `refactor` - Code refactoring
+- `perf` - Performance improvement
+- `test` - Tests
+- `build` - Build system
+- `ci` - CI/CD
+- `chore` - Maintenance
+- `style` - Code formatting
+
+**Examples**:
+```
+feat(chat): Add auto-discovery router system
+fix(auth): Database configuration for multi-user
+db: Upgrade to v2.3.1 with connection pooling
+docs: Archive completion reports
+```
+
+**Enforcement**: commit-msg hook validates format before commit is created.
+
+**See**: `/docs/guides/CHANGE_MANAGEMENT.md` for complete guide
+
+### Automated CHANGELOG
+
+CHANGELOG.md is auto-generated from conventional commits:
+
+```bash
+# Generate CHANGELOG for new version
+python3 tools/generators/generate_changelog.py --version v2.4.0
+```
+
+**Benefits**:
+- Automatic version history
+- Clear categorization of changes
+- Easy to see what changed between versions
+
+### Weekly Change Summaries
+
+Track what changed each week:
+
+```bash
+# See last week's changes
+./tools/reports/weekly_summary.sh
+
+# See last 2 weeks
+./tools/reports/weekly_summary.sh 2
+```
+
+### Repository Health Check
+
+Monitor project organization:
+
+```bash
+python3 tools/reports/repo_health.py
+```
+
+Shows: repo size, file counts, structure compliance, recent activity.
+
+---
+
+## 💾 Database Management (NEW in v2.4.0)
+
+### Schema-Only Approach
+
+**DO**:
+- ✅ Track schema files in `data/schema/*.sql`
+- ✅ Use `./scripts/setup/init_databases.sh` for fresh installs
+- ✅ Run `./scripts/maintenance/export_schema.sh` after schema changes
+
+**DON'T**:
+- ❌ Track database files (`data/*.db`) in git
+- ❌ Commit your personal data
+- ❌ Check in database backups
+
+**Migration**: See `/docs/guides/MIGRATION_TO_V2.4.md`
+
+---
+
 **This is the law of the land. Follow these rules to keep Zoe clean!** 🏛️
 
 *Effective immediately. Enforced automatically. No exceptions without approval.*

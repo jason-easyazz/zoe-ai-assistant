@@ -2021,8 +2021,12 @@
             btn.innerHTML = '⏳ Adding...';
             
             try {
+                // ✅ FIX: Get authenticated user
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId = session?.user_id || 'default';
+                
                 // Add to calendar
-                await apiRequest('/calendar/events', {
+                await apiRequest(`/calendar/events?user_id=${userId}`, {
                     method: 'POST',
                     body: JSON.stringify({
                         title: data.title,
@@ -2064,13 +2068,17 @@
             const btn = event.target;
             const originalText = btn.textContent;
             
+            // ✅ FIX: Get authenticated user
+            const session = window.zoeAuth?.getCurrentSession();
+            const userId = session?.user_id || 'default';
+            
             // Show loading
             btn.disabled = true;
             btn.textContent = '⏳ Processing...';
             
             try {
                 if (actionType === 'add_to_calendar') {
-                    await apiRequest('/calendar/events', {
+                    await apiRequest(`/calendar/events?user_id=${userId}`, {
                         method: 'POST',
                         body: JSON.stringify({
                             title: data.title,
@@ -2081,7 +2089,7 @@
                     btn.textContent = '✅ Added!';
                     
                 } else if (actionType === 'add_to_list') {
-                    await apiRequest('/lists/tasks', {
+                    await apiRequest(`/lists/tasks?user_id=${userId}`, {
                         method: 'POST',
                         body: JSON.stringify({
                             text: data.text,

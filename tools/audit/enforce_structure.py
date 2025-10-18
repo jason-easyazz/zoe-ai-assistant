@@ -145,7 +145,8 @@ def check_structure_exists():
         "tests/integration",
         "scripts/maintenance",
         "docs/archive",
-        "tools/audit"
+        "tools/audit",
+        "data/schema"
     ]
     
     missing = [d for d in required_dirs if not (PROJECT_ROOT / d).exists()]
@@ -162,6 +163,98 @@ def check_structure_exists():
     print("✅ Folder Structure: Complete")
     return True
 
+def check_no_databases_in_git():
+    """Database files should not be tracked in git"""
+    import subprocess
+    
+    try:
+        result = subprocess.run(
+            ['git', 'ls-files', 'data/*.db'],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True
+        )
+        
+        tracked_dbs = [f for f in result.stdout.strip().split('\n') if f]
+        
+        if tracked_dbs:
+            print(f"❌ RULE VIOLATION: {len(tracked_dbs)} database files tracked in git")
+            print("   Databases should NOT be in git (use schemas instead):")
+            for db in tracked_dbs:
+                print(f"   - {db}")
+            print("\n   ACTION: Run 'git rm --cached data/*.db'")
+            print("   See docs/guides/MIGRATION_TO_V2.4.md for migration guide")
+            return False
+        
+        print("✅ Databases: Not tracked (schema-only)")
+        return True
+    except Exception as e:
+        print(f"⚠️  WARNING: Could not check git tracking: {e}")
+        return True
+
+def check_no_venv_in_git():
+    """Virtual environments should not be tracked in git"""
+    import subprocess
+    
+    try:
+        result = subprocess.run(
+            ['git', 'ls-files', 'venv/', 'mcp_test_env/', '**/venv/'],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True
+        )
+        
+        tracked_venv = [f for f in result.stdout.strip().split('\n') if f]
+        
+        if tracked_venv:
+            print(f"❌ RULE VIOLATION: {len(tracked_venv)} venv files tracked in git")
+            print("   Virtual environments should NOT be in git:")
+            venv_dirs = set(f.split('/')[0] for f in tracked_venv[:5])
+            for vdir in venv_dirs:
+                print(f"   - {vdir}/")
+            print(f"\n   ACTION: Run 'git rm -r --cached venv/ mcp_test_env/'")
+            return False
+        
+        print("✅ Virtual Envs: Not tracked")
+        return True
+    except Exception as e:
+        print(f"⚠️  WARNING: Could not check git tracking: {e}")
+        return True
+
+def check_dockerignore_exists():
+    """Check if .dockerignore exists"""
+    dockerignore = PROJECT_ROOT / ".dockerignore"
+    
+    if not dockerignore.exists():
+        print("❌ RULE VIOLATION: .dockerignore not found")
+        print("   ACTION: Create .dockerignore to reduce Docker image size")
+        return False
+    
+    print("✅ .dockerignore: Present")
+    return True
+
+def check_schema_files_exist():
+    """Check that database schema files exist"""
+    schema_dir = PROJECT_ROOT / "data" / "schema"
+    required_schemas = ["zoe_schema.sql", "memory_schema.sql", "training_schema.sql"]
+    
+    if not schema_dir.exists():
+        print("❌ RULE VIOLATION: data/schema/ directory not found")
+        print("   ACTION: Run './scripts/maintenance/export_schema.sh'")
+        return False
+    
+    missing = [s for s in required_schemas if not (schema_dir / s).exists()]
+    
+    if missing:
+        print(f"❌ RULE VIOLATION: {len(missing)} schema files missing")
+        for s in missing:
+            print(f"   - data/schema/{s}")
+        print("   ACTION: Run './scripts/maintenance/export_schema.sh'")
+        return False
+    
+    print("✅ Database Schemas: All present")
+    return True
+
 if __name__ == "__main__":
     print("\n" + "="*70)
     print("🔒 ZOE PROJECT STRUCTURE ENFORCEMENT")
@@ -176,6 +269,10 @@ if __name__ == "__main__":
         ("No archive folders", check_no_archive_folders),
         ("No duplicate configs", check_no_duplicate_configs),
         ("Folder structure exists", check_structure_exists),
+        ("No databases in git", check_no_databases_in_git),
+        ("No venv in git", check_no_venv_in_git),
+        (".dockerignore exists", check_dockerignore_exists),
+        ("Database schemas exist", check_schema_files_exist),
     ]
     
     passed = 0
