@@ -1885,7 +1885,13 @@
         // Authenticated API request wrapper
         async function authedApiRequest(endpoint, options = {}) {
             const session = window.zoeAuth?.getCurrentSession();
-            return apiRequest(endpoint, {
+            const userId = session?.user_id || 'default';
+            
+            // ✅ FIX: Add user_id to query params for proper isolation
+            const separator = endpoint.includes('?') ? '&' : '?';
+            const endpointWithUser = `${endpoint}${separator}user_id=${userId}`;
+            
+            return apiRequest(endpointWithUser, {
                 ...options,
                 headers: {
                     ...(session ? { 'X-Session-ID': session.session_id } : {}),

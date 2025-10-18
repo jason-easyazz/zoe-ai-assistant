@@ -16,31 +16,19 @@ import os
 import logging
 from datetime import datetime
 
-# Import existing routers
-from routers import auth, tasks, chat
+# Auto-discover and import routers
+from router_loader import RouterLoader
 
-# Enhanced chat functionality now integrated into existing chat router
-
-# Import new touch panel router
-from routers import touch_panel_config
-
-# Import widget builder router
-from routers import widget_builder
-
-# Import missing routers for complete API functionality
-from routers import calendar, memories, lists, reminders, developer, homeassistant, weather, developer_tasks, settings, journal, family, enhanced_calendar, event_permissions, system, self_awareness, birthday_calendar, birthday_memories, test_memories, public_memories
-from routers import vector_search, notifications
-from routers import proactive_insights, agent_planner, tool_registry, onboarding, chat_sessions
-from routers import location, media, journeys  # Journal enhancement routers
-from routers import tts  # NeuTTS Air voice synthesis
+# Initialize router loader
+router_loader = RouterLoader()
 
 # Optional LiveKit voice agent (requires livekit package)
+VOICE_AGENT_AVAILABLE = False
 try:
     from routers import voice_agent  # LiveKit real-time voice
     VOICE_AGENT_AVAILABLE = True
 except ImportError:
-    print("⚠️  LiveKit voice agent not available (livekit package not installed)")
-    VOICE_AGENT_AVAILABLE = False
+    logger.warning("⚠️  LiveKit voice agent not available (livekit package not installed)")
 
 # Import metrics middleware
 from middleware.metrics import MetricsMiddleware, get_metrics
@@ -53,13 +41,18 @@ app = FastAPI(
     version="5.1"
 )
 
-# CORS middleware - enable for frontend access
+# CORS middleware - environment-based configuration
+ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS", 
+    "http://localhost:3000,http://localhost:8080,http://localhost:5000"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins (can restrict to specific domains in production)
+    allow_origins=ALLOWED_ORIGINS,  # Restrict to configured origins only
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
 )
 
 # Metrics middleware
@@ -67,57 +60,24 @@ app.add_middleware(MetricsMiddleware)
 
 from auth_integration import validate_session
 
-# Include routers
-app.include_router(auth.router)
-app.include_router(tasks.router)
-app.include_router(chat.router)  # Original chat
-# Enhanced chat functionality integrated into existing chat router above
-app.include_router(touch_panel_config.router)
-app.include_router(widget_builder.router)  # Widget system
-app.include_router(widget_builder.user_layout_router)  # User layout endpoints (/api/user/layout)
+# Auto-discover and include all routers
+discovered_routers = router_loader.discover_routers()
+logger.info(f"📦 Discovered {len(discovered_routers)} routers")
 
-# Include missing routers for complete API functionality
-app.include_router(calendar.router)
-app.include_router(memories.router)
-app.include_router(lists.router)
-app.include_router(reminders.router)
-app.include_router(developer.router)
-app.include_router(homeassistant.router)
-app.include_router(weather.router)
-app.include_router(developer_tasks.router)
-app.include_router(settings.router)
-app.include_router(journal.router)
-app.include_router(family.router)
-app.include_router(enhanced_calendar.router)
-app.include_router(event_permissions.router)
-app.include_router(system.router)
-app.include_router(self_awareness.router)
-app.include_router(birthday_calendar.router)
-app.include_router(birthday_memories.router)
-app.include_router(test_memories.router)
-app.include_router(public_memories.router)
-app.include_router(vector_search.router)
-app.include_router(notifications.router)
+for router_name, router_instance in discovered_routers:
+    try:
+        app.include_router(router_instance)
+        logger.info(f"✅ Registered router: {router_name}")
+    except Exception as e:
+        logger.error(f"❌ Failed to register router {router_name}: {e}")
 
-# Mount websocket router for intelligence stream
-app.include_router(notifications.ws_router)
-app.include_router(proactive_insights.router)
-app.include_router(agent_planner.router)
-app.include_router(tool_registry.router)
-app.include_router(onboarding.router)
-app.include_router(chat_sessions.router)
-
-# Journal enhancement routers
-app.include_router(location.router)
-app.include_router(media.router)
-app.include_router(journeys.router)
-
-# TTS router (NeuTTS Air voice synthesis)
-app.include_router(tts.router)
-
-# Voice agent router (LiveKit real-time voice)
+# Voice agent router (LiveKit real-time voice) - special handling
 if VOICE_AGENT_AVAILABLE:
-    app.include_router(voice_agent.router)
+    try:
+        app.include_router(voice_agent.router)
+        logger.info("✅ Registered voice agent router (LiveKit)")
+    except Exception as e:
+        logger.error(f"❌ Failed to register voice agent router: {e}")
 
 # Mount static files for uploads
 import pathlib

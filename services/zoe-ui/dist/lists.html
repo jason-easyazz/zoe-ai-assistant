@@ -994,6 +994,9 @@
 
     <script src="js/common.js"></script>
     <script>
+        // ✅ CACHE BUSTER - Force browser reload v2.0 - USER ISOLATION FIXED
+        console.log('🔄 Lists.html v2.0 - User Isolation Enforced (Oct 18, 2025)');
+        
         // Global variables
         let lists = {
             shopping: [],
@@ -1105,12 +1108,16 @@
                 // Initialize empty lists
                 lists = { shopping: [], personal: [], work: [], bucket: [] };
                 
-                // Load in parallel with caching
+                // ✅ FIX: Get current authenticated user
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId = session?.user_id || 'default';
+                
+                // Load in parallel with caching - include user_id for proper isolation
                 const [shoppingRes, personalRes, workRes, bucketRes] = await Promise.all([
-                    apiGetCached('/lists/shopping', 15000),
-                    apiGetCached('/lists/personal_todos', 15000),
-                    apiGetCached('/lists/work_todos', 15000),
-                    apiGetCached('/lists/bucket', 15000)
+                    apiGetCached(`/lists/shopping?user_id=${userId}`, 15000),
+                    apiGetCached(`/lists/personal_todos?user_id=${userId}`, 15000),
+                    apiGetCached(`/lists/work_todos?user_id=${userId}`, 15000),
+                    apiGetCached(`/lists/bucket?user_id=${userId}`, 15000)
                 ]);
                 
                 const getLists = (res) => (res && Array.isArray(res.lists)) ? res.lists : [];
@@ -1130,11 +1137,21 @@
                 const personalLists = getLists(personalRes);
                 const workLists = getLists(workRes);
                 const bucketLists = getLists(bucketRes);
+                
+                // ✅ DEBUG: Log what we got
+                console.log('📊 Lists loaded:', {
+                    shopping: shoppingLists.length,
+                    personal: personalLists.length,
+                    work: workLists.length,
+                    bucket: bucketLists.length
+                });
+                
                 if (shoppingLists.length > 1) extra.push(...mapWithType(shoppingLists.slice(1), 'shopping'));
                 if (personalLists.length > 1) extra.push(...mapWithType(personalLists.slice(1), 'personal_todos'));
                 if (workLists.length > 1) extra.push(...mapWithType(workLists.slice(1), 'work_todos'));
                 if (bucketLists.length > 1) extra.push(...mapWithType(bucketLists.slice(1), 'bucket'));
 
+                console.log('📊 Extra lists to render:', extra.length);
                 renderDynamicLists(extra);
                 
                 renderAllLists();
@@ -1476,9 +1493,12 @@
                 const listType = listTypeMap[category];
                 if (!listType) return;
 
-                // Check if list exists
+                // ✅ FIX: Get current authenticated user
                 const session = window.zoeAuth?.getCurrentSession();
-                const response = await apiRequest(`/lists/${listType}`, {
+                const userId = session?.user_id || 'default';
+                
+                // Check if list exists - include user_id
+                const response = await apiRequest(`/lists/${listType}?user_id=${userId}`, {
                     headers: session ? { 'X-Session-ID': session.session_id } : {}
                 });
                 const existingLists = response.lists || [];

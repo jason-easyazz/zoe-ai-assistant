@@ -1,8 +1,8 @@
-# 🤖 Zoe AI Assistant v2.3 - "Advanced Widget System"
+# 🤖 Zoe AI Assistant v2.4.0 - "Governance & Automation"
 
-> **A "Samantha from Her" level AI companion** with perfect memory, beautiful UI, production-grade monitoring, **Multi-Expert Model with Action Execution**, **Light RAG Intelligence**, and **AI-Powered Widget System**.
+> **A "Samantha from Her" level AI companion** with perfect memory, beautiful UI, production-grade monitoring, **Multi-Expert Model with Action Execution**, **Light RAG Intelligence**, **Hardened Architecture**, and **Automated Governance**.
 
-[![Version](https://img.shields.io/badge/version-2.3.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)](CHANGELOG.md)
 [![Tests](https://img.shields.io/badge/tests-26/37_passing-green.svg)](tests/)
 [![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com)
@@ -109,15 +109,20 @@
 git clone https://github.com/yourusername/zoe.git
 cd zoe
 
+# Initialize databases from schemas (first-time only)
+./scripts/setup/init_databases.sh
+
+# Optional: Add demo data for testing
+./scripts/setup/init_databases.sh --with-seed-data
+
 # Start services
 docker-compose up -d
-
-# Initialize database
-python3 scripts/init_database.py
 
 # Verify health
 curl http://localhost:8000/health
 ```
+
+**Note**: Databases are **not** tracked in git - only schemas are. New installations must run `init_databases.sh` to create databases from schema files. See [`docs/guides/MIGRATION_TO_V2.4.md`](docs/guides/MIGRATION_TO_V2.4.md) for details.
 
 ### Access Points
 

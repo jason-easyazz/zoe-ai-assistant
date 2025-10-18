@@ -12,13 +12,18 @@ import statistics
 import asyncio
 import time
 from datetime import datetime
-
-sys.path.append('/app')
-
-# Import advanced components
+import os
 
 # Setup logger IMMEDIATELY
 logger = logging.getLogger(__name__)
+
+# Add parent directory to path only if not already accessible
+# This allows imports to work in both Docker (/app) and local dev environments
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+# Import advanced components
 from route_llm import router as route_llm_router
 from mem_agent_client import MemAgentClient
 from enhanced_mem_agent_client import EnhancedMemAgentClient
@@ -45,20 +50,52 @@ from graph_engine import graph_engine
 # Import preference learning
 from preference_learner import preference_learner
 
-# Import temporal memory integration
-sys.path.append('/home/pi/zoe')
-try:
-    from temporal_memory_integration import (
-        enhance_memory_search_with_temporal,
-        start_chat_episode,
-        add_chat_turn,
-        close_chat_episode
-    )
-    TEMPORAL_MEMORY_AVAILABLE = True
-    logger.info("✅ Temporal memory integration loaded successfully")
-except ImportError as e:
-    logger.warning(f"⚠️ Temporal memory integration not available: {e}")
-    TEMPORAL_MEMORY_AVAILABLE = False
+# Import temporal memory integration (REQUIRED - core feature)
+from temporal_memory_integration import (
+    TemporalMemoryIntegration,
+)
+
+# Initialize temporal memory system
+temporal_memory = TemporalMemoryIntegration()
+
+# Wrapper functions for backward compatibility
+async def start_chat_episode(user_id: str, context_type: str = "chat") -> Optional[int]:
+    """Start a new chat episode for conversation continuity"""
+    try:
+        return await temporal_memory.start_conversation_episode(user_id, context_type)
+    except Exception as e:
+        logger.error(f"Failed to start chat episode: {e}")
+        return None
+
+async def add_chat_turn(user_id: str, message: str, response: str, context_type: str = "chat", memory_fact_id: Optional[int] = None):
+    """Add a conversation turn to the current episode"""
+    try:
+        await temporal_memory.add_message_to_episode(user_id, message, response, context_type, memory_fact_id)
+    except Exception as e:
+        logger.error(f"Failed to add chat turn: {e}")
+
+async def close_chat_episode(user_id: str, context_type: str = "chat", summary: Optional[str] = None):
+    """Close the current chat episode"""
+    try:
+        await temporal_memory.close_episode(user_id, context_type, summary)
+    except Exception as e:
+        logger.error(f"Failed to close chat episode: {e}")
+
+async def enhance_memory_search_with_temporal(query: str, user_id: str, time_range: str = "all") -> Dict:
+    """Enhance memory search with temporal context from recent episodes"""
+    try:
+        temporal_results = await temporal_memory.search_with_temporal_context(query, user_id, time_range)
+        episode_context = await temporal_memory.get_episode_context(user_id, "chat")
+        return {
+            "enhanced": True,
+            "temporal_results": temporal_results,
+            "episode_context": episode_context
+        }
+    except Exception as e:
+        logger.error(f"Temporal memory search failed: {e}")
+        return {"enhanced": False, "error": str(e)}
+
+logger.info("✅ Temporal memory integration initialized (REQUIRED)")
 
 # Import user satisfaction tracking
 try:
@@ -69,16 +106,6 @@ except ImportError as e:
     logger.warning(f"⚠️ User satisfaction tracking not available: {e}")
     SATISFACTION_TRACKING_AVAILABLE = False
     satisfaction_system = None
-    
-    # Fallback functions
-    async def start_chat_episode(user_id: str, context_type: str = "chat"):
-        return None
-    async def add_chat_turn(user_id: str, message: str, response: str, context_type: str = "chat", memory_fact_id: Optional[int] = None):
-        pass
-    async def close_chat_episode(user_id: str, context_type: str = "chat", summary: Optional[str] = None):
-        pass
-    async def enhance_memory_search_with_temporal(query: str, user_id: str, time_range: str = "all"):
-        return {"enhanced": False, "error": "Temporal memory not available"}
 
 router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -225,18 +252,15 @@ async def search_memories(query: str, user_id: str, time_range: str = "all") -> 
         logger.warning(f"Query expansion failed: {e}")
         expanded_queries = [query]
     
-    # Enhanced temporal memory search
-    if TEMPORAL_MEMORY_AVAILABLE:
-        try:
-            temporal_enhancement = await enhance_memory_search_with_temporal(query, user_id, time_range)
-            if temporal_enhancement.get("enhanced"):
-                memories["temporal_results"] = temporal_enhancement.get("temporal_results", {}).get("results", [])
-                memories["episode_context"] = temporal_enhancement.get("episode_context", {})
-                logger.info(f"✅ Temporal search found {len(memories['temporal_results'])} results")
-        except Exception as e:
-            logger.warning(f"Temporal search failed: {e}")
-    else:
-        logger.info("📝 Temporal memory not available, skipping temporal search")
+    # Enhanced temporal memory search (ALWAYS ACTIVE)
+    try:
+        temporal_enhancement = await enhance_memory_search_with_temporal(query, user_id, time_range)
+        if temporal_enhancement.get("enhanced"):
+            memories["temporal_results"] = temporal_enhancement.get("temporal_results", {}).get("results", [])
+            memories["episode_context"] = temporal_enhancement.get("episode_context", {})
+            logger.info(f"✅ Temporal search found {len(memories['temporal_results'])} results")
+    except Exception as e:
+        logger.warning(f"Temporal search failed: {e}")
     
     # Try mem-agent first for semantic search
     if mem_agent:
@@ -925,13 +949,10 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
         if msg.context:
             context.update(msg.context)
         
-        # Start temporal memory episode for this conversation
-        episode_id = None
-        if TEMPORAL_MEMORY_AVAILABLE:
-            episode_id = await start_chat_episode(actual_user_id, "chat")
+        # Start temporal memory episode for this conversation (ALWAYS ACTIVE)
+        episode_id = await start_chat_episode(actual_user_id, "chat")
+        if episode_id:
             logger.info(f"📝 Started temporal episode {episode_id} for user {actual_user_id}")
-        else:
-            logger.info("📝 Temporal memory not available, skipping episode creation")
         
         # Step 0: Detect if this needs orchestration (planning requests)
         needs_orchestration = _is_planning_request(msg.message)
@@ -1050,8 +1071,8 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                         except Exception as e:
                             logger.error(f"❌ Failed to format planning data: {e}", exc_info=True)
                     
-                    elif expert_data and ("list" in primary_expert.lower() or "shopping" in msg.message.lower() or "add" in msg.message.lower()):
-                        # Format list data from expert
+                    elif expert_data and ("list" in primary_expert.lower() or "shopping" in msg.message.lower() or "add" in msg.message.lower() or "remove" in msg.message.lower()):
+                        # Format list data from expert (works for add, remove, and query)
                         try:
                             logger.info(f"📊 Formatting list data from expert...")
                             current_items = expert_data.get("current_items", [])
@@ -1061,28 +1082,38 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                             items_to_show = current_items if current_items else items_data
                             
                             logger.info(f"📊 List data: {len(items_to_show)} items")
+                            logger.info(f"📊 Items structure: {items_to_show[:3] if items_to_show else 'empty'}")
                             
-                            if items_to_show:
-                                response += f"\n\n🛒 **Shopping List** ({len(items_to_show)} items):\n"
-                                for item in items_to_show[:15]:
-                                    if isinstance(item, dict):
-                                        status = "✅" if item.get("completed") else "○"
-                                        text = item.get("text", item.get("name", "Item"))
-                                        response += f"{status} {text}\n"
-                                    else:
-                                        response += f"○ {item}\n"
-                            else:
-                                response += "\n\n🛒 Your shopping list is currently empty."
+                            # Only show list if there are items OR if it was a query/remove action
+                            # (Don't show empty list after adding, only after removing or querying)
+                            should_show_list = (
+                                len(items_to_show) > 0 or 
+                                "remove" in msg.message.lower() or 
+                                "show" in msg.message.lower() or 
+                                "what" in msg.message.lower()
+                            )
+                            
+                            if should_show_list:
+                                if items_to_show:
+                                    response += f"\n\n🛒 **Shopping List** ({len(items_to_show)} items):\n"
+                                    for item in items_to_show[:15]:
+                                        if isinstance(item, dict):
+                                            status = "✅" if item.get("completed") else "○"
+                                            text = item.get("text", item.get("name", "Item"))
+                                            response += f"{status} {text}\n"
+                                        else:
+                                            response += f"○ {item}\n"
+                                else:
+                                    response += "\n\n🛒 Your shopping list is currently empty."
                         except Exception as e:
                             logger.error(f"❌ Failed to format list data: {e}", exc_info=True)
                     
-                    # Record in temporal memory
-                    if TEMPORAL_MEMORY_AVAILABLE:
-                        try:
-                            await add_chat_turn(actual_user_id, msg.message, response, "chat")
-                            logger.info(f"📝 Recorded enhanced mem agent turn in temporal episode {episode_id}")
-                        except Exception as e:
-                            logger.warning(f"Failed to record temporal memory: {e}")
+                    # Record in temporal memory (ALWAYS ACTIVE)
+                    try:
+                        await add_chat_turn(actual_user_id, msg.message, response, "chat")
+                        logger.info(f"📝 Recorded enhanced mem agent turn in temporal episode {episode_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to record temporal memory: {e}")
                     
                     # ✅ NEW: Log action execution for training
                     interaction_id = None
@@ -1193,11 +1224,24 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                         get_user_context(actual_user_id, query=msg.message)  # ✅ Pass query for smart selection
                     )
                 else:
+                    # Get episode context even without full memory search (conversational continuity)
                     memories = {}
+                    try:
+                        temporal_enhancement = await enhance_memory_search_with_temporal("", actual_user_id, "all")
+                        memories["episode_context"] = temporal_enhancement.get("episode_context", {})
+                        logger.info(f"✅ Got episode context for conversation (no full memory search)")
+                    except Exception as e:
+                        logger.warning(f"Failed to get episode context: {e}")
                     user_context = await get_user_context(actual_user_id, query=msg.message)  # ✅ Pass query
         except asyncio.TimeoutError:
             logger.warning(f"Memory search timed out after 15s, using empty context")
             memories = {}
+            # Still try to get episode context on timeout (lightweight operation)
+            try:
+                temporal_enhancement = await enhance_memory_search_with_temporal("", actual_user_id, "all")
+                memories["episode_context"] = temporal_enhancement.get("episode_context", {})
+            except:
+                pass
             user_context = {"calendar_events": [], "active_lists": [], "recent_journal": [], "people": [], "projects": []}
 
         # Step 3: Emit intelligence stream context update
@@ -1251,13 +1295,12 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                 len(user_context.get("projects", []))
             )
             
-            # Record this conversation turn in temporal memory
-            if TEMPORAL_MEMORY_AVAILABLE:
-                try:
-                    await add_chat_turn(actual_user_id, msg.message, response, "chat")
-                    logger.info(f"📝 Recorded conversation turn in temporal episode {episode_id}")
-                except Exception as e:
-                    logger.warning(f"Failed to record temporal memory: {e}")
+            # Record this conversation turn in temporal memory (ALWAYS ACTIVE)
+            try:
+                await add_chat_turn(actual_user_id, msg.message, response, "chat")
+                logger.info(f"📝 Recorded conversation turn in temporal episode {episode_id}")
+            except Exception as e:
+                logger.warning(f"Failed to record temporal memory: {e}")
             
             # ✅ NEW: Log interaction for training
             interaction_id = None
