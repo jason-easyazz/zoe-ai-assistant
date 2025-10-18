@@ -56,3 +56,5 @@ echo ""
 echo "Schema files updated in: $SCHEMA_DIR"
 echo "Commit these files to git to track schema changes."
 
+
+
