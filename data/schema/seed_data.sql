@@ -5,15 +5,16 @@
 -- ============================================================================
 -- DEMO USER (optional - only for development/testing)
 -- ============================================================================
--- Default password: 'demo123' (hashed with bcrypt)
--- To create your own user, use the onboarding UI instead
+-- SECURITY NOTE: This creates a demo user with a bcrypt-hashed password
+-- For production use: Create users via the onboarding UI with strong passwords
+-- Demo credentials are documented in docs/guides/MIGRATION_TO_V2.4.md
 
 INSERT OR IGNORE INTO users (user_id, username, email, password_hash, is_active, is_admin, role, created_at)
 VALUES (
     'demo-user-001',
     'demo',
     'demo@zoe.local',
-    '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYIgHqGvLzq',  -- 'demo123'
+    '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5GyYIgHqGvLzq',
     1,
     0,
     'user',
