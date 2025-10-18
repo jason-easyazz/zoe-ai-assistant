@@ -145,3 +145,7 @@ homeassistant/*.db-wal
 homeassistant/*.log*
 core
 services/zoe-voice-agent/core
+
+# Database files (archived)
+data/archive/*.db
+data/archive/*/*.db
