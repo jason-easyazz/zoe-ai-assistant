@@ -30,6 +30,6 @@ EXPOSE 8003
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import sqlite3; conn = sqlite3.connect('/app/data/zoe.db'); conn.close()" || exit 1
 
-# Run the MCP server
-CMD ["python", "main.py"]
+# Run the MCP HTTP server (not STDIO server)
+CMD ["uvicorn", "http_mcp_server:app", "--host", "0.0.0.0", "--port", "8003"]
 
