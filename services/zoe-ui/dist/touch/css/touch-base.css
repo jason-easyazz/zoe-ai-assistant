@@ -1,0 +1,626 @@
+/* Zoe Touch Interface - Unified Design System */
+
+:root {
+  /* Zoe Brand Colors */
+  --primary-purple: #7B61FF;
+  --primary-teal: #5AE0E0;
+  --primary-gradient: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+  --secondary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --bg-gradient: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+  
+  /* Glass Morphism - Zoe Style */
+  --glass-bg: rgba(255, 255, 255, 0.6);
+  --glass-bg-light: rgba(255, 255, 255, 0.4);
+  --glass-bg-dark: rgba(0, 0, 0, 0.1);
+  --glass-border: rgba(255, 255, 255, 0.4);
+  --glass-border-light: rgba(255, 255, 255, 0.2);
+  --blur-amount: 40px;
+  --blur-light: 20px;
+  
+  /* Typography - Unified Font System */
+  --font-family-primary: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+  --font-family-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+  
+  /* Colors */
+  --fg-primary: #fff;
+  --fg-secondary: rgba(255, 255, 255, 0.7);
+  --fg-muted: rgba(255, 255, 255, 0.5);
+  --accent: var(--primary-purple);
+  
+  /* Shadows - Zoe Style */
+  --shadow-small: 0 2px 8px rgba(0, 0, 0, 0.1);
+  --shadow-medium: 0 4px 16px rgba(0, 0, 0, 0.15);
+  --shadow-large: 0 8px 32px rgba(0, 0, 0, 0.2);
+  --shadow-purple: 0 8px 32px rgba(123, 97, 255, 0.3);
+  --shadow-teal: 0 8px 32px rgba(90, 224, 224, 0.3);
+  --shadow-orb: 0 0 60px rgba(123, 97, 255, 0.4), 0 0 120px rgba(90, 224, 224, 0.2);
+  
+  /* Border Radius */
+  --border-radius-small: 8px;
+  --border-radius-medium: 12px;
+  --border-radius-large: 16px;
+  --border-radius-xl: 24px;
+  
+  /* Animations */
+  --animation-fast: 0.2s ease;
+  --animation-smooth: 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  
+  /* Touch Targets */
+  --min-touch-target: 44px;
+  --touch-padding: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0; padding: 0; width: 100%; height: 100%; 
+  background: var(--bg-gradient);
+  color: var(--fg-primary);
+  font-family: var(--font-family-primary);
+  font-weight: 300;
+  font-size: clamp(16px, 2.2vw, 20px);
+  -webkit-font-smoothing: antialiased; 
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+  overflow: hidden;
+  cursor: none; /* Start in ambient mode */
+  position: relative;
+}
+
+/* Photo backdrop for slideshow - Zoe Style */
+.photo-backdrop {
+  position: fixed; 
+  inset: 0; 
+  background-size: cover; 
+  background-position: center; 
+  background-repeat: no-repeat;
+  background: var(--bg-gradient);
+  filter: brightness(0.4) saturate(1.2);
+  z-index: -1; 
+  opacity: 0.8;
+  transition: opacity var(--animation-smooth);
+}
+
+/* Main layout optimized for landscape */
+.page {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100vh;
+  padding: 12px;
+  gap: 8px;
+  position: relative;
+  z-index: 1;
+}
+
+/* Top navigation bar */
+.navbar {
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius);
+  backdrop-filter: blur(20px);
+  transition: opacity var(--animation-smooth);
+}
+
+.nav-group { 
+  display: flex; 
+  gap: 6px; 
+}
+
+.btn {
+  min-width: 60px; 
+  min-height: 44px; 
+  padding: 8px 12px; 
+  border-radius: var(--border-radius);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  color: var(--fg-secondary);
+  text-decoration: none; 
+  display: inline-flex; 
+  align-items: center; 
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 400;
+  transition: all var(--animation-fast);
+  cursor: pointer;
+}
+.btn:hover, .btn:focus { 
+  background: rgba(255,255,255,0.1); 
+  color: var(--fg-primary);
+  box-shadow: var(--shadow-active);
+}
+.btn:active { 
+  transform: scale(0.95); 
+}
+.btn-primary { 
+  background: rgba(74,158,255,0.2); 
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Main content area with MagicMirror regions */
+.content { 
+  flex: 1; 
+  display: grid; 
+  place-items: stretch;
+  overflow: hidden;
+}
+
+.regions {
+  display: grid; 
+  grid-template-columns: 1fr 2fr 1fr; 
+  grid-template-rows: 1fr 1fr 1fr; 
+  gap: 16px; 
+  width: 100%; 
+  height: 100%;
+  padding: 8px;
+}
+
+[data-region] { 
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+/* Enhanced widget styling - Zoe Orb-Inspired */
+.widget { 
+  width: 100%;
+  padding: 20px;
+  text-align: center;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius-large);
+  backdrop-filter: blur(var(--blur-amount)) saturate(120%);
+  -webkit-backdrop-filter: blur(var(--blur-amount)) saturate(120%);
+  box-shadow: var(--shadow-large);
+  transition: all var(--animation-smooth);
+  position: relative;
+  overflow: hidden;
+}
+
+.widget::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--primary-gradient);
+  opacity: 0;
+  border-radius: var(--border-radius-large);
+  transition: opacity var(--animation-smooth);
+  z-index: -1;
+}
+
+.widget:hover::before {
+  opacity: 0.1;
+}
+
+/* Orb-style widgets for key displays */
+.widget-orb {
+  border-radius: 50%;
+  width: 120px;
+  height: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary-gradient);
+  border: none;
+  box-shadow: var(--shadow-orb);
+  animation: breathe 4s ease-in-out infinite;
+  margin: 0 auto;
+}
+
+@keyframes breathe {
+  0%, 100% { 
+    transform: scale(1) translateY(0px);
+    filter: brightness(1);
+  }
+  50% { 
+    transform: scale(1.05) translateY(-5px);
+    filter: brightness(1.1);
+  }
+}
+
+.widget-header {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--fg-secondary);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Clock widget - Zoe Orb Style */
+.widget-clock {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.widget-clock .clock-orb {
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  background: var(--primary-gradient);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-orb);
+  animation: breathe 4s ease-in-out infinite;
+  margin-bottom: 12px;
+}
+
+.clock-time {
+  font-size: clamp(18px, 2.5vw, 24px);
+  font-weight: 300;
+  line-height: 1;
+  color: #fff;
+  text-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+.clock-date {
+  font-size: clamp(12px, 1.5vw, 16px);
+  color: rgba(255,255,255,0.9);
+  margin-top: 2px;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+}
+
+/* Clock outside the orb */
+.clock-time-external {
+  font-size: clamp(28px, 3.5vw, 36px);
+  font-weight: 200;
+  line-height: 1;
+  color: var(--fg-primary);
+  background: var(--primary-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-top: 8px;
+}
+
+/* Weather widget */
+.weather-main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.weather-icon {
+  font-size: 28px;
+}
+.weather-temp {
+  font-size: clamp(24px, 3vw, 36px);
+  font-weight: 300;
+  color: var(--fg-primary);
+}
+.weather-summary {
+  font-size: 14px;
+  color: var(--fg-secondary);
+  text-transform: capitalize;
+}
+.weather-meta {
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin-top: 4px;
+}
+
+/* Calendar widget */
+.cal-events {
+  display: grid;
+  gap: 6px;
+}
+.cal-event {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  padding: 4px 0;
+}
+.cal-time {
+  color: var(--accent);
+  font-weight: 500;
+  min-width: 50px;
+}
+.cal-title {
+  color: var(--fg-secondary);
+  flex: 1;
+  text-align: left;
+  margin-left: 8px;
+}
+.cal-empty {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+/* News widget */
+.news-items {
+  display: grid;
+  gap: 8px;
+}
+.news-item {
+  text-align: left;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.news-title {
+  font-size: 13px;
+  color: var(--fg-secondary);
+  line-height: 1.3;
+  margin-bottom: 2px;
+}
+.news-source {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* Memory widget */
+.memory-content {
+  display: grid;
+  gap: 8px;
+}
+.memory-item {
+  font-size: 13px;
+  color: var(--fg-secondary);
+  line-height: 1.4;
+}
+.memory-empty {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+/* System widget */
+.system-stat {
+  font-size: 14px;
+  color: var(--fg-secondary);
+  margin: 2px 0;
+}
+.system-uptime {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-top: 4px;
+}
+
+/* Core Zoe widgets */
+.events-list,
+.lists-container,
+.journal-list,
+.notes-list {
+  display: grid;
+  gap: 8px;
+}
+
+/* Events widget */
+.event-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+.event-icon {
+  font-size: 16px;
+  min-width: 20px;
+}
+.event-details {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.event-title {
+  font-size: 13px;
+  color: var(--fg-secondary);
+  font-weight: 500;
+}
+.event-time {
+  font-size: 11px;
+  color: var(--accent);
+}
+
+/* Lists widget */
+.list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+.list-checkbox {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--fg-muted);
+  border-radius: 3px;
+  flex-shrink: 0;
+  position: relative;
+}
+.list-checkbox.checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.list-checkbox.checked::after {
+  content: '✓';
+  position: absolute;
+  top: -2px;
+  left: 2px;
+  color: white;
+  font-size: 10px;
+  font-weight: bold;
+}
+.list-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.list-text {
+  font-size: 13px;
+  color: var(--fg-secondary);
+  line-height: 1.3;
+}
+.list-item.completed .list-text {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+.list-name {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* Journal widget */
+.journal-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+}
+.journal-mood {
+  font-size: 16px;
+  min-width: 20px;
+}
+.journal-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.journal-title {
+  font-size: 13px;
+  color: var(--fg-secondary);
+  line-height: 1.3;
+}
+.journal-date {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* Notes widget */
+.note-item {
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.note-item:last-child {
+  border-bottom: none;
+}
+.note-text {
+  font-size: 13px;
+  color: var(--fg-secondary);
+  line-height: 1.3;
+  display: block;
+  margin-bottom: 2px;
+}
+.note-time {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* Empty states */
+.empty-state {
+  font-size: 12px;
+  color: var(--fg-muted);
+  text-align: center;
+  padding: 12px 0;
+  opacity: 0.7;
+}
+
+/* Footer */
+.footer { 
+  display: flex; 
+  justify-content: space-between; 
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius);
+  backdrop-filter: blur(20px);
+  font-size: 12px;
+  color: var(--fg-muted);
+  transition: opacity var(--animation-smooth);
+}
+
+/* Chat interface specific styles */
+.chat-container {
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--border-radius);
+  backdrop-filter: blur(20px);
+}
+
+#chat {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.chat-input-area {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--glass-border);
+}
+
+#chatInput {
+  flex: 1;
+  padding: 12px;
+  border-radius: var(--border-radius);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  color: var(--fg-primary);
+  font-size: 16px;
+}
+
+/* Landscape orientation optimizations */
+@media (orientation: landscape) {
+  .regions {
+    grid-template-columns: 1fr 2fr 1fr;
+    grid-template-rows: 1fr 1fr 1fr;
+    gap: 20px;
+  }
+  
+  .clock-time {
+    font-size: clamp(36px, 5vw, 56px);
+  }
+  
+  .weather-temp {
+    font-size: clamp(28px, 4vw, 42px);
+  }
+}
+
+@media (max-height: 600px) {
+  .page { padding: 8px; gap: 6px; }
+  .regions { gap: 12px; }
+  .widget { padding: 12px; }
+  .clock-time { font-size: clamp(28px, 3.5vw, 40px); }
+}
+
+/* Performance optimizations for Pi */
+.widget * {
+  will-change: auto;
+}
+
+.photo-backdrop {
+  will-change: opacity, background-image;
+}
+
+

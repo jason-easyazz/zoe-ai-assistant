@@ -1,3 +1,0 @@
-# Zoe Installation Log
-Mon 15 Sep 18:48:57 AWST 2025: Bootstrap installer created
-Mon 15 Sep 18:48:57 AWST 2025: All phase scripts generated

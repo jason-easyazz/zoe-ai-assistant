@@ -26,4 +26,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8002/health || exit 1
 
 # Run the application using simple_main.py to avoid import issues
+# Force rebuild - using simple_main.py
 CMD ["python", "simple_main.py"]
