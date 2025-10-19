@@ -8,8 +8,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional, Callable, Annotated
 import logging
 
-from ..core.sessions import session_manager, AuthSession
-from ..core.rbac import rbac_manager
+from core.sessions import session_manager, AuthSession
+from core.rbac import rbac_manager
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +167,7 @@ def require_standard_session() -> Callable:
     def check_session_type(
         current_session: AuthSession = Depends(validate_session_timeout)
     ) -> AuthSession:
-        from ..models.database import SessionType
+        from models.database import SessionType
         
         if current_session.session_type == SessionType.PASSCODE:
             raise HTTPException(

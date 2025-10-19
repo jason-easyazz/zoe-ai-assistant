@@ -10,12 +10,12 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 import logging
 
-from ..core.auth import auth_manager
-from ..core.passcode import passcode_manager
-from ..core.sessions import session_manager, AuthenticationRequest, SessionType, AuthMethod
-from ..core.rbac import rbac_manager
-from ..models.database import auth_db
-from .dependencies import get_current_session, require_permission, validate_session_timeout
+from core.auth import auth_manager
+from core.passcode import passcode_manager
+from core.sessions import session_manager, AuthenticationRequest, SessionType, AuthMethod
+from core.rbac import rbac_manager
+from models.database import auth_db
+from api.dependencies import get_current_session, require_permission, validate_session_timeout
 
 logger = logging.getLogger(__name__)
 

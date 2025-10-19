@@ -1,0 +1,13 @@
+services:
+  zoe-cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: zoe-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARED_TOKEN}
+    networks:
+      - zoe-network
+    depends_on:
+      - zoe-core
+      - zoe-ui

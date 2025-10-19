@@ -8,10 +8,10 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional, List, Dict, Any
 import logging
 
-from ..sso.homeassistant import ha_integration
-from ..sso.n8n import n8n_integration
-from ..sso.matrix import matrix_integration
-from .dependencies import require_permission, get_current_session
+from sso.homeassistant import ha_integration
+from sso.n8n import n8n_integration
+from sso.matrix import matrix_integration
+from api.dependencies import require_permission, get_current_session
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +178,7 @@ async def get_n8n_user_info(email: str):
             raise HTTPException(status_code=503, detail="n8n integration not configured")
 
         # Find user by email
-        from ..models.database import auth_db
+        from models.database import auth_db
         with auth_db.get_connection() as conn:
             cursor = conn.execute(
                 "SELECT user_id FROM users WHERE email = ? AND is_active = 1",
@@ -189,8 +189,8 @@ async def get_n8n_user_info(email: str):
                 raise HTTPException(status_code=404, detail="User not found")
 
         user_id = row[0]
-        from ..core.auth import auth_manager
-        from ..core.rbac import rbac_manager
+        from core.auth import auth_manager
+        from core.rbac import rbac_manager
         
         user_info = auth_manager.get_user_info(user_id)
         user_permissions = rbac_manager.list_user_permissions(user_id)
@@ -407,7 +407,7 @@ async def sync_all_users_to_services(
         if "n8n" in services and n8n_integration:
             try:
                 # Get all users and sync to n8n
-                from ..core.auth import auth_manager
+                from core.auth import auth_manager
                 users = auth_manager.list_users(current_session.user_id)
                 n8n_results = {}
                 
@@ -427,7 +427,7 @@ async def sync_all_users_to_services(
         if "matrix" in services and matrix_integration:
             try:
                 # Get all users and sync to Matrix
-                from ..core.auth import auth_manager
+                from core.auth import auth_manager
                 users = auth_manager.list_users(current_session.user_id)
                 matrix_results = {}
                 
