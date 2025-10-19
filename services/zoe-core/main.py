@@ -16,6 +16,10 @@ import os
 import logging
 from datetime import datetime
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Auto-discover and import routers
 from router_loader import RouterLoader
 

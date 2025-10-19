@@ -1779,7 +1779,7 @@
                         
                         try {
                             const xhr = new XMLHttpRequest();
-                            xhr.open('POST', 'http://localhost:8000/api/media/upload');
+                            xhr.open('POST', '/api/media/upload');
                             
                             xhr.upload.onprogress = (e) => {
                                 if (e.lengthComputable) {
@@ -1868,7 +1868,7 @@
         // Check API status
         async function checkApiStatus() {
             try {
-                const response = await fetch('http://localhost:8000/status', {
+                const response = await fetch('/api/status', {
                     method: 'GET',
                     headers: { 'Accept': 'application/json' }
                 });
@@ -1973,7 +1973,7 @@
 
         async function loadNotifications() {
             try {
-                const response = await fetch('http://localhost:8000/reminders/notifications/pending');
+                const response = await fetch('/api/reminders/notifications/pending');
                 const data = await response.json();
                 const notifications = data.notifications || [];
                 displayNotifications(notifications);

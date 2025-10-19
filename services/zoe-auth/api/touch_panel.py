@@ -8,9 +8,9 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 import logging
 
-from ..touch_panel.quick_auth import get_quick_auth_manager, QuickAuthResult, TouchPanelConfig
-from ..touch_panel.cache import cache_manager
-from .dependencies import get_current_session, optional_session
+from touch_panel.quick_auth import get_quick_auth_manager, QuickAuthResult, TouchPanelConfig
+from touch_panel.cache import cache_manager
+from api.dependencies import get_current_session, optional_session
 
 logger = logging.getLogger(__name__)
 
@@ -429,7 +429,7 @@ async def sync_all_devices():
     try:
         # This would typically be called from admin interface
         # Get sync data from main auth service
-        from ..api.admin import get_sync_data
+        from api.admin import get_sync_data
         
         # Note: This is a simplified version - in production you'd need proper auth
         sync_data = {

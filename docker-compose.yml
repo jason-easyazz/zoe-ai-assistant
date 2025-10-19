@@ -18,6 +18,7 @@ services:
     - DOCKER_HOST=unix:///var/run/docker.sock
     - PROJECT_ROOT=/home/pi/zoe
     - FULL_ACCESS=true
+    - DATABASE_PATH=/app/data/zoe.db
     networks:
     - zoe-network
     healthcheck:
@@ -44,8 +45,8 @@ services:
     - PYTHONUNBUFFERED=1
     - ZOE_DB_PATH=/app/data/zoe.db
     - ZOE_API_URL=http://zoe-core:8000
-    - PEOPLE_SERVICE_URL=http://people-service:8001
-    - COLLECTIONS_SERVICE_URL=http://collections-service:8005
+    # - PEOPLE_SERVICE_URL=http://people-service:8001
+    # - COLLECTIONS_SERVICE_URL=http://collections-service:8005
     - HOMEASSISTANT_BRIDGE_URL=http://homeassistant-mcp-bridge:8007
     - N8N_BRIDGE_URL=http://n8n-mcp-bridge:8009
     - ZOE_AUTH_TOKEN=${ZOE_AUTH_TOKEN:-}
@@ -65,60 +66,60 @@ services:
     - zoe-core
     env_file:
     - .env
-  people-service:
-    build: ./services/people-service
-    container_name: people-service
-    restart: unless-stopped
-    ports:
-    - 8001:8001
-    volumes:
-    - ./services/people-service:/app
-    - ./data:/app/data
-    environment:
-    - PYTHONUNBUFFERED=1
-    - DATABASE_PATH=/app/data/zoe.db
-    networks:
-    - zoe-network
-    healthcheck:
-      test:
-      - CMD
-      - curl
-      - -f
-      - http://localhost:8001/
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    depends_on:
-    - zoe-core
-    env_file:
-    - .env
-  collections-service:
-    build: ./services/collections-service
-    container_name: collections-service
-    restart: unless-stopped
-    ports:
-    - 8005:8005
-    volumes:
-    - ./services/collections-service:/app
-    - ./data:/app/data
-    environment:
-    - PYTHONUNBUFFERED=1
-    - DATABASE_PATH=/app/data/zoe.db
-    networks:
-    - zoe-network
-    healthcheck:
-      test:
-      - CMD
-      - curl
-      - -f
-      - http://localhost:8005/
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    depends_on:
-    - zoe-core
-    env_file:
-    - .env
+  # people-service:
+  #   build: ./services/people-service
+  #   container_name: people-service
+  #   restart: unless-stopped
+  #   ports:
+  #   - 8001:8001
+  #   volumes:
+  #   - ./services/people-service:/app
+  #   - ./data:/app/data
+  #   environment:
+  #   - PYTHONUNBUFFERED=1
+  #   - DATABASE_PATH=/app/data/zoe.db
+  #   networks:
+  #   - zoe-network
+  #   healthcheck:
+  #     test:
+  #     - CMD
+  #     - curl
+  #     - -f
+  #     - http://localhost:8001/
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #   depends_on:
+  #   - zoe-core
+  #   env_file:
+  #   - .env
+  # collections-service:
+  #   build: ./services/collections-service
+  #   container_name: collections-service
+  #   restart: unless-stopped
+  #   ports:
+  #   - 8005:8005
+  #   volumes:
+  #   - ./services/collections-service:/app
+  #   - ./data:/app/data
+  #   environment:
+  #   - PYTHONUNBUFFERED=1
+  #   - DATABASE_PATH=/app/data/zoe.db
+  #   networks:
+  #   - zoe-network
+  #   healthcheck:
+  #     test:
+  #     - CMD
+  #     - curl
+  #     - -f
+  #     - http://localhost:8005/
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #   depends_on:
+  #   - zoe-core
+  #   env_file:
+  #   - .env
   homeassistant:
     image: ghcr.io/home-assistant/home-assistant:stable
     container_name: homeassistant

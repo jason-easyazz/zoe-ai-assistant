@@ -10,12 +10,12 @@ from datetime import datetime
 import logging
 import json
 
-from ..core.auth import auth_manager
-from ..core.passcode import passcode_manager
-from ..core.sessions import session_manager
-from ..core.rbac import rbac_manager
-from ..models.database import auth_db
-from .dependencies import require_permission, require_admin, get_current_session
+from core.auth import auth_manager
+from core.passcode import passcode_manager
+from core.sessions import session_manager
+from core.rbac import rbac_manager
+from models.database import auth_db
+from api.dependencies import require_permission, require_admin, get_current_session
 
 logger = logging.getLogger(__name__)
 
@@ -524,7 +524,7 @@ async def get_system_stats(
             session_stats["by_auth_method"][auth_method] = session_stats["by_auth_method"].get(auth_method, 0) + 1
 
         # Cache statistics
-        from ..touch_panel.cache import cache_manager
+        from touch_panel.cache import cache_manager
         cache_stats = cache_manager.get_all_cache_stats()
 
         return {

@@ -166,12 +166,12 @@ async def health_check():
 async def get_profiles():
     """Get user profiles for the welcome screen"""
     conn = get_db_connection()
-    cursor = conn.execute("SELECT user_id, username, role FROM users WHERE is_active = 1")
+    cursor = conn.execute("SELECT id, username, role FROM users WHERE is_active = 1")
     users = []
     
     for row in cursor.fetchall():
         users.append({
-            "user_id": row["user_id"],
+            "user_id": row["id"],
             "username": row["username"],
             "role": row["role"],
             "avatar": row["username"][0].upper()
@@ -191,12 +191,12 @@ async def login(request: LoginRequest):
         conn.close()
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    session = create_session(user["user_id"])
+    session = create_session(user["id"])
     conn.close()
     
     return {
         "success": True,
-        "user_id": user["user_id"],
+        "user_id": user["id"],
         "username": user["username"],
         "role": user["role"],
         "session_id": session["session_id"],
@@ -210,7 +210,7 @@ async def register(request: RegisterRequest):
     conn = get_db_connection()
     
     # Check if username exists
-    cursor = conn.execute("SELECT user_id FROM users WHERE username = ?", (request.username,))
+    cursor = conn.execute("SELECT id FROM users WHERE username = ?", (request.username,))
     if cursor.fetchone():
         conn.close()
         raise HTTPException(status_code=400, detail="Username already exists")
@@ -220,7 +220,7 @@ async def register(request: RegisterRequest):
     password_hash = bcrypt.hashpw(request.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     
     conn.execute("""
-        INSERT INTO users (user_id, username, email, password_hash, role)
+        INSERT INTO users (id, username, email, password_hash, role)
         VALUES (?, ?, ?, ?, ?)
     """, (user_id, request.username, request.email, password_hash, request.role))
     
@@ -271,7 +271,7 @@ async def get_user(request: Request):
     conn = get_db_connection()
     cursor = conn.execute("""
         SELECT u.* FROM users u
-        JOIN sessions s ON u.user_id = s.user_id
+        JOIN sessions s ON u.id = s.user_id
         WHERE s.session_id = ? AND s.expires_at > ?
     """, (session_id, datetime.now().isoformat()))
     
@@ -282,7 +282,7 @@ async def get_user(request: Request):
         raise HTTPException(status_code=401, detail="Invalid session")
     
     return {
-        "user_id": user["user_id"],
+        "user_id": user["id"],
         "username": user["username"],
         "role": user["role"],
         "email": user["email"]
