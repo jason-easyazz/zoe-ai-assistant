@@ -149,3 +149,4 @@ services/zoe-voice-agent/core
 # Database files (archived)
 data/archive/*.db
 data/archive/*/*.db
+data/snapshot_key.key

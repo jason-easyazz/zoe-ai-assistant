@@ -134,13 +134,14 @@ services:
     - zoe-network
 
   homeassistant-mcp-bridge:
-    build: ./services/homeassistant-mcp-bridge
+    image: zoe-homeassistant-mcp-bridge:latest
     container_name: homeassistant-mcp-bridge
     restart: unless-stopped
     ports:
     - 8007:8007
-    volumes:
-    - ./services/homeassistant-mcp-bridge:/app
+    # volumes:
+    # Source directory removed during cleanup, using pre-built image
+    # - ./services/homeassistant-mcp-bridge:/app
     environment:
     - PYTHONUNBUFFERED=1
     - HA_BASE_URL=${HA_BASE_URL:-http://homeassistant:8123}
@@ -159,13 +160,14 @@ services:
     env_file:
     - .env
   n8n-mcp-bridge:
-    build: ./services/n8n-mcp-bridge
+    image: zoe-n8n-mcp-bridge:latest
     container_name: n8n-mcp-bridge
     restart: unless-stopped
     ports:
     - 8009:8009
-    volumes:
-    - ./services/n8n-mcp-bridge:/app
+    # volumes:
+    # Source directory removed during cleanup, using pre-built image
+    # - ./services/n8n-mcp-bridge:/app
     environment:
     - PYTHONUNBUFFERED=1
     - N8N_BASE_URL=${N8N_BASE_URL:-http://n8n:5678}
@@ -217,7 +219,7 @@ services:
     - zoe-network
     restart: unless-stopped
   zoe-whisper:
-    build: ./services/zoe-whisper
+    image: zoe-zoe-whisper:latest
     container_name: zoe-whisper
     ports:
     - 9001:9001
@@ -231,14 +233,15 @@ services:
     - zoe-network
     restart: unless-stopped
   zoe-tts:
-    build: ./services/zoe-tts
+    image: zoe-zoe-tts:latest
     container_name: zoe-tts
     ports:
     - 9002:9002
     volumes:
     - zoe_neutts_models:/root/.cache/neutts
     - ./data/voice_profiles:/app/voice_profiles
-    - ./services/zoe-tts/samples:/app/samples
+    # Source directory removed during cleanup, using pre-built image
+    # - ./services/zoe-tts/samples:/app/samples
     devices:
     - /dev/snd:/dev/snd
     environment:
@@ -248,7 +251,7 @@ services:
     - zoe-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9002/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9002/health').read()"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -354,12 +357,13 @@ services:
       retries: 3
       start_period: 10s
   zoe-voice-agent:
-    build: ./services/zoe-voice-agent
+    image: zoe-zoe-voice-agent:latest
     container_name: zoe-voice-agent
     ports:
     - 9003:9003
     volumes:
-    - ./services/zoe-voice-agent:/app
+    # Source directory removed during cleanup, using pre-built image
+    # - ./services/zoe-voice-agent:/app
     - ./data:/app/data
     environment:
     - PYTHONUNBUFFERED=1

@@ -300,3 +300,4 @@ class SimpleWorkflowGenerator:
 # Global instance
 simple_generator = SimpleWorkflowGenerator()
 
+
