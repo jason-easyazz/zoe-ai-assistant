@@ -185,3 +185,4 @@ find . -type f -size +10M -not -path "./.git/*"
 - `.zoe/manifest.json` - File approval registry
 - `.cursorrules` - Cursor AI rules
 
+

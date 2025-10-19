@@ -11,3 +11,4 @@ services:
     depends_on:
       - zoe-core
       - zoe-ui
+

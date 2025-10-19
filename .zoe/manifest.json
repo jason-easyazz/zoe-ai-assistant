@@ -1,0 +1,142 @@
+{
+  "version": "1.0",
+  "description": "Zoe Project File Manifest - Defines approved files, critical files, and cleanup rules",
+  "last_updated": "2025-10-19",
+  
+  "critical_files": {
+    "ui_core_css": [
+      "services/zoe-ui/dist/css/glass.css",
+      "services/zoe-ui/dist/css/memories-enhanced.css"
+    ],
+    "ui_core_js": [
+      "services/zoe-ui/dist/js/auth.js",
+      "services/zoe-ui/dist/js/common.js",
+      "services/zoe-ui/dist/js/widget-system.js",
+      "services/zoe-ui/dist/js/widget-base.js",
+      "services/zoe-ui/dist/js/ai-processor.js",
+      "services/zoe-ui/dist/js/zoe-orb.js",
+      "services/zoe-ui/dist/js/journal-api.js",
+      "services/zoe-ui/dist/js/journal-ui-enhancements.js",
+      "services/zoe-ui/dist/js/memory-graph.js",
+      "services/zoe-ui/dist/js/memory-search.js",
+      "services/zoe-ui/dist/js/memory-timeline.js",
+      "services/zoe-ui/dist/js/settings.js",
+      "services/zoe-ui/dist/js/wikilink-parser.js"
+    ],
+    "ui_widgets": [
+      "services/zoe-ui/dist/js/widgets/core/events.js",
+      "services/zoe-ui/dist/js/widgets/core/tasks.js",
+      "services/zoe-ui/dist/js/widgets/core/time.js",
+      "services/zoe-ui/dist/js/widgets/core/weather.js",
+      "services/zoe-ui/dist/js/widgets/core/home.js",
+      "services/zoe-ui/dist/js/widgets/core/system.js",
+      "services/zoe-ui/dist/js/widgets/core/notes.js",
+      "services/zoe-ui/dist/js/widgets/core/zoe-orb.js"
+    ],
+    "ui_components": [
+      "services/zoe-ui/dist/components/zoe-orb.html",
+      "services/zoe-ui/dist/components/zoe-orb-complete.html"
+    ],
+    "ui_pages": [
+      "services/zoe-ui/dist/index.html",
+      "services/zoe-ui/dist/auth.html",
+      "services/zoe-ui/dist/chat.html",
+      "services/zoe-ui/dist/chat-v2.html",
+      "services/zoe-ui/dist/dashboard.html",
+      "services/zoe-ui/dist/calendar.html",
+      "services/zoe-ui/dist/lists.html",
+      "services/zoe-ui/dist/journal.html",
+      "services/zoe-ui/dist/memories.html",
+      "services/zoe-ui/dist/settings.html"
+    ],
+    "backend_core": [
+      "services/zoe-core/main.py",
+      "services/zoe-core/routers/chat.py",
+      "services/zoe-core/ai_client.py",
+      "services/zoe-auth/main.py"
+    ],
+    "config_files": [
+      "docker-compose.yml",
+      "services/zoe-ui/nginx.conf",
+      ".env"
+    ]
+  },
+  
+  "approved_patterns": {
+    "touch_interface": "services/zoe-ui/dist/touch/**/*",
+    "developer_tools": "services/zoe-ui/dist/developer/**/*",
+    "documentation": "docs/**/*",
+    "tests": "tests/**/*",
+    "scripts": "scripts/**/*",
+    "tools": "tools/**/*",
+    "data_schemas": "data/schema/**/*.sql",
+    "data_files": "data/**/*.db*",
+    "data_keys": "data/**/*.key",
+    "configs": "config/**/*",
+    "backups": "backups/**/*",
+    "checkpoints": "checkpoints/**/*",
+    "homeassistant": "homeassistant/**/*",
+    "models": "models/**/*",
+    "ssl": "ssl/**/*",
+    "templates": "templates/**/*",
+    "services": "services/**/*",
+    "git_files": ".git*",
+    "env_files": ".env*",
+    "docker_files": ".docker*",
+    "cursor_files": ".cursor*",
+    "misc_dotfiles": ".DS_Store|.file-tags",
+    "manifest": ".zoe/**/*"
+  },
+  
+  "safe_to_delete_patterns": [
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/.pytest_cache/**",
+    "**/._*",
+    "**/*.tmp",
+    "**/*.cache",
+    "**/*.log"
+  ],
+  
+  "prohibited_in_root": [
+    "*.jar",
+    "*.log",
+    "*.json",
+    "*_backup.*",
+    "*_old.*",
+    "*_v2.*",
+    "*_new.*",
+    "*_fixed.*",
+    "test_*.py",
+    "fix_*.py",
+    "*.sql",
+    "*.conf"
+  ],
+  
+  "approved_root_files": [
+    "README.md",
+    "CHANGELOG.md",
+    "QUICK-START.md",
+    "PROJECT_STATUS.md",
+    "PROJECT_STRUCTURE_RULES.md",
+    "pytest.ini",
+    ".cursorrules",
+    ".gitignore",
+    ".dockerignore",
+    ".env",
+    ".env.example",
+    "docker-compose.yml",
+    "docker-compose.override.yml",
+    "docker-compose.mem-agent.yml",
+    "verify_updates.sh",
+    "test_architecture.py"
+  ],
+  
+  "optional_files": {
+    "description": "Files that can be deleted with user confirmation",
+    "patterns": [
+      "services/zoe-ui/dist/developer/**/*"
+    ]
+  }
+}
+

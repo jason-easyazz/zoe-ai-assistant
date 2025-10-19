@@ -183,3 +183,4 @@ python3 tools/audit/validate_critical_files.py
 - `docs/governance/CRITICAL_FILES.md` - Critical files list
 - `PROJECT_STRUCTURE_RULES.md` - Project organization rules
 
+

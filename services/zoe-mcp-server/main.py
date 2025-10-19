@@ -26,6 +26,7 @@ from mcp.types import (
     TextContent,
     ImageContent,
     EmbeddedResource,
+    ServerCapabilities,
 )
 
 from security import MCPSecurityManager, SecureMCPServer, SECURITY_CONFIG
@@ -1580,9 +1581,8 @@ class ZoeMCPServer:
                 InitializationOptions(
                     server_name="zoe-mcp-server",
                     server_version="1.0.0",
-                    capabilities=self.server.get_capabilities(
-                        notification_options=None,
-                        experimental_capabilities=None,
+                    capabilities=ServerCapabilities(
+                        tools={}
                     ),
                 ),
             )

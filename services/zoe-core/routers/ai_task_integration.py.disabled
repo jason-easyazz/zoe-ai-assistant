@@ -207,3 +207,4 @@ async def get_ai_status():
             "complex": dynamic_router.get_best_model_for_complexity("complex")
         }
     }
+
