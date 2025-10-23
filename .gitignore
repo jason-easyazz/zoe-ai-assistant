@@ -152,8 +152,10 @@ homeassistant/*.db
 homeassistant/*.db-shm
 homeassistant/*.db-wal
 homeassistant/*.log*
-core
-services/zoe-voice-agent/core
+# Core dump files (not core/ directories!)
+core.*.dump
+**/core.*
+!**/core/
 
 # Database files (archived)
 data/archive/*.db
