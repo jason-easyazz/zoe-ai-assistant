@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 class PushNotificationService:
     """Service for sending web push notifications"""
     
-    def __init__(self, db_path: str = "/home/pi/zoe/data/zoe.db"):
+    def __init__(self, db_path: str = None):
+        if db_path is None:
+            db_path = os.getenv("DATABASE_PATH", "/home/pi/zoe/data/zoe.db")
         self.db_path = db_path
         self.vapid_private_key_path = None
         self.vapid_public_key = None

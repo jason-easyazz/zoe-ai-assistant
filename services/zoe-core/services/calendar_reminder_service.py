@@ -5,6 +5,7 @@ Automatically sends push notifications for upcoming calendar events
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import aiosqlite
@@ -18,7 +19,9 @@ logger = logging.getLogger(__name__)
 class CalendarReminderService:
     """Service for sending calendar event reminders"""
     
-    def __init__(self, db_path: str = "/home/pi/zoe/data/zoe.db"):
+    def __init__(self, db_path: str = None):
+        if db_path is None:
+            db_path = os.getenv("DATABASE_PATH", "/home/pi/zoe/data/zoe.db")
         self.db_path = db_path
         self.push_service = get_push_service()
         self.check_interval = 60  # Check every 60 seconds
