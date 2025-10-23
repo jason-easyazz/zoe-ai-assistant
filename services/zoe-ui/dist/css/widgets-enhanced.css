@@ -1,11 +1,11 @@
 /**
  * Enhanced Widget Styles - Time & Weather
- * Beautiful, responsive designs with smooth transitions
- * Version: 1.0.0
+ * Premium, fluid responsive designs with advanced animations
+ * Version: 2.0.0 - The "Truly Exceptional" Edition
  */
 
 /* ============================================
-   TIME WIDGET - Elegant Clock Display
+   TIME WIDGET - Premium Clock Display
    ============================================ */
 
 .widget[data-widget-type="time"] {
@@ -13,6 +13,8 @@
     overflow: hidden;
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
+    container-type: size;
+    container-name: time-widget;
 }
 
 .time-widget-content {
@@ -53,20 +55,45 @@
     margin-bottom: 16px;
 }
 
+/* Fluid typography using clamp() for perfect scaling */
 .time-display {
-    font-size: 56px;
+    font-size: clamp(2rem, 10cqw, 6rem);
     font-weight: 200;
     line-height: 1;
-    letter-spacing: -2px;
+    letter-spacing: -0.02em;
     text-shadow: 0 2px 20px rgba(0,0,0,0.2);
     font-variant-numeric: tabular-nums;
+    animation: timeSlideIn 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes timeSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .date-display {
-    font-size: 16px;
+    font-size: clamp(0.75rem, 3cqw, 1.25rem);
     font-weight: 400;
     opacity: 0.9;
     text-transform: capitalize;
+    animation: timeFadeIn 0.8s ease-out 0.2s both;
+}
+
+@keyframes timeFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 0.9;
+        transform: translateY(0);
+    }
 }
 
 /* Mini weather display in time widget */
