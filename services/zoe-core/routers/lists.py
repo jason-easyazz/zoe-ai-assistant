@@ -91,7 +91,7 @@ class ProductivityAnalytics(BaseModel):
     break_compliance: float = 0.0
 
 # Database path
-DB_PATH = os.getenv("DATABASE_PATH", "/home/pi/zoe/data/zoe.db")
+DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 
 def get_connection(row_factory=None):
     conn = sqlite3.connect(DB_PATH, timeout=5.0)
@@ -165,8 +165,8 @@ def init_lists_db():
     conn.commit()
     conn.close()
 
-# Initialize on import
-init_lists_db()
+# Database will be initialized on first use
+# (removed module-level init to avoid path issues)
 
 def normalize_list_type(list_type: str, category: str = "personal") -> str:
     """Convert old list types to new ones for backward compatibility"""

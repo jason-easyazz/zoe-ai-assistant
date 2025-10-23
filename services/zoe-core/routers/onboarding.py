@@ -11,6 +11,7 @@ This system learns about users through natural conversation to enable:
 """
 
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+import os
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from datetime import datetime
@@ -24,7 +25,7 @@ sys.path.append('/app')
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
 
-DB_PATH = "/app/data/zoe.db"
+DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 
 
 # ============================================================================

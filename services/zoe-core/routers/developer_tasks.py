@@ -17,7 +17,7 @@ import subprocess
 import os
 from pathlib import Path
 
-DB_PATH = "/app/data/zoe.db"
+DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 
 logger = logging.getLogger(__name__)
 

@@ -14,6 +14,7 @@ Features:
 """
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+import os
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Set
 from datetime import datetime, timedelta
@@ -129,7 +130,7 @@ class AgentMessage(BaseModel):
     response_deadline: Optional[datetime] = None
 
 # Database setup
-DB_PATH = "/app/data/zoe.db"
+DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 
 def init_agent_db():
     """Initialize agent planning database"""

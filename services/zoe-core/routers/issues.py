@@ -12,6 +12,7 @@ Complete issues/bugs tracking with:
 """
 
 from fastapi import APIRouter, HTTPException, Query, Depends
+import os
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from auth_integration import validate_session, AuthenticatedSession
@@ -26,7 +27,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/issues", tags=["issues"])
 
 # Database path
-DB_PATH = "/app/data/zoe.db"
+DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 
 class IssueType(str, Enum):
     BUG = "bug"

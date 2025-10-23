@@ -8,8 +8,8 @@ import os
 from .auth import get_current_user
 
 
-DB_PATH = "/app/data/zoe.db"
-LEGACY_DB_PATH = "/app/data/zoe.db"
+DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
+LEGACY_DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])

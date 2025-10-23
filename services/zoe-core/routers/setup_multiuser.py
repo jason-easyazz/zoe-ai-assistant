@@ -4,7 +4,7 @@ import os
 
 router = APIRouter(prefix="/api/setup/multiuser", tags=["setup", "multiuser"])
 
-DB_PATH = "/app/data/zoe.db"
+DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 
 
 def _ensure_data_dir() -> None:
