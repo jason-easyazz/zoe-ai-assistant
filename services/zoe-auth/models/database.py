@@ -151,10 +151,12 @@ class AuthDatabase:
 
     def get_connection(self) -> sqlite3.Connection:
         """Get database connection with proper settings"""
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
+        # Temporarily disable FK constraints to allow login with mixed schema
+        # conn.execute("PRAGMA foreign_keys = ON")
+        # Use DELETE mode instead of WAL to avoid locking issues
+        conn.execute("PRAGMA journal_mode = DELETE")
         return conn
 
     def init_database(self):
@@ -416,29 +418,38 @@ class AuthDatabase:
             old_conn = sqlite3.connect(old_db_path)
             old_conn.row_factory = sqlite3.Row
             
-            cursor = old_conn.execute("""
-                SELECT user_id, username, email, password_hash, is_active, is_admin, created_at
-                FROM users
-            """)
+            # Check if old schema or new schema
+            cursor = old_conn.execute("PRAGMA table_info(users)")
+            columns = [row[1] for row in cursor.fetchall()]
             
-            migrated = 0
-            with self.get_connection() as new_conn:
-                for row in cursor.fetchall():
-                    role = "admin" if row["is_admin"] else "user"
-                    
-                    new_conn.execute("""
-                        INSERT OR IGNORE INTO users 
-                        (user_id, username, email, password_hash, role, is_active, is_verified, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        row["user_id"], row["username"], row["email"],
-                        row["password_hash"], role, row["is_active"], 1,
-                        row["created_at"] or datetime.now().isoformat()
-                    ))
-                    migrated += 1
+            if "is_admin" in columns:
+                # Old schema migration
+                cursor = old_conn.execute("""
+                    SELECT user_id, username, email, password_hash, is_active, is_admin, created_at
+                    FROM users
+                """)
+                
+                migrated = 0
+                with self.get_connection() as new_conn:
+                    for row in cursor.fetchall():
+                        role = "admin" if row["is_admin"] else "user"
+                        
+                        new_conn.execute("""
+                            INSERT OR IGNORE INTO users 
+                            (user_id, username, email, password_hash, role, is_active, is_verified, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            row["user_id"], row["username"], row["email"],
+                            row["password_hash"], role, row["is_active"], 1,
+                            row["created_at"] or datetime.now().isoformat()
+                        ))
+                        migrated += 1
+                
+                logger.info(f"Migrated {migrated} users from old schema")
+            else:
+                logger.info("Database already uses new schema, no migration needed")
             
             old_conn.close()
-            logger.info(f"Migrated {migrated} users from existing database")
             
         except Exception as e:
             logger.error(f"Migration failed: {e}")

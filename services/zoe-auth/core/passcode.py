@@ -12,7 +12,7 @@ from typing import Optional, Dict, List, Tuple, Any
 import logging
 from dataclasses import dataclass
 
-from ..models.database import auth_db, AuthMethod, AuditLog
+from models.database import auth_db, AuthMethod, AuditLog
 
 logger = logging.getLogger(__name__)
 

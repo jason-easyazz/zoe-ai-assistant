@@ -13,10 +13,10 @@ from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 import logging
 
-from ..core.auth import auth_manager
-from ..core.sessions import session_manager, AuthenticationRequest, SessionType, AuthMethod
-from ..core.rbac import rbac_manager
-from ..models.database import auth_db
+from core.auth import auth_manager
+from core.sessions import session_manager, AuthenticationRequest, SessionType, AuthMethod
+from core.rbac import rbac_manager
+from models.database import auth_db
 
 logger = logging.getLogger(__name__)
 

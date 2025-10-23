@@ -12,6 +12,9 @@ data/billing/
 data/logs/
 data/backup/
 data/context_cache.db
+data/uploads/
+data/project_digest*.txt
+data/time_location_settings.json
 
 # Docker volumes
 volumes/
@@ -119,7 +122,13 @@ logs/
 
 # OS files
 .DS_Store
+._.DS_Store
+._*.DS_Store
 Thumbs.db
+
+# Test files in root
+test_*.html
+*_test.html
 
 # Keep structure files
 !.gitkeep

@@ -36,7 +36,9 @@ async function setupPeopleAutocomplete() {
     // Load people from API
     async function loadPeople() {
         try {
-            const response = await fetch(`http://localhost:8000/api/memories/people?user_id=default&limit=100`);
+            const session = window.zoeAuth?.getCurrentSession();
+            const userId = session?.user_info?.user_id || session?.user_id || 'default';
+            const response = await fetch(`/api/memories/people?user_id=${userId}&limit=100`);
             const data = await response.json();
             peopleList = data.people || [];
         } catch (error) {
@@ -158,7 +160,7 @@ async function setupLocationAutocomplete() {
         }
         
         try {
-            const response = await fetch(`http://localhost:8000/api/location/search?query=${encodeURIComponent(query)}&limit=5`);
+            const response = await fetch(`/api/location/search?query=${encodeURIComponent(query)}&limit=5`);
             const data = await response.json();
             
             if (!data.results || data.results.length === 0) {
@@ -300,7 +302,9 @@ window.publishEntryEnhanced = async function() {
     };
     
     try {
-        const response = await fetch(`http://localhost:8000/api/journal/entries?user_id=default`, {
+        const session = window.zoeAuth?.getCurrentSession();
+        const userId = session?.user_info?.user_id || session?.user_id || 'default';
+        const response = await fetch(`/api/journal/entries?user_id=${userId}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(entryData)

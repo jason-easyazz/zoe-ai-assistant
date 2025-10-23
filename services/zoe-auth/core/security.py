@@ -15,7 +15,7 @@ import threading
 import logging
 import ipaddress
 
-from ..models.database import auth_db, AuditLog
+from models.database import auth_db, AuditLog
 
 logger = logging.getLogger(__name__)
 

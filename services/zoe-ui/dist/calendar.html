@@ -1461,6 +1461,52 @@
         .no-notifications {
             text-align: center; color: #666; font-size: 14px; padding: 40px 20px;
         }
+
+        /* Mobile Navigation Menu */
+        .mobile-nav-menu {
+            position: fixed; top: 0; left: -280px; width: 280px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.3); z-index: 2000;
+            transition: left 0.3s ease; display: flex; flex-direction: column;
+        }
+        .mobile-nav-menu.open { left: 0; }
+        .mobile-nav-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .mobile-nav-header h3 { margin: 0; font-size: 20px; font-weight: 600; color: #333; }
+        .mobile-nav-close {
+            width: 40px; height: 40px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 24px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: all 0.3s ease;
+        }
+        .mobile-nav-close:active { background: rgba(255, 255, 255, 0.5); }
+        .mobile-nav-content { flex: 1; overflow-y: auto; padding: 10px; }
+        .mobile-nav-item {
+            display: flex; align-items: center; gap: 12px; padding: 16px; margin: 4px 0;
+            color: #666; text-decoration: none; font-size: 16px; font-weight: 500;
+            border-radius: 12px; transition: all 0.3s ease;
+        }
+        .mobile-nav-item:active { background: rgba(123, 97, 255, 0.1); color: #7B61FF; }
+        .mobile-nav-item.active { background: rgba(123, 97, 255, 0.15); color: #7B61FF; font-weight: 600; }
+        .mobile-nav-item.logout { color: #ff4444; }
+        .mobile-nav-divider { height: 1px; background: rgba(255, 255, 255, 0.3); margin: 10px 0; }
+        .mobile-nav-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.3); z-index: 1999; opacity: 0;
+            pointer-events: none; transition: opacity 0.3s ease;
+        }
+        .mobile-nav-overlay.open { opacity: 1; pointer-events: auto; }
+        
+        /* Responsive: hide nav-menu on mobile, show mini-orb */
+        @media (max-width: 768px) {
+            .nav-menu { display: none !important; }
+            .mini-orb { display: flex !important; }
+        }
+        @media (min-width: 769px) {
+            .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
+        }
     </style>
         <!-- Zoe Orb Styles -->
         <style>
@@ -1559,12 +1605,34 @@
             50% { opacity: 0.7; transform: scale(1.2); }
         }
         </style>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
 </head>
 <body>
     <!-- Navigation -->
     <div class="nav-bar">
         <div class="nav-left">
-            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
+            <div class="mini-orb" onclick="toggleMobileMenu()"></div>
             <div class="nav-menu">
                 <a href="index.html" class="nav-item">Chat</a>
                 <a href="dashboard.html" class="nav-item">Dashboard</a>
@@ -1607,13 +1675,33 @@
                     <div class="more-item-icon">⚙️</div>
                     <div class="more-item-label">Settings</div>
                 </div>
-                <div class="more-item" onclick="alert('Coming soon!')">
-                    <div class="more-item-icon">📊</div>
-                    <div class="more-item-label">Analytics</div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
                 </div>
             </div>
         </div>
     </div>
+
+    <!-- Mobile Navigation Menu -->
+    <div class="mobile-nav-menu" id="mobileNavMenu">
+        <div class="mobile-nav-header">
+            <h3>Navigation</h3>
+            <button class="mobile-nav-close" onclick="toggleMobileMenu()">✕</button>
+        </div>
+        <div class="mobile-nav-content">
+            <a href="chat.html" class="mobile-nav-item">💬 Chat</a>
+            <a href="dashboard.html" class="mobile-nav-item">📊 Dashboard</a>
+            <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
+            <a href="calendar.html" class="mobile-nav-item active">📅 Calendar</a>
+            <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
+            <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
+            <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
+            <div class="mobile-nav-divider"></div>
+            <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
+        </div>
+    </div>
+    <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
 
     <!-- Notifications Panel -->
     <div class="notifications-panel" id="notificationsPanel">
@@ -1881,11 +1969,14 @@
 
     <script src="js/auth.js"></script>
     <script src="js/common.js"></script>
+    <script src="js/websocket-sync.js"></script>
     <script>
         // Authenticated API request wrapper
         async function authedApiRequest(endpoint, options = {}) {
             const session = window.zoeAuth?.getCurrentSession();
-            const userId = session?.user_id || 'default';
+            const userId = session?.user_info?.user_id || session?.user_id || 'default';
+            
+            console.log('📅 Calendar API call for user:', userId, 'Endpoint:', endpoint);
             
             // ✅ FIX: Add user_id to query params for proper isolation
             const separator = endpoint.includes('?') ? '&' : '?';
@@ -2595,6 +2686,20 @@
             const container = document.getElementById('monthDayEvents');
             container.innerHTML = '';
             
+            // Add container-level click handler for clicking in empty spaces between events
+            container.onclick = (e) => {
+                // Only trigger if clicking directly on the container or hour lines, not on events
+                if (e.target === container || e.target.classList.contains('hour-line')) {
+                    const rect = container.getBoundingClientRect();
+                    const clickY = e.clientY - rect.top + container.scrollTop;
+                    const hour = Math.floor(clickY / 60);
+                    if (hour >= 0 && hour < 24) {
+                        const time = `${hour.toString().padStart(2, '0')}:00`;
+                        openNewEventPanel(date, time);
+                    }
+                }
+            };
+            
             for (let h = 0; h < 24; h++) {
                 const line = document.createElement('div');
                 line.className = 'hour-line' + (h % 3 === 0 ? ' major' : '');
@@ -2643,7 +2748,9 @@
                 
                 // Add click handler to create new event
                 line.addEventListener('click', (e) => {
-                    if (e.target === line) {
+                    // Allow clicks on the hour line itself or on the container background
+                    // Don't trigger if clicking on an event element
+                    if (e.target === line || (e.target.classList.contains('hour-line') && !e.target.classList.contains('calendar-event') && !e.target.classList.contains('calendar-reminder'))) {
                         const hour = parseInt(line.dataset.hour);
                         const time = `${hour.toString().padStart(2, '0')}:00`;
                         const date = new Date(line.dataset.date);
@@ -2714,6 +2821,23 @@
                 const slots = document.createElement('div');
                 slots.className = 'day-slots';
                 
+                // Add container-level click handler for clicking in empty spaces between events
+                // Use closure to capture the day variable for this specific column
+                ((dayDate) => {
+                    slots.onclick = (e) => {
+                        // Only trigger if clicking directly on the container or hour lines, not on events
+                        if (e.target === slots || e.target.classList.contains('hour-line')) {
+                            const rect = slots.getBoundingClientRect();
+                            const clickY = e.clientY - rect.top + slots.scrollTop;
+                            const hour = Math.floor(clickY / 60);
+                            if (hour >= 0 && hour < 24) {
+                                const time = `${hour.toString().padStart(2, '0')}:00`;
+                                openNewEventPanel(dayDate, time);
+                            }
+                        }
+                    };
+                })(new Date(day));
+                
                 for (let h = 0; h < 24; h++) {
                     const line = document.createElement('div');
                     line.className = 'hour-line' + (h % 3 === 0 ? ' major' : '');
@@ -2749,7 +2873,9 @@
                     
                     // Add click handler to create new event
                     line.addEventListener('click', (e) => {
-                        if (e.target === line) {
+                        // Allow clicks on the hour line itself or on the container background
+                        // Don't trigger if clicking on an event element
+                        if (e.target === line || (e.target.classList.contains('hour-line') && !e.target.classList.contains('calendar-event') && !e.target.classList.contains('calendar-reminder'))) {
                             const hour = parseInt(line.dataset.hour);
                             const time = `${hour.toString().padStart(2, '0')}:00`;
                             const date = new Date(line.dataset.date);
@@ -2800,6 +2926,20 @@
             const container = document.getElementById('dayEventsContainer');
             container.innerHTML = '';
             
+            // Add container-level click handler for clicking in empty spaces between events
+            container.onclick = (e) => {
+                // Only trigger if clicking directly on the container or hour lines, not on events
+                if (e.target === container || e.target.classList.contains('hour-line')) {
+                    const rect = container.getBoundingClientRect();
+                    const clickY = e.clientY - rect.top + container.scrollTop;
+                    const hour = Math.floor(clickY / 60);
+                    if (hour >= 0 && hour < 24) {
+                        const time = `${hour.toString().padStart(2, '0')}:00`;
+                        openNewEventPanel(currentDate, time);
+                    }
+                }
+            };
+            
             for (let h = 0; h < 24; h++) {
                 const line = document.createElement('div');
                 line.className = 'hour-line' + (h % 3 === 0 ? ' major' : '');
@@ -2831,7 +2971,9 @@
                 
                 // Add click handler to create new event
                 line.addEventListener('click', (e) => {
-                    if (e.target === line) {
+                    // Allow clicks on the hour line itself or on the container background
+                    // Don't trigger if clicking on an event element
+                    if (e.target === line || (e.target.classList.contains('hour-line') && !e.target.classList.contains('calendar-event') && !e.target.classList.contains('calendar-reminder'))) {
                         const hour = parseInt(line.dataset.hour);
                         const time = `${hour.toString().padStart(2, '0')}:00`;
                         openNewEventPanel(currentDate, time);
@@ -3393,7 +3535,7 @@
             };
             
             try {
-                const response = await apiRequest('/calendar/events', {
+                const response = await authedApiRequest('/calendar/events', {
                     method: 'POST',
                     body: JSON.stringify(eventData)
                 });
@@ -4098,6 +4240,24 @@
         function closeNotifications() {
             document.getElementById('notificationsPanel').classList.remove('open');
         }
+
+        // Mobile menu toggle
+        function toggleMobileMenu() {
+            if (window.innerWidth > 768) { window.location.href = 'index.html'; return; }
+            const menu = document.getElementById('mobileNavMenu');
+            const overlay = document.getElementById('mobileNavOverlay');
+            if (menu && overlay) {
+                menu.classList.toggle('open');
+                overlay.classList.toggle('open');
+            }
+        }
+
+        function handleLogout() {
+            if (window.innerWidth <= 768) {
+                toggleMobileMenu();
+            }
+            logout();
+        }
         
         async function loadNotifications() {
             try {
@@ -4181,6 +4341,22 @@
             // Initialize date to today
             currentDate = new Date();
             selectedMonthDay = new Date();
+            
+            // Initialize WebSocket for real-time sync
+            const session = window.zoeAuth?.getCurrentSession();
+            const userId = session?.user_info?.user_id || session?.user_id || 'default';
+            if (window.ZoeWebSockets) {
+                ZoeWebSockets.init(userId);
+                console.log('✅ Real-time sync enabled via WebSocket');
+            } else {
+                // Fallback to polling if WebSocket fails to load
+                console.warn('⚠️ WebSocket not available, using polling fallback');
+                setInterval(() => {
+                    console.log('🔄 Auto-refreshing calendar (polling)...');
+                    loadEvents();
+                    loadLists();
+                }, 5000);
+            }
             
             // Load data
             await loadLists();

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Header
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from typing import Optional
@@ -6,7 +6,9 @@ import jwt
 import bcrypt
 import sqlite3
 import os
+import httpx
 from datetime import datetime, timedelta
+from auth_integration import validate_session
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
 security = HTTPBearer(auto_error=False)  # Don't auto-raise, we'll handle it manually for 401
@@ -15,6 +17,7 @@ SECRET_KEY = os.getenv("ZOE_AUTH_SECRET_KEY", "change-me-in-prod")
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
 DB_PATH = "/app/data/zoe.db"
+ZOE_AUTH_URL = os.getenv("ZOE_AUTH_INTERNAL_URL", "http://zoe-auth:8002")
 
 
 class UserLogin(BaseModel):
@@ -141,24 +144,52 @@ async def login(credentials: UserLogin):
 
 
 
+# Session-based auth endpoints (proxying to zoe-auth service)
 
-
-
-
-
-from fastapi import APIRouter, Depends, Header, HTTPException
-import os, httpx
-from auth_integration import validate_session
-router = APIRouter(prefix="/api/auth", tags=["auth-proxy"]) 
-ZOE_AUTH_URL = os.getenv("ZOE_AUTH_INTERNAL_URL", "http://zoe-auth:8002")
-@router.get("/profiles")
-async def profiles(x_session_id: str = Header(None, alias="X-Session-ID")):
+@router.get("/profile")
+async def get_profile(x_session_id: str = Header(None, alias="X-Session-ID")):
+    """Get user profile from session - used by frontend auth.js"""
     if not x_session_id:
         raise HTTPException(status_code=401, detail="Missing X-Session-ID")
+    
     async with httpx.AsyncClient(timeout=5.0) as client:
-        r = await client.get(f"{ZOE_AUTH_URL}/api/auth/user", headers={"X-Session-ID": x_session_id})
-        if r.status_code == 401:
-            raise HTTPException(status_code=401, detail="Invalid or expired session")
-        r.raise_for_status()
-        u = r.json()
-        return {"profiles": [{"user_id": u.get("user_id"), "username": u.get("username"), "role": u.get("role"), "permissions": u.get("permissions", [])}]} 
+        try:
+            r = await client.get(f"{ZOE_AUTH_URL}/api/auth/user", headers={"X-Session-ID": x_session_id})
+            if r.status_code == 401:
+                raise HTTPException(status_code=401, detail="Invalid or expired session")
+            r.raise_for_status()
+            user_data = r.json()
+            return {
+                "user_id": user_data.get("user_id"),
+                "username": user_data.get("username"),
+                "email": user_data.get("email"),
+                "role": user_data.get("role"),
+                "permissions": user_data.get("permissions", [])
+            }
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=503, detail=f"Auth service unavailable: {str(e)}")
+
+
+@router.get("/profiles")
+async def profiles(x_session_id: str = Header(None, alias="X-Session-ID")):
+    """Get user profiles list (legacy endpoint)"""
+    if not x_session_id:
+        raise HTTPException(status_code=401, detail="Missing X-Session-ID")
+    
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        try:
+            r = await client.get(f"{ZOE_AUTH_URL}/api/auth/user", headers={"X-Session-ID": x_session_id})
+            if r.status_code == 401:
+                raise HTTPException(status_code=401, detail="Invalid or expired session")
+            r.raise_for_status()
+            u = r.json()
+            return {
+                "profiles": [{
+                    "user_id": u.get("user_id"),
+                    "username": u.get("username"),
+                    "role": u.get("role"),
+                    "permissions": u.get("permissions", [])
+                }]
+            }
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=503, detail=f"Auth service unavailable: {str(e)}") 

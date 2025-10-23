@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Fix User Isolation</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            margin: 0;
+            padding: 40px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: white;
+            border-radius: 24px;
+            padding: 40px;
+            max-width: 600px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        h1 {
+            font-size: 32px;
+            font-weight: 300;
+            margin-bottom: 20px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .step {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 12px;
+            margin: 20px 0;
+        }
+        .step-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #7B61FF;
+            margin-bottom: 10px;
+        }
+        .step-desc {
+            color: #666;
+            line-height: 1.6;
+        }
+        button {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            border: none;
+            padding: 16px 32px;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            margin: 10px 0;
+            transition: all 0.3s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.4);
+        }
+        .status {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            font-weight: 500;
+        }
+        .success {
+            background: rgba(34, 197, 94, 0.1);
+            color: #16a34a;
+        }
+        .info {
+            background: rgba(59, 130, 246, 0.1);
+            color: #2563eb;
+        }
+        code {
+            background: #f1f3f6;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 14px;
+        }
+    </style>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
+</head>
+<body>
+    <div class="container">
+        <h1>🔒 Fix User Isolation</h1>
+        
+        <div class="step">
+            <div class="step-title">What's the issue?</div>
+            <div class="step-desc">
+                You're seeing other users' data (shopping lists, calendar events) because your browser cached API responses before the user isolation fix was applied.
+            </div>
+        </div>
+        
+        <div class="step">
+            <div class="step-title">The Solution</div>
+            <div class="step-desc">
+                Click the button below to clear all cached data and reload with proper user isolation.
+            </div>
+        </div>
+        
+        <button onclick="clearAndReload()">🧹 Clear Cache & Fix Now</button>
+        
+        <div id="status"></div>
+        
+        <div class="step">
+            <div class="step-title">Manual Method (if button doesn't work)</div>
+            <div class="step-desc">
+                1. Press <code>F12</code> to open DevTools<br>
+                2. Go to Console tab<br>
+                3. Type: <code>localStorage.clear()</code><br>
+                4. Type: <code>sessionStorage.clear()</code><br>
+                5. Type: <code>location.reload(true)</code>
+            </div>
+        </div>
+        
+        <div class="step">
+            <div class="step-title">Verify It's Working</div>
+            <div class="step-desc">
+                After clearing cache, check the browser console on lists.html or calendar.html:<br>
+                <br>
+                ✅ Look for: <code>📋 Loading lists for user: jason</code><br>
+                ✅ Look for: <code>📅 Calendar API call for user: jason</code><br>
+                <br>
+                <strong>Not</strong> "default" or undefined!
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function clearAndReload() {
+            const status = document.getElementById('status');
+            
+            try {
+                // Clear all storage
+                localStorage.clear();
+                sessionStorage.clear();
+                
+                // Clear API cache if it exists
+                if (window.caches) {
+                    caches.keys().then(names => {
+                        names.forEach(name => caches.delete(name));
+                    });
+                }
+                
+                status.innerHTML = '<div class="status success">✅ Cache cleared! Reloading in 2 seconds...</div>';
+                
+                setTimeout(() => {
+                    window.location.href = '/index.html';
+                }, 2000);
+                
+            } catch (e) {
+                status.innerHTML = '<div class="status info">⚠️ Please use manual method below</div>';
+            }
+        }
+    </script>
+</body>
+</html>
+

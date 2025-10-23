@@ -1,18 +1,21 @@
 """
 Weather Service
-Provides weather data for the frontend
+Provides weather data using Open-Meteo free API
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Body
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import requests
 import os
 from datetime import datetime
+import logging
+import sqlite3
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/weather", tags=["weather"])
 
-# Weather API configuration
-OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
+# Default location (can be overridden by user settings)
 DEFAULT_LAT = "37.7749"  # San Francisco
 DEFAULT_LON = "-122.4194"
 DEFAULT_CITY = "San Francisco"
@@ -27,13 +30,100 @@ class WeatherResponse(BaseModel):
     pressure: Optional[int] = None
     icon: Optional[str] = None
     location: Optional[str] = None
+    temperature_unit: Optional[str] = "celsius"
 
-def get_user_location(user_id: str = "default"):
+def convert_temperature(temp_celsius: float, unit: str = "celsius") -> float:
+    """Convert temperature from Celsius to requested unit"""
+    if unit.lower() == "fahrenheit":
+        return round((temp_celsius * 9/5) + 32, 1)
+    return round(temp_celsius, 1)
+
+def map_weather_code_to_condition(code: int) -> tuple:
+    """
+    Map Open-Meteo weather codes to condition, description, and icon
+    Reference: https://open-meteo.com/en/docs
+    """
+    weather_mapping = {
+        0: ("clear", "Clear sky", "01d"),
+        1: ("clear", "Mainly clear", "01d"),
+        2: ("partly-cloudy", "Partly cloudy", "02d"),
+        3: ("cloudy", "Overcast", "03d"),
+        45: ("fog", "Foggy", "50d"),
+        48: ("fog", "Depositing rime fog", "50d"),
+        51: ("drizzle", "Light drizzle", "09d"),
+        53: ("drizzle", "Moderate drizzle", "09d"),
+        55: ("drizzle", "Dense drizzle", "09d"),
+        61: ("rain", "Slight rain", "10d"),
+        63: ("rain", "Moderate rain", "10d"),
+        65: ("rain", "Heavy rain", "10d"),
+        71: ("snow", "Slight snow", "13d"),
+        73: ("snow", "Moderate snow", "13d"),
+        75: ("snow", "Heavy snow", "13d"),
+        77: ("snow", "Snow grains", "13d"),
+        80: ("rain", "Slight rain showers", "09d"),
+        81: ("rain", "Moderate rain showers", "09d"),
+        82: ("rain", "Violent rain showers", "09d"),
+        85: ("snow", "Slight snow showers", "13d"),
+        86: ("snow", "Heavy snow showers", "13d"),
+        95: ("thunderstorm", "Thunderstorm", "11d"),
+        96: ("thunderstorm", "Thunderstorm with slight hail", "11d"),
+        99: ("thunderstorm", "Thunderstorm with heavy hail", "11d")
+    }
+    return weather_mapping.get(code, ("unknown", "Unknown conditions", "01d"))
+
+def get_db_connection():
+    """Get database connection"""
+    DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
+    return sqlite3.connect(DB_PATH)
+
+def ensure_user_settings_table():
+    """Ensure user_settings table exists with all required columns"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Create table if it doesn't exist
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                setting_key TEXT NOT NULL,
+                setting_value TEXT,
+                latitude REAL,
+                longitude REAL,
+                city TEXT,
+                country TEXT,
+                temperature_unit TEXT DEFAULT 'celsius',
+                use_current_location INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, setting_key)
+            )
+        """)
+        
+        # Check if columns exist (for existing tables)
+        cursor.execute("PRAGMA table_info(user_settings)")
+        columns = [row[1] for row in cursor.fetchall()]
+        
+        if 'temperature_unit' not in columns:
+            cursor.execute("ALTER TABLE user_settings ADD COLUMN temperature_unit TEXT DEFAULT 'celsius'")
+            logger.info("Added temperature_unit column to user_settings table")
+        
+        if 'use_current_location' not in columns:
+            cursor.execute("ALTER TABLE user_settings ADD COLUMN use_current_location INTEGER DEFAULT 0")
+            logger.info("Added use_current_location column to user_settings table")
+        
+        conn.commit()
+        conn.close()
+        logger.info("User settings table initialized successfully")
+        
+    except Exception as e:
+        logger.error(f"Error ensuring user_settings table: {e}")
+
+def get_user_location(user_id: str = "default") -> Dict[str, Any]:
     """Get user's location settings from database or environment"""
     try:
-        import sqlite3
-        DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         # Check if user has location settings
@@ -50,11 +140,11 @@ def get_user_location(user_id: str = "default"):
             return {
                 "latitude": float(row[0]),
                 "longitude": float(row[1]),
-                "city": row[2],
-                "country": row[3]
+                "city": row[2] or DEFAULT_CITY,
+                "country": row[3] or DEFAULT_COUNTRY
             }
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"Error fetching user location: {e}")
     
     # Fallback to environment variables or defaults
     return {
@@ -64,181 +154,345 @@ def get_user_location(user_id: str = "default"):
         "country": os.getenv("WEATHER_COUNTRY", DEFAULT_COUNTRY)
     }
 
-@router.get("/")
-async def get_weather(user_id: str = Query("default", description="User ID")):
-    """Get current weather data for user's location"""
-    location = get_user_location(user_id)
+def get_user_temperature_unit(user_id: str = "default") -> str:
+    """Get user's preferred temperature unit"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT temperature_unit 
+            FROM user_settings 
+            WHERE user_id = ? AND setting_key = 'weather_preferences'
+        """, (user_id,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row and row[0]:
+            return row[0]
+    except Exception as e:
+        logger.error(f"Error fetching temperature unit: {e}")
     
-    if not OPENWEATHER_API_KEY:
-        # Return mock weather data if no API key
-        return {
-            "temperature": 23.0,
-            "condition": "sunny",
-            "description": "Clear sky",
-            "humidity": 65,
-            "wind_speed": 3.2,
-            "pressure": 1013,
-            "icon": "01d",
-            "location": f"{location['city']}, {location['country']}"
+    return "celsius"
+
+def get_user_use_current_location(user_id: str = "default") -> bool:
+    """Check if user wants to use current device location"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT use_current_location 
+            FROM user_settings 
+            WHERE user_id = ? AND setting_key = 'weather_preferences'
+        """, (user_id,))
+        
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row and row[0]:
+            return bool(row[0])
+    except Exception as e:
+        logger.error(f"Error fetching use_current_location: {e}")
+    
+    return False
+
+def get_user_preferences(user_id: str = "default") -> Dict[str, Any]:
+    """Get user's weather preferences (location and temperature unit)"""
+    location = get_user_location(user_id)
+    temperature_unit = get_user_temperature_unit(user_id)
+    use_current_location = get_user_use_current_location(user_id)
+    
+    return {
+        "location": location,
+        "temperature_unit": temperature_unit,
+        "use_current_location": use_current_location
+    }
+
+@router.get("/")
+async def get_weather(
+    user_id: str = Query("default", description="User ID"),
+    lat: Optional[float] = Query(None, description="Override latitude (for device location)"),
+    lon: Optional[float] = Query(None, description="Override longitude (for device location)")
+):
+    """Get current weather data using Open-Meteo API"""
+    
+    # Use override coordinates if provided (for device location)
+    if lat is not None and lon is not None:
+        location = {
+            "latitude": lat,
+            "longitude": lon,
+            "city": "Current Location",
+            "country": ""
         }
+    else:
+        # Use saved user location
+        location = get_user_location(user_id)
+    
+    temperature_unit = get_user_temperature_unit(user_id)
     
     try:
-        # Call OpenWeatherMap API
-        url = f"http://api.openweathermap.org/data/2.5/weather"
+        # Call Open-Meteo API (no API key needed!)
+        url = "https://api.open-meteo.com/v1/forecast"
         params = {
-            "lat": location["latitude"],
-            "lon": location["longitude"],
-            "appid": OPENWEATHER_API_KEY,
-            "units": "metric"
+            "latitude": location["latitude"],
+            "longitude": location["longitude"],
+            "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,surface_pressure",
+            "timezone": "auto"
         }
         
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         
         data = response.json()
+        current = data["current"]
+        
+        # Map weather code to condition
+        weather_code = current["weather_code"]
+        condition, description, icon = map_weather_code_to_condition(weather_code)
+        
+        # Convert temperature to user's preferred unit
+        temp_celsius = current["temperature_2m"]
+        temperature = convert_temperature(temp_celsius, temperature_unit)
         
         return {
-            "temperature": data["main"]["temp"],
-            "condition": data["weather"][0]["main"].lower(),
-            "description": data["weather"][0]["description"],
-            "humidity": data["main"]["humidity"],
-            "wind_speed": data["wind"]["speed"],
-            "pressure": data["main"]["pressure"],
-            "icon": data["weather"][0]["icon"],
-            "location": f"{location['city']}, {location['country']}"
+            "temperature": temperature,
+            "condition": condition,
+            "description": description,
+            "humidity": round(current["relative_humidity_2m"]),
+            "wind_speed": round(current["wind_speed_10m"], 1),
+            "pressure": round(current["surface_pressure"]),
+            "icon": icon,
+            "location": f"{location['city']}, {location['country']}",
+            "temperature_unit": temperature_unit
         }
         
     except Exception as e:
-        # Fallback to mock data on error
-        return {
-            "temperature": 23.0,
-            "condition": "sunny",
-            "description": "Clear sky",
-            "humidity": 65,
-            "wind_speed": 3.2,
-            "pressure": 1013,
-            "icon": "01d",
-            "location": f"{location['city']}, {location['country']}"
-        }
+        logger.error(f"Weather API error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch weather data: {str(e)}")
+
+@router.get("/current")
+async def get_current_weather(
+    user_id: str = Query("default", description="User ID"),
+    lat: Optional[float] = Query(None, description="Override latitude (for device location)"),
+    lon: Optional[float] = Query(None, description="Override longitude (for device location)")
+):
+    """Get current weather data (alias for /)"""
+    return await get_weather(user_id, lat, lon)
 
 @router.get("/forecast")
-async def get_forecast(days: int = Query(5, description="Number of days for forecast")):
-    """Get weather forecast"""
-    if not OPENWEATHER_API_KEY:
-        # Return mock forecast data
-        mock_forecast = []
-        for i in range(min(days, 5)):
-            mock_forecast.append({
-                "date": f"2024-01-{i+1:02d}",
-                "temperature": 20 + i * 2,
-                "condition": ["sunny", "cloudy", "rainy", "clear", "partly-cloudy"][i % 5],
-                "description": ["Clear sky", "Cloudy", "Light rain", "Clear", "Partly cloudy"][i % 5],
-                "humidity": 60 + i * 5,
-                "wind_speed": 2.0 + i * 0.5
-            })
-        return {"forecast": mock_forecast}
+async def get_forecast(
+    days: int = Query(7, description="Number of days for forecast (1-16)"),
+    user_id: str = Query("default", description="User ID"),
+    lat: Optional[float] = Query(None, description="Override latitude (for device location)"),
+    lon: Optional[float] = Query(None, description="Override longitude (for device location)")
+):
+    """Get weather forecast using Open-Meteo API"""
+    
+    # Use override coordinates if provided (for device location)
+    if lat is not None and lon is not None:
+        location = {
+            "latitude": lat,
+            "longitude": lon,
+            "city": "Current Location",
+            "country": ""
+        }
+    else:
+        # Use saved user location
+        location = get_user_location(user_id)
+    
+    temperature_unit = get_user_temperature_unit(user_id)
+    
+    # Open-Meteo supports up to 16 days
+    days = min(max(days, 1), 16)
     
     try:
-        # Call OpenWeatherMap 5-day forecast API
-        url = f"http://api.openweathermap.org/data/2.5/forecast"
+        # Call Open-Meteo API
+        url = "https://api.open-meteo.com/v1/forecast"
         params = {
-            "lat": WEATHER_LAT,
-            "lon": WEATHER_LON,
-            "appid": OPENWEATHER_API_KEY,
-            "units": "metric"
+            "latitude": location["latitude"],
+            "longitude": location["longitude"],
+            "daily": "temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum,wind_speed_10m_max",
+            "timezone": "auto",
+            "forecast_days": days
         }
         
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
         
         data = response.json()
+        daily = data["daily"]
         
-        # Process forecast data (group by day)
         forecast = []
-        daily_data = {}
-        
-        for item in data["list"]:
-            date = item["dt_txt"].split(" ")[0]
-            if date not in daily_data:
-                daily_data[date] = []
-            daily_data[date].append(item)
-        
-        # Get daily averages
-        for date, items in list(daily_data.items())[:days]:
-            temps = [item["main"]["temp"] for item in items]
-            conditions = [item["weather"][0]["main"].lower() for item in items]
-            humidities = [item["main"]["humidity"] for item in items]
-            wind_speeds = [item["wind"]["speed"] for item in items]
+        for i in range(len(daily["time"])):
+            weather_code = daily["weather_code"][i]
+            condition, description, icon = map_weather_code_to_condition(weather_code)
             
-            # Get most common condition for the day
-            most_common_condition = max(set(conditions), key=conditions.count)
+            # Convert temperatures
+            temp_max = convert_temperature(daily["temperature_2m_max"][i], temperature_unit)
+            temp_min = convert_temperature(daily["temperature_2m_min"][i], temperature_unit)
+            avg_temp = convert_temperature((daily["temperature_2m_max"][i] + daily["temperature_2m_min"][i]) / 2, temperature_unit)
             
             forecast.append({
-                "date": date,
-                "temperature": round(sum(temps) / len(temps), 1),
-                "condition": most_common_condition,
-                "description": items[0]["weather"][0]["description"],
-                "humidity": round(sum(humidities) / len(humidities)),
-                "wind_speed": round(sum(wind_speeds) / len(wind_speeds), 1)
+                "date": daily["time"][i],
+                "temperature": avg_temp,
+                "temperature_max": temp_max,
+                "temperature_min": temp_min,
+                "condition": condition,
+                "description": description,
+                "precipitation": round(daily["precipitation_sum"][i], 1),
+                "wind_speed": round(daily["wind_speed_10m_max"][i], 1),
+                "icon": icon
             })
         
-        return {"forecast": forecast}
+        return {
+            "forecast": forecast, 
+            "location": f"{location['city']}, {location['country']}",
+            "temperature_unit": temperature_unit
+        }
         
     except Exception as e:
-        # Fallback to mock data on error
-        mock_forecast = []
-        for i in range(min(days, 5)):
-            mock_forecast.append({
-                "date": f"2024-01-{i+1:02d}",
-                "temperature": 20 + i * 2,
-                "condition": ["sunny", "cloudy", "rainy", "clear", "partly-cloudy"][i % 5],
-                "description": ["Clear sky", "Cloudy", "Light rain", "Clear", "Partly cloudy"][i % 5],
-                "humidity": 60 + i * 5,
-                "wind_speed": 2.0 + i * 0.5
+        logger.error(f"Forecast API error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch forecast data: {str(e)}")
+
+@router.get("/hourly")
+async def get_hourly_forecast(
+    hours: int = Query(24, description="Number of hours (1-168)"),
+    user_id: str = Query("default", description="User ID")
+):
+    """Get hourly weather forecast"""
+    location = get_user_location(user_id)
+    temperature_unit = get_user_temperature_unit(user_id)
+    hours = min(max(hours, 1), 168)  # Max 7 days (168 hours)
+    
+    try:
+        url = "https://api.open-meteo.com/v1/forecast"
+        params = {
+            "latitude": location["latitude"],
+            "longitude": location["longitude"],
+            "hourly": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,precipitation",
+            "timezone": "auto",
+            "forecast_hours": hours
+        }
+        
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        hourly = data["hourly"]
+        
+        forecast = []
+        for i in range(min(hours, len(hourly["time"]))):
+            weather_code = hourly["weather_code"][i]
+            condition, description, icon = map_weather_code_to_condition(weather_code)
+            
+            temperature = convert_temperature(hourly["temperature_2m"][i], temperature_unit)
+            
+            forecast.append({
+                "time": hourly["time"][i],
+                "temperature": temperature,
+                "humidity": round(hourly["relative_humidity_2m"][i]),
+                "condition": condition,
+                "description": description,
+                "wind_speed": round(hourly["wind_speed_10m"][i], 1),
+                "precipitation": round(hourly["precipitation"][i], 1),
+                "icon": icon
             })
-        return {"forecast": mock_forecast}
+        
+        return {
+            "hourly": forecast, 
+            "location": f"{location['city']}, {location['country']}",
+            "temperature_unit": temperature_unit
+        }
+        
+    except Exception as e:
+        logger.error(f"Hourly forecast error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch hourly forecast: {str(e)}")
 
 @router.get("/location")
-async def get_location():
+async def get_location(user_id: str = Query("default", description="User ID")):
     """Get current location coordinates"""
-    return {
-        "latitude": float(DEFAULT_LAT),
-        "longitude": float(DEFAULT_LON),
-        "city": DEFAULT_CITY,
-        "country": DEFAULT_COUNTRY
-    }
+    location = get_user_location(user_id)
+    return location
+
+@router.get("/preferences")
+async def get_preferences(user_id: str = Query("default", description="User ID")):
+    """Get user's weather preferences (location and temperature unit)"""
+    return get_user_preferences(user_id)
+
+@router.post("/preferences")
+async def update_preferences(
+    user_id: str = Query("default", description="User ID"),
+    temperature_unit: Optional[str] = Body(None),
+    use_current_location: Optional[bool] = Body(None),
+    latitude: Optional[float] = Body(None),
+    longitude: Optional[float] = Body(None),
+    city: Optional[str] = Body(None),
+    country: Optional[str] = Body(None)
+):
+    """Update user's weather preferences"""
+    try:
+        ensure_user_settings_table()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Update location if provided
+        if latitude is not None and longitude is not None:
+            cursor.execute("""
+                INSERT OR REPLACE INTO user_settings 
+                (user_id, setting_key, setting_value, latitude, longitude, city, country, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (user_id, "location", f"{latitude},{longitude}", latitude, longitude, city, country))
+        
+        # Update weather preferences (temperature unit and use_current_location)
+        if temperature_unit or use_current_location is not None:
+            # Get current values first
+            cursor.execute("""
+                SELECT temperature_unit, use_current_location 
+                FROM user_settings 
+                WHERE user_id = ? AND setting_key = 'weather_preferences'
+            """, (user_id,))
+            
+            current = cursor.fetchone()
+            current_temp_unit = current[0] if current else 'celsius'
+            current_use_location = current[1] if current else 0
+            
+            # Use provided values or keep current
+            final_temp_unit = temperature_unit if temperature_unit else current_temp_unit
+            final_use_location = int(use_current_location) if use_current_location is not None else current_use_location
+            
+            cursor.execute("""
+                INSERT OR REPLACE INTO user_settings 
+                (user_id, setting_key, temperature_unit, use_current_location, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (user_id, "weather_preferences", final_temp_unit, final_use_location))
+        
+        conn.commit()
+        conn.close()
+        
+        return {
+            "message": "Weather preferences updated successfully",
+            "preferences": get_user_preferences(user_id)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to update preferences: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update preferences: {str(e)}")
 
 @router.post("/location")
 async def update_location(
-    latitude: float, 
-    longitude: float, 
-    city: Optional[str] = None,
-    country: Optional[str] = None,
+    latitude: float = Body(...), 
+    longitude: float = Body(...), 
+    city: Optional[str] = Body(None),
+    country: Optional[str] = Body(None),
     user_id: str = Query("default", description="User ID")
 ):
     """Update user's location coordinates"""
     try:
-        import sqlite3
-        DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
-        conn = sqlite3.connect(DB_PATH)
+        ensure_user_settings_table()
+        conn = get_db_connection()
         cursor = conn.cursor()
-        
-        # Create user_settings table if it doesn't exist
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS user_settings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                setting_key TEXT NOT NULL,
-                setting_value TEXT,
-                latitude REAL,
-                longitude REAL,
-                city TEXT,
-                country TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, setting_key)
-            )
-        """)
         
         # Insert or update location settings
         cursor.execute("""
@@ -259,6 +513,7 @@ async def update_location(
         }
         
     except Exception as e:
+        logger.error(f"Failed to update location: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to update location: {str(e)}")
 
 @router.get("/location/search")
@@ -266,25 +521,15 @@ async def search_location(
     query: str = Query(..., description="Location search query"),
     limit: int = Query(5, description="Number of results to return")
 ):
-    """Search for locations using OpenWeatherMap Geocoding API"""
-    if not OPENWEATHER_API_KEY:
-        # Return mock search results
-        mock_results = [
-            {"name": "San Francisco, US", "lat": 37.7749, "lon": -122.4194, "country": "US"},
-            {"name": "New York, US", "lat": 40.7128, "lon": -74.0060, "country": "US"},
-            {"name": "London, GB", "lat": 51.5074, "lon": -0.1278, "country": "GB"},
-            {"name": "Tokyo, JP", "lat": 35.6762, "lon": 139.6503, "country": "JP"},
-            {"name": "Paris, FR", "lat": 48.8566, "lon": 2.3522, "country": "FR"}
-        ]
-        return {"results": mock_results[:limit]}
-    
+    """Search for locations using Open-Meteo Geocoding API"""
     try:
-        # Call OpenWeatherMap Geocoding API
-        url = f"http://api.openweathermap.org/geo/1.0/direct"
+        # Use Open-Meteo's free geocoding API
+        url = "https://geocoding-api.open-meteo.com/v1/search"
         params = {
-            "q": query,
-            "limit": limit,
-            "appid": OPENWEATHER_API_KEY
+            "name": query,
+            "count": limit,
+            "language": "en",
+            "format": "json"
         }
         
         response = requests.get(url, params=params, timeout=10)
@@ -293,22 +538,22 @@ async def search_location(
         data = response.json()
         
         results = []
-        for item in data:
-            results.append({
-                "name": f"{item['name']}, {item['country']}",
-                "lat": item['lat'],
-                "lon": item['lon'],
-                "country": item['country'],
-                "state": item.get('state', '')
-            })
+        if "results" in data:
+            for item in data["results"]:
+                results.append({
+                    "name": f"{item['name']}, {item.get('country', '')}",
+                    "lat": item['latitude'],
+                    "lon": item['longitude'],
+                    "country": item.get('country', ''),
+                    "country_code": item.get('country_code', ''),
+                    "admin1": item.get('admin1', ''),  # State/region
+                    "timezone": item.get('timezone', '')
+                })
         
         return {"results": results}
         
     except Exception as e:
-        # Fallback to mock results on error
-        mock_results = [
-            {"name": "San Francisco, US", "lat": 37.7749, "lon": -122.4194, "country": "US"},
-            {"name": "New York, US", "lat": 40.7128, "lon": -74.0060, "country": "US"},
-            {"name": "London, GB", "lat": 51.5074, "lon": -0.1278, "country": "GB"}
-        ]
-        return {"results": mock_results[:limit]}
+        logger.error(f"Location search error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to search location: {str(e)}")
+
+# Table will be created on first API call (moved to avoid blocking startup)

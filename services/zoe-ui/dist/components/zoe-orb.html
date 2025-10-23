@@ -387,7 +387,7 @@
             const session = window.zoeAuth?.getCurrentSession();
             
             // Use REAL AG-UI streaming
-            const response = await fetch(`/api/chat/?user_id=${session?.user_id || 'default'}&stream=true`, {
+            const response = await fetch(`/api/chat/?user_id=${session?.user_id}&stream=true`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'

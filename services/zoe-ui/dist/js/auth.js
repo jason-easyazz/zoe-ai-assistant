@@ -169,7 +169,7 @@
                         <p style="font-size: 16px; color: #ccc; margin-bottom: 30px;">
                             Your session has expired or is invalid. Please log in again to continue.
                         </p>
-                        <button onclick="localStorage.removeItem('zoe_session'); window.location.href='/auth.html';" 
+                        <button onclick="localStorage.removeItem('zoe_session'); window.location.href='/index.html';" 
                                 style="background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
                                        border: none; color: white; padding: 16px 32px; font-size: 16px; 
                                        border-radius: 12px; cursor: pointer; font-weight: 600;">
@@ -225,11 +225,9 @@
                     console.log('🔒 Forced HTTP → HTTPS:', urlString);
                 }
                 
-                // Remove user_id parameter FIRST, then log final URL
-                urlString = urlString.replace(/\?user_id=[^&]*&/, '?');  // ?user_id=xxx& -> ?
-                urlString = urlString.replace(/&user_id=[^&]*&/, '&');   // &user_id=xxx& -> &
-                urlString = urlString.replace(/\?user_id=[^&]*$/, '');   // ?user_id=xxx (end) -> (empty)
-                urlString = urlString.replace(/&user_id=[^&]*$/, '');    // &user_id=xxx (end) -> (empty)
+                // NOTE: DO NOT remove user_id parameter - it's required for user isolation!
+                // Legacy code that was stripping user_id has been removed.
+                
                 // Clean up any trailing ? or &
                 urlString = urlString.replace(/[?&]$/, '');
                 

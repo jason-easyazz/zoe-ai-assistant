@@ -33,7 +33,7 @@ class LoginRequest(BaseModel):
 class PasscodeLoginRequest(BaseModel):
     """Passcode login request model"""
     username: str = Field(..., min_length=1, max_length=50)
-    passcode: str = Field(..., min_length=4, max_length=8, regex=r'^\d+$')
+    passcode: str = Field(..., min_length=4, max_length=8, pattern=r'^\d+$')
     device_info: Dict[str, Any] = Field(default_factory=dict)
 
 class RegisterRequest(BaseModel):
@@ -50,7 +50,7 @@ class PasswordChangeRequest(BaseModel):
 
 class PasscodeSetupRequest(BaseModel):
     """Passcode setup request model"""
-    passcode: str = Field(..., min_length=4, max_length=8, regex=r'^\d+$')
+    passcode: str = Field(..., min_length=4, max_length=8, pattern=r'^\d+$')
     expires_at: Optional[datetime] = None
 
 class SessionEscalationRequest(BaseModel):
@@ -81,6 +81,90 @@ class UserResponse(BaseModel):
     permissions: List[str] = []
 
 # Authentication endpoints
+@router.get("/profiles")
+async def get_user_profiles():
+    """
+    Get list of active user profiles for login page
+    No authentication required - public endpoint
+    
+    Returns:
+        List of active users with basic info
+    """
+    try:
+        profiles = []
+        with auth_db.get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT user_id, username, role
+                FROM users
+                WHERE is_active = 1
+                ORDER BY username
+            """)
+            
+            for row in cursor.fetchall():
+                profiles.append({
+                    "user_id": row["user_id"],
+                    "username": row["username"],
+                    "role": row["role"],
+                    "avatar": row["username"][0].upper() if row["username"] else "?"
+                })
+        
+        return profiles
+    except Exception as e:
+        logger.error(f"Get profiles error: {e}", exc_info=True)
+        return []  # Return empty list on error for login page
+
+@router.post("/guest")
+async def guest_login(request: dict, http_request: Request):
+    """
+    Guest login with temporary session
+    No authentication required - creates limited guest session
+    
+    Args:
+        request: Device info
+        http_request: FastAPI request object
+        
+    Returns:
+        Guest session details
+    """
+    try:
+        import secrets
+        from datetime import timedelta
+        
+        # Create a temporary guest session (4 hour expiry)
+        session_id = f"guest_{secrets.token_urlsafe(32)}"
+        expires_at = datetime.now() + timedelta(hours=4)
+        
+        guest_user_info = {
+            "user_id": "guest",
+            "username": "Guest",
+            "email": "",
+            "role": "guest",
+            "is_active": True,
+            "is_verified": False,
+            "created_at": datetime.now().isoformat(),
+            "last_login": datetime.now().isoformat(),
+            "failed_login_attempts": 0,
+            "locked_until": None,
+            "is_locked": False,
+            "settings": "{}"
+        }
+        
+        return {
+            "success": True,
+            "user_id": "guest",
+            "username": "Guest",
+            "role": "guest",
+            "session_id": session_id,
+            "session_type": "guest",
+            "expires_at": expires_at.isoformat(),
+            "user_info": guest_user_info,
+            "requires_escalation": False,
+            "error_message": None
+        }
+    except Exception as e:
+        logger.error(f"Guest login error: {e}")
+        raise HTTPException(status_code=500, detail="Guest login failed")
+
 @router.post("/login", response_model=AuthResponse)
 async def login(request: LoginRequest, http_request: Request):
     """
@@ -97,8 +181,21 @@ async def login(request: LoginRequest, http_request: Request):
         # Get client IP
         ip_address = http_request.client.host
         
-        # First verify password
-        auth_result = auth_manager.verify_password(request.username, request.password, ip_address)
+        # Look up user by username first
+        with auth_db.get_connection() as conn:
+            cursor = conn.execute("SELECT user_id FROM users WHERE username = ?", (request.username,))
+            user_row = cursor.fetchone()
+            
+            if not user_row:
+                return AuthResponse(
+                    success=False,
+                    error_message="Invalid credentials"
+                )
+            
+            user_id = user_row["user_id"]
+        
+        # Now verify password with user_id
+        auth_result = auth_manager.verify_password(user_id, request.password, ip_address)
         if not auth_result.success:
             return AuthResponse(
                 success=False,
@@ -401,6 +498,19 @@ async def get_current_user(current_session = Depends(get_current_session)):
         logger.error(f"Get user error: {e}")
         raise HTTPException(status_code=500, detail="Failed to get user information")
 
+@router.get("/profile", response_model=UserResponse)
+async def get_user_profile(current_session = Depends(get_current_session)):
+    """
+    Get current user profile (alias for /user for UI compatibility)
+    
+    Args:
+        current_session: Current authenticated session
+        
+    Returns:
+        UserResponse with user details
+    """
+    return await get_current_user(current_session)
+
 @router.post("/password/change")
 async def change_password(request: PasswordChangeRequest,
                          current_session = Depends(get_current_session)):
@@ -431,6 +541,28 @@ async def change_password(request: PasswordChangeRequest,
     except Exception as e:
         logger.error(f"Password change error: {e}")
         raise HTTPException(status_code=500, detail="Password change failed")
+
+@router.get("/passcode/status")
+async def get_passcode_status(current_session = Depends(get_current_session)):
+    """
+    Get passcode status for current user
+    
+    Args:
+        current_session: Current authenticated session
+        
+    Returns:
+        Passcode status information
+    """
+    try:
+        passcode_info = passcode_manager.get_passcode_info(current_session.user_id)
+        return {
+            "has_passcode": passcode_info.get("has_passcode", False),
+            "passcode_required": False,  # Can be configured per user
+            "last_updated": passcode_info.get("last_updated")
+        }
+    except Exception as e:
+        logger.error(f"Get passcode status error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get passcode status")
 
 @router.post("/passcode/setup")
 async def setup_passcode(request: PasscodeSetupRequest,

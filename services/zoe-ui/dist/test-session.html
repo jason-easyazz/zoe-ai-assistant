@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Zoe Session Test</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #1a1a1a; color: #0f0; }
+        .box { border: 1px solid #0f0; padding: 15px; margin: 10px 0; }
+        .error { color: #f00; }
+        .success { color: #0f0; }
+        button { background: #0f0; color: #000; border: none; padding: 10px 20px; cursor: pointer; }
+    </style>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
+</head>
+<body>
+    <h1>🔐 Zoe Session Tester</h1>
+    
+    <div class="box">
+        <h2>Current Session Status:</h2>
+        <div id="status">Checking...</div>
+    </div>
+    
+    <div class="box">
+        <h2>Actions:</h2>
+        <button onclick="clearSession()">Clear Session</button>
+        <button onclick="testLogin()">Test Login</button>
+        <button onclick="location.href='/index.html'">Go to Login</button>
+        <button onclick="location.href='/dashboard.html'">Go to Dashboard</button>
+    </div>
+    
+    <div class="box">
+        <h2>Log:</h2>
+        <div id="log"></div>
+    </div>
+    
+    <script>
+        const log = (msg, isError = false) => {
+            const div = document.createElement('div');
+            div.className = isError ? 'error' : 'success';
+            div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            document.getElementById('log').appendChild(div);
+        };
+        
+        async function checkSession() {
+            const session = localStorage.getItem('zoe_session');
+            const status = document.getElementById('status');
+            
+            if (!session) {
+                status.innerHTML = '<span class="error">❌ No session in localStorage</span>';
+                log('No session found in localStorage', true);
+                return;
+            }
+            
+            const data = JSON.parse(session);
+            log(`Found session: ${data.session_id?.substring(0, 20)}...`);
+            
+            try {
+                const response = await fetch('/api/auth/user', {
+                    headers: { 'X-Session-ID': data.session_id }
+                });
+                
+                if (response.ok) {
+                    const user = await response.json();
+                    status.innerHTML = `<span class="success">✅ Valid session for: ${user.username} (${user.role})</span>`;
+                    log(`Session valid! User: ${user.username}`);
+                } else {
+                    status.innerHTML = '<span class="error">❌ Session expired or invalid</span>';
+                    log(`Session validation failed: ${response.status}`, true);
+                }
+            } catch (e) {
+                status.innerHTML = '<span class="error">❌ Error validating session</span>';
+                log(`Error: ${e.message}`, true);
+            }
+        }
+        
+        function clearSession() {
+            localStorage.removeItem('zoe_session');
+            log('Session cleared from localStorage');
+            checkSession();
+        }
+        
+        async function testLogin() {
+            log('Testing login...');
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: 'admin',
+                        password: 'admin',
+                        device_info: { type: 'web' }
+                    })
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    localStorage.setItem('zoe_session', JSON.stringify({
+                        session_id: data.session_id,
+                        user: data.user_info,
+                        expires_at: data.expires_at
+                    }));
+                    log(`✅ Login successful! Session: ${data.session_id.substring(0, 20)}...`);
+                    checkSession();
+                } else {
+                    log(`❌ Login failed: ${data.error_message}`, true);
+                }
+            } catch (e) {
+                log(`❌ Login error: ${e.message}`, true);
+            }
+        }
+        
+        // Check on load
+        checkSession();
+    </script>
+</body>
+</html>

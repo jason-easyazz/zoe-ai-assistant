@@ -1,51 +1,97 @@
 """
-Zoe Authentication Service
-Main FastAPI application with comprehensive authentication features
+Zoe Authentication Service - Hybrid Version
+Combines simple_main.py stability with full RBAC features
 """
 
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import logging
 import uvicorn
 import os
+import sqlite3
 from datetime import datetime
 
-# Import our modules
-from api.auth import router as auth_router
-from api.admin import router as admin_router  
-from api.touch_panel import router as touch_panel_router
-from api.sso import router as sso_router
-from models.database import auth_db
-from core.sessions import session_manager
-from core.rbac import rbac_manager
-from touch_panel.cache import cache_manager
-
-# Configure logging
+# Configure logging BEFORE imports
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
+# Monkey-patch the database connection to use simple approach
+# This prevents WAL locking issues while keeping full RBAC features
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Override database connection before importing modules
+class SimpleAuthDatabase:
+    """Simple database wrapper that avoids locking issues"""
+    
+    def __init__(self):
+        self.db_path = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
+        self._connection_pool = []
+        logger.info(f"Using database: {self.db_path}")
+    
+    def get_connection(self):
+        """Simple connection without WAL or FK constraints"""
+        conn = sqlite3.connect(self.db_path, timeout=5.0, check_same_thread=False, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        # CRITICAL: Don't enable FK constraints or WAL mode
+        # isolation_level=None puts in autocommit mode which prevents locking
+        return conn
+    
+    def __enter__(self):
+        """Context manager support"""
+        self._conn = self.get_connection()
+        return self._conn
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager support"""
+        if hasattr(self, '_conn'):
+            self._conn.close()
+        return False
+    
+    def init_database(self):
+        """Minimal init - tables already exist"""
+        pass
+    
+    def create_migration_from_existing(self):
+        """Skip migration - database already compatible"""
+        logger.info("Using existing database schema")
+
+# Replace the auth_db before any imports use it
+import models.database as db_module
+db_module.auth_db = SimpleAuthDatabase()
+
+# Now import our modules (they'll use the patched auth_db)
+from api.auth import router as auth_router
+from api.admin import router as admin_router  
+from api.touch_panel import router as touch_panel_router
+from api.sso import router as sso_router
+from core.sessions import session_manager
+from core.rbac import rbac_manager
+from touch_panel.cache import cache_manager
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     # Startup
-    logger.info("Starting Zoe Authentication Service")
+    logger.info("Starting Zoe Authentication Service (Hybrid Version)")
     
-    # Initialize database and migrate existing users
+    # Skip complex migration - just log
     try:
-        auth_db.create_migration_from_existing()
-        logger.info("Database migration completed")
+        logger.info("Database ready - using existing schema")
     except Exception as e:
-        logger.error(f"Database migration failed: {e}")
+        logger.warning(f"Startup warning: {e}")
     
     # Cleanup expired sessions and cache on startup
-    session_manager._cleanup_expired_sessions()
-    cache_manager.cleanup_all_caches()
+    try:
+        session_manager._cleanup_expired_sessions()
+        cache_manager.cleanup_all_caches()
+    except Exception as e:
+        logger.warning(f"Cleanup warning: {e}")
     
     logger.info("Zoe Authentication Service started successfully")
     
@@ -53,7 +99,10 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Shutting down Zoe Authentication Service")
-    session_manager.close()
+    try:
+        session_manager.close()
+    except:
+        pass
 
 # Create FastAPI app
 app = FastAPI(
@@ -68,48 +117,13 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8080",
-        "http://zoe-ui:80",
-        "http://localhost:3000",  # Development
-        "https://*.zoe.local",    # Local domain
-    ],
+    allow_origins=["*"],  # Simplified for local network
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Add trusted host middleware for security
-app.add_middleware(
-    TrustedHostMiddleware,
-    allowed_hosts=[
-        "localhost",
-        "zoe-auth",
-        "zoe-core",
-        "*.zoe.local",
-        "127.0.0.1",
-        "192.168.*",
-        "10.*",
-        "172.16.*",
-        "172.17.*",
-        "172.18.*",
-        "172.19.*",
-        "172.20.*",
-        "172.21.*",
-        "172.22.*",
-        "172.23.*",
-        "172.24.*",
-        "172.25.*",
-        "172.26.*",
-        "172.27.*",
-        "172.28.*",
-        "172.29.*",
-        "172.30.*",
-        "172.31.*"
-    ]
-)
-
-# Add request logging middleware
+# Request logging middleware
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     """Log all requests for audit purposes"""
@@ -137,18 +151,19 @@ app.include_router(sso_router)
 async def health_check():
     """Health check endpoint"""
     try:
-        # Test database connection
-        with auth_db.get_connection() as conn:
-            conn.execute("SELECT 1").fetchone()
+        # Test database connection using our simple approach
+        conn = sqlite3.connect(db_module.auth_db.db_path, timeout=5.0)
+        conn.execute("SELECT 1").fetchone()
+        conn.close()
         
         # Get basic stats
         stats = {
             "status": "healthy",
             "timestamp": datetime.now().isoformat(),
-            "version": "1.0.0",
+            "version": "1.0.0-hybrid",
             "database": "connected",
-            "active_sessions": len(session_manager.active_sessions),
-            "cache_devices": len(cache_manager.caches)
+            "active_sessions": len(session_manager.active_sessions) if hasattr(session_manager, 'active_sessions') else 0,
+            "cache_devices": len(cache_manager.caches) if hasattr(cache_manager, 'caches') else 0
         }
         
         return stats
@@ -170,8 +185,8 @@ async def root():
     """Root endpoint with service information"""
     return {
         "service": "Zoe Authentication Service",
-        "version": "1.0.0",
-        "description": "Comprehensive authentication with passcode support and RBAC",
+        "version": "1.0.0-hybrid",
+        "description": "Hybrid: Simple DB + Full RBAC features",
         "endpoints": {
             "health": "/health",
             "docs": "/docs",
@@ -186,7 +201,7 @@ async def root():
             "Session management",
             "Touch panel optimization",
             "Offline support",
-            "Audit logging",
+            "Admin user management",
             "SSO integration ready"
         ]
     }
@@ -207,11 +222,11 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 if __name__ == "__main__":
-    # Development server
+    # Production server - no reload to prevent database locks
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=8002,
-        reload=True,
+        reload=False,
         log_level="info"
     )

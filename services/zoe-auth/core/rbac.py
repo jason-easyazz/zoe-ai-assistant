@@ -14,7 +14,7 @@ import logging
 import threading
 import time
 
-from ..models.database import auth_db, UserRole, Role, Permission
+from models.database import auth_db, UserRole, Role, Permission
 
 logger = logging.getLogger(__name__)
 

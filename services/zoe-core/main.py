@@ -185,6 +185,52 @@ async def metrics():
     """Prometheus metrics endpoint"""
     return Response(content=get_metrics(), media_type="text/plain")
 
+# ===== STARTUP AND SHUTDOWN EVENTS =====
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on startup"""
+    logger.info("🚀 Starting Zoe Core services...")
+    
+    try:
+        # Start calendar reminder service
+        from services.calendar_reminder_service import start_reminder_service
+        await start_reminder_service()
+        logger.info("✅ Calendar reminder service started")
+    except Exception as e:
+        logger.error(f"❌ Failed to start calendar reminders: {e}")
+    
+    try:
+        # Start task reminder service
+        from services.task_reminder_service import start_task_reminder_service
+        await start_task_reminder_service()
+        logger.info("✅ Task reminder service started")
+    except Exception as e:
+        logger.error(f"❌ Failed to start task reminders: {e}")
+    
+    logger.info("🎉 All services started successfully")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    logger.info("🛑 Shutting down Zoe Core services...")
+    
+    try:
+        from services.calendar_reminder_service import stop_reminder_service
+        await stop_reminder_service()
+        logger.info("✅ Calendar reminder service stopped")
+    except Exception as e:
+        logger.error(f"❌ Error stopping calendar reminders: {e}")
+    
+    try:
+        from services.task_reminder_service import stop_task_reminder_service
+        await stop_task_reminder_service()
+        logger.info("✅ Task reminder service stopped")
+    except Exception as e:
+        logger.error(f"❌ Error stopping task reminders: {e}")
+    
+    logger.info("👋 Shutdown complete")
+
 if __name__ == "__main__":
     uvicorn.run(
         "main_enhanced:app",

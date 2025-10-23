@@ -11,9 +11,9 @@ from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 import logging
 
-from .cache import TouchPanelCache, cache_manager
-from ..core.sessions import AuthenticationRequest, SessionType, AuthMethod
-from ..models.database import auth_db
+from touch_panel.cache import TouchPanelCache, cache_manager
+from core.sessions import AuthenticationRequest, SessionType, AuthMethod
+from models.database import auth_db
 
 logger = logging.getLogger(__name__)
 
