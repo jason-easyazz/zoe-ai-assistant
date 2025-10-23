@@ -4,7 +4,7 @@ Provides FastAPI dependencies for session-based authentication
 """
 
 from fastapi import Depends, HTTPException, Request, Header
-from typing import Optional, Annotated
+from typing import Optional, Annotated, Callable
 import logging
 
 from session_manager import session_manager, Session

@@ -417,6 +417,28 @@
         }
     </style>
     <script src="/js/auth.js"></script>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
 </head>
 <body>
     <!-- Header Bar -->
@@ -523,49 +545,8 @@
                 renderLists();
             } catch (error) {
                 console.error('Failed to load lists:', error);
-                // Show demo lists
-                lists = [
-                    {
-                        type: 'personal_todos',
-                        name: 'Personal Tasks',
-                        icon: '🏠',
-                        items: [
-                            { text: 'Buy groceries', completed: false, priority: 'high' },
-                            { text: 'Call mom', completed: true, priority: 'medium' },
-                            { text: 'Exercise', completed: false, priority: 'low' }
-                        ]
-                    },
-                    {
-                        type: 'work_todos',
-                        name: 'Work Tasks',
-                        icon: '💼',
-                        items: [
-                            { text: 'Finish report', completed: false, priority: 'high' },
-                            { text: 'Team meeting', completed: false, priority: 'medium' },
-                            { text: 'Update website', completed: true, priority: 'low' }
-                        ]
-                    },
-                    {
-                        type: 'shopping',
-                        name: 'Shopping List',
-                        icon: '🛒',
-                        items: [
-                            { text: 'Milk', completed: false, priority: 'high' },
-                            { text: 'Bread', completed: false, priority: 'medium' },
-                            { text: 'Apples', completed: true, priority: 'low' }
-                        ]
-                    },
-                    {
-                        type: 'bucket',
-                        name: 'Bucket List',
-                        icon: '🎯',
-                        items: [
-                            { text: 'Visit Japan', completed: false, priority: 'high' },
-                            { text: 'Learn guitar', completed: false, priority: 'medium' },
-                            { text: 'Write a book', completed: false, priority: 'low' }
-                        ]
-                    }
-                ];
+                // Show empty lists on error
+                lists = [];
                 renderLists();
             }
         }

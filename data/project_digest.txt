@@ -1,0 +1,698 @@
+================================================================================
+ZOE AI ASSISTANT - PROJECT DIGEST
+Generated: 2025-10-23 02:00:01
+================================================================================
+
+## Project Structure
+
+.
+├── backups
+│   ├── local
+│   └── remote
+├── checkpoints
+│   └── backup_20250820_221526
+│       ├── zoe-core
+│       ├── zoe-ui
+│       └── docker-compose.yml
+├── config
+│   ├── nginx
+│   │   └── nginx-auth.conf
+│   ├── DEPLOYMENT_MANIFEST.json
+│   ├── vapid_private.pem
+│   └── vapid_public.pem
+├── docs
+│   ├── api
+│   ├── architecture
+│   │   ├── ACTION_PLAN_PROGRESS.md
+│   │   ├── API_VERSIONING_STRATEGY.md
+│   │   ├── ARCHITECTURE_PROTECTION.md
+│   │   ├── ARCHITECTURE_REVIEW.md
+│   │   ├── CHAT_INTEGRATION_DIAGNOSIS.md
+│   │   ├── DATABASE_CONSOLIDATION_PLAN.md
+│   │   ├── DESKTOP_DASHBOARD_FIXES_COMPLETE.md
+│   │   ├── ERROR_HANDLING_STANDARD.md
+│   │   ├── FIXES_COMPLETED.md
+│   │   ├── IMPLEMENTATION_SUMMARY.md
+│   │   ├── LIST_ISOLATION_BUG_FIX.md
+│   │   ├── LISTS_CALENDAR_ERRORS_FIX.md
+│   │   ├── LISTS_DATABASE_FIX.md
+│   │   ├── navigation-standardization.md
+│   │   ├── PAGE_HEALTH_REPORT.md
+│   │   ├── PERSON_EXPERT_RECOMMENDATION.md
+│   │   ├── PWA-PHASE1-COMPLETE.md
+│   │   ├── PWA-PHASE2-PROGRESS.md
+│   │   ├── ROUTER_CONSOLIDATION_PLAN.md
+│   │   ├── SERVICE_HEALTH_FIX.md
+│   │   ├── SESSION_SUMMARY.md
+│   │   ├── TOUCH_DASHBOARD_UPGRADE_PLAN.md
+│   │   ├── user-isolation-audit.md
+│   │   └── ZOE_ORB_SYSTEM.md
+│   ├── archive
+│   ├── developer
+│   │   ├── continuation-prompt.txt
+│   │   └── SMART_CONTINUATION_PROMPT.txt
+│   ├── features
+│   ├── governance
+│   │   ├── BROWSER_CACHE_FIX.md
+│   │   ├── CLEANUP_SAFETY.md
+│   │   ├── CRITICAL_FILES.md
+│   │   ├── DELETION_PREVENTION_SYSTEM.md
+│   │   ├── MANIFEST_SYSTEM.md
+│   │   ├── PROJECT_ORGANIZATION_COMPLETE.md
+│   │   ├── QUICK_REFERENCE.md
+│   │   └── UI_ERROR_ANALYSIS.md
+│   ├── guides
+│   │   ├── ALL_DOCUMENTATION_INDEX.md
+│   │   ├── CHANGE_MANAGEMENT.md
+│   │   ├── CURSOR_BEST_PRACTICES.md
+│   │   ├── FILE_TAGGING_SYSTEM.md
+│   │   ├── iOS-SHORTCUTS-INTEGRATION.md
+│   │   ├── jetson-upgrade-checklist.md
+│   │   ├── memvid-integration.md
+│   │   ├── MIGRATION_TO_V2.4.md
+│   │   ├── pre-jetson-implementation-tracking.md
+│   │   ├── productivity-commands.md
+│   │   ├── project-evaluation-implementation.md
+│   │   ├── PWA-INSTALLATION-TESTING.md
+│   │   ├── QUICK-FIX-SUMMARY.md
+│   │   ├── QUICK-START-INTELLIGENCE.md
+│   │   ├── UNSLOTH_INSTALLATION.md
+│   │   ├── voice-agent-setup.md
+│   │   ├── widget-development.md
+│   │   ├── widget-quick-start.md
+│   │   └── ZOE_ORB_COMPONENT_FIX.md
+│   ├── ENVIRONMENT_VARIABLES.md
+│   ├── EXPERT_ARCHITECTURE.md
+│   ├── GOVERNANCE_IMPLEMENTATION_COMPLETE.md
+│   ├── HOME_DIRECTORY_RULES.md
+│   ├── IMPLEMENTATION_SUMMARY_V2.4.0.md
+│   ├── INTEGRATION_WITH_LLMS_AND_MCP.md
+│   ├── README.md
+│   ├── RESTORATION_ANALYSIS.md
+│   ├── RESTORATION_LOG_2025-10-19.md
+│   ├── START_HERE.md
+│   └── TRAINING_OPTIONS.md
+├── homeassistant
+├── models
+│   └── adapters
+├── scripts
+│   ├── deployment
+│   │   ├── deploy-phase2-push-notifications.sh
+│   │   ├── deploy_v2.3.1.sh
+│   │   └── push_to_github.sh
+│   ├── development
+│   ├── maintenance
+│   │   ├── scripts
+│   │   ├── advanced_cleanup.py
+│   │   ├── aggressive_cleanup.py
+│   │   ├── archive_tagged_files.py
+│   │   ├── comprehensive_cleanup.py
+│   │   ├── daily_consolidation.py
+│   │   ├── export_schema.sh
+│   │   ├── file_tags.json
+│   │   ├── git_history_cleanup.py
+│   │   ├── quarterly_archival.sh
+│   │   ├── setup_file_tagging.sh
+│   │   ├── tag_unused_files.py
+│   │   ├── TASK_SYSTEM_PROGRESS.md
+│   │   ├── verify_github_cleanup.py
+│   │   └── weekly_preference_update.py
+│   ├── n8n
+│   │   └── workflows
+│   ├── security
+│   │   ├── 01_integrate_auth_sessions.sh
+│   │   ├── 02_protect_privileged_endpoints.sh
+│   │   ├── 03_add_user_isolation.sh
+│   │   ├── 04_harden_secrets.sh
+│   │   ├── 05_update_ui_auth.sh
+│   │   ├── 06_test_multiuser_security.sh
+│   │   ├── master_security_implementation.sh
+│   │   └── validate_deployment.sh
+│   ├── setup
+│   │   ├── init_databases.py
+│   │   ├── init_databases.sh
+│   │   ├── setup_overnight_training_10pm.sh
+│   │   └── setup_overnight_training.sh
+│   ├── train
+│   │   ├── nightly_training_cpu.py
+│   │   ├── nightly_training.py
+│   │   ├── nightly_training.sh
+│   │   └── test_training_setup.py
+│   ├── utilities
+│   │   ├── archive
+│   │   ├── add_dog_treats_to_admin.py
+│   │   ├── add_dog_treats_to_default.py
+│   │   ├── add_enhanced_tasks.py
+│   │   ├── add-pwa-meta-tags.sh
+│   │   ├── add-pwa-meta-tags-v2.sh
+│   │   ├── audit_user_isolation.sh
+│   │   ├── benchmark_llms.py
+│   │   ├── check_actual_list.py
+│   │   ├── check_admin_shopping.py
+│   │   ├── check_shopping_all_users.py
+│   │   ├── cleanup_docs.sh
+│   │   ├── comprehensive_conversation_test.py
+│   │   ├── comprehensive_core_component_tester.py
+│   │   ├── comprehensive_integrated_test.py
+│   │   ├── comprehensive_model_benchmark.py
+│   │   ├── comprehensive_system_optimization.py
+│   │   ├── consolidate_databases.py
+│   │   ├── context_briefing.sh
+│   │   ├── demonstrate_zoe_awareness.py
+│   │   ├── final_four_test.py
+│   │   ├── final_samantha_test.py
+│   │   ├── fix_api_urls.py
+│   │   ├── full_conversation_display.py
+│   │   ├── generate-pwa-icons.sh
+│   │   ├── generate-vapid-keys.py
+│   │   ├── INTERACTIVE_MEMORY_TEST.sh
+│   │   ├── light_rag_benchmarks.py
+│   │   ├── migrate_tasks.py
+│   │   ├── migrate_to_light_rag.py
+│   │   ├── natural_language_learning.py
+│   │   ├── optimize_database_indexes.py
+│   │   ├── run_all_tests.sh
+│   │   ├── run_bulk_tests.py
+│   │   ├── samantha_level_intelligence_test.py
+│   │   ├── temporal_memory_integration.py
+│   │   ├── temporal_memory_system.py
+│   │   ├── test_chat_now.sh
+│   │   ├── test_complete_system.sh
+│   │   ├── test_developer_dashboard.sh
+│   │   ├── test_developer_experience.sh
+│   │   ├── test_time_sync.py
+│   │   ├── test_widget_system_e2e.sh
+│   │   ├── time_sync_service.py
+│   │   ├── update_compose.py
+│   │   ├── update_database_references.py
+│   │   ├── verify_widget_system.sh
+│   │   └── zoe-superpowers.sh
+│   └── zoe-time-sync.service
+├── services
+│   ├── zoe-auth
+│   │   ├── api
+│   │   ├── core
+│   │   ├── models
+│   │   ├── sso
+│   │   ├── tests
+│   │   ├── touch_panel
+│   │   ├── Dockerfile
+│   │   ├── main.py
+│   │   ├── README.md
+│   │   ├── requirements.txt
+│   │   └── run.py
+│   ├── zoe-core
+│   │   ├── config
+│   │   ├── db
+│   │   ├── developer
+│   │   ├── docs
+│   │   ├── middleware
+│   │   ├── models
+│   │   ├── routers
+│   │   ├── services
+│   │   ├── templates
+│   │   ├── training_engine
+│   │   ├── action_executor.py
+│   │   ├── add_roadmap_tasks.py
+│   │   ├── ai_client_enhanced.py
+│   │   ├── ai_client.py
+│   │   ├── aider_integration.py
+│   │   ├── aider_service.py
+│   │   ├── aider_task_integration.py
+│   │   ├── ai_personalities.py
+│   │   ├── ai_router.py
+│   │   ├── api_doc_generator.py
+│   │   ├── api_key_loader.py
+│   │   ├── auth_integration.py
+│   │   ├── autonomous_system.py
+│   │   ├── backup_system.py
+│   │   ├── claude_integration.py
+│   │   ├── code_reviewer.py
+│   │   ├── context_cache.py
+│   │   ├── context_optimizer.py
+│   │   ├── cross_agent_collaboration.py
+│   │   ├── database_migrations.py
+│   │   ├── development_metrics.py
+│   │   ├── Dockerfile
+│   │   ├── documentation_loader.py
+│   │   ├── dynamic_router.py
+│   │   ├── enhanced_calendar.py
+│   │   ├── enhanced_chat_router.py
+│   │   ├── enhanced_mem_agent_client.py
+│   │   ├── feature_request_pipeline.py
+│   │   ├── graph_engine.py
+│   │   ├── guardrails_validation.py
+│   │   ├── __init__.py
+│   │   ├── install_ollama.py
+│   │   ├── intelligent_model_manager.py
+│   │   ├── learning_system.py
+│   │   ├── life_orchestrator.py
+│   │   ├── light_rag_memory.py
+│   │   ├── llm_models.py
+│   │   ├── main.py
+│   │   ├── mem_agent_client.py
+│   │   ├── memory_consolidation.py
+│   │   ├── memory_system.py
+│   │   ├── memvid_archiver.py
+│   │   ├── migrate_lists_items.py
+│   │   ├── migrate_lists_schema.py
+│   │   ├── migrate_to_user_auth.py
+│   │   ├── model_config.py
+│   │   ├── model_discovery.py
+│   │   ├── n8n_integration.py
+│   │   ├── optimize_hybrid_router.py
+│   │   ├── persistent_agent_memory.py
+│   │   ├── predictive_intelligence.py
+│   │   ├── preference_learner.py
+│   │   ├── project_analyzer.py
+│   │   ├── prompt_templates.py
+│   │   ├── rag_enhancements.py
+│   │   ├── requirements.txt
+│   │   ├── resource_monitor.py
+│   │   ├── route_llm.py
+│   │   ├── router_loader.py
+│   │   ├── self_awareness.py
+│   │   ├── self_test_suite.py
+│   │   ├── session_auth.py
+│   │   ├── session_config.py
+│   │   ├── session_integration_example.py
+│   │   ├── SESSION_INTEGRATION_GUIDE.md
+│   │   ├── session_manager.py
+│   │   ├── session_middleware.py
+│   │   ├── task_scheduler.py
+│   │   ├── temporal_memory_integration.py
+│   │   ├── temporal_memory.py
+│   │   ├── test_session_management.py
+│   │   ├── true_intelligence_core.py
+│   │   ├── unified_learner.py
+│   │   ├── update_ai_router.py
+│   │   ├── user_context.py
+│   │   ├── user_profile_schema.py
+│   │   ├── user_satisfaction.py
+│   │   └── wake_word_detector.py
+│   ├── zoe-litellm
+│   │   ├── config.yaml
+│   │   ├── Dockerfile
+│   │   └── minimal_config.yaml
+│   ├── zoe-mcp-server
+│   │   ├── Dockerfile
+│   │   ├── http_mcp_server.py
+│   │   ├── main.py
+│   │   ├── requirements.txt
+│   │   ├── security.py
+│   │   └── simple_server.py
+│   └── zoe-ui
+│       ├── dist
+│       ├── AUTH_INTEGRATION_SUMMARY.md
+│       ├── nginx.conf
+│       ├── nginx.conf.backup
+│       ├── nginx-dev.conf
+│       ├── nginx-livekit-proxy.conf
+│       └── VERSION.md
+├── templates
+├── tests
+│   ├── fixtures
+│   ├── integration
+│   ├── results
+│   │   └── 20251008_121422
+│   ├── unit
+│   │   ├── test_auth_security.py
+│   │   ├── test_experts.py
+│   │   ├── test_html_syntax.py
+│   │   ├── test_intelligent_system.py
+│   │   ├── test_mcp_security.py
+│   │   ├── test_mcp_server.py
+│   │   ├── test_tool_calling.py
+│   │   ├── test_ui_functionality.py
+│   │   ├── test_user_profile_schema.py
+│   │   └── test_zoe_optimization.py
+│   ├── conftest.py
+│   ├── test_add_and_query.py
+│   ├── test_complete_flow.py
+│   ├── test_dog_treats.py
+│   ├── test_enhanced_features.py
+│   ├── test_extraction.py
+│   ├── TEST_FRAMEWORK.md
+│   ├── test_light_rag.py
+│   ├── test_mem_agent_direct.py
+│   ├── test_query_direct.py
+│   ├── test_remove_direct.py
+│   ├── test_remove_item.py
+│   └── test_teddy_conversation.py
+├── tools
+│   ├── audit
+│   │   ├── analyze_databases.py
+│   │   ├── audit_references.py
+│   │   ├── check_home_cleanliness.py
+│   │   ├── check_ui_health.sh
+│   │   ├── comprehensive_audit.py
+│   │   ├── comprehensive_project_audit.py
+│   │   ├── comprehensive_scan.py
+│   │   ├── database_audit.py
+│   │   ├── enforce_structure.py
+│   │   ├── find_file_references.sh
+│   │   ├── pre-commit-database-check.sh
+│   │   ├── pre-commit-hook.sh
+│   │   ├── validate_before_delete.py
+│   │   ├── validate_commit_message.sh
+│   │   ├── validate_critical_files.py
+│   │   ├── validate_databases.py
+│   │   ├── validate_intelligent_architecture.py
+│   │   └── validate_structure.py
+│   ├── cleanup
+│   │   ├── archive
+│   │   ├── auto_organize.py
+│   │   ├── bfg.jar
+│   │   ├── clean_home_directory.py
+│   │   ├── comprehensive_cleanup.py
+│   │   ├── comprehensive_root_cleanup.py
+│   │   ├── consolidate_docs.py
+│   │   ├── final_cleanup.py
+│   │   ├── fix_api_urls.py
+│   │   ├── fix_references.py
+│   │   ├── fix_ui_reminders.py
+│   │   ├── migrate_to_unified_db.py
+│   │   ├── remove_duplicate_project.sh
+│   │   ├── safe_cleanup.py
+│   │   └── update_compose.py
+│   ├── generators
+│   │   ├── create_enhancement_tasks.py
+│   │   ├── fresh_context.sh
+│   │   ├── generate_changelog.py
+│   │   └── unified_schema_design.sql
+│   ├── maintenance
+│   │   └── storage_manager.py
+│   ├── reports
+│   │   ├── repo_health.py
+│   │   └── weekly_summary.sh
+│   ├── utilities
+│   │   ├── model-manager.py
+│   │   └── verify-intelligence.sh
+│   └── validation
+│       └── verify_cursor_fixes.sh
+├── CHANGELOG.md
+├── CURSOR_IMPLEMENTATION_PLAN.md
+├── CURSOR_QUICKSTART_PROMPT.md
+├── DASHBOARD_INTEGRATION_STATUS.md
+├── DEPLOY-PWA-NOW.md
+├── DEVELOPER_DASHBOARD_READY.md
+├── docker-compose.mem-agent.yml
+├── docker-compose.override.yml
+├── docker-compose.yml
+├── PROJECT_STATUS.md
+├── PROJECT_STRUCTURE_RULES.md
+├── PWA-DEPLOYMENT-SUCCESS.md
+├── PWA-IMPLEMENTATION-COMPLETE.md
+├── PWA-QUICK-START.md
+├── pytest.ini
+├── QUICK-START.md
+├── README.md
+├── test_architecture.py
+├── test_delete_user.html
+└── verify_updates.sh
+
+72 directories, 333 files
+
+## Git Status
+
+A  CURSOR_IMPLEMENTATION_PLAN.md
+A  CURSOR_QUICKSTART_PROMPT.md
+ M docs/RESTORATION_LOG_2025-10-19.md
+ M docs/governance/BROWSER_CACHE_FIX.md
+ M docs/governance/MANIFEST_SYSTEM.md
+ M docs/governance/PROJECT_ORGANIZATION_COMPLETE.md
+ M docs/governance/QUICK_REFERENCE.md
+ M docs/governance/UI_ERROR_ANALYSIS.md
+ M services/zoe-auth/Dockerfile
+ M services/zoe-auth/api/admin.py
+ M services/zoe-auth/api/auth.py
+ M services/zoe-auth/api/dependencies.py
+ M services/zoe-auth/api/touch_panel.py
+ M services/zoe-auth/core/auth.py
+ M services/zoe-auth/core/passcode.py
+ M services/zoe-auth/core/rbac.py
+ M services/zoe-auth/core/security.py
+ M services/zoe-auth/core/sessions.py
+ M services/zoe-auth/data/auth.db
+ M services/zoe-auth/main.py
+ M services/zoe-auth/models/database.py
+ D services/zoe-auth/simple_main.py
+ M services/zoe-auth/sso/homeassistant.py
+ M services/zoe-auth/sso/matrix.py
+ M services/zoe-auth/sso/n8n.py
+ M services/zoe-auth/touch_panel/quick_auth.py
+ M services/zoe-core/main.py
+ M services/zoe-core/requirements.txt
+ M services/zoe-core/routers/ai_task_integration.py.disabled
+ M services/zoe-core/routers/calendar.py
+ M services/zoe-core/routers/chat.py
+ M services/zoe-core/routers/lists.py
+ M services/zoe-core/routers/media.py
+ M services/zoe-ui/dist/auth.html
+ M services/zoe-ui/dist/calendar.html
+ M services/zoe-ui/dist/chat-v2.html
+ M services/zoe-ui/dist/chat.html
+ M services/zoe-ui/dist/components/zoe-orb.html
+ M services/zoe-ui/dist/dashboard.html
+ M services/zoe-ui/dist/developer/index.html
+ M services/zoe-ui/dist/developer/zoe_dashboard_demo.html
+ M services/zoe-ui/dist/index.html
+ M services/zoe-ui/dist/journal.html
+ M services/zoe-ui/dist/js/auth.js
+ M services/zoe-ui/dist/js/journal-ui-enhancements.js
+ M services/zoe-ui/dist/js/widget-base.js
+ M services/zoe-ui/dist/js/widget-system.js
+ M services/zoe-ui/dist/lists.html
+ M services/zoe-ui/dist/memories.html
+ M services/zoe-ui/dist/settings.html
+ M services/zoe-ui/dist/touch/calendar.html
+ M services/zoe-ui/dist/touch/dashboard.html
+ M services/zoe-ui/dist/touch/index.html
+ M services/zoe-ui/dist/touch/lists.html
+ M services/zoe-ui/nginx.conf
+ M tools/audit/validate_before_delete.py
+ M tools/cleanup/safe_cleanup.py
+?? ._.DS_Store
+?? DASHBOARD_INTEGRATION_STATUS.md
+?? DEPLOY-PWA-NOW.md
+?? DEVELOPER_DASHBOARD_READY.md
+?? PWA-DEPLOYMENT-SUCCESS.md
+?? PWA-IMPLEMENTATION-COMPLETE.md
+?? PWA-QUICK-START.md
+?? data/project_digest.txt
+?? data/project_digest_temp.txt
+?? data/project_digest_trimmed.txt
+?? data/uploads/
+?? docs/architecture/PWA-PHASE1-COMPLETE.md
+?? docs/architecture/PWA-PHASE2-PROGRESS.md
+?? docs/architecture/navigation-standardization.md
+?? docs/architecture/user-isolation-audit.md
+?? docs/guides/PWA-INSTALLATION-TESTING.md
+?? docs/guides/iOS-SHORTCUTS-INTEGRATION.md
+?? scripts/utilities/generate-vapid-keys.py
+?? services/._.DS_Store
+?? services/zoe-core/data/zoe.db
+?? services/zoe-core/db/schema/push_subscriptions.sql
+?? services/zoe-core/routers/push.py
+?? services/zoe-core/services/
+?? services/zoe-ui/._.DS_Store
+?? services/zoe-ui/VERSION.md
+?? services/zoe-ui/dist/._teneeka.html
+?? services/zoe-ui/dist/apple-touch-icon.png
+?? services/zoe-ui/dist/clear-cache.html
+?? services/zoe-ui/dist/clear-session.html
+?? services/zoe-ui/dist/dashboard.html.backup-20251022-125807
+?? services/zoe-ui/dist/dashboard.html.broken-20251022-132414
+?? services/zoe-ui/dist/favicon-16.png
+?? services/zoe-ui/dist/favicon-32.png
+?? services/zoe-ui/dist/favicon.ico
+?? services/zoe-ui/dist/fix-isolation.html
+?? services/zoe-ui/dist/icons/
+?? services/zoe-ui/dist/js/dashboard.js
+?? services/zoe-ui/dist/js/list-configs.js
+?? services/zoe-ui/dist/js/lists-dashboard.js
+?? services/zoe-ui/dist/js/lists-dashboard.js.backup-20251022-214925
+?? services/zoe-ui/dist/js/masonry-grid.js
+?? services/zoe-ui/dist/js/push-notifications.js
+?? services/zoe-ui/dist/js/sw-registration.js
+?? services/zoe-ui/dist/js/websocket-sync.js
+?? services/zoe-ui/dist/lib/
+?? services/zoe-ui/dist/lists.html.backup-20251022
+?? services/zoe-ui/dist/lists.html.backup-20251022-214924
+?? services/zoe-ui/dist/offline.html
+?? services/zoe-ui/dist/session-debug.html
+?? services/zoe-ui/dist/standardize_navigation.py
+?? services/zoe-ui/dist/sw.js
+?? services/zoe-ui/dist/teneeka.html
+?? services/zoe-ui/dist/test-session.html
+?? test_delete_user.html
+
+## Recent Commits (Last 10)
+
+c262906 fix: Complete system fixes - Docker Compose, MCP server, and service health
+bf9ef67 fix: Restore critical files and touch interface after cleanup
+0beb480 chore: ULTRA-AGGRESSIVE cleanup - target zoe-core and zoe-ui
+c40b51f chore: AGGRESSIVE cleanup - remove all non-essential files
+a337703 chore: Advanced project cleanup - further size reduction
+d75a32d chore: Add GitHub cleanup verification script
+d5c6428 chore: Add git history cleanup script and update gitignore
+545cf97 chore: Comprehensive project cleanup and size optimization
+7471694 chore: Project structure cleanup and organization
+ba22a15 fix(security): Remove plaintext password from seed data comments
+
+## Core Services
+
+zoe-auth
+zoe-core
+zoe-litellm
+zoe-mcp-server
+zoe-ui
+
+## Available Routers
+
+agent_planner.py
+aider.py
+alert_system.py
+auth.py
+autonomous.py
+autonomous_simple.py
+auto_recovery.py
+birthday_calendar.py
+birthday_memories.py
+calendar.py
+chat.py
+chat_sessions.py
+cross_agent_collaboration.py
+developer_chat.py
+developer.py
+developer_tasks.py
+developer_tasks_update.py
+diagnostic_repair.py
+docker_mgmt.py
+encrypted_snapshots.py
+enhanced_calendar.py
+event_permissions.py
+family.py
+health_dashboard.py
+homeassistant.py
+__init__.py
+issues.py
+journal.py
+journeys.py
+lists.py
+
+## Database Schemas
+
+### auth.db
+
+
+
+
+sessions
+users
+
+### memory.db
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### training.db
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+response_patterns
+tool_call_performance
+
+### zoe.db
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Key Files
+
+- docker-compose.yml
+- README.md
+- CHANGELOG.md
+CHANGELOG.md
+CURSOR_IMPLEMENTATION_PLAN.md
+CURSOR_QUICKSTART_PROMPT.md
+DASHBOARD_INTEGRATION_STATUS.md
+DEPLOY-PWA-NOW.md
+DEVELOPER_DASHBOARD_READY.md
+PROJECT_STATUS.md
+PROJECT_STRUCTURE_RULES.md
+PWA-DEPLOYMENT-SUCCESS.md
+PWA-IMPLEMENTATION-COMPLETE.md
+
+## Files Changed Recently (Last 7 Days)
+
+services/zoe-core/preference_learner.py
+services/zoe-core/cross_agent_collaboration.py
+services/zoe-core/training_engine/data_collector.py
+services/zoe-core/training_engine/__init__.py
+services/zoe-core/predictive_intelligence.py
+services/zoe-core/route_llm.py
+services/zoe-core/router_loader.py
+services/zoe-core/temporal_memory_integration.py
+services/zoe-core/context_optimizer.py
+services/zoe-core/database_migrations.py
+services/zoe-core/developer/n8n/simple_generator.py
+services/zoe-core/developer/n8n/workflow_analyzer.py
+services/zoe-core/developer/n8n/__init__.py
+services/zoe-core/developer/docker/__init__.py
+services/zoe-core/developer/docker/manager.py
+services/zoe-core/developer/__init__.py
+services/zoe-core/ai_client.py
+services/zoe-core/memvid_archiver.py
+services/zoe-core/memory_consolidation.py
+services/zoe-core/routers/health_dashboard.py
+

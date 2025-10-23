@@ -1,0 +1,117 @@
+================================================================================
+ZOE AI ASSISTANT - PROJECT DIGEST
+Generated: 2025-10-23 02:00:01
+================================================================================
+
+## Project Structure
+
+.
+├── backups
+│   ├── local
+│   └── remote
+├── checkpoints
+│   └── backup_20250820_221526
+│       ├── zoe-core
+│       ├── zoe-ui
+│       └── docker-compose.yml
+├── config
+│   ├── nginx
+│   │   └── nginx-auth.conf
+│   ├── DEPLOYMENT_MANIFEST.json
+│   ├── vapid_private.pem
+│   └── vapid_public.pem
+├── docs
+│   ├── api
+│   ├── architecture
+│   │   ├── ACTION_PLAN_PROGRESS.md
+│   │   ├── API_VERSIONING_STRATEGY.md
+│   │   ├── ARCHITECTURE_PROTECTION.md
+│   │   ├── ARCHITECTURE_REVIEW.md
+│   │   ├── CHAT_INTEGRATION_DIAGNOSIS.md
+│   │   ├── DATABASE_CONSOLIDATION_PLAN.md
+│   │   ├── DESKTOP_DASHBOARD_FIXES_COMPLETE.md
+│   │   ├── ERROR_HANDLING_STANDARD.md
+│   │   ├── FIXES_COMPLETED.md
+│   │   ├── IMPLEMENTATION_SUMMARY.md
+│   │   ├── LIST_ISOLATION_BUG_FIX.md
+│   │   ├── LISTS_CALENDAR_ERRORS_FIX.md
+│   │   ├── LISTS_DATABASE_FIX.md
+│   │   ├── navigation-standardization.md
+│   │   ├── PAGE_HEALTH_REPORT.md
+│   │   ├── PERSON_EXPERT_RECOMMENDATION.md
+│   │   ├── PWA-PHASE1-COMPLETE.md
+│   │   ├── PWA-PHASE2-PROGRESS.md
+│   │   ├── ROUTER_CONSOLIDATION_PLAN.md
+│   │   ├── SERVICE_HEALTH_FIX.md
+│   │   ├── SESSION_SUMMARY.md
+│   │   ├── TOUCH_DASHBOARD_UPGRADE_PLAN.md
+│   │   ├── user-isolation-audit.md
+│   │   └── ZOE_ORB_SYSTEM.md
+│   ├── archive
+│   ├── developer
+│   │   ├── continuation-prompt.txt
+│   │   └── SMART_CONTINUATION_PROMPT.txt
+│   ├── features
+│   ├── governance
+│   │   ├── BROWSER_CACHE_FIX.md
+│   │   ├── CLEANUP_SAFETY.md
+│   │   ├── CRITICAL_FILES.md
+│   │   ├── DELETION_PREVENTION_SYSTEM.md
+│   │   ├── MANIFEST_SYSTEM.md
+│   │   ├── PROJECT_ORGANIZATION_COMPLETE.md
+│   │   ├── QUICK_REFERENCE.md
+│   │   └── UI_ERROR_ANALYSIS.md
+│   ├── guides
+│   │   ├── ALL_DOCUMENTATION_INDEX.md
+│   │   ├── CHANGE_MANAGEMENT.md
+│   │   ├── CURSOR_BEST_PRACTICES.md
+│   │   ├── FILE_TAGGING_SYSTEM.md
+│   │   ├── iOS-SHORTCUTS-INTEGRATION.md
+│   │   ├── jetson-upgrade-checklist.md
+│   │   ├── memvid-integration.md
+│   │   ├── MIGRATION_TO_V2.4.md
+│   │   ├── pre-jetson-implementation-tracking.md
+│   │   ├── productivity-commands.md
+│   │   ├── project-evaluation-implementation.md
+│   │   ├── PWA-INSTALLATION-TESTING.md
+│   │   ├── QUICK-FIX-SUMMARY.md
+│   │   ├── QUICK-START-INTELLIGENCE.md
+│   │   ├── UNSLOTH_INSTALLATION.md
+│   │   ├── voice-agent-setup.md
+│   │   ├── widget-development.md
+│   │   ├── widget-quick-start.md
+│   │   └── ZOE_ORB_COMPONENT_FIX.md
+│   ├── ENVIRONMENT_VARIABLES.md
+│   ├── EXPERT_ARCHITECTURE.md
+│   ├── GOVERNANCE_IMPLEMENTATION_COMPLETE.md
+│   ├── HOME_DIRECTORY_RULES.md
+│   ├── IMPLEMENTATION_SUMMARY_V2.4.0.md
+│   ├── INTEGRATION_WITH_LLMS_AND_MCP.md
+│   ├── README.md
+│   ├── RESTORATION_ANALYSIS.md
+│   ├── RESTORATION_LOG_2025-10-19.md
+│   ├── START_HERE.md
+│   └── TRAINING_OPTIONS.md
+├── homeassistant
+├── models
+│   └── adapters
+├── scripts
+│   ├── deployment
+│   │   ├── deploy-phase2-push-notifications.sh
+│   │   ├── deploy_v2.3.1.sh
+│   │   └── push_to_github.sh
+│   ├── development
+│   ├── maintenance
+│   │   ├── scripts
+│   │   ├── advanced_cleanup.py
+│   │   ├── aggressive_cleanup.py
+│   │   ├── archive_tagged_files.py
+│   │   ├── comprehensive_cleanup.py
+│   │   ├── daily_consolidation.py
+│   │   ├── export_schema.sh
+│   │   ├── file_tags.json
+│   │   ├── git_history_cleanup.py
+│   │   ├── quarterly_archival.sh
+│   │   ├── setup_file_tagging.sh
+│   │   ├── tag_unused_files.py
+│   │   ├── TASK_SYSTEM_PROGRESS.md

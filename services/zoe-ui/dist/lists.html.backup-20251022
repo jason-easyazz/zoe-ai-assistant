@@ -1,0 +1,2175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>Zoe - Lists v3.4</title>
+    <style>
+        * { 
+            margin: 0; padding: 0; box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh; color: #333;
+            font-size: clamp(14px, 1.6vw, 16px);
+        }
+        
+        /* Navigation - exact copy from dashboard */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        /* Authentication Integration */
+        .user-menu {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .user-menu:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .user-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .user-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        
+        .user-role {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.2;
+        }
+        
+        .user-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 8px 0;
+            min-width: 200px;
+            z-index: 1000;
+            display: none;
+            border: 1px solid #e1e5e9;
+        }
+        
+        .user-dropdown.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 8px 16px;
+            color: #333;
+            text-decoration: none;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .dropdown-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .dropdown-divider {
+            height: 1px;
+            background: #e1e5e9;
+            margin: 4px 0;
+        }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold; position: relative;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+            animation: notificationDotPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 8px rgba(123, 97, 255, 0);
+            }
+        }
+        
+        @keyframes notificationDotPulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.2);
+                opacity: 0.7;
+            }
+        }
+        
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .notifications-title {
+            font-size: 18px; font-weight: 600; color: #333; margin: 0;
+        }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content {
+            padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title {
+            font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px;
+        }
+        .notification-meta {
+            font-size: 12px; color: #666; display: flex; gap: 10px;
+        }
+        .notification-time {
+            color: #7B61FF; font-weight: 500;
+        }
+        .notification-priority {
+            padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600;
+        }
+        .no-notifications {
+            text-align: center; color: #666; font-size: 14px; padding: 40px 20px;
+        }
+        
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.warning::before { background: #ea580c; }
+
+        /* Time/Date Display in Top Right */
+        .time-date-display {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time {
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        .current-date {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.2;
+        }
+
+        /* Main Layout */
+        .main-container { padding: 80px 20px 20px; min-height: 100vh; }
+
+        /* Widget Grid - True Masonry Layout (Pinterest-style) */
+        .widget-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            grid-auto-rows: 10px;
+            gap: 16px;
+            max-width: 100%;
+            margin: 0 auto;
+            width: 100%;
+            padding: 0;
+        }
+        
+        /* Ensure widgets are visible */
+        .widget-grid > * {
+            position: relative;
+            z-index: 1;
+        }
+        
+        /* Edit mode button active state */
+        body.edit-mode .edit-mode-btn {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+            color: white !important;
+        }
+        
+        body.edit-mode .add-widget-btn {
+            opacity: 1 !important;
+            pointer-events: auto !important;
+        }
+
+        /* Widget Base Styles - Auto-sizing for Pinterest Masonry */
+        .widget {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 16px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+            position: relative;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            overflow: hidden;
+            user-select: none;
+            display: flex;
+            flex-direction: column;
+            /* Auto-sizing will be set via JavaScript */
+        }
+
+        .widget:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
+            background: rgba(255, 255, 255, 0.95);
+        }
+
+        .widget.new {
+            animation: widgetAppear 0.5s ease-out;
+        }
+
+        @keyframes widgetAppear {
+            from {
+                opacity: 0;
+                transform: scale(0.8) translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        .widget-controls {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            display: flex;
+            gap: 8px;
+            opacity: 0;
+            transition: all 0.2s ease;
+            pointer-events: none;
+        }
+
+        body.edit-mode .widget-controls {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .widget-control-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.1);
+            color: #333;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .widget-control-btn:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            transform: scale(1.1);
+        }
+
+        .widget-control-btn.delete:hover {
+            background: #ff4757;
+        }
+
+        .widget-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .widget-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .widget-badge {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .widget-content {
+            flex: 1;
+            overflow-y: auto;
+            min-height: 0;
+        }
+
+        body.edit-mode .widget {
+            border: 2px dashed rgba(123, 97, 255, 0.3);
+        }
+
+        body.edit-mode .widget:hover {
+            border-color: rgba(123, 97, 255, 0.6);
+        }
+
+        /* List Header */
+        .list-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .list-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .list-count {
+            background: rgba(123, 97, 255, 0.1);
+            color: #7B61FF;
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-weight: 500;
+        }
+
+        /* List Items Container */
+        .list-items {
+            flex: 1;
+            overflow-y: auto;
+            margin-bottom: 10px;
+        }
+
+        /* When space is tight (e.g., 7" displays), allow a list to flow into two columns */
+        .list-items.two-columns {
+            column-count: 2;
+            column-gap: 12px;
+        }
+        .list-items.two-columns .list-item {
+            break-inside: avoid;
+            -webkit-column-break-inside: avoid;
+            page-break-inside: avoid;
+        }
+
+        .list-header-btn {
+            border: none;
+            background: rgba(255, 255, 255, 0.7);
+            border: 1px solid rgba(0,0,0,0.08);
+            border-radius: 8px;
+            width: 32px; height: 32px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; color: #666; font-size: 14px;
+            transition: all 0.2s ease;
+        }
+        .list-header-btn:hover { background: rgba(255,255,255,0.9); color: #333; }
+        .list-header-btn.danger { color: #dc2626; border-color: rgba(220,38,38,0.2); }
+        .list-header-btn.danger:hover { background: rgba(220,38,38,0.08); }
+
+        /* Reminders-specific styles */
+        .reminders-card {
+            border-left: 4px solid #7B61FF;
+        }
+
+        .reminder-controls {
+            display: flex;
+            gap: 8px;
+        }
+
+        .reminders-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+
+        .reminder-filters {
+            display: flex;
+            gap: 6px;
+            padding: 8px 0;
+            border-top: 1px solid rgba(255, 255, 255, 0.3);
+            margin-top: 8px;
+            flex-wrap: wrap;
+        }
+
+        .filter-btn {
+            padding: 4px 8px;
+            border: none;
+            background: rgba(255, 255, 255, 0.6);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            color: #666;
+        }
+
+        .filter-btn:hover {
+            background: rgba(255, 255, 255, 0.8);
+        }
+
+        .filter-btn.active {
+            background: #7B61FF;
+            color: white;
+        }
+
+        .reminder-draggable {
+            cursor: grab;
+        }
+
+        .reminder-draggable:active {
+            cursor: grabbing;
+        }
+
+        /* Reminder-specific styling within list items */
+        .reminder-time-info {
+            font-size: 11px;
+            color: #666;
+            font-weight: normal;
+        }
+
+        /* Priority-based styling for reminder list items */
+        .list-item.priority-critical {
+            border-left: 3px solid #EF4444;
+            background: rgba(239, 68, 68, 0.05);
+        }
+
+        .list-item.priority-high {
+            border-left: 3px solid #F59E0B;
+            background: rgba(245, 158, 11, 0.05);
+        }
+
+        .list-item.priority-medium {
+            border-left: 3px solid #3B82F6;
+            background: rgba(59, 130, 246, 0.05);
+        }
+
+        .list-item.priority-low {
+            border-left: 3px solid #6B7280;
+            background: rgba(107, 114, 128, 0.05);
+        }
+
+        /* Individual List Item */
+        .list-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            min-height: 40px;
+        }
+
+        .list-item:last-child {
+            border-bottom: none;
+        }
+
+        /* Checkbox */
+        .item-checkbox {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #7B61FF;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            background: white;
+        }
+
+        .item-checkbox.checked {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border-color: transparent;
+        }
+
+        .item-checkbox.checked::after {
+            content: "✓";
+            color: white;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        /* Item Text */
+        .item-text {
+            flex: 1;
+            font-size: 13px;
+            color: #333;
+            transition: all 0.2s ease;
+        }
+
+        .item-text.completed {
+            text-decoration: line-through;
+            opacity: 0.5;
+            color: #666;
+        }
+
+        /* Delete Button */
+        .item-delete {
+            width: 24px;
+            height: 24px;
+            border: none;
+            background: rgba(244, 67, 54, 0.1);
+            color: #f44336;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            opacity: 0;
+        }
+
+        .list-item:hover .item-delete {
+            opacity: 1;
+        }
+
+        .item-delete:active {
+            background: #f44336;
+            color: white;
+            transform: scale(0.9);
+        }
+
+        /* Add Item Input */
+        .add-item-input {
+            width: 100%;
+            border: 1px solid rgba(123, 97, 255, 0.3);
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 13px;
+            background: rgba(255, 255, 255, 0.5);
+            transition: all 0.2s ease;
+            margin-bottom: 8px;
+        }
+
+        .add-item-input:focus {
+            outline: none;
+            border-color: #7B61FF;
+            background: white;
+        }
+
+        /* Complete List Button - bottom right */
+        .complete-list-btn {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            width: 32px;
+            height: 32px;
+            border: 2px solid #7B61FF;
+            border-radius: 50%;
+            background: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            color: #7B61FF;
+        }
+
+        .complete-list-btn:hover {
+            background: rgba(123, 97, 255, 0.1);
+            transform: scale(1.1);
+        }
+
+        .complete-list-btn.completed {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            border-color: transparent;
+        }
+
+        .complete-list-btn.completed::after {
+            content: "✓";
+            font-weight: bold;
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 20px 10px;
+            color: #666;
+            font-size: 12px;
+        }
+
+        /* Floating Action Buttons */
+        .fab-edit-btn {
+            position: fixed;
+            bottom: 32px;
+            right: 32px;
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: none;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            box-shadow: 0 8px 24px rgba(123, 97, 255, 0.4);
+            z-index: 1100;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .fab-edit-btn:hover {
+            transform: scale(1.1);
+            box-shadow: 0 12px 32px rgba(123, 97, 255, 0.6);
+        }
+
+        .fab-edit-btn.active {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            box-shadow: 0 8px 24px rgba(16, 185, 129, 0.4);
+        }
+        
+        .fab-edit-btn.active:hover {
+            box-shadow: 0 12px 32px rgba(16, 185, 129, 0.6);
+        }
+
+        .fab-add-widget {
+            position: fixed;
+            bottom: 32px;
+            right: 108px;
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: none;
+            color: white;
+            font-size: 28px;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+            transition: all 0.3s ease;
+            z-index: 1000;
+            opacity: 0;
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        body.edit-mode .fab-add-widget {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .fab-add-widget:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 16px rgba(123, 97, 255, 0.4);
+        }
+
+        /* Responsive Design for Mobile/Tablet */
+        @media (max-width: 768px) {
+            .main-container {
+                padding: 70px 12px 80px;
+            }
+            
+            .widget-grid {
+                grid-template-columns: 1fr !important;
+                gap: 12px;
+                grid-auto-rows: auto;
+            }
+
+            /* Hide traditional nav menu, show mini-orb for mobile menu */
+            .nav-menu {
+                display: none !important;
+            }
+            
+            .mini-orb {
+                display: flex !important;
+            }
+        }
+        
+        /* Mini-orb stays visible on all screens */
+        @media (min-width: 769px) {
+            /* On desktop, hide mobile nav menu */
+            .mobile-nav-menu, .mobile-nav-overlay {
+                display: none !important;
+            }
+
+            .widget {
+                min-height: auto !important;
+                height: auto !important;
+                max-height: none !important;
+                grid-row-end: auto !important;
+            }
+            
+            .widget-content {
+                max-height: 400px;
+                overflow-y: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+
+            .item-delete {
+                opacity: 1 !important; /* Always visible on touch */
+                width: 32px !important;
+                height: 32px !important;
+                font-size: 16px !important;
+            }
+            
+            .add-item-input {
+                font-size: 16px !important; /* Prevent zoom on iOS */
+                padding: 10px 14px !important;
+            }
+            
+            .item-checkbox {
+                width: 24px !important;
+                height: 24px !important;
+                min-width: 24px !important;
+            }
+            
+            .list-item {
+                padding: 12px 0 !important;
+                min-height: 48px !important;
+            }
+            
+            .edit-mode-btn {
+                width: 32px !important;
+                height: 32px !important;
+                font-size: 14px !important;
+            }
+            
+            .add-widget-btn {
+                bottom: 20px !important;
+                right: 20px !important;
+                width: 48px !important;
+                height: 48px !important;
+                font-size: 24px !important;
+            }
+            
+            .time-date-display {
+                display: none; /* Hide on mobile to save space */
+            }
+        }
+        
+        @media (min-width: 769px) and (max-width: 1024px) {
+            /* Tablet */
+            .widget-grid {
+                grid-template-columns: repeat(2, 1fr) !important;
+            }
+        }
+        
+        @media (min-width: 1025px) and (max-width: 1440px) {
+            /* Small desktop */
+            .widget-grid {
+                grid-template-columns: repeat(3, 1fr) !important;
+            }
+        }
+        
+        @media (min-width: 1441px) {
+            /* Large desktop */
+            .widget-grid {
+                grid-template-columns: repeat(4, 1fr) !important;
+            }
+        }
+
+        /* Single row remains on all heights; items scroll inside their tiles */
+
+        /* More Overlay - from dashboard */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; 
+            -webkit-text-fill-color: transparent; color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+    </style>
+    <script src="js/auth.js"></script>
+        <!-- Zoe Orb Styles -->
+        <style>
+        .zoe-orb {
+            position: fixed; bottom: 24px; right: 24px; width: 70px; height: 70px;
+            border-radius: 50%; cursor: pointer; transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            z-index: 1200; display: flex; align-items: center; justify-content: center;
+            overflow: hidden;
+            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
+            background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 50%, #A855F7 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
+        }
+        .zoe-orb::before {
+            content: ""; position: absolute; top: 50%; left: 50%; width: 20px; height: 20px;
+            background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+            border-radius: 50%; transform: translate(-50%, -50%);
+            animation: orb-inner-glow 2s ease-in-out infinite alternate;
+        }
+        .zoe-orb:hover {
+            transform: scale(1.12);
+            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.5), 0 0 50px rgba(123, 97, 255, 0.3);
+            animation-duration: 8s, 3s;
+        }
+        .zoe-orb:active { transform: scale(0.95); }
+        .zoe-orb.connecting {
+            background: linear-gradient(135deg, #7B61FF 0%, #6366F1 50%, #8B5CF6 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
+        }
+        .zoe-orb.connected {
+            background: linear-gradient(135deg, #7B61FF 0%, #10B981 50%, #34D399 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(16, 185, 129, 0.2);
+        }
+        .zoe-orb.thinking {
+            background: linear-gradient(135deg, #7B61FF 0%, #F59E0B 50%, #FBBF24 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(245, 158, 11, 0.2);
+            animation: orb-thinking-gentle 3s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
+        }
+        .zoe-orb.proactive {
+            background: linear-gradient(135deg, #7B61FF 0%, #EC4899 50%, #F472B6 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(236, 72, 153, 0.2);
+            animation: orb-proactive-gentle 4s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
+        }
+        .zoe-orb.error {
+            background: linear-gradient(135deg, #7B61FF 0%, #EF4444 50%, #F87171 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(239, 68, 68, 0.2);
+            animation: orb-error-shake 0.5s ease-in-out infinite, orb-liquid-swirl 3s ease-in-out infinite;
+        }
+        .zoe-orb.chatting {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 50%, #06B6D4 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.6), 0 0 60px rgba(123, 97, 255, 0.4);
+            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
+        }
+        .zoe-orb.badge::after {
+            content: ""; position: absolute; top: 8px; right: 8px; width: 12px; height: 12px;
+            background: #F59E0B; border-radius: 50%; border: 2px solid white;
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.8);
+            animation: badge-pulse 2s ease-in-out infinite;
+        }
+        @keyframes orb-liquid-swirl {
+            0%, 100% { background-position: 0% 50%; border-radius: 50% 45% 55% 50%; }
+            25% { background-position: 100% 50%; border-radius: 55% 50% 45% 55%; }
+            50% { background-position: 100% 100%; border-radius: 45% 55% 50% 45%; }
+            75% { background-position: 0% 100%; border-radius: 50% 45% 55% 50%; }
+        }
+        @keyframes orb-breathe {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        @keyframes orb-inner-glow {
+            0% { opacity: 0.3; transform: translate(-50%, -50%) scale(1); }
+            100% { opacity: 0.6; transform: translate(-50%, -50%) scale(1.1); }
+        }
+        @keyframes orb-thinking-gentle {
+            0%, 100% { transform: rotate(0deg); }
+            25% { transform: rotate(5deg); }
+            75% { transform: rotate(-5deg); }
+        }
+        @keyframes orb-proactive-gentle {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.08); }
+        }
+        @keyframes orb-error-shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-2px); }
+            75% { transform: translateX(2px); }
+        }
+        @keyframes badge-pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.2); }
+        }
+        
+
+        /* Navigation Bar - Standardized */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400;
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications { animation: notificationPulse 2s ease-in-out infinite; }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        
+        .api-indicator { 
+            font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 8px; 
+            display: flex; align-items: center; gap: 6px; 
+        }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.connecting { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.connecting::before { background: #ea580c; }
+        
+        /* Time/Date Display */
+        .time-date-display {
+            display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time { font-size: 16px; font-weight: 500; color: #333; line-height: 1.2; }
+        .current-date { font-size: 11px; color: #666; line-height: 1.2; }
+
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center; 
+        }
+        .notifications-title { font-size: 18px; font-weight: 600; color: #333; margin: 0; }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content { padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title { font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px; }
+        .notification-meta { font-size: 12px; color: #666; display: flex; gap: 10px; }
+        .notification-time { color: #7B61FF; font-weight: 500; }
+        .no-notifications { text-align: center; color: #666; font-size: 14px; padding: 40px 20px; }
+
+        /* Mobile Navigation Menu */
+        .mobile-nav-menu {
+            position: fixed;
+            top: 0;
+            left: -280px;
+            width: 280px;
+            height: 100vh;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.3);
+            z-index: 2000;
+            transition: left 0.3s ease;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .mobile-nav-menu.open {
+            left: 0;
+        }
+
+        .mobile-nav-header {
+            padding: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .mobile-nav-header h3 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .mobile-nav-close {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(255, 255, 255, 0.3);
+            color: #666;
+            font-size: 24px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+        }
+
+        .mobile-nav-close:active {
+            background: rgba(255, 255, 255, 0.5);
+        }
+
+        .mobile-nav-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+        }
+
+        .mobile-nav-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px;
+            margin: 4px 0;
+            color: #666;
+            text-decoration: none;
+            font-size: 16px;
+            font-weight: 500;
+            border-radius: 12px;
+            transition: all 0.3s ease;
+        }
+
+        .mobile-nav-item:active {
+            background: rgba(123, 97, 255, 0.1);
+            color: #7B61FF;
+        }
+
+        .mobile-nav-item.active {
+            background: rgba(123, 97, 255, 0.15);
+            color: #7B61FF;
+            font-weight: 600;
+        }
+
+        .mobile-nav-item.logout {
+            color: #ff4444;
+        }
+
+        .mobile-nav-divider {
+            height: 1px;
+            background: rgba(255, 255, 255, 0.3);
+            margin: 10px 0;
+        }
+
+        .mobile-nav-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.3);
+            z-index: 1999;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+
+        .mobile-nav-overlay.open {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        /* Only show mobile menu on mobile */
+        @media (min-width: 769px) {
+            .mobile-nav-menu,
+            .mobile-nav-overlay {
+                display: none !important;
+            }
+        }
+
+    </style>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/orb-180.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
+</head>
+<body>
+    <!-- Navigation - exact copy from dashboard -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="toggleMobileMenu()"></div>
+            <div class="nav-menu">
+                <a href="chat.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="lists.html" class="nav-item active">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- Time/Date Display -->
+            <div class="time-date-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+            
+            <!-- Edit Mode Toggle Button -->
+            <button class="edit-mode-btn" id="editModeBtn" onclick="toggleEditMode()" title="Edit Layout" style="background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 8px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666; font-size: 16px;">
+                <span id="editModeIcon">✏️</span>
+            </button>
+            
+            <!-- User Menu (moved to mini-orb click) -->
+            <div class="user-menu" onclick="toggleUserDropdown()" style="display: none;">
+                <div class="user-avatar" id="userAvatar">?</div>
+                
+                <div class="user-dropdown" id="userDropdown">
+                    <a href="#" class="dropdown-item" onclick="showUserProfile()">Profile</a>
+                    <a href="#" class="dropdown-item" onclick="showSecuritySettings()">Security</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" class="dropdown-item" onclick="switchUser()">Switch User</a>
+                    <a href="#" class="dropdown-item" onclick="upgradeSession()" id="upgradeSessionItem" style="display: none;">Upgrade Session</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="admin.html" class="dropdown-item" id="adminLink" style="display: none;">Admin Dashboard</a>
+                    <div class="dropdown-divider" id="adminDivider" style="display: none;"></div>
+                    <a href="#" class="dropdown-item" onclick="logout()">Logout</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Navigation Menu -->
+    <div class="mobile-nav-menu" id="mobileNavMenu">
+        <div class="mobile-nav-header">
+            <h3>Navigation</h3>
+            <button class="mobile-nav-close" onclick="toggleMobileMenu()">✕</button>
+        </div>
+        <div class="mobile-nav-content">
+            <a href="chat.html" class="mobile-nav-item">💬 Chat</a>
+            <a href="dashboard.html" class="mobile-nav-item">📊 Dashboard</a>
+            <a href="lists.html" class="mobile-nav-item active">✅ Lists</a>
+            <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
+            <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
+            <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
+            <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
+            <div class="mobile-nav-divider"></div>
+            <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
+        </div>
+    </div>
+    <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+
+    <!-- Main Container -->
+    <div class="main-container">
+        <div class="widget-grid" id="widgetGrid">
+            <!-- Widgets will be dynamically loaded here -->
+        </div>
+    </div>
+
+    <!-- Add Widget Button (shows in edit mode) -->
+    <button class="add-widget-btn" onclick="openWidgetLibrary()" title="Add Widget" style="position: fixed; bottom: 32px; right: 32px; width: 56px; height: 56px; border-radius: 50%; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); border: none; color: white; font-size: 28px; cursor: pointer; box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3); transition: all 0.3s ease; z-index: 1000; opacity: 0; pointer-events: none; display: flex; align-items: center; justify-content: center;">+</button>
+
+    <!-- Widget Library Overlay -->
+    <div class="widget-library-overlay" id="widgetLibraryOverlay" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(8px); display: none; align-items: center; justify-content: center; z-index: 2000; opacity: 0; transition: all 0.3s ease;">
+        <div class="widget-library" style="background: white; border-radius: 20px; padding: 32px; max-width: 800px; width: 90%; max-height: 80vh; overflow-y: auto; transform: scale(0.8); transition: transform 0.3s ease;">
+            <div class="library-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+                <h2 class="library-title" style="font-size: 24px; font-weight: 600; color: #333;">Add List Widget</h2>
+                <button class="close-library" onclick="closeWidgetLibrary()" style="width: 32px; height: 32px; border: none; border-radius: 50%; background: rgba(0, 0, 0, 0.1); color: #333; cursor: pointer; transition: all 0.2s ease;">×</button>
+            </div>
+            <div class="library-grid" id="widgetLibraryGrid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
+                <!-- Widget library items will be populated here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Create List Modal -->
+    <div id="createListModal" class="more-overlay" onclick="if(event.target.id==='createListModal') closeCreateListModal()">
+        <div class="more-content" style="max-width: 480px;">
+            <div class="more-close" onclick="closeCreateListModal()">×</div>
+            <div class="more-header">
+                <div class="more-title">Create New List</div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:12px;">
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#666; margin-bottom:6px;">Name</label>
+                    <input id="newListName" type="text" placeholder="e.g., Errands" style="width:100%; padding:10px; border:1px solid rgba(123,97,255,0.3); border-radius:8px; background:rgba(255,255,255,0.6);">
+                </div>
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#666; margin-bottom:6px;">Type</label>
+                    <select id="newListType" style="width:100%; padding:10px; border:1px solid rgba(123,97,255,0.3); border-radius:8px; background:rgba(255,255,255,0.6);">
+                        <option value="personal_todos">Personal Todos</option>
+                        <option value="work_todos">Work Todos</option>
+                        <option value="shopping">Shopping</option>
+                        <option value="bucket">Bucket</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="display:block; font-size:12px; font-weight:600; color:#666; margin-bottom:6px;">Category</label>
+                    <select id="newListCategory" style="width:100%; padding:10px; border:1px solid rgba(123,97,255,0.3); border-radius:8px; background:rgba(255,255,255,0.6);">
+                        <option value="personal">Personal</option>
+                        <option value="work">Work</option>
+                    </select>
+                </div>
+                <label style="display:flex; align-items:center; gap:8px; font-size:14px; color:#333;">
+                    <input id="newListIsTask" type="checkbox" style="width:16px; height:16px; accent-color:#7B61FF;">
+                    Show in Calendar as task list
+                </label>
+                <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:8px;">
+                    <button onclick="closeCreateListModal()" style="padding:10px 16px; border:1px solid rgba(123,97,255,0.3); background:white; border-radius:8px; cursor:pointer;">Cancel</button>
+                    <button onclick="createList()" style="padding:10px 16px; border:none; background:linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); color:white; border-radius:8px; cursor:pointer;">Create</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div id="moreOverlay" class="more-overlay" onclick="if(event.target.id==='moreOverlay') closeMoreOverlay()">
+        <div class="more-content">
+            <div class="more-close" onclick="closeMoreOverlay()">×</div>
+            <div class="more-header">
+                <div class="more-title">All Features</div>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Version Check - Force Reload if Old Version Detected -->
+    <script>
+        (function() {
+            const CURRENT_VERSION = '3.5.0';
+            const VERSION_KEY = 'zoe_lists_version';
+            const savedVersion = localStorage.getItem(VERSION_KEY);
+            
+            console.log('🔍 Version check - Current:', CURRENT_VERSION, 'Saved:', savedVersion);
+            
+            // Show version badge on page for debugging
+            setTimeout(() => {
+                const badge = document.createElement('div');
+                badge.textContent = 'v' + CURRENT_VERSION;
+                badge.style.cssText = 'position: fixed; top: 70px; left: 10px; background: rgba(123,97,255,0.8); color: white; padding: 4px 8px; border-radius: 4px; font-size: 10px; z-index: 9999; font-family: monospace;';
+                document.body.appendChild(badge);
+                setTimeout(() => badge.remove(), 5000);
+            }, 100);
+            
+            if (savedVersion && savedVersion !== CURRENT_VERSION) {
+                console.warn('⚠️ Old version detected! Forcing cache clear and reload...');
+                
+                // Clear ALL list-related caches
+                Object.keys(localStorage).forEach(key => {
+                    if (key.includes('zoe_lists') || key.includes('zoe:list')) {
+                        localStorage.removeItem(key);
+                    }
+                });
+                
+                // Update version
+                localStorage.setItem(VERSION_KEY, CURRENT_VERSION);
+                
+                // Force hard reload with cache bypass
+                window.location.href = window.location.href.split('?')[0] + '?v=' + CURRENT_VERSION + '&t=' + Date.now();
+            } else if (!savedVersion) {
+                localStorage.setItem(VERSION_KEY, CURRENT_VERSION);
+            }
+        })();
+    </script>
+    
+    <script src="js/common.js?v=3.4.0"></script>
+    <script src="js/websocket-sync.js?v=3.4.0"></script>
+    
+    <!-- Widget System Scripts -->
+    <script src="js/masonry-grid.js?v=3.4.0"></script>
+    <script src="js/widget-base.js?v=3.4.0"></script>
+    <script src="js/widget-system.js?v=3.4.0"></script>
+    
+    <!-- List Widget Scripts -->
+    <script src="js/widgets/core/shopping.js?v=3.4.0"></script>
+    <script src="js/widgets/core/personal.js?v=3.4.0"></script>
+    <script src="js/widgets/core/work.js?v=3.4.0"></script>
+    <script src="js/widgets/core/bucket.js?v=3.4.0"></script>
+    <script src="js/widgets/core/reminders.js?v=3.4.0"></script>
+    <script src="js/widgets/core/dynamic-list.js?v=3.4.0"></script>
+    
+    <script>
+        // ✅ Widget-Based Lists System - v3.0
+        console.log('🔄 Lists.html v3.0 - Widget System with Masonry Grid (Oct 20, 2025)');
+        
+        // Global State
+        let isEditMode = false;
+        let draggedWidget = null;
+        const WIDGET_STORAGE_KEY = 'zoe_lists_widgets';
+
+        // Time/Date Update Functions
+        function updateTimeDate() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            const timeElement = document.getElementById('currentTime');
+            const dateElement = document.getElementById('currentDate');
+            
+            if (timeElement) timeElement.textContent = timeString;
+            if (dateElement) dateElement.textContent = dateString;
+        }
+
+        // Initialize page with widget system
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('✅ Widget-based Lists page loaded');
+            
+            // Initialize masonry grid
+            const grid = document.getElementById('widgetGrid');
+            if (grid) {
+                MasonryGrid.init(grid);
+            }
+            
+            // Update time/date immediately and every minute
+            updateTimeDate();
+            setInterval(updateTimeDate, 60000);
+            
+            // Initialize WebSocket for real-time sync
+            const session = window.zoeAuth?.getCurrentSession();
+            const userId = session?.user_info?.user_id || session?.user_id || 'default';
+            if (window.ZoeWebSockets) {
+                ZoeWebSockets.init(userId);
+                console.log('✅ Real-time sync enabled via WebSocket');
+            } else {
+                // Fallback to polling if WebSocket fails to load
+                console.warn('⚠️ WebSocket not available, using polling fallback');
+                setInterval(() => {
+                    console.log('🔄 Auto-refreshing widgets (polling)...');
+                    WidgetManager.updateAll();
+                }, 5000);
+            }
+            
+            // Load widget layout
+            loadLayout();
+            
+            // Setup drag and drop after short delay
+            setTimeout(() => {
+                setupDragAndDrop();
+            }, 500);
+        });
+
+        // Widget Management Functions
+        function toggleEditMode() {
+            isEditMode = !isEditMode;
+            document.body.classList.toggle('edit-mode', isEditMode);
+            
+            const editBtn = document.getElementById('editModeBtn');
+            const editIcon = document.getElementById('editModeIcon');
+            
+            if (isEditMode) {
+                editIcon.textContent = '✓';
+                editBtn.title = 'Done Editing';
+            } else {
+                editIcon.textContent = '✏️';
+                editBtn.title = 'Edit Layout';
+                saveLayout();
+            }
+        }
+
+        function cycleWidgetSize(widget) {
+            // Widgets auto-size in masonry grid, no manual sizing needed
+            console.log('Widget sizing is automatic in masonry grid');
+        }
+
+        function removeWidget(widget) {
+            if (confirm('Remove this widget?')) {
+                WidgetManager.removeWidget(widget);
+                saveLayout();
+            }
+        }
+
+        function openWidgetLibrary() {
+            const overlay = document.getElementById('widgetLibraryOverlay');
+            const grid = document.getElementById('widgetLibraryGrid');
+            
+            // Populate widget library
+            const availableWidgets = [
+                { type: 'shopping', icon: '🛒', name: 'Shopping', desc: 'Shopping list with items' },
+                { type: 'personal', icon: '📝', name: 'Personal', desc: 'Personal todos' },
+                { type: 'work', icon: '💼', name: 'Work', desc: 'Work tasks' },
+                { type: 'bucket', icon: '🎯', name: 'Bucket', desc: 'Bucket list goals' },
+                { type: 'reminders', icon: '🔔', name: 'Reminders', desc: 'Time-based reminders' }
+            ];
+            
+            grid.innerHTML = availableWidgets.map(widget => `
+                <div class="library-widget" onclick="addWidget('${widget.type}')" style="background: #f8f9fa; border: 2px solid transparent; border-radius: 12px; padding: 20px; text-align: center; cursor: pointer; transition: all 0.2s ease;">
+                    <div style="font-size: 32px; margin-bottom: 12px;">${widget.icon}</div>
+                    <div style="font-size: 14px; font-weight: 600; color: #333; margin-bottom: 4px;">${widget.name}</div>
+                    <div style="font-size: 12px; color: #666;">${widget.desc}</div>
+                </div>
+            `).join('');
+            
+            overlay.style.display = 'flex';
+            setTimeout(() => overlay.style.opacity = '1', 10);
+        }
+
+        function closeWidgetLibrary() {
+            const overlay = document.getElementById('widgetLibraryOverlay');
+            overlay.style.opacity = '0';
+            setTimeout(() => overlay.style.display = 'none', 300);
+        }
+
+        function addWidget(type) {
+            const grid = document.getElementById('widgetGrid');
+            const widget = WidgetManager.createWidget(type, grid);
+            closeWidgetLibrary();
+            
+            if (widget) {
+                console.log('✅ Widget added, setting up interactions');
+                // Setup drag and drop for new widget
+                setupWidgetInteractions(widget);
+                saveLayout();
+            } else {
+                console.error('❌ Failed to add widget:', type);
+            }
+        }
+
+        // Layout Management
+        async function saveLayout() {
+            const grid = document.getElementById('widgetGrid');
+            const widgets = Array.from(grid.children);
+            const layout = widgets.map((widget, index) => ({
+                type: widget.getAttribute('data-widget-type'),
+                order: index
+            }));
+            
+            console.log('💾 Saving layout:', layout.length, 'widgets');
+            
+            // Save using masonry grid (device-specific)
+            MasonryGrid.saveLayout(layout, 'zoe_lists_widgets');
+            
+            // Try to save to backend
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const deviceId = MasonryGrid.currentDeviceProfile;
+                
+                if (session && session.session_id) {
+                    await apiRequest('/api/user/layout', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Session-ID': session.session_id
+                        },
+                        body: JSON.stringify({
+                            device_id: deviceId,
+                            layout_type: 'lists_page',
+                            layout: layout
+                        })
+                    });
+                    console.log('✅ Layout saved to backend');
+                }
+            } catch (error) {
+                console.warn('⚠️ Backend save failed, using localStorage only:', error);
+            }
+        }
+
+        async function loadLayout() {
+            console.log('📋 Loading widget layout...');
+            
+            // Try device-specific layout first
+            let layout = MasonryGrid.loadLayout('zoe_lists_widgets');
+            
+            // Validate layout - must have at least 4 widgets to be valid
+            if (!layout || layout.length === 0) {
+                console.log('📋 No saved layout found, creating default layout');
+                createDefaultLayout();
+                return;
+            }
+            
+            if (layout.length < 4) {
+                console.warn('⚠️ Saved layout is incomplete (' + layout.length + ' widgets), resetting to default');
+                // Clear saved layout for this device profile
+                try {
+                    const key = MasonryGrid.getStorageKey('zoe_lists_widgets');
+                    localStorage.removeItem(key);
+                } catch (e) {}
+                createDefaultLayout();
+                return;
+            }
+            
+            console.log('✅ Loading saved layout with', layout.length, 'widgets');
+            applyLayout(layout);
+        }
+
+        function createDefaultLayout() {
+            const grid = document.getElementById('widgetGrid');
+            const defaultWidgets = ['shopping', 'personal', 'work', 'bucket', 'reminders'];
+            
+            console.log('📦 Creating default widgets:', defaultWidgets);
+            
+            defaultWidgets.forEach(type => {
+                try {
+                    console.log(`📦 Creating widget: ${type}`);
+                    const widget = WidgetManager.createWidget(type, grid);
+                    if (widget) {
+                        console.log(`✅ Widget ${type} created successfully`);
+                    } else {
+                        console.error(`❌ Widget ${type} failed to create`);
+                    }
+                } catch (error) {
+                    console.error(`❌ Error creating widget ${type}:`, error);
+                }
+            });
+            
+            console.log('📊 Total widgets in grid:', grid.children.length);
+            
+            // Setup drag and drop for default widgets and calculate layout
+            setTimeout(() => {
+                setupDragAndDrop();
+            }, 100);
+            
+            // Recalculate masonry after widgets have loaded their data
+            setTimeout(() => {
+                recalculateMasonryLayout();
+                saveLayout();
+            }, 1000);
+        }
+
+        function applyLayout(layout) {
+            const grid = document.getElementById('widgetGrid');
+            grid.innerHTML = '';
+            
+            layout.forEach(item => {
+                WidgetManager.createWidget(item.type, grid);
+            });
+            
+            // Setup drag and drop for newly created widgets
+            setTimeout(() => {
+                setupDragAndDrop();
+            }, 100);
+            
+            // Recalculate layout after data loads
+            setTimeout(() => {
+                recalculateMasonryLayout();
+            }, 1000);
+        }
+
+        // Recalculate masonry layout
+        function recalculateMasonryLayout() {
+            const grid = document.getElementById('widgetGrid');
+            if (!grid) return;
+            
+            // Skip masonry calculations on mobile - use simple auto layout
+            const isMobile = window.innerWidth <= 768;
+            if (isMobile) {
+                console.log('📱 Mobile detected - using simple auto layout');
+                const widgets = grid.querySelectorAll('.widget');
+                widgets.forEach(widget => {
+                    widget.style.gridRowEnd = 'auto';
+                });
+                return;
+            }
+            
+            const rowHeight = 10;
+            const gap = 16;
+            const widgets = grid.querySelectorAll('.widget');
+            
+            console.log('📐 Recalculating masonry layout for', widgets.length, 'widgets');
+            
+            widgets.forEach((widget, index) => {
+                // Wait for content to fully render
+                setTimeout(() => {
+                    const content = widget.querySelector('.widget-content');
+                    if (!content) {
+                        console.warn('⚠️ No content found for widget', index);
+                        return;
+                    }
+                    
+                    // Force browser to calculate actual dimensions
+                    const widgetHeight = widget.offsetHeight;
+                    
+                    // Calculate row span based on actual rendered height
+                    const rowSpan = Math.ceil((widgetHeight + gap) / rowHeight);
+                    widget.style.gridRowEnd = `span ${rowSpan}`;
+                    
+                    console.log(`📏 Widget ${index} (${widget.getAttribute('data-widget-type')}): ${widgetHeight}px = span ${rowSpan} rows`);
+                }, 100 + (index * 20)); // Stagger calculations
+            });
+        }
+        
+        // Expose to window for manual debugging
+        window.recalculateMasonryLayout = recalculateMasonryLayout;
+
+        // Drag and Drop Handlers
+        function setupDragAndDrop() {
+            const widgets = document.querySelectorAll('.widget');
+            const grid = document.getElementById('widgetGrid');
+
+            widgets.forEach(widget => {
+                setupWidgetInteractions(widget);
+            });
+
+            grid.addEventListener('dragover', handleDragOver);
+            grid.addEventListener('dragenter', handleDragEnter);
+            grid.addEventListener('dragleave', handleDragLeave);
+            grid.addEventListener('drop', handleDrop);
+            
+            console.log('🎯 Drag and drop setup complete');
+        }
+
+        function setupWidgetInteractions(element) {
+            element.draggable = true;
+            element.addEventListener('dragstart', handleDragStart);
+            element.addEventListener('dragend', handleDragEnd);
+        }
+
+        function handleDragStart(e) {
+            if (!isEditMode) {
+                e.preventDefault();
+                return;
+            }
+            draggedWidget = this;
+            this.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+        }
+
+        function handleDragEnd(e) {
+            this.classList.remove('dragging');
+            document.querySelectorAll('.widget').forEach(w => w.classList.remove('drag-over'));
+            draggedWidget = null;
+            saveLayout();
+            // Recalculate layout after drag
+            setTimeout(() => recalculateMasonryLayout(), 100);
+        }
+
+        function handleDragOver(e) {
+            if (e.preventDefault) e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            return false;
+        }
+
+        function handleDragEnter(e) {
+            const widget = e.target.closest('.widget');
+            if (widget && widget !== draggedWidget && isEditMode) {
+                widget.classList.add('drag-over');
+            }
+        }
+
+        function handleDragLeave(e) {
+            const widget = e.target.closest('.widget');
+            if (widget && !widget.contains(e.relatedTarget)) {
+                widget.classList.remove('drag-over');
+            }
+        }
+
+        function handleDrop(e) {
+            if (e.stopPropagation) e.stopPropagation();
+
+            const targetWidget = e.target.closest('.widget');
+            const grid = document.getElementById('widgetGrid');
+            
+            if (!draggedWidget || !isEditMode) return false;
+
+            if (targetWidget && targetWidget !== draggedWidget) {
+                const allWidgets = Array.from(grid.children);
+                const draggedIndex = allWidgets.indexOf(draggedWidget);
+                const targetIndex = allWidgets.indexOf(targetWidget);
+                
+                if (draggedIndex < targetIndex) {
+                    grid.insertBefore(draggedWidget, targetWidget.nextSibling);
+                } else {
+                    grid.insertBefore(draggedWidget, targetWidget);
+                }
+            }
+            
+            document.querySelectorAll('.widget').forEach(w => w.classList.remove('drag-over'));
+            return false;
+        }
+
+        // More overlay functions
+        function openMoreOverlay() {
+            document.getElementById('moreOverlay').classList.add('active');
+        }
+
+        function closeMoreOverlay() {
+            document.getElementById('moreOverlay').classList.remove('active');
+        }
+
+        function navigateToPage(url) {
+            window.location.href = url;
+        }
+
+        // Create List Modal Functions
+        function openCreateListModal() {
+            document.getElementById('createListModal').classList.add('active');
+            setTimeout(() => document.getElementById('newListName').focus(), 50);
+        }
+        
+        function closeCreateListModal() {
+            document.getElementById('createListModal').classList.remove('active');
+        }
+        
+        async function createList() {
+            const name = (document.getElementById('newListName').value || '').trim();
+            const type = document.getElementById('newListType').value;
+            const category = document.getElementById('newListCategory').value;
+            const isTask = document.getElementById('newListIsTask').checked;
+            
+            if (!name) { 
+                alert('Please enter a list name'); 
+                return; 
+            }
+            
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                
+                console.log('📋 Creating new list for user:', userId);
+                
+                await apiRequest(`/lists/${type}?user_id=${userId}`, {
+                    method: 'POST',
+                    headers: session ? { 'X-Session-ID': session.session_id } : {},
+                    body: JSON.stringify({
+                        list_type: type,
+                        name,
+                        category,
+                        is_task_list: isTask
+                    })
+                });
+                
+                closeCreateListModal();
+                
+                // Create a dynamic-list widget for the new list
+                // For now, just reload the page to show it
+                showNotification('List created! Reload the page to see it.', 'success');
+                
+            } catch (e) {
+                console.error('Failed to create list', e);
+                showNotification('Failed to create list', 'error');
+            }
+        }
+
+        // Lightweight GET cache
+        const __listsApiGetCache = new Map();
+        const __listsApiInFlight = new Map();
+        function apiGetCached(path, ttlMs = 30000) {
+            const key = path;
+            const now = Date.now();
+            const cached = __listsApiGetCache.get(key);
+            if (cached && (now - cached.timestamp) < cached.ttl) {
+                return Promise.resolve(cached.data);
+            }
+            if (__listsApiInFlight.has(key)) {
+                return __listsApiInFlight.get(key);
+            }
+            const p = apiRequest(path)
+                .then(data => {
+                    __listsApiGetCache.set(key, { timestamp: Date.now(), ttl: ttlMs, data });
+                    __listsApiInFlight.delete(key);
+                    return data;
+                })
+                .catch(err => {
+                    __listsApiInFlight.delete(key);
+                    throw err;
+                });
+            __listsApiInFlight.set(key, p);
+            return p;
+        }
+
+        // Notifications system
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+            
+            // Clear notification indicator when panel is opened
+            const notificationBtn = document.querySelector('.notifications-btn');
+            notificationBtn.classList.remove('has-notifications');
+        }
+
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+
+        // Mobile menu toggle (desktop: go to dashboard, mobile: open menu)
+        function toggleMobileMenu() {
+            if (window.innerWidth > 768) {
+                // Desktop: navigate to dashboard
+                window.location.href = 'dashboard.html';
+            } else {
+                // Mobile: toggle menu
+                const menu = document.getElementById('mobileNavMenu');
+                const overlay = document.getElementById('mobileNavOverlay');
+                
+                if (menu && overlay) {
+                    menu.classList.toggle('open');
+                    overlay.classList.toggle('open');
+                }
+            }
+        }
+
+        function handleLogout() {
+            if (window.innerWidth <= 768) {
+                // On mobile, close menu first if open
+                toggleMobileMenu();
+            }
+            // Then logout
+            logout();
+        }
+
+        async function loadNotifications() {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const response = await apiRequest('/reminders/notifications/pending', {
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                const notifications = response.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            // Update notification button indicator
+            if (notifications.length > 0) {
+                notificationBtn.classList.add('has-notifications');
+            } else {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
+                     onclick="handleNotificationClick(${notification.id})">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${new Date(notification.created_at).toLocaleTimeString()}</span>
+                        ${notification.priority ? `<span class="notification-priority" style="background: ${getPriorityColor(notification.priority)}; color: white;">${notification.priority}</span>` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function getPriorityColor(priority) {
+            switch(priority.toLowerCase()) {
+                case 'high': return '#ef4444';
+                case 'medium': return '#f59e0b';
+                case 'low': return '#10b981';
+                default: return '#6b7280';
+            }
+        }
+
+        function handleNotificationClick(notificationId) {
+            // Mark notification as acknowledged
+            acknowledgeNotification(notificationId);
+            closeNotifications();
+        }
+
+        async function acknowledgeNotification(notificationId) {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
+                    method: 'POST',
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                // Reload notifications
+                loadNotifications();
+            } catch (error) {
+                console.error('Failed to acknowledge notification:', error);
+            }
+        }
+
+        // User menu functions
+        function toggleUserDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+
+        function showUserProfile() {
+            // Implement user profile modal
+            alert('User profile coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        function showSecuritySettings() {
+            // Implement security settings
+            alert('Security settings coming soon!');
+            document.getElementById('userDropdown').classList.remove('show');
+        }
+
+        // Authentication functions now handled by auth.js
+        // Removed duplicate logout/switchUser/upgradeSession functions
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const userMenu = document.querySelector('.user-menu');
+            const dropdown = document.getElementById('userDropdown');
+            
+            if (userMenu && !userMenu.contains(event.target)) {
+                dropdown.classList.remove('show');
+            }
+        });
+
+        // Load notifications on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadNotifications();
+        });
+    </script>
+    
+    <!-- Load Zoe Orb Component -->
+    <script>
+        // Load the JavaScript first
+        const orbScript = document.createElement('script');
+        orbScript.src = '/js/zoe-orb.js';
+        orbScript.onload = function() {
+            // Then load the HTML component
+            fetch('/components/zoe-orb-complete.html')
+                .then(r => r.text())
+                .then(html => {
+                    const div = document.createElement('div');
+                    div.innerHTML = html;
+                    // Remove the script tag from the HTML (we already loaded it)
+                    const scripts = div.querySelectorAll('script');
+                    scripts.forEach(s => s.remove());
+                    // Append all elements
+                    while (div.firstChild) {
+                        document.body.appendChild(div.firstChild);
+                    }
+                    // Initialize
+                    if (typeof initOrbChat === 'function') {
+                        initOrbChat();
+                    }
+                })
+                .catch(err => console.error('Failed to load Zoe orb:', err));
+        };
+        document.head.appendChild(orbScript);
+    </script>
+</body>
+</html>

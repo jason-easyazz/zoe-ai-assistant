@@ -1,0 +1,3021 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe AI Dashboard</title>
+    
+    <!-- Gridstack.js - Professional Dashboard Grid System (Local for Offline Support) -->
+    <link rel="stylesheet" href="lib/gridstack/gridstack.min.css" />
+    <link rel="stylesheet" href="lib/gridstack/gridstack-extra.min.css" />
+    
+    <style>
+        /* Desktop Widget System Variables */
+        :root {
+            /* Zoe Brand Colors */
+            --primary-gradient: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            --secondary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            
+            /* Desktop-specific sizing */
+            --widget-radius: 16px;
+            --widget-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+            --widget-shadow-hover: 0 12px 40px rgba(0, 0, 0, 0.18);
+            --grid-gap: 24px;
+            --widget-min-width: 320px;
+            --widget-min-height: 240px;
+            
+            /* Desktop touch targets */
+            --touch-target: 44px;
+            --touch-large: 56px;
+            
+            /* Theme colors */
+            --background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            --surface: rgba(255, 255, 255, 0.9);
+            --surface-hover: rgba(255, 255, 255, 0.95);
+            --text-primary: #333;
+            --text-secondary: #666;
+            --border: rgba(255, 255, 255, 0.3);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: var(--background);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        /* Navigation */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold; position: relative;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+            animation: notificationDotPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 8px rgba(123, 97, 255, 0);
+            }
+        }
+        
+        @keyframes notificationDotPulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.2);
+                opacity: 0.7;
+            }
+        }
+        
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .notifications-title {
+            font-size: 18px; font-weight: 600; color: #333; margin: 0;
+        }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content {
+            padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title {
+            font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px;
+        }
+        .notification-meta {
+            font-size: 12px; color: #666; display: flex; gap: 10px;
+        }
+        .notification-time {
+            color: #7B61FF; font-weight: 500;
+        }
+        .notification-priority {
+            padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600;
+        }
+        .no-notifications {
+            text-align: center; color: #666; font-size: 14px; padding: 40px 20px;
+        }
+        
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.warning::before { background: #ea580c; }
+
+        /* Time/Date Display in Top Right */
+        .time-date-display {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time {
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        .current-date {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.2;
+        }
+
+        /* Floating Action Button for Edit Mode */
+        .fab-edit-btn {
+            position: fixed;
+            bottom: 32px;
+            right: 32px;
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: none;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            box-shadow: 0 8px 24px rgba(123, 97, 255, 0.4);
+            z-index: 1100;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .fab-edit-btn:hover {
+            transform: scale(1.1);
+            box-shadow: 0 12px 32px rgba(123, 97, 255, 0.6);
+        }
+
+        .fab-edit-btn.active {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            box-shadow: 0 8px 24px rgba(16, 185, 129, 0.4);
+        }
+        
+        .fab-edit-btn.active:hover {
+            box-shadow: 0 12px 32px rgba(16, 185, 129, 0.6);
+        }
+
+        /* Main Container */
+        .main-container {
+            padding: 60px 8px 10px;
+            min-height: 100vh;
+        }
+
+        /* Widget Grid - CSS Grid Layout (default) */
+        #widgetGrid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            grid-auto-rows: 80px;
+            gap: 16px;
+            background: transparent;
+            margin: 0 auto;
+            padding: 8px;
+            max-width: 100%;
+        }
+
+        /* When Gridstack is active, it takes over */
+        #widgetGrid.grid-stack {
+            display: block !important;
+        }
+
+        .grid-stack-item {
+            transition: all 0.3s ease !important;
+        }
+
+        .grid-stack-item-content {
+            overflow: visible !important;
+            inset: 8px !important;
+        }
+
+        /* Hide Gridstack's default resize handle */
+        .ui-resizable-handle {
+            display: none !important;
+        }
+
+        /* Gridstack drag helper */
+        .grid-stack-item.ui-draggable-dragging {
+            opacity: 0.8;
+            z-index: 1000;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            transform: scale(1.02);
+        }
+
+        /* Fast, smooth transitions */
+        .grid-stack-item:not(.ui-draggable-dragging) {
+            transition: transform 0.2s ease, opacity 0.2s ease;
+            will-change: transform;
+        }
+
+        /* Widget inside grid-stack-item */
+        .grid-stack-item-content .widget {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+        }
+
+        /* Laptop/Desktop - 3 widgets across (most common) */
+        @media (min-width: 1024px) and (max-width: 1599px) {
+            .widget-grid {
+                grid-template-columns: repeat(9, 1fr);
+                gap: 10px;
+            }
+        }
+
+        /* Smaller laptop - 2 widgets across */
+        @media (min-width: 768px) and (max-width: 1023px) {
+            .widget-grid {
+                grid-template-columns: repeat(6, 1fr);
+                gap: 10px;
+            }
+        }
+
+        /* Tablet - 1-2 widgets */
+        @media (max-width: 767px) {
+            .widget-grid {
+                grid-template-columns: repeat(4, 1fr);
+                gap: 8px;
+            }
+        }
+
+        /* Mobile - 1 widget */
+        @media (max-width: 480px) {
+            .widget-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 6px;
+            }
+        }
+
+        /* Widget Base Styles */
+        .widget {
+            background: var(--surface);
+            border-radius: var(--widget-radius);
+            padding: 24px;
+            box-shadow: var(--widget-shadow);
+            position: relative;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            overflow: hidden; /* Prevent scrollbars interfering with buttons */
+            display: flex;
+            flex-direction: column;
+        }
+
+        .widget:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--widget-shadow-hover);
+            background: var(--surface-hover);
+        }
+
+        /* Widget Controls (Edit Mode) */
+        .widget-controls {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            display: flex;
+            gap: 8px;
+            opacity: 0;
+            transition: all 0.2s ease;
+            pointer-events: none;
+        }
+
+        body.edit-mode .widget-controls {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .widget-control-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--text-primary);
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .widget-control-btn:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: scale(1.1);
+        }
+
+        .widget-control-btn.delete:hover {
+            background: #ff4757;
+        }
+
+        /* Drag Handle - Left Side to Avoid Controls */
+        /* Drag Handle - Center grab area */
+        .widget-drag-handle {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 48px;
+            height: 48px;
+            cursor: move;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, rgba(123, 97, 255, 0.95) 0%, rgba(90, 224, 224, 0.95) 100%);
+            border-radius: 50%;
+            z-index: 15;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 16px rgba(123, 97, 255, 0.4);
+        }
+
+        body.edit-mode .widget-drag-handle {
+            display: flex;
+        }
+
+        .widget-drag-handle:hover {
+            transform: translate(-50%, -50%) scale(1.15);
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.6);
+        }
+
+        .widget-drag-handle::before {
+            content: '✥';
+            color: white;
+            font-size: 28px;
+            font-weight: bold;
+        }
+
+        /* Resize Buttons - Plus/Minus on edges */
+        .widget-resize-btn {
+            position: absolute;
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: 2px solid white;
+            border-radius: 50%;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 20px;
+            font-weight: bold;
+            line-height: 1;
+            z-index: 20;
+            cursor: pointer;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+            transition: all 0.2s ease;
+            user-select: none;
+        }
+
+        body.edit-mode .widget-resize-btn {
+            display: flex;
+        }
+
+        .widget-resize-btn:hover {
+            transform: scale(1.25);
+            box-shadow: 0 5px 15px rgba(123, 97, 255, 0.6);
+        }
+
+        .widget-resize-btn:active {
+            transform: scale(1.1);
+        }
+
+        /* Width controls - right edge */
+        .widget-resize-btn.resize-width-plus {
+            right: -16px;
+            top: calc(50% - 24px);
+        }
+
+        .widget-resize-btn.resize-width-minus {
+            right: -16px;
+            top: calc(50% + 24px);
+        }
+
+        /* Height controls - bottom edge */
+        .widget-resize-btn.resize-height-plus {
+            bottom: -16px;
+            left: calc(50% - 24px);
+        }
+
+        .widget-resize-btn.resize-height-minus {
+            bottom: -16px;
+            left: calc(50% + 24px);
+        }
+
+        /* Drag Placeholder */
+        .widget-placeholder {
+            background: repeating-linear-gradient(
+                45deg,
+                rgba(123, 97, 255, 0.1),
+                rgba(123, 97, 255, 0.1) 10px,
+                rgba(90, 224, 224, 0.1) 10px,
+                rgba(90, 224, 224, 0.1) 20px
+            );
+            border: 2px dashed #7B61FF;
+            border-radius: 16px;
+            pointer-events: none;
+        }
+
+        .widget.dragging {
+            opacity: 0.5;
+            z-index: 1000;
+        }
+
+        /* Widget Sizes - 12 Column Grid System */
+        .widget.size-small { 
+            grid-column: span 3;  /* 1/4 width (3 of 12 columns) */
+            grid-row: span 3;     /* 240px (3 * 80px) */
+        }
+        .widget.size-medium { 
+            grid-column: span 3;  /* 1/4 width */
+            grid-row: span 6;     /* 480px (6 * 80px) */
+        }
+        .widget.size-large { 
+            grid-column: span 6;  /* 1/2 width (6 of 12 columns) */
+            grid-row: span 3;     /* 240px */
+        }
+        .widget.size-xlarge { 
+            grid-column: span 6;  /* 1/2 width */
+            grid-row: span 6;     /* 480px */
+        }
+        
+        /* Responsive adjustments */
+        @media (max-width: 1200px) {
+            .widget.size-small, .widget.size-medium { 
+                grid-column: span 4;  /* Adjust for 8-column grid */
+            }
+            .widget.size-large, .widget.size-xlarge { 
+                grid-column: span 8;  /* Full width on tablet */
+            }
+        }
+        
+        @media (max-width: 900px) {
+            .widget.size-small, .widget.size-medium { 
+                grid-column: span 4;  /* Full width on mobile */
+            }
+            .widget.size-large, .widget.size-xlarge { 
+                grid-column: span 4;
+            }
+        }
+
+        /* List Widget Dynamic Column Layouts */
+        .widget[data-widget-type*="list"] .widget-content,
+        .widget[data-widget-type*="tasks"] .widget-content,
+        .widget[data-widget-type*="shopping"] .widget-content {
+            display: grid;
+            gap: 8px;
+            /* grid-template-columns set by updateListWidgetColumns() */
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        /* List items should respect grid */
+        .widget[data-widget-type*="list"] .widget-content > *,
+        .widget[data-widget-type*="tasks"] .widget-content > *,
+        .widget[data-widget-type*="shopping"] .widget-content > * {
+            min-width: 0;
+            max-width: 100%;
+            box-sizing: border-box;
+        }
+
+        /* Widget Headers */
+        .widget-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+
+        .widget-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .widget-badge {
+            background: var(--primary-gradient);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* Widget Content */
+        .widget-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            overflow-x: hidden;
+            width: 100%;
+        }
+        
+        /* Widget Content Areas */
+        #eventsContent, #tasksContent {
+            display: flex;
+            flex-direction: column;
+            padding: 8px;
+            overflow-y: auto;
+            max-height: 200px;
+            min-height: auto;
+        }
+        
+        /* Remove loading widget styles when content is loaded */
+        #eventsContent:not(.loading-widget), #tasksContent:not(.loading-widget) {
+            align-items: stretch;
+            justify-content: flex-start;
+        }
+        
+        /* Calendar Event Items */
+        .calendar-event-item {
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .calendar-event-item:hover {
+            transform: translateX(4px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+        
+        .calendar-event-item.work {
+            background: rgba(59, 130, 246, 0.15);
+            border-left-color: #2563eb !important;
+            color: #1e40af;
+        }
+        
+        .calendar-event-item.personal {
+            background: rgba(147, 51, 234, 0.15);
+            border-left-color: #9333ea !important;
+            color: #7e22ce;
+        }
+        
+        .calendar-event-item.bucket {
+            background: rgba(16, 185, 129, 0.15);
+            border-left-color: #059669 !important;
+            color: #047857;
+        }
+        
+        .calendar-event-item.shopping {
+            background: rgba(251, 146, 60, 0.15);
+            border-left-color: #ea580c !important;
+            color: #c2410c;
+        }
+        
+        .calendar-event-item.health {
+            background: rgba(236, 72, 153, 0.15);
+            border-left-color: #be185d !important;
+            color: #9d174d;
+        }
+        
+        .calendar-event-item.routine {
+            background: rgba(107, 114, 128, 0.15);
+            border-left-color: #374151 !important;
+            color: #1f2937;
+        }
+        
+        .calendar-event-item.social {
+            background: rgba(34, 197, 94, 0.15);
+            border-left-color: #16a34a !important;
+            color: #15803d;
+        }
+        
+        .calendar-event-item.family {
+            background: rgba(168, 85, 247, 0.15);
+            border-left-color: #9333ea !important;
+            color: #7c3aed;
+        }
+        
+        /* Weather Widget - Responsive Purple Gradient Design */
+        .widget[data-widget-type="weather"] {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .widget[data-widget-type="weather"]::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, rgba(123, 97, 255, 0.1) 0%, rgba(90, 224, 224, 0.1) 100%);
+            pointer-events: none;
+        }
+
+        .widget[data-widget-type="weather"] .widget-header,
+        .widget[data-widget-type="weather"] .widget-content {
+            position: relative;
+            z-index: 1;
+        }
+
+        .widget[data-widget-type="weather"] .widget-title {
+            color: white;
+        }
+
+        .widget[data-widget-type="weather"] .widget-badge {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+        }
+
+        .widget[data-widget-type="weather"] .widget-content {
+            color: white;
+        }
+
+        .widget[data-widget-type="weather"] .widget-content [style*="color: #666"] {
+            color: rgba(255, 255, 255, 0.8) !important;
+        }
+
+        /* Weather widget - Dynamic backgrounds based on conditions */
+        .widget[data-widget-type="weather"] {
+            transition: background 0.5s ease;
+        }
+
+        /* Sunny/Clear */
+        .widget[data-widget-type="weather"].weather-sunny {
+            background: linear-gradient(135deg, #FFD93D 0%, #FF8A00 100%);
+        }
+
+        /* Cloudy/Overcast */
+        .widget[data-widget-type="weather"].weather-cloudy {
+            background: linear-gradient(135deg, #95A5A6 0%, #5D6D7E 100%);
+        }
+
+        /* Rainy */
+        .widget[data-widget-type="weather"].weather-rainy {
+            background: linear-gradient(135deg, #5DADE2 0%, #2874A6 100%);
+        }
+
+        /* Stormy */
+        .widget[data-widget-type="weather"].weather-stormy {
+            background: linear-gradient(135deg, #566573 0%, #273746 100%);
+        }
+
+        /* Snowy */
+        .widget[data-widget-type="weather"].weather-snowy {
+            background: linear-gradient(135deg, #E8F8F5 0%, #A9CCE3 100%);
+        }
+
+        /* Partly Cloudy */
+        .widget[data-widget-type="weather"].weather-partly-cloudy {
+            background: linear-gradient(135deg, #F8C471 0%, #85C1E9 100%);
+        }
+
+        /* Weather widget text should be white on colored backgrounds */
+        .widget[data-widget-type="weather"].weather-sunny,
+        .widget[data-widget-type="weather"].weather-cloudy,
+        .widget[data-widget-type="weather"].weather-rainy,
+        .widget[data-widget-type="weather"].weather-stormy,
+        .widget[data-widget-type="weather"].weather-partly-cloudy {
+            color: white;
+        }
+
+        .widget[data-widget-type="weather"].weather-snowy {
+            color: #2C3E50;
+        }
+
+        /* Weather widget - No scroll */
+        .widget[data-widget-type="weather"] .widget-content {
+            overflow: hidden !important;
+            text-align: center;
+        }
+
+        /* Weather sizing - hide/show based on widget size */
+        .weather-content .weather-small,
+        .weather-content .weather-medium,
+        .weather-content .weather-large {
+            display: none;
+        }
+
+        /* Small widget (3 cols or less) - Basic info only */
+        .widget[data-widget-type="weather"][style*="span 3"] .weather-small,
+        .widget.size-small[data-widget-type="weather"] .weather-small {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .weather-icon-large {
+            font-size: 64px;
+            margin-bottom: 8px;
+        }
+
+        .weather-temp {
+            font-size: 36px;
+            font-weight: 300;
+            margin-bottom: 4px;
+        }
+
+        .weather-condition {
+            font-size: 16px;
+            opacity: 0.9;
+        }
+
+        /* Medium widget (4-6 cols) - Add details */
+        .widget[data-widget-type="weather"][style*="span 4"] .weather-medium,
+        .widget[data-widget-type="weather"][style*="span 5"] .weather-medium,
+        .widget[data-widget-type="weather"][style*="span 6"] .weather-medium,
+        .widget.size-medium[data-widget-type="weather"] .weather-medium {
+            display: block;
+        }
+
+        .weather-current {
+            margin-bottom: 20px;
+        }
+
+        .weather-details {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .weather-detail-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .detail-icon {
+            font-size: 24px;
+        }
+
+        .detail-label {
+            font-size: 12px;
+            opacity: 0.8;
+        }
+
+        .detail-value {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        /* Large widget (7+ cols) - Show full forecast */
+        .widget[data-widget-type="weather"][style*="span 7"] .weather-large,
+        .widget[data-widget-type="weather"][style*="span 8"] .weather-large,
+        .widget[data-widget-type="weather"][style*="span 9"] .weather-large,
+        .widget[data-widget-type="weather"][style*="span 10"] .weather-large,
+        .widget[data-widget-type="weather"][style*="span 11"] .weather-large,
+        .widget[data-widget-type="weather"][style*="span 12"] .weather-large,
+        .widget.size-large[data-widget-type="weather"] .weather-large,
+        .widget.size-xlarge[data-widget-type="weather"] .weather-large {
+            display: flex;
+            gap: 24px;
+            align-items: flex-start;
+        }
+
+        .weather-main {
+            flex: 1;
+        }
+
+        .weather-details-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-top: 16px;
+            font-size: 14px;
+        }
+
+        .detail-item {
+            opacity: 0.9;
+        }
+
+        .weather-forecast {
+            flex: 1;
+            display: flex;
+            gap: 12px;
+            justify-content: space-around;
+        }
+
+        .forecast-day {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .forecast-day-name {
+            font-size: 12px;
+            opacity: 0.8;
+            font-weight: 600;
+        }
+
+        .forecast-icon {
+            font-size: 32px;
+        }
+
+        .forecast-temps {
+            display: flex;
+            gap: 6px;
+            font-size: 14px;
+        }
+
+        .forecast-high {
+            font-weight: 600;
+        }
+
+        .forecast-low {
+            opacity: 0.7;
+        }
+
+        /* Time Widget - Beautiful Purple Gradient (Touch Dashboard Style) */
+        .widget[data-widget-type="time"] {
+            background: linear-gradient(180deg, #a855f7 0%, #7c3aed 50%, #6d28d9 100%);
+            color: white;
+            position: relative;
+            overflow: hidden;
+            padding: 40px 20px;
+            box-shadow: 0 12px 40px rgba(139, 92, 246, 0.3);
+        }
+
+        .widget[data-widget-type="time"] .widget-controls {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+        }
+
+        .widget[data-widget-type="time"] .widget-control-btn {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+        }
+
+        .widget[data-widget-type="time"] .widget-control-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .time-widget-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            width: 100%;
+            height: 100%;
+        }
+
+        .time-display {
+            font-size: 72px;
+            font-weight: 300;
+            color: white;
+            margin-bottom: 12px;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            line-height: 1;
+            letter-spacing: -2px;
+            font-family: 'DejaVu Sans', 'Liberation Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        .date-display {
+            font-size: 22px;
+            color: rgba(255, 255, 255, 0.95);
+            margin-bottom: 24px;
+            font-weight: 400;
+            opacity: 0.95;
+        }
+
+        .weather-display {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 18px;
+            color: rgba(255, 255, 255, 0.9);
+            font-weight: 400;
+        }
+
+        .weather-icon {
+            font-size: 24px;
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
+        }
+
+        /* Responsive time widget - smaller */
+        .widget[data-widget-type="time"][style*="span 3"] .time-display,
+        .widget[data-widget-type="time"].size-small .time-display {
+            font-size: 48px;
+            margin-bottom: 8px;
+        }
+
+        .widget[data-widget-type="time"][style*="span 3"] .date-display,
+        .widget[data-widget-type="time"].size-small .date-display {
+            font-size: 16px;
+            margin-bottom: 12px;
+        }
+
+        .widget[data-widget-type="time"][style*="span 3"] .weather-display,
+        .widget[data-widget-type="time"].size-small .weather-display {
+            font-size: 14px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        
+        /* Task Items */
+        .task-item {
+            cursor: grab;
+            transition: all 0.3s;
+        }
+        
+        .task-item:hover {
+            transform: translateX(4px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+        
+        .task-item.work {
+            background: rgba(59, 130, 246, 0.15);
+            color: #1e40af;
+        }
+        
+        .task-item.personal {
+            background: rgba(147, 51, 234, 0.15);
+            color: #7e22ce;
+        }
+        
+        .task-item.bucket {
+            background: rgba(16, 185, 129, 0.15);
+            color: #047857;
+        }
+        
+        .task-item.shopping {
+            background: rgba(251, 146, 60, 0.15);
+            color: #c2410c;
+        }
+        
+        .task-item.health {
+            background: rgba(236, 72, 153, 0.15);
+            color: #9d174d;
+        }
+        
+        .task-item.routine {
+            background: rgba(107, 114, 128, 0.15);
+            color: #1f2937;
+        }
+        
+        .task-item.social {
+            background: rgba(34, 197, 94, 0.15);
+            color: #15803d;
+        }
+        
+        .task-item.family {
+            background: rgba(168, 85, 247, 0.15);
+            color: #7c3aed;
+        }
+
+        /* Drag and Drop Styles */
+        .widget.dragging {
+            opacity: 0.5;
+            transform: rotate(5deg);
+            z-index: 1000;
+        }
+
+        .widget.drag-over {
+            border: 2px dashed #7B61FF;
+            background: rgba(123, 97, 255, 0.05);
+        }
+
+        /* Drop Zones */
+        .drop-zone {
+            position: relative;
+        }
+
+        .drop-zone::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            border: 2px dashed rgba(123, 97, 255, 0.3);
+            border-radius: 16px;
+            background: rgba(123, 97, 255, 0.05);
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .drop-zone.drag-over::after {
+            opacity: 1;
+        }
+
+        /* Calendar Pulse Animation */
+        @keyframes calendarPulse {
+            0%, 100% {
+                background-color: rgba(255, 0, 0, 0.1);
+                box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.4);
+            }
+            50% {
+                background-color: rgba(255, 0, 0, 0.2);
+                box-shadow: 0 0 0 10px rgba(255, 0, 0, 0);
+            }
+        }
+
+        .calendar-pulse {
+            animation: calendarPulse 2s ease-in-out infinite;
+        }
+
+        .calendar-pulse .widget {
+            animation: calendarPulse 2s ease-in-out infinite;
+        }
+
+        .widget.new {
+            animation: widgetAppear 0.5s ease-out;
+        }
+
+        @keyframes widgetAppear {
+            from {
+                opacity: 0;
+                transform: scale(0.8) translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        /* Edit Mode Styles */
+        body.edit-mode .widget {
+            border: 2px dashed rgba(123, 97, 255, 0.3);
+        }
+
+        body.edit-mode .widget:hover {
+            border-color: rgba(123, 97, 255, 0.6);
+        }
+
+        body.edit-mode .widget::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(123, 97, 255, 0.05);
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        /* Widget Library Overlay */
+        .widget-library-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(8px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+
+        .widget-library-overlay.active {
+            display: flex;
+            opacity: 1;
+        }
+
+        .widget-library {
+            background: white;
+            border-radius: 20px;
+            padding: 32px;
+            max-width: 800px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            transform: scale(0.8);
+            transition: transform 0.3s ease;
+        }
+
+        .widget-library-overlay.active .widget-library {
+            transform: scale(1);
+        }
+
+        .library-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .library-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .close-library {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .close-library:hover {
+            background: #ff4757;
+            color: white;
+        }
+
+        .library-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .library-widget {
+            background: #f8f9fa;
+            border: 2px solid transparent;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .library-widget:hover {
+            border-color: #7B61FF;
+            background: rgba(123, 97, 255, 0.05);
+            transform: translateY(-2px);
+        }
+
+        .library-widget-icon {
+            font-size: 32px;
+            margin-bottom: 12px;
+            display: block;
+        }
+
+        .library-widget-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .library-widget-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        
+        .library-tab {
+            transition: all 0.2s ease;
+        }
+        
+        .library-tab:hover {
+            color: #7B61FF;
+            background: rgba(123, 97, 255, 0.05);
+        }
+
+        /* Loading States */
+        .loading-widget {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 200px;
+            color: var(--text-secondary);
+        }
+
+        .spinner {
+            width: 24px;
+            height: 24px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #7B61FF;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 12px;
+        }
+
+        @keyframes slideInRight {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        @keyframes slideOutRight {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+        }
+
+        /* Zoe Widget Styles */
+        .zoe-widget {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 200px;
+        }
+
+        .zoe-orb-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+        }
+
+        .zoe-orb {
+            width: clamp(80px, 10vw, 120px);
+            height: clamp(80px, 10vw, 120px);
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            position: relative;
+            cursor: pointer;
+            transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            animation: zoeBreathe 4s ease-in-out infinite;
+            box-shadow: 
+                0 0 60px rgba(123, 97, 255, 0.4),
+                0 0 120px rgba(90, 224, 224, 0.2);
+        }
+
+        .zoe-orb:hover {
+            transform: scale(1.1);
+            box-shadow: 
+                0 0 80px rgba(123, 97, 255, 0.6),
+                0 0 160px rgba(90, 224, 224, 0.3);
+        }
+
+        .zoe-orb.listening {
+            animation: zoeListening 0.5s ease-in-out infinite alternate;
+            background: linear-gradient(135deg, #ff6b6b 0%, #ffa500 100%);
+        }
+
+        .zoe-orb.processing {
+            animation: zoeProcessing 1s ease-in-out infinite;
+            background: linear-gradient(135deg, #4ecdc4 0%, #44a08d 100%);
+        }
+
+        @keyframes zoeBreathe {
+            0%, 100% { 
+                transform: scale(1);
+                filter: brightness(1);
+            }
+            50% { 
+                transform: scale(1.05);
+                filter: brightness(1.1);
+            }
+        }
+
+        @keyframes zoeListening {
+            0% { transform: scale(1); }
+            100% { transform: scale(1.1); }
+        }
+
+        @keyframes zoeProcessing {
+            0%, 100% { transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(180deg) scale(1.05); }
+        }
+
+        .zoe-status {
+            position: absolute;
+            bottom: -30px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: 12px;
+            font-weight: 500;
+            text-align: center;
+            opacity: 0.9;
+            white-space: nowrap;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 900px) {
+            .nav-menu { display: none !important; }
+            .mini-orb { display: flex !important; }
+            .widget-grid { grid-template-columns: 1fr; }
+        }
+        
+        /* Mini-orb visible on all screens */
+        @media (min-width: 901px) {
+            /* Mobile menu hidden on desktop */
+            .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
+        }
+        
+        @media (max-width: 420px) {
+            .main-container { padding: 80px 10px 20px; }
+            .widget-grid { gap: 15px; }
+            .widget.size-large,
+            .widget.size-xlarge {
+                grid-column: span 1;
+            }
+        }
+        
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+
+        /* Mobile Navigation Menu */
+        .mobile-nav-menu {
+            position: fixed; top: 0; left: -280px; width: 280px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.3); z-index: 2000;
+            transition: left 0.3s ease; display: flex; flex-direction: column;
+        }
+        .mobile-nav-menu.open { left: 0; }
+        .mobile-nav-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .mobile-nav-header h3 {
+            margin: 0; font-size: 20px; font-weight: 600; color: #333;
+        }
+        .mobile-nav-close {
+            width: 40px; height: 40px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 24px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: all 0.3s ease;
+        }
+        .mobile-nav-close:active { background: rgba(255, 255, 255, 0.5); }
+        .mobile-nav-content { flex: 1; overflow-y: auto; padding: 10px; }
+        .mobile-nav-item {
+            display: flex; align-items: center; gap: 12px; padding: 16px; margin: 4px 0;
+            color: #666; text-decoration: none; font-size: 16px; font-weight: 500;
+            border-radius: 12px; transition: all 0.3s ease;
+        }
+        .mobile-nav-item:active { background: rgba(123, 97, 255, 0.1); color: #7B61FF; }
+        .mobile-nav-item.active {
+            background: rgba(123, 97, 255, 0.15); color: #7B61FF; font-weight: 600;
+        }
+        .mobile-nav-item.logout { color: #ff4444; }
+        .mobile-nav-divider {
+            height: 1px; background: rgba(255, 255, 255, 0.3); margin: 10px 0;
+        }
+        .mobile-nav-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.3); z-index: 1999; opacity: 0;
+            pointer-events: none; transition: opacity 0.3s ease;
+        }
+        .mobile-nav-overlay.open { opacity: 1; pointer-events: auto; }
+        @media (min-width: 769px) {
+            .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
+        }
+    </style>
+    <script src="js/auth.js"></script>
+    <script>
+        // DEBUG: Log session state immediately
+        console.log('🔍 Dashboard loading - Session check:');
+        console.log('  localStorage.zoe_session:', localStorage.getItem('zoe_session'));
+        try {
+            const session = JSON.parse(localStorage.getItem('zoe_session'));
+            console.log('  Parsed session:', session);
+            if (session?.expires_at) {
+                const expiresAt = new Date(session.expires_at);
+                const now = new Date();
+                console.log('  Expires:', expiresAt.toISOString());
+                console.log('  Now:', now.toISOString());
+                console.log('  Is expired?', now >= expiresAt);
+                console.log('  Minutes until expiry:', Math.round((expiresAt - now) / 60000));
+            }
+        } catch (e) {
+            console.error('  Error parsing session:', e);
+        }
+        console.log('  zoeAuth available?', typeof window.zoeAuth);
+    </script>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
+</head>
+<body>
+    <!-- Navigation -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="toggleMobileMenu()"></div>
+            <div class="nav-menu">
+                <a href="chat.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item active">Dashboard</a>
+                <a href="lists.html" class="nav-item">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- Time/Date Display -->
+            <div class="time-date-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Navigation Menu -->
+    <div class="mobile-nav-menu" id="mobileNavMenu">
+        <div class="mobile-nav-header">
+            <h3>Navigation</h3>
+            <button class="mobile-nav-close" onclick="toggleMobileMenu()">✕</button>
+        </div>
+        <div class="mobile-nav-content">
+            <a href="chat.html" class="mobile-nav-item">💬 Chat</a>
+            <a href="dashboard.html" class="mobile-nav-item active">📊 Dashboard</a>
+            <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
+            <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
+            <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
+            <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
+            <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
+            <div class="mobile-nav-divider"></div>
+            <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
+        </div>
+    </div>
+    <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <div id="widgetGrid">
+            <!-- Widgets will be dynamically loaded here -->
+        </div>
+    </div>
+
+    <!-- Floating Action Button for Edit Mode -->
+    <button class="fab-edit-btn" id="fabEditBtn" onclick="toggleEditMode()" title="Edit Dashboard">
+        <span id="fabEditIcon">✏️</span>
+    </button>
+
+    <!-- Widget Library Overlay -->
+    <div class="widget-library-overlay" id="widgetLibraryOverlay">
+        <div class="widget-library">
+            <div class="library-header">
+                <h2 class="library-title">Add Widget</h2>
+                <button class="close-library" onclick="closeWidgetLibrary()">×</button>
+            </div>
+            
+            <!-- Tabs for Core vs Marketplace -->
+            <div style="display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #ddd;">
+                <button id="coreWidgetsTab" class="library-tab active" onclick="switchLibraryTab('core')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid #7B61FF; font-weight: 500;">Core Widgets</button>
+                <button id="marketplaceTab" class="library-tab" onclick="switchLibraryTab('marketplace')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500;">Marketplace</button>
+                <button id="aiGenerateTab" class="library-tab" onclick="switchLibraryTab('ai')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500;">✨ AI Generate</button>
+            </div>
+            
+            <!-- Core Widgets Grid -->
+            <div id="coreWidgetsGrid" class="library-grid">
+                <!-- Core widget library items will be populated here -->
+            </div>
+            
+            <!-- Marketplace Grid -->
+            <div id="marketplaceGrid" class="library-grid" style="display: none;">
+                <!-- Marketplace widgets will be populated here -->
+            </div>
+            
+            <!-- AI Generate Panel -->
+            <div id="aiGeneratePanel" style="display: none;">
+                <div style="margin-bottom: 16px;">
+                    <h3 style="font-size: 16px; margin-bottom: 8px;">Describe Your Widget</h3>
+                    <textarea id="aiWidgetDescription" placeholder="Example: Create a widget showing my daily step count as a circular progress gauge..." style="width: 100%; min-height: 100px; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; font-family: inherit; resize: vertical;"></textarea>
+                </div>
+                <button onclick="generateWidgetWithAI()" style="width: 100%; padding: 12px; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer;">✨ Generate Widget</button>
+                <div id="aiGenerationStatus" style="margin-top: 16px; padding: 12px; border-radius: 8px; display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/common.js"></script>
+    <script src="js/websocket-sync.js"></script>
+    
+    <!-- Widget System Core -->
+    <script src="js/widget-base.js"></script>
+    <script src="js/widget-system.js"></script>
+    
+    <!-- Core Widgets -->
+    <script src="js/widgets/core/events.js"></script>
+    <script src="js/widgets/core/tasks.js"></script>
+    <script src="js/widgets/core/time.js"></script>
+    <script src="js/widgets/core/weather.js"></script>
+    <script src="js/widgets/core/home.js"></script>
+    <script src="js/widgets/core/system.js"></script>
+    <script src="js/widgets/core/notes.js"></script>
+    <script src="js/widgets/core/zoe-orb.js"></script>
+    
+    <!-- List Widgets -->
+    <script src="js/widgets/core/shopping.js"></script>
+    <script src="js/widgets/core/personal.js"></script>
+    <script src="js/widgets/core/work.js"></script>
+    <script src="js/widgets/core/bucket.js"></script>
+    <script src="js/widgets/core/reminders.js"></script>
+    <script src="js/widgets/core/dynamic-list.js"></script>
+    
+    <script>
+        // Enhanced Widget System Implementation
+        const WIDGET_STORAGE_KEY = 'zoe_desktop_widgets';
+        let isEditMode = false;
+        let draggedWidget = null;
+        let resizeHandle = null;
+        let isResizing = false;
+        let calendarPulseInterval = null;
+        
+        // Helper functions for user session and device ID
+        function getUserSession() {
+            try {
+                const sessionData = localStorage.getItem('zoe.session');
+                return sessionData ? JSON.parse(sessionData) : null;
+            } catch (e) {
+                console.warn('Failed to parse session data:', e);
+                return null;
+            }
+        }
+        
+        function getDeviceId() {
+            let deviceId = localStorage.getItem('zoe.device.id');
+            if (!deviceId) {
+                const screenInfo = `${screen.width}x${screen.height}x${screen.colorDepth}`;
+                const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                const language = navigator.language;
+                const fingerprint = `${screenInfo}-${timezone}-${language}-${Date.now()}`;
+                
+                deviceId = btoa(fingerprint).replace(/[^a-zA-Z0-9]/g, '').substring(0, 32);
+                
+                localStorage.setItem('zoe.device.id', deviceId);
+                console.log('🔑 Generated device ID:', deviceId);
+            }
+            return deviceId;
+        }
+
+        // Global functions
+        function toggleEditMode() {
+            isEditMode = !isEditMode;
+            document.body.classList.toggle('edit-mode', isEditMode);
+            
+            const fabBtn = document.getElementById('fabEditBtn');
+            const fabIcon = document.getElementById('fabEditIcon');
+            
+            if (isEditMode) {
+                fabBtn.classList.add('active');
+                fabIcon.textContent = '✓';
+                fabBtn.title = 'Done Editing';
+                
+                // Initialize Gridstack on first edit
+                if (!gridInitialized) {
+                    console.log('First edit - initializing Gridstack...');
+                    initializeGridstack();
+                }
+                
+                // Enable Gridstack dragging
+                updateGridstackEditMode();
+                setupWidgetInteractions();
+            } else {
+                fabBtn.classList.remove('active');
+                fabIcon.textContent = '✏️';
+                fabBtn.title = 'Edit Dashboard';
+                
+                // Disable Gridstack dragging
+                updateGridstackEditMode();
+                saveLayout();
+            }
+        }
+
+        // Widget Interaction Setup - Industry Standard Pattern
+        let resizeWidget = null;
+        let resizeStartX, resizeStartY, resizeStartColSpan, resizeStartRowSpan;
+
+        function setupWidgetInteractions() {
+            const widgets = document.querySelectorAll('.widget');
+            widgets.forEach(widget => {
+                // Add drag handle if not present (center) - Gridstack will use this as the handle
+                if (!widget.querySelector('.widget-drag-handle')) {
+                    const dragHandle = document.createElement('div');
+                    dragHandle.className = 'widget-drag-handle';
+                    widget.insertBefore(dragHandle, widget.firstChild);
+                    // No event listener needed - Gridstack handles it!
+                }
+                
+                // Add resize buttons if not present
+                if (!widget.querySelector('.widget-resize-btn')) {
+                    // Width Plus
+                    const widthPlus = document.createElement('button');
+                    widthPlus.className = 'widget-resize-btn resize-width-plus';
+                    widthPlus.innerHTML = '+';
+                    widthPlus.title = 'Expand Width';
+                    widget.appendChild(widthPlus);
+                    widthPlus.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        resizeWidgetByButton(widget, 'width', 1);
+                    });
+                    
+                    // Width Minus
+                    const widthMinus = document.createElement('button');
+                    widthMinus.className = 'widget-resize-btn resize-width-minus';
+                    widthMinus.innerHTML = '−';
+                    widthMinus.title = 'Shrink Width';
+                    widget.appendChild(widthMinus);
+                    widthMinus.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        resizeWidgetByButton(widget, 'width', -1);
+                    });
+                    
+                    // Height Plus
+                    const heightPlus = document.createElement('button');
+                    heightPlus.className = 'widget-resize-btn resize-height-plus';
+                    heightPlus.innerHTML = '+';
+                    heightPlus.title = 'Expand Height';
+                    widget.appendChild(heightPlus);
+                    heightPlus.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        resizeWidgetByButton(widget, 'height', 1);
+                    });
+                    
+                    // Height Minus
+                    const heightMinus = document.createElement('button');
+                    heightMinus.className = 'widget-resize-btn resize-height-minus';
+                    heightMinus.innerHTML = '−';
+                    heightMinus.title = 'Shrink Height';
+                    widget.appendChild(heightMinus);
+                    heightMinus.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        resizeWidgetByButton(widget, 'height', -1);
+                    });
+                }
+            });
+        }
+
+        function resizeWidgetByButton(widget, direction, change) {
+            if (!isEditMode || !grid) {
+                console.log('Cannot resize: edit mode:', isEditMode, 'grid:', !!grid);
+                return;
+            }
+            
+            // Find the grid-stack-item that contains this widget
+            const gridItem = widget.closest('.grid-stack-item');
+            if (!gridItem) {
+                console.log('No grid item found for widget');
+                return;
+            }
+            
+            // Get current size from the grid item element
+            const currentW = parseInt(gridItem.getAttribute('gs-w')) || 3;
+            const currentH = parseInt(gridItem.getAttribute('gs-h')) || 3;
+            
+            console.log('Current size:', currentW, 'x', currentH, 'Changing', direction, 'by', change);
+            
+            // Calculate new size
+            let newW = currentW;
+            let newH = currentH;
+            
+            if (direction === 'width') {
+                newW = Math.max(3, Math.min(12, currentW + change));
+            } else if (direction === 'height') {
+                newH = Math.max(2, Math.min(8, currentH + change));
+            }
+            
+            console.log('New size:', newW, 'x', newH);
+            
+            // Update grid item with Gridstack API
+            grid.update(gridItem, {w: newW, h: newH});
+            
+            // Find the actual widget element inside the grid item
+            const actualWidget = gridItem.querySelector('.widget');
+            if (actualWidget) {
+                // Update list columns
+                updateListWidgetColumns(actualWidget);
+                updateWidgetSizeClass(actualWidget);
+            }
+            
+            saveGridstackLayout();
+        }
+
+        function updateWidgetSizeClass(widget) {
+            const colSpan = parseInt(widget.style.gridColumn?.match(/span (\d+)/)?.[1]) || 3;
+            const rowSpan = parseInt(widget.style.gridRow?.match(/span (\d+)/)?.[1]) || 3;
+            
+            // Remove old size classes
+            widget.classList.remove('size-small', 'size-medium', 'size-large', 'size-xlarge');
+            
+            // Add appropriate size class
+            if (colSpan <= 3 && rowSpan <= 3) {
+                widget.classList.add('size-small');
+            } else if (colSpan <= 3 && rowSpan > 3) {
+                widget.classList.add('size-medium');
+            } else if (colSpan > 3 && rowSpan <= 3) {
+                widget.classList.add('size-large');
+            } else {
+                widget.classList.add('size-xlarge');
+            }
+        }
+
+        function startResize(e, widget) {
+            if (!isEditMode) return;
+            e.preventDefault();
+            e.stopPropagation();
+            
+            resizeWidget = widget;
+            resizeStartX = e.clientX;
+            resizeStartY = e.clientY;
+            
+            // Get current grid spans
+            const computed = getComputedStyle(widget);
+            resizeStartColSpan = parseInt(widget.style.gridColumn?.match(/span (\d+)/)?.[1]) || 3;
+            resizeStartRowSpan = parseInt(widget.style.gridRow?.match(/span (\d+)/)?.[1]) || 3;
+            
+            document.addEventListener('mousemove', handleResizeMove);
+            document.addEventListener('mouseup', handleResizeEnd);
+            
+            // Prevent text selection during resize
+            document.body.style.userSelect = 'none';
+        }
+
+        function handleResizeMove(e) {
+            if (!resizeWidget) return;
+            
+            const deltaX = e.clientX - resizeStartX;
+            const deltaY = e.clientY - resizeStartY;
+            
+            // Calculate new spans (approximately 100px per column, 80px per row)
+            const newColSpan = Math.max(3, Math.min(12, resizeStartColSpan + Math.round(deltaX / 100)));
+            const newRowSpan = Math.max(3, Math.min(12, resizeStartRowSpan + Math.round(deltaY / 80)));
+            
+            resizeWidget.style.gridColumn = `span ${newColSpan}`;
+            resizeWidget.style.gridRow = `span ${newRowSpan}`;
+            
+            // Update list columns in real-time
+            updateListWidgetColumns(resizeWidget);
+        }
+
+        function handleResizeEnd(e) {
+            if (!resizeWidget) return;
+            
+            // Update widget size class based on final grid spans
+            const colSpan = parseInt(resizeWidget.style.gridColumn?.match(/span (\d+)/)?.[1]) || 3;
+            const rowSpan = parseInt(resizeWidget.style.gridRow?.match(/span (\d+)/)?.[1]) || 3;
+            
+            // Remove old size classes
+            resizeWidget.classList.remove('size-small', 'size-medium', 'size-large', 'size-xlarge');
+            
+            // Add appropriate size class
+            if (colSpan <= 3 && rowSpan <= 3) {
+                resizeWidget.classList.add('size-small');
+            } else if (colSpan <= 3 && rowSpan > 3) {
+                resizeWidget.classList.add('size-medium');
+            } else if (colSpan > 3 && rowSpan <= 3) {
+                resizeWidget.classList.add('size-large');
+            } else {
+                resizeWidget.classList.add('size-xlarge');
+            }
+            
+            updateListWidgetColumns(resizeWidget);
+            
+            resizeWidget = null;
+            document.removeEventListener('mousemove', handleResizeMove);
+            document.removeEventListener('mouseup', handleResizeEnd);
+            document.body.style.userSelect = '';
+            
+            saveLayout();
+        }
+
+        function updateListWidgetColumns(widget) {
+            const widgetType = widget.getAttribute('data-widget-type');
+            if (!widgetType || (!widgetType.includes('list') && !widgetType.includes('tasks') && !widgetType.includes('shopping'))) {
+                return;
+            }
+            
+            const content = widget.querySelector('.widget-content');
+            if (!content) {
+                console.log('No widget-content found for', widgetType);
+                return;
+            }
+            
+            // Get actual column span from style
+            const gridColumn = widget.style.gridColumn || '';
+            const colSpan = parseInt(gridColumn.match(/span (\d+)/)?.[1]) || 3;
+            
+            console.log(`Updating ${widgetType} columns - colSpan: ${colSpan}`);
+            
+            // Update columns based on width in grid columns
+            // Small widget (3 cols) = 1 column
+            // Medium widget (4-6 cols) = 2 columns  
+            // Large widget (7+ cols) = 3 columns
+            let columns;
+            if (colSpan <= 3) {
+                columns = '1fr';
+            } else if (colSpan <= 6) {
+                columns = 'repeat(2, 1fr)';
+            } else {
+                columns = 'repeat(3, 1fr)';
+            }
+            
+            content.style.gridTemplateColumns = columns;
+            content.style.display = 'grid';
+            console.log(`Set columns to: ${columns}`);
+        }
+
+        // Widget Management Functions
+        function removeWidget(widget) {
+            if (confirm('Remove this widget?')) {
+                WidgetManager.removeWidget(widget);
+                saveLayout();
+            }
+        }
+
+        // Calendar Pulse System
+        function startCalendarPulseCheck() {
+            if (calendarPulseInterval) {
+                clearInterval(calendarPulseInterval);
+            }
+            
+            calendarPulseInterval = setInterval(async () => {
+                try {
+                    const response = await fetch('/api/calendar/events/upcoming');
+                    const data = await response.json();
+                    
+                    if (data.events && data.events.length > 0) {
+                        const now = new Date();
+                        const upcomingEvents = data.events.filter(event => {
+                            const eventTime = new Date(event.start_time || event.start);
+                            const timeDiff = eventTime - now;
+                            return timeDiff > 0 && timeDiff <= 300000; // 5 minutes
+                        });
+                        
+                        if (upcomingEvents.length > 0) {
+                            triggerCalendarPulse(upcomingEvents[0]);
+                        }
+                    }
+                } catch (error) {
+                    console.warn('Failed to check for upcoming events:', error);
+                }
+            }, 30000); // Check every 30 seconds
+        }
+
+        function triggerCalendarPulse(event) {
+            const body = document.body;
+            body.classList.add('calendar-pulse');
+            
+            // Show notification
+            const notification = document.createElement('div');
+            notification.className = 'calendar-notification';
+            notification.innerHTML = `
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <div style="font-size: 24px;">🔔</div>
+                    <div>
+                        <div style="font-weight: 600; font-size: 16px;">Upcoming Event</div>
+                        <div style="font-size: 14px; color: #666;">${event.title || event.name}</div>
+                        <div style="font-size: 12px; color: #999;">${formatEventTime(event.start_time || event.start)}</div>
+                    </div>
+                </div>
+            `;
+            notification.style.cssText = `
+                position: fixed;
+                top: 80px;
+                right: 20px;
+                background: white;
+                border: 1px solid #ddd;
+                border-radius: 12px;
+                padding: 16px;
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+                z-index: 10000;
+                animation: slideInRight 0.3s ease-out;
+            `;
+            
+            document.body.appendChild(notification);
+            
+            // Auto-remove after 10 seconds
+            setTimeout(() => {
+                body.classList.remove('calendar-pulse');
+                if (notification.parentElement) {
+                    notification.style.animation = 'slideOutRight 0.3s ease-in';
+                    setTimeout(() => notification.remove(), 300);
+                }
+            }, 10000);
+        }
+
+        function formatEventTime(timeStr) {
+            const date = new Date(timeStr);
+            const now = new Date();
+            const diff = date - now;
+            const minutes = Math.floor(diff / 60000);
+            
+            if (minutes < 1) return 'Starting now';
+            if (minutes === 1) return 'Starting in 1 minute';
+            return `Starting in ${minutes} minutes`;
+        }
+
+        function openWidgetLibrary() {
+            const overlay = document.getElementById('widgetLibraryOverlay');
+            
+            // Load core widgets
+            loadCoreWidgets();
+            
+            // Show core tab by default
+            switchLibraryTab('core');
+            
+            overlay.classList.add('active');
+        }
+        
+        function loadCoreWidgets() {
+            const grid = document.getElementById('coreWidgetsGrid');
+            
+            // Populate library with available core widgets
+            const availableWidgets = [
+                { type: 'events', icon: '📅', name: 'Events', desc: 'Today\'s calendar events' },
+                { type: 'tasks', icon: '✅', name: 'Tasks', desc: 'Today\'s tasks and todos' },
+                { type: 'home', icon: '🏠', name: 'Home', desc: 'Smart home controls' },
+                { type: 'weather', icon: '🌤️', name: 'Weather', desc: 'Current weather and forecast' },
+                { type: 'time', icon: '🕐', name: 'Clock', desc: 'Current time and date' },
+                { type: 'system', icon: '💻', name: 'System', desc: 'System status and resources' },
+                { type: 'notes', icon: '📝', name: 'Notes', desc: 'Quick notes and reminders' },
+                { type: 'zoe-orb', icon: '🤖', name: 'Zoe AI', desc: 'AI assistant with voice' },
+                { type: 'shopping', icon: '🛒', name: 'Shopping', desc: 'Shopping list with items' },
+                { type: 'personal', icon: '📝', name: 'Personal', desc: 'Personal todo list' },
+                { type: 'work', icon: '💼', name: 'Work', desc: 'Work tasks list' },
+                { type: 'bucket', icon: '🎯', name: 'Bucket List', desc: 'Bucket list goals' },
+                { type: 'reminders', icon: '🔔', name: 'Reminders', desc: 'Time-based reminders' }
+            ];
+            
+            grid.innerHTML = availableWidgets.map(widget => `
+                <div class="library-widget" onclick="addWidget('${widget.type}')">
+                    <div class="library-widget-icon">${widget.icon}</div>
+                    <div class="library-widget-name">${widget.name}</div>
+                    <div class="library-widget-desc">${widget.desc}</div>
+                </div>
+            `).join('');
+        }
+        
+        function switchLibraryTab(tab) {
+            // Update tab styles
+            document.querySelectorAll('.library-tab').forEach(btn => {
+                btn.style.borderBottom = '2px solid transparent';
+                btn.classList.remove('active');
+            });
+            
+            // Hide all grids
+            document.getElementById('coreWidgetsGrid').style.display = 'none';
+            document.getElementById('marketplaceGrid').style.display = 'none';
+            document.getElementById('aiGeneratePanel').style.display = 'none';
+            
+            // Show selected tab
+            if (tab === 'core') {
+                document.getElementById('coreWidgetsTab').style.borderBottom = '2px solid #7B61FF';
+                document.getElementById('coreWidgetsTab').classList.add('active');
+                document.getElementById('coreWidgetsGrid').style.display = 'grid';
+            } else if (tab === 'marketplace') {
+                document.getElementById('marketplaceTab').style.borderBottom = '2px solid #7B61FF';
+                document.getElementById('marketplaceTab').classList.add('active');
+                document.getElementById('marketplaceGrid').style.display = 'grid';
+                loadMarketplaceWidgets();
+            } else if (tab === 'ai') {
+                document.getElementById('aiGenerateTab').style.borderBottom = '2px solid #7B61FF';
+                document.getElementById('aiGenerateTab').classList.add('active');
+                document.getElementById('aiGeneratePanel').style.display = 'block';
+            }
+        }
+        
+        async function loadMarketplaceWidgets() {
+            const grid = document.getElementById('marketplaceGrid');
+            grid.innerHTML = '<div style="text-align: center; padding: 40px; color: #666;">Loading marketplace...</div>';
+            
+            try {
+                const response = await fetch('/api/widgets/marketplace');
+                const data = await response.json();
+                
+                if (data.widgets && data.widgets.length > 0) {
+                    grid.innerHTML = data.widgets.map(widget => `
+                        <div class="library-widget" onclick="installMarketplaceWidget('${widget.id}', '${widget.name}')">
+                            <div class="library-widget-icon">${widget.icon || '🔹'}</div>
+                            <div class="library-widget-name">${widget.display_name}</div>
+                            <div class="library-widget-desc">${widget.description || 'No description'}</div>
+                            <div style="margin-top: 8px; font-size: 11px; color: #999;">
+                                ⭐ ${widget.rating.toFixed(1)} | ⬇ ${widget.downloads}
+                            </div>
+                        </div>
+                    `).join('');
+                } else {
+                    grid.innerHTML = '<div style="text-align: center; padding: 40px; color: #666;">No marketplace widgets yet.<br/>Be the first to create one!</div>';
+                }
+            } catch (error) {
+                console.error('Failed to load marketplace:', error);
+                grid.innerHTML = '<div style="text-align: center; padding: 40px; color: #666;">Failed to load marketplace</div>';
+            }
+        }
+        
+        async function installMarketplaceWidget(widgetId, widgetName) {
+            try {
+                const response = await fetch(`/api/widgets/install/${widgetId}`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    alert(`Widget "${widgetName}" installed! Reload the page to use it.`);
+                    closeWidgetLibrary();
+                } else {
+                    alert('Failed to install widget');
+                }
+            } catch (error) {
+                console.error('Failed to install widget:', error);
+                alert('Failed to install widget');
+            }
+        }
+        
+        async function generateWidgetWithAI() {
+            const description = document.getElementById('aiWidgetDescription').value.trim();
+            const statusDiv = document.getElementById('aiGenerationStatus');
+            
+            if (!description) {
+                alert('Please describe the widget you want to create');
+                return;
+            }
+            
+            statusDiv.style.display = 'block';
+            statusDiv.style.background = 'rgba(123, 97, 255, 0.1)';
+            statusDiv.style.color = '#7B61FF';
+            statusDiv.innerHTML = '✨ Generating widget with AI...';
+            
+            try {
+                const response = await fetch('/api/widgets/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ description })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    statusDiv.style.background = 'rgba(34, 197, 94, 0.1)';
+                    statusDiv.style.color = '#22c55e';
+                    statusDiv.innerHTML = `✅ Widget "${data.widget.display_name}" created successfully!<br/><small>Reload the page to use it.</small>`;
+                    
+                    // Clear input
+                    document.getElementById('aiWidgetDescription').value = '';
+                    
+                    // Auto-close after 3 seconds
+                    setTimeout(() => {
+                        closeWidgetLibrary();
+                    }, 3000);
+                } else {
+                    throw new Error('Generation failed');
+                }
+            } catch (error) {
+                console.error('Failed to generate widget:', error);
+                statusDiv.style.background = 'rgba(239, 68, 68, 0.1)';
+                statusDiv.style.color = '#ef4444';
+                statusDiv.innerHTML = '❌ Failed to generate widget. Please try again.';
+            }
+        }
+
+        function closeWidgetLibrary() {
+            document.getElementById('widgetLibraryOverlay').classList.remove('active');
+        }
+
+        function addWidget(type) {
+            if (!grid) {
+                console.error('Gridstack not initialized yet');
+                return;
+            }
+            
+            // Create a temporary container for the widget
+            const tempContainer = document.createElement('div');
+            const widget = WidgetManager.createWidget(type, tempContainer);
+            
+            if (widget) {
+                // Setup widget interactions
+                setupWidgetInteractions();
+                
+                // Add to Gridstack
+                grid.addWidget({
+                    w: 3,  // Default width
+                    h: 3,  // Default height
+                    content: widget.outerHTML,
+                    autoPosition: true
+                });
+                
+                // Re-setup interactions for the new widget in grid
+                setTimeout(() => {
+                    setupWidgetInteractions();
+                }, 100);
+            }
+            
+            closeWidgetLibrary();
+            saveGridstackLayout();
+        }
+
+        function toggleRoom(room) {
+            const btn = event.target;
+            btn.classList.toggle('on');
+            console.log(`Toggling ${room}`);
+        }
+
+        function addQuickNote() {
+            const title = prompt('Note title:');
+            if (title) {
+                const content = prompt('Note content:');
+                if (content) {
+                    const notesList = document.getElementById('notesList');
+                    const noteDiv = document.createElement('div');
+                    noteDiv.style.cssText = 'padding: 8px; border-bottom: 1px solid rgba(0,0,0,0.1); font-size: 14px;';
+                    noteDiv.innerHTML = `
+                        <div style="font-weight: 600; margin-bottom: 4px;">${title}</div>
+                        <div style="color: #666; font-size: 12px;">${content}</div>
+                    `;
+                    notesList.insertBefore(noteDiv, notesList.firstChild);
+                }
+            }
+        }
+        
+        function openWidgetSettings(widget) {
+            // Widget settings panel - to be implemented
+            alert('Widget settings coming soon!');
+        }
+
+        async function toggleTask(checkbox, taskId) {
+            const isCompleted = checkbox.checked;
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                
+                console.log('📝 Toggling task for user:', userId, 'Task:', taskId);
+                
+                const response = await fetch(`/api/lists/tasks/${taskId}?user_id=${userId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: isCompleted ? 'completed' : 'pending' })
+                });
+                
+                if (!response.ok) {
+                    console.warn('API update failed, updating UI only');
+                }
+                
+                // Refresh the tasks widget
+                const tasksWidget = WidgetManager.findWidgetsByType('tasks')[0];
+                if (tasksWidget) {
+                    const widgetInstance = WidgetManager.getWidget(tasksWidget);
+                    if (widgetInstance && widgetInstance.loadTasks) {
+                        widgetInstance.loadTasks();
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to toggle task:', error);
+                checkbox.checked = !isCompleted;
+            }
+        }
+
+        // Navigation Functions
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('currentTime').textContent = now.toLocaleTimeString([], { 
+                hour: 'numeric', minute: '2-digit', hour12: true 
+            });
+            document.getElementById('currentDate').textContent = now.toLocaleDateString([], { 
+                weekday: 'long', month: 'long', day: 'numeric' 
+            });
+        }
+
+        function handleLogout() {
+            if (confirm('Are you sure you want to logout?')) {
+                window.location.href = 'index.html';
+            }
+        }
+
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+            const notificationBtn = document.querySelector('.notifications-btn');
+            if (notificationBtn) notificationBtn.classList.remove('has-notifications');
+        }
+
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+
+        // Mobile menu toggle (desktop: go home, mobile: open menu)
+        function toggleMobileMenu() {
+            if (window.innerWidth > 768) {
+                // Desktop: navigate to home
+                window.location.href = 'index.html';
+            } else {
+                // Mobile: toggle menu
+                const menu = document.getElementById('mobileNavMenu');
+                const overlay = document.getElementById('mobileNavOverlay');
+                if (menu && overlay) {
+                    menu.classList.toggle('open');
+                    overlay.classList.toggle('open');
+                }
+            }
+        }
+
+        function handleLogout() {
+            if (window.innerWidth <= 768) {
+                toggleMobileMenu();
+            }
+            logout();
+        }
+
+        function openMoreOverlay() {
+            document.getElementById('moreOverlay').classList.add('active');
+        }
+        
+        function closeMoreOverlay() {
+            document.getElementById('moreOverlay').classList.remove('active');
+        }
+        
+        function navigateToPage(page) {
+            window.location.href = page;
+        }
+        
+        async function loadNotifications() {
+            try {
+                const response = await apiRequest('/reminders/notifications/pending');
+                const notifications = response.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+        
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            if (notifications.length > 0 && notificationBtn) {
+                notificationBtn.classList.add('has-notifications');
+            } else if (notificationBtn) {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
+                     onclick="handleNotificationClick(${notification.id})">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${formatNotificationTime(notification.notification_time)}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        function formatNotificationTime(timeStr) {
+            const date = new Date(timeStr);
+            const now = new Date();
+            const diff = now - date;
+            const minutes = Math.floor(diff / 60000);
+            const hours = Math.floor(minutes / 60);
+            const days = Math.floor(hours / 24);
+            
+            if (minutes < 1) return 'Just now';
+            if (minutes < 60) return `${minutes}m ago`;
+            if (hours < 24) return `${hours}h ago`;
+            return `${days}d ago`;
+        }
+        
+        async function handleNotificationClick(notificationId) {
+            try {
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
+                    method: 'POST'
+                });
+                loadNotifications();
+            } catch (error) {
+                console.error('Failed to acknowledge notification:', error);
+            }
+            closeNotifications();
+        }
+        
+        // Update time/date display
+        function updateTimeDate() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            const timeElement = document.getElementById('currentTime');
+            const dateElement = document.getElementById('currentDate');
+            
+            if (timeElement) timeElement.textContent = timeString;
+            if (dateElement) dateElement.textContent = dateString;
+        }
+        
+        // Initialize time/date updates
+        setInterval(updateTimeDate, 60000);
+        updateTimeDate();
+
+        async function saveLayout() {
+            const grid = document.getElementById('widgetGrid');
+            const widgets = Array.from(grid.children).filter(child => child.classList.contains('widget'));
+            const layout = widgets.map((widget, index) => {
+                const widgetType = widget.getAttribute('data-widget-type');
+                const size = Array.from(widget.classList).find(cls => cls.startsWith('size-')) || 'size-small';
+                
+                return {
+                    type: widgetType,
+                    size: size,
+                    order: index,
+                    timestamp: Date.now()
+                };
+            });
+            
+            console.log('💾 Saving layout:', layout.length, 'widgets');
+            
+            // Always save to local storage first
+            localStorage.setItem(WIDGET_STORAGE_KEY, JSON.stringify(layout));
+            console.log('✅ Widget layout saved to localStorage');
+            
+            // Try to save to backend if user is authenticated
+            try {
+                const session = getUserSession();
+                const deviceId = getDeviceId();
+                
+                if (session && session.session_id) {
+                    const response = await fetch('/api/user/layout', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Session-ID': session.session_id
+                        },
+                        body: JSON.stringify({
+                            device_id: deviceId,
+                            layout_type: 'desktop_dashboard',
+                            layout: layout
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        console.log('✅ Widget layout saved to backend');
+                    } else {
+                        console.warn('⚠️ Failed to save layout to backend, using localStorage only');
+                    }
+                } else {
+                    console.log('ℹ️ No session found, using localStorage only');
+                }
+            } catch (error) {
+                console.warn('⚠️ Backend save failed, using localStorage only:', error);
+            }
+        }
+        
+        function resetLayout() {
+            if (confirm('Reset dashboard to default layout? This will remove all customizations.')) {
+                localStorage.removeItem(WIDGET_STORAGE_KEY);
+                location.reload();
+            }
+        }
+        
+        async function loadLayout() {
+            console.log('📋 Loading enhanced widget layout...');
+            
+            // Try to load from backend first if user is authenticated
+            try {
+                const session = getUserSession();
+                const deviceId = getDeviceId();
+                
+                if (session && session.session_id) {
+                    const response = await fetch(`/api/user/layout?device_id=${deviceId}&layout_type=desktop_dashboard`, {
+                        headers: {
+                            'X-Session-ID': session.session_id
+                        }
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.layout && Array.isArray(data.layout)) {
+                            console.log('✅ Loaded', data.layout.length, 'widgets from backend');
+                            applyLayout(data.layout);
+                            return;
+                        }
+                    }
+                } else {
+                    console.log('ℹ️ No session found, trying localStorage');
+                }
+            } catch (error) {
+                console.warn('⚠️ Backend load failed, trying localStorage:', error);
+            }
+            
+            // Fallback to local storage
+            const saved = localStorage.getItem(WIDGET_STORAGE_KEY);
+            if (!saved) {
+                console.log('📋 No saved layout found, creating default layout');
+                createDefaultLayout();
+                return;
+            }
+            
+            try {
+                const layout = JSON.parse(saved);
+                console.log('✅ Loaded', layout.length, 'widgets from localStorage');
+                applyLayout(layout);
+            } catch (e) {
+                console.error('❌ Failed to parse saved layout:', e);
+                createDefaultLayout();
+            }
+        }
+        
+        function createDefaultLayout() {
+            const grid = document.getElementById('widgetGrid');
+            const defaultWidgets = [
+                { type: 'events', size: 'size-small' },
+                { type: 'tasks', size: 'size-small' },
+                { type: 'home', size: 'size-small' },
+                { type: 'weather', size: 'size-small' },
+                { type: 'time', size: 'size-large' }
+            ];
+            
+            defaultWidgets.forEach(widgetConfig => {
+                const widget = WidgetManager.createWidget(widgetConfig.type, grid);
+                if (widget && widgetConfig.size !== 'size-small') {
+                    WidgetManager.resizeWidget(widget, widgetConfig.size);
+                }
+                // Update list widget columns
+                if (widget) {
+                    updateListWidgetColumns(widget);
+                }
+            });
+            
+            // Setup widget interactions for default widgets
+            setTimeout(() => {
+                setupWidgetInteractions();
+                // Update all list widgets after setup
+                document.querySelectorAll('.widget').forEach(w => updateListWidgetColumns(w));
+            }, 100);
+            
+            saveLayout();
+        }
+        
+        function applyLayout(layout) {
+            const grid = document.getElementById('widgetGrid');
+            grid.innerHTML = '';
+            
+            // Sort by order to maintain proper sequence
+            const sortedLayout = layout.sort((a, b) => (a.order || 0) - (b.order || 0));
+            
+            sortedLayout.forEach(item => {
+                const widget = WidgetManager.createWidget(item.type, grid);
+                if (widget) {
+                    // Always apply the size from the layout
+                    const size = item.size || 'size-small';
+                    WidgetManager.resizeWidget(widget, size);
+                    
+                    // Update list widget columns if applicable
+                    updateListWidgetColumns(widget);
+                }
+            });
+            
+            // Setup widget interactions for newly created widgets
+            setTimeout(() => {
+                setupWidgetInteractions();
+                // Update all list widgets after setup
+                document.querySelectorAll('.widget').forEach(w => updateListWidgetColumns(w));
+            }, 100);
+        }
+
+        // Drag and Drop with Placeholder - Industry Standard
+        let placeholder = null;
+
+        function startDrag(e, widget) {
+            if (!isEditMode) return;
+            e.preventDefault();
+            
+            draggedWidget = widget;
+            widget.classList.add('dragging');
+            
+            // Create placeholder
+            placeholder = document.createElement('div');
+            placeholder.className = 'widget widget-placeholder';
+            placeholder.style.gridColumn = widget.style.gridColumn || getComputedStyle(widget).gridColumn;
+            placeholder.style.gridRow = widget.style.gridRow || getComputedStyle(widget).gridRow;
+            
+            const grid = document.getElementById('widgetGrid');
+            grid.insertBefore(placeholder, widget);
+            
+            document.addEventListener('mousemove', handleDragMove);
+            document.addEventListener('mouseup', handleDragEnd);
+            
+            // Prevent text selection
+            document.body.style.userSelect = 'none';
+        }
+
+        function handleDragMove(e) {
+            if (!draggedWidget || !placeholder) return;
+            
+            const grid = document.getElementById('widgetGrid');
+            const widgets = Array.from(grid.children).filter(w => 
+                w.classList.contains('widget') && 
+                !w.classList.contains('widget-placeholder') &&
+                w !== draggedWidget
+            );
+            
+            if (widgets.length === 0) return;
+            
+            const mouseX = e.clientX;
+            const mouseY = e.clientY;
+            
+            let closestWidget = null;
+            let closestDistance = Infinity;
+            let insertBefore = true;
+            
+            // Find the closest widget and determine position
+            for (const widget of widgets) {
+                const rect = widget.getBoundingClientRect();
+                
+                // Check if mouse is over this widget
+                if (mouseX >= rect.left && mouseX <= rect.right &&
+                    mouseY >= rect.top && mouseY <= rect.bottom) {
+                    closestWidget = widget;
+                    insertBefore = mouseY < (rect.top + rect.height / 2);
+                    break;
+                }
+                
+                // Calculate distance to widget center
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
+                const distance = Math.sqrt(Math.pow(mouseX - centerX, 2) + Math.pow(mouseY - centerY, 2));
+                
+                if (distance < closestDistance) {
+                    closestDistance = distance;
+                    closestWidget = widget;
+                    insertBefore = mouseY < centerY;
+                }
+            }
+            
+            // Move placeholder to the determined position
+            if (closestWidget) {
+                if (insertBefore) {
+                    if (placeholder.nextSibling !== closestWidget) {
+                        grid.insertBefore(placeholder, closestWidget);
+                    }
+                } else {
+                    if (placeholder.previousSibling !== closestWidget) {
+                        grid.insertBefore(placeholder, closestWidget.nextSibling);
+                    }
+                }
+            }
+        }
+
+        function handleDragEnd(e) {
+            if (!draggedWidget || !placeholder) return;
+            
+            const grid = document.getElementById('widgetGrid');
+            
+            // Place dragged widget where placeholder is
+            grid.insertBefore(draggedWidget, placeholder);
+            placeholder.remove();
+            
+            draggedWidget.classList.remove('dragging');
+            draggedWidget = null;
+            placeholder = null;
+            
+            document.removeEventListener('mousemove', handleDragMove);
+            document.removeEventListener('mouseup', handleDragEnd);
+            document.body.style.userSelect = '';
+            
+            saveLayout();
+        }
+
+        // Legacy drag and drop removed - now using mouse-based drag system
+
+        function handleTouchStart(e) {
+            // Touch support for mobile devices
+        }
+
+        function handleTouchMove(e) {
+            // Touch support for mobile devices
+        }
+
+        function handleTouchEnd(e) {
+            // Touch support for mobile devices
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            // Update time immediately and then every minute
+            updateTime();
+            setInterval(updateTime, 60000);
+            
+            // Initialize WebSocket for real-time sync
+            const session = window.zoeAuth?.getCurrentSession();
+            const userId = session?.user_info?.user_id || session?.user_id || 'default';
+            if (window.ZoeWebSockets) {
+                ZoeWebSockets.init(userId);
+                console.log('✅ Real-time sync enabled via WebSocket');
+            }
+            
+            // Start calendar pulse monitoring
+            startCalendarPulseCheck();
+            console.log('✅ Calendar pulse monitoring started');
+            
+            // Load widget layout
+            loadLayout();
+            
+            // Setup interactions (but DON'T initialize Gridstack yet)
+            setTimeout(() => {
+                setupWidgetInteractions();
+                console.log('✅ Widgets loaded and interactions ready');
+            }, 500);
+            
+            // Add floating action button for adding widgets in edit mode
+            const addWidgetFab = document.createElement('button');
+            addWidgetFab.innerHTML = '+';
+            addWidgetFab.style.cssText = `
+                position: fixed;
+                bottom: 32px;
+                right: 108px;
+                width: 56px;
+                height: 56px;
+                border-radius: 50%;
+                background: var(--primary-gradient);
+                border: none;
+                color: white;
+                font-size: 28px;
+                cursor: pointer;
+                box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+                transition: all 0.3s ease;
+                z-index: 1000;
+                opacity: 0;
+                pointer-events: none;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            `;
+            
+            addWidgetFab.addEventListener('click', openWidgetLibrary);
+            addWidgetFab.title = 'Add Widget';
+            document.body.appendChild(addWidgetFab);
+            
+            // Show/hide add widget FAB based on edit mode
+            const observer = new MutationObserver(() => {
+                addWidgetFab.style.opacity = isEditMode ? '1' : '0';
+                addWidgetFab.style.pointerEvents = isEditMode ? 'auto' : 'none';
+            });
+            
+            observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+            
+            console.log('✅ Desktop Dashboard with Widget System loaded');
+        });
+    </script>
+
+    <!-- Gridstack.js Library (Local for Offline Support) -->
+    <script src="lib/gridstack/gridstack-all.js"></script>
+
+    <!-- Gridstack Integration -->
+    <script>
+        let grid = null;
+
+        let gridInitialized = false;
+
+        function initializeGridstack() {
+            if (gridInitialized) {
+                console.log('Gridstack already initialized');
+                return;
+            }
+            
+            const gridElement = document.getElementById('widgetGrid');
+            
+            console.log('Initializing Gridstack.js...');
+            
+            // Initialize Gridstack with optimized iPad-like settings
+            grid = GridStack.init({
+                column: 12,
+                cellHeight: 70,
+                margin: 16,
+                float: true,
+                animate: true,
+                draggable: {
+                    handle: '.widget-drag-handle',
+                    scroll: false,
+                    appendTo: 'body',
+                    containment: '.main-container'
+                },
+                resizable: {
+                    handles: 'se',
+                },
+                disableResize: true,  // We use custom buttons
+                removable: false,
+                acceptWidgets: true,
+                alwaysShowResizeHandle: false,
+                staticGrid: true,  // Start disabled - only enable in edit mode
+                minRow: 1
+            }, gridElement);
+
+            gridInitialized = true;
+
+            // Convert existing widgets to Gridstack items
+            const widgets = Array.from(document.querySelectorAll('#widgetGrid > .widget'));
+            console.log('Found', widgets.length, 'widgets to wrap');
+            
+            if (widgets.length > 0) {
+                widgets.forEach((widget) => {
+                    convertToGridstackItem(widget);
+                });
+            }
+
+            // Save layout on change
+            grid.on('change', (event, items) => {
+                if (isEditMode) {
+                    console.log('Layout changed, saving...');
+                    saveGridstackLayout();
+                }
+            });
+
+            console.log('✅ Gridstack.js initialized');
+        }
+
+        function convertToGridstackItem(widget) {
+            if (!grid) {
+                console.error('Grid not initialized');
+                return;
+            }
+            
+            try {
+                // Get current size from classes or style
+                let colSpan = parseInt(widget.style.gridColumn?.match(/span (\d+)/)?.[1]) || 3;
+                let rowSpan = parseInt(widget.style.gridRow?.match(/span (\d+)/)?.[1]) || 3;
+                
+                // Get size from class if style not present
+                if (widget.classList.contains('size-large')) {
+                    colSpan = 6;
+                    rowSpan = 4;
+                } else if (widget.classList.contains('size-xlarge')) {
+                    colSpan = 9;
+                    rowSpan = 5;
+                }
+                
+                // Get widget type for identification
+                const widgetType = widget.getAttribute('data-widget-type') || 'unknown';
+                
+                console.log('Wrapping widget:', widgetType, 'size:', colSpan, 'x', rowSpan);
+                
+                // Wrap the widget in Gridstack structure IN PLACE (don't remove/recreate)
+                const parent = widget.parentElement;
+                
+                // Create grid item wrapper
+                const gridItemDiv = document.createElement('div');
+                gridItemDiv.className = 'grid-stack-item';
+                gridItemDiv.setAttribute('gs-w', colSpan);
+                gridItemDiv.setAttribute('gs-h', rowSpan);
+                gridItemDiv.setAttribute('gs-id', widgetType);
+                gridItemDiv.setAttribute('gs-auto-position', 'true');
+                
+                // Create content wrapper
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'grid-stack-item-content';
+                
+                // Insert grid item before widget
+                parent.insertBefore(gridItemDiv, widget);
+                
+                // Move widget into content div
+                contentDiv.appendChild(widget);
+                gridItemDiv.appendChild(contentDiv);
+                
+                // Make it a Gridstack widget
+                grid.makeWidget(gridItemDiv);
+                
+                console.log('✅ Wrapped widget:', widgetType);
+            } catch (error) {
+                console.error('Error wrapping widget:', error);
+            }
+        }
+
+        function updateGridstackEditMode() {
+            if (!grid) {
+                console.log('Grid not initialized yet');
+                return;
+            }
+            
+            console.log('Updating Gridstack edit mode:', isEditMode ? 'ENABLED' : 'DISABLED');
+            
+            if (isEditMode) {
+                grid.enable();
+                grid.enableMove(true);
+                console.log('✅ Drag enabled - grab the center ✥ to move widgets');
+            } else {
+                grid.disable();
+                grid.enableMove(false);
+                console.log('🔒 Drag disabled - dashboard locked');
+            }
+        }
+
+        // Hook into toggleEditMode
+        document.addEventListener('DOMContentLoaded', () => {
+            // Wait for original toggleEditMode to be defined
+            setTimeout(() => {
+                const originalToggleEditMode = window.toggleEditMode;
+                if (originalToggleEditMode) {
+                    window.toggleEditMode = function() {
+                        originalToggleEditMode();
+                        setTimeout(() => {
+                            updateGridstackEditMode();
+                        }, 50);
+                    };
+                }
+            }, 1000);
+        });
+
+        function saveGridstackLayout() {
+            if (!grid) return;
+            
+            const layout = [];
+            grid.engine.nodes.forEach((node, index) => {
+                const gridItem = node.el;
+                const widget = gridItem.querySelector('.widget');
+                
+                if (widget) {
+                    const widgetType = widget.getAttribute('data-widget-type');
+                    const sizeClass = Array.from(widget.classList).find(c => c.startsWith('size-'));
+                    
+                    layout.push({
+                        type: widgetType,
+                        size: sizeClass || 'size-small',
+                        x: node.x,
+                        y: node.y,
+                        w: node.w,
+                        h: node.h,
+                        order: index
+                    });
+                }
+            });
+
+            saveLayout(layout);
+        }
+
+    </script>
+</body>
+</html>
+
+
+

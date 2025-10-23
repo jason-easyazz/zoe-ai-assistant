@@ -831,6 +831,28 @@
 })();
 </script>
     <script src="/js/auth.js"></script>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
 </head>
 <body>
     <!-- Main Welcome Container -->
@@ -1302,6 +1324,14 @@
         }
 
         function handleSuccessfulAuth(data) {
+            // Safety check - only store successful logins
+            if (!data || !data.success || !data.session_id) {
+                console.error('Attempted to store invalid session:', data);
+                showAuthError(data?.error_message || 'Login failed - invalid session data');
+                currentPin = '';
+                return;
+            }
+            
             localStorage.setItem('zoe_session', JSON.stringify(data));
             
             // Show success and redirect

@@ -14,12 +14,15 @@ from datetime import datetime
 from pathlib import Path
 import sqlite3
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/media", tags=["media"])
 
 # Configuration
 UPLOAD_BASE_DIR = Path(os.getenv("UPLOAD_DIR", "/app/data/uploads"))
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB (increased to match nginx limit)
 MAX_DIMENSION = 1920
 THUMBNAIL_SIZE = 400
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"}
@@ -142,8 +145,15 @@ def generate_photo_id() -> str:
     return f"photo_{random_hash}"
 
 def get_file_extension(filename: str) -> str:
-    """Get file extension in lowercase"""
-    return Path(filename).suffix.lower()
+    """Get file extension in lowercase, handle edge cases"""
+    if not filename:
+        return ""
+    # Use pathlib to extract extension (handles spaces correctly)
+    ext = Path(filename).suffix.lower()
+    # If no extension found, try splitting by last dot
+    if not ext and '.' in filename:
+        ext = '.' + filename.rsplit('.', 1)[-1].lower()
+    return ext
 
 def process_image(
     image_data: bytes,
@@ -248,12 +258,17 @@ async def upload_photos(
     uploaded_photos = []
     
     for file in files:
+        # Log what we received
+        logger.info(f"📸 Upload received: filename='{file.filename}', content_type='{file.content_type}', size={file.size if hasattr(file, 'size') else 'unknown'}")
+        
         # Validate file extension
         ext = get_file_extension(file.filename)
+        logger.info(f"📸 Extracted extension: '{ext}' from filename '{file.filename}'")
+        
         if ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(
                 status_code=400,
-                detail=f"File type {ext} not supported. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
+                detail=f"File type '{ext}' not supported. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
             )
         
         # Check HEIC support

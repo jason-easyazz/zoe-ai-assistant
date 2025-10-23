@@ -13,9 +13,9 @@ import logging
 import hashlib
 import re
 
-from ..models.database import auth_db, User, UserRole, AuthMethod
-from .passcode import passcode_manager, PasscodeValidationResult
-from .rbac import rbac_manager
+from models.database import auth_db, User, UserRole, AuthMethod
+from core.passcode import passcode_manager, PasscodeValidationResult
+from core.rbac import rbac_manager
 
 logger = logging.getLogger(__name__)
 
@@ -642,21 +642,24 @@ class AuthManager:
             logger.error(f"Failed to log user creation: {e}")
 
     def _log_auth_attempt(self, user_id: str, method: str, result: str, reason: str, ip_address: Optional[str]):
-        """Log authentication attempt"""
+        """Log authentication attempt - non-blocking, errors suppressed"""
         try:
-            with auth_db.get_connection() as conn:
-                conn.execute("""
-                    INSERT INTO audit_logs 
-                    (log_id, user_id, action, resource, result, ip_address, details, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    f"auth_{secrets.token_hex(8)}", user_id, f"auth_{method}",
-                    "authentication", result, ip_address,
-                    f'{{"reason": "{reason}", "method": "{method}"}}',
-                    datetime.now().isoformat()
-                ))
+            conn = auth_db.get_connection()
+            conn.execute("""
+                INSERT INTO audit_logs 
+                (log_id, user_id, action, resource, result, ip_address, details, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                f"auth_{secrets.token_hex(8)}", user_id, f"auth_{method}",
+                "authentication", result, ip_address,
+                f'{{"reason": "{reason}", "method": "{method}"}}',
+                datetime.now().isoformat()
+            ))
+            conn.commit()
+            conn.close()
         except Exception as e:
-            logger.error(f"Failed to log auth attempt: {e}")
+            # Non-blocking - just log and continue
+            logger.debug(f"Audit log failed (non-critical): {e}")
 
     def _log_password_change(self, user_id: str, changed_by: Optional[str]):
         """Log password change"""

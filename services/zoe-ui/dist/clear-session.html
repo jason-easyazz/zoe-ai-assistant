@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clear Session</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            padding: 40px; 
+            background: #1a1a1a; 
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .container {
+            text-align: center;
+            max-width: 500px;
+        }
+        .icon { font-size: 64px; margin-bottom: 20px; }
+        h1 { font-size: 32px; font-weight: 300; margin-bottom: 20px; }
+        p { font-size: 16px; color: #ccc; margin-bottom: 30px; }
+        button {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: none;
+            color: white;
+            padding: 16px 32px;
+            font-size: 16px;
+            border-radius: 12px;
+            cursor: pointer;
+            font-weight: 600;
+            margin: 5px;
+        }
+        button:hover { opacity: 0.9; }
+        .status { margin-top: 20px; padding: 15px; border-radius: 8px; }
+        .success { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+        .error { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+    </style>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">🔐</div>
+        <h1>Clear Session Data</h1>
+        <p>Clear your stored session data to fix login issues.</p>
+        
+        <div>
+            <button onclick="clearAndGo()">Clear & Go to Login</button>
+            <button onclick="clearSession()">Just Clear</button>
+        </div>
+        
+        <div id="status"></div>
+    </div>
+    
+    <script>
+        function clearSession() {
+            localStorage.removeItem('zoe_session');
+            sessionStorage.clear();
+            document.getElementById('status').innerHTML = '<div class="status success">✅ Session cleared successfully!</div>';
+        }
+        
+        function clearAndGo() {
+            clearSession();
+            setTimeout(() => {
+                window.location.href = '/index.html';
+            }, 500);
+        }
+        
+        // Show current session status
+        const session = localStorage.getItem('zoe_session');
+        if (session) {
+            try {
+                const data = JSON.parse(session);
+                if (data.success === false) {
+                    document.getElementById('status').innerHTML = 
+                        '<div class="status error">⚠️ Bad session detected: ' + (data.error_message || 'Login failed') + '</div>';
+                }
+            } catch (e) {}
+        }
+    </script>
+</body>
+</html>

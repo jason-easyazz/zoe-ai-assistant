@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api/touch-panel", tags=["touch-panel"])
 class TouchPanelAuthRequest(BaseModel):
     """Touch panel authentication request"""
     username: str = Field(..., min_length=1, max_length=50)
-    passcode: str = Field(..., min_length=4, max_length=8, regex=r'^\d+$')
+    passcode: str = Field(..., min_length=4, max_length=8, pattern=r'^\d+$')
     device_id: str = Field(..., min_length=1, max_length=100)
     location: str = Field(default="unknown")
 
@@ -28,7 +28,7 @@ class QuickSwitchRequest(BaseModel):
     """Quick user switch request"""
     current_session_id: Optional[str] = None
     new_username: str = Field(..., min_length=1, max_length=50)
-    new_passcode: str = Field(..., min_length=4, max_length=8, regex=r'^\d+$')
+    new_passcode: str = Field(..., min_length=4, max_length=8, pattern=r'^\d+$')
     device_id: str = Field(..., min_length=1, max_length=100)
 
 class SessionValidationRequest(BaseModel):

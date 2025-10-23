@@ -3,19 +3,63 @@ from auth_integration import validate_session
 Calendar Management System
 Handles events, scheduling, and calendar operations with smart scheduling integration
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from datetime import datetime, date, timedelta
 import sqlite3
 import json
 import os
 import sys
+import asyncio
 from dateutil.rrule import rrule, DAILY, WEEKLY, MONTHLY, YEARLY
 from dateutil.relativedelta import relativedelta
 sys.path.append('/app')
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
+
+# WebSocket Connection Manager for real-time calendar updates
+class CalendarWebSocketManager:
+    def __init__(self):
+        self.active_connections: Dict[str, Set[WebSocket]] = {}
+        self.lock = asyncio.Lock()
+    
+    async def connect(self, websocket: WebSocket, user_id: str):
+        await websocket.accept()
+        async with self.lock:
+            if user_id not in self.active_connections:
+                self.active_connections[user_id] = set()
+            self.active_connections[user_id].add(websocket)
+        print(f"✅ Calendar WebSocket connected for user {user_id} (total: {len(self.active_connections[user_id])})")
+    
+    async def disconnect(self, websocket: WebSocket, user_id: str):
+        async with self.lock:
+            if user_id in self.active_connections and websocket in self.active_connections[user_id]:
+                self.active_connections[user_id].remove(websocket)
+                if not self.active_connections[user_id]:
+                    del self.active_connections[user_id]
+        print(f"❌ Calendar WebSocket disconnected for user {user_id}")
+    
+    async def broadcast_to_user(self, user_id: str, message: Dict[str, Any]):
+        """Broadcast message to all connections for a specific user"""
+        async with self.lock:
+            if user_id not in self.active_connections:
+                return
+            connections = list(self.active_connections[user_id])
+        
+        dead_connections = []
+        for ws in connections:
+            try:
+                await ws.send_json(message)
+            except Exception as e:
+                print(f"⚠️ Failed to send to connection: {e}")
+                dead_connections.append(ws)
+        
+        # Clean up dead connections
+        for ws in dead_connections:
+            await self.disconnect(ws, user_id)
+
+calendar_ws_manager = CalendarWebSocketManager()
 
 # Database path
 DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
@@ -473,6 +517,13 @@ async def create_event(event: EventCreate, user_id: str = Query("default")):
     conn.commit()
     conn.close()
     
+    # Broadcast update to WebSocket clients
+    await calendar_ws_manager.broadcast_to_user(user_id, {
+        "type": "event_created",
+        "event_id": event_id,
+        "action": "created"
+    })
+    
     # Return the created event with calculated end_time
     return {"event": {
         "id": event_id,
@@ -605,6 +656,13 @@ async def update_event(event_id: int, event_update: EventUpdate, user_id: str = 
         cursor.execute("SELECT * FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
         event = cursor.fetchone()
         conn.close()
+        
+        # Broadcast update to WebSocket clients
+        await calendar_ws_manager.broadcast_to_user(user_id, {
+            "type": "event_updated",
+            "event_id": event_id,
+            "action": "updated"
+        })
         
         if event:
             return {"event": dict(event)}
@@ -1386,3 +1444,27 @@ async def get_todays_reminders(user_id: str = Query("default")):
         return {"reminders": reminders, "date": today, "count": len(reminders)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# WebSocket endpoint for real-time calendar updates
+@router.websocket("/ws/{user_id}")
+async def calendar_websocket(websocket: WebSocket, user_id: str):
+    """WebSocket endpoint for real-time calendar synchronization across devices"""
+    await calendar_ws_manager.connect(websocket, user_id)
+    try:
+        # Send initial connection confirmation
+        await websocket.send_json({
+            "type": "connected",
+            "message": "Calendar WebSocket connected",
+            "user_id": user_id
+        })
+        
+        # Keep connection alive and handle pings
+        while True:
+            data = await websocket.receive_text()
+            # Echo back as heartbeat
+            await websocket.send_json({"type": "pong", "timestamp": datetime.now().isoformat()})
+    except WebSocketDisconnect:
+        await calendar_ws_manager.disconnect(websocket, user_id)
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        await calendar_ws_manager.disconnect(websocket, user_id)

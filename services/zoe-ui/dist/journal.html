@@ -357,6 +357,8 @@
             overflow: hidden;
             cursor: pointer;
             transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column; /* Default: stacked layout */
         }
         
         .entry-card:hover {
@@ -365,6 +367,71 @@
             box-shadow: 0 12px 40px rgba(123, 97, 255, 0.15);
         }
         
+        /* Default landscape layout: photo on top, text below */
+        .entry-card.landscape-layout {
+            flex-direction: column;
+        }
+        
+        .entry-card.landscape-layout .entry-image {
+            width: 100%;
+            height: 220px;
+            object-fit: cover;
+            display: block;
+        }
+        
+        .entry-card.landscape-layout .entry-content {
+            padding: 20px;
+        }
+        
+        /* Portrait layout: photo on left, text on right */
+        .entry-card.portrait-layout {
+            flex-direction: row;
+            min-height: 300px;
+        }
+        
+        .entry-card.portrait-layout .entry-image {
+            width: 45%;
+            min-width: 280px;
+            max-width: 400px;
+            height: auto;
+            min-height: 300px;
+            object-fit: cover;
+            display: block;
+            flex-shrink: 0;
+        }
+        
+        .entry-card.portrait-layout .entry-content {
+            flex: 1;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        
+        /* Square layout: compact side-by-side */
+        .entry-card.square-layout {
+            flex-direction: row;
+        }
+        
+        .entry-card.square-layout .entry-image {
+            width: 300px;
+            height: 300px;
+            object-fit: cover;
+            display: block;
+            flex-shrink: 0;
+        }
+        
+        .entry-card.square-layout .entry-content {
+            flex: 1;
+            padding: 20px;
+        }
+        
+        /* Text-only entries (no photo) */
+        .entry-card.text-only .entry-content {
+            padding: 24px;
+        }
+        
+        /* Legacy support for entries without orientation class */
         .entry-image {
             width: 100%;
             height: 220px;
@@ -761,6 +828,66 @@
         
         .read-modal-text p {
             margin-bottom: 16px;
+        }
+        
+        .read-modal-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 1px solid var(--glass-border);
+        }
+        
+        .read-modal-actions button {
+            flex: 1;
+            padding: 12px 20px;
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(10px);
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .read-modal-actions button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        
+        .read-modal-actions .btn-edit {
+            color: var(--primary-purple);
+            border-color: var(--primary-purple);
+        }
+        
+        .read-modal-actions .btn-edit:hover {
+            background: var(--primary-purple);
+            color: white;
+        }
+        
+        .read-modal-actions .btn-delete {
+            color: #ef4444;
+            border-color: #ef4444;
+        }
+        
+        .read-modal-actions .btn-delete:hover {
+            background: #ef4444;
+            color: white;
+        }
+        
+        .read-modal-actions .btn-share {
+            color: #3b82f6;
+            border-color: #3b82f6;
+        }
+        
+        .read-modal-actions .btn-share:hover {
+            background: #3b82f6;
+            color: white;
         }
         
         /* New Entry Form */
@@ -1354,14 +1481,242 @@
             .privacy-selector {
                 grid-template-columns: repeat(2, 1fr);
             }
+            
+            /* Mobile: always stack photos vertically */
+            .entry-card.portrait-layout,
+            .entry-card.square-layout {
+                flex-direction: column !important;
+            }
+            
+            .entry-card.portrait-layout .entry-image,
+            .entry-card.square-layout .entry-image {
+                width: 100% !important;
+                height: 200px !important;
+                max-width: none !important;
+                min-width: 0 !important;
+                min-height: 0 !important;
+            }
         }
-        </style>
+        
+
+        /* Navigation Bar - Standardized */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400;
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications { animation: notificationPulse 2s ease-in-out infinite; }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        
+        .api-indicator { 
+            font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 8px; 
+            display: flex; align-items: center; gap: 6px; 
+        }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.connecting { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.connecting::before { background: #ea580c; }
+        
+        /* Time/Date Display */
+        .time-date-display {
+            display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time { font-size: 16px; font-weight: 500; color: #333; line-height: 1.2; }
+        .current-date { font-size: 11px; color: #666; line-height: 1.2; }
+
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center; 
+        }
+        .notifications-title { font-size: 18px; font-weight: 600; color: #333; margin: 0; }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content { padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title { font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px; }
+        .notification-meta { font-size: 12px; color: #666; display: flex; gap: 10px; }
+        .notification-time { color: #7B61FF; font-weight: 500; }
+        .no-notifications { text-align: center; color: #666; font-size: 14px; padding: 40px 20px; }
+
+
+        /* Mobile Navigation Menu */
+        .mobile-nav-menu {
+            position: fixed; top: 0; left: -280px; width: 280px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.3); z-index: 2000;
+            transition: left 0.3s ease; display: flex; flex-direction: column;
+        }
+        .mobile-nav-menu.open { left: 0; }
+        .mobile-nav-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .mobile-nav-header h3 { margin: 0; font-size: 20px; font-weight: 600; color: #333; }
+        .mobile-nav-close {
+            width: 40px; height: 40px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 24px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: all 0.3s ease;
+        }
+        .mobile-nav-close:active { background: rgba(255, 255, 255, 0.5); }
+        .mobile-nav-content { flex: 1; overflow-y: auto; padding: 10px; }
+        .mobile-nav-item {
+            display: flex; align-items: center; gap: 12px; padding: 16px; margin: 4px 0;
+            color: #666; text-decoration: none; font-size: 16px; font-weight: 500;
+            border-radius: 12px; transition: all 0.3s ease;
+        }
+        .mobile-nav-item:active { background: rgba(123, 97, 255, 0.1); color: #7B61FF; }
+        .mobile-nav-item.active { background: rgba(123, 97, 255, 0.15); color: #7B61FF; font-weight: 600; }
+        .mobile-nav-item.logout { color: #ff4444; }
+        .mobile-nav-divider { height: 1px; background: rgba(255, 255, 255, 0.3); margin: 10px 0; }
+        .mobile-nav-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.3); z-index: 1999; opacity: 0;
+            pointer-events: none; transition: opacity 0.3s ease;
+        }
+        .mobile-nav-overlay.open { opacity: 1; pointer-events: auto; }
+        
+        /* Responsive: hide nav-menu on mobile, show mini-orb */
+        @media (max-width: 768px) {
+            .nav-menu { display: none !important; }
+            .mini-orb { display: flex !important; }
+        }
+        @media (min-width: 769px) {
+            .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
+        }
+    </style>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
 </head>
 <body>
     <!-- Navigation -->
     <div class="nav-bar">
         <div class="nav-left">
-            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
+            <div class="mini-orb" onclick="toggleMobileMenu()"></div>
             <div class="nav-menu">
                 <a href="chat.html" class="nav-item">Chat</a>
                 <a href="dashboard.html" class="nav-item">Dashboard</a>
@@ -1382,6 +1737,66 @@
                 <div class="current-date" id="currentDate">Loading...</div>
             </div>
         </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Navigation Menu -->
+    <div class="mobile-nav-menu" id="mobileNavMenu">
+        <div class="mobile-nav-header">
+            <h3>Navigation</h3>
+            <button class="mobile-nav-close" onclick="toggleMobileMenu()">✕</button>
+        </div>
+        <div class="mobile-nav-content">
+            <a href="chat.html" class="mobile-nav-item">💬 Chat</a>
+            <a href="dashboard.html" class="mobile-nav-item">📊 Dashboard</a>
+            <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
+            <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
+            <a href="journal.html" class="mobile-nav-item active">📔 Journal</a>
+            <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
+            <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
+            <div class="mobile-nav-divider"></div>
+            <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
+        </div>
+    </div>
+    <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
             </div>
             
     <!-- More Overlay -->
@@ -1399,14 +1814,14 @@
                 <div class="more-item" onclick="navigateToPage('workflows.html')">
                     <div class="more-item-icon">⚡</div>
                     <div class="more-item-label">Workflows</div>
-            </div>
+                </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
                     <div class="more-item-label">Settings</div>
                 </div>
-                <div class="more-item" onclick="alert('Coming soon!')">
-                    <div class="more-item-icon">📊</div>
-                    <div class="more-item-label">Analytics</div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
                 </div>
             </div>
         </div>
@@ -1625,15 +2040,25 @@
                     
                     <p>When we finally broke through the tree line and saw the summit, that's when it hit me—all the training, the early mornings, the sore muscles—it was all for this moment.</p>
                     </div>
-                <div class="entry-tags">
-                    <span class="tag">Adventure</span>
-                    <span class="tag">Nature</span>
-                    <span class="tag person-tag">👤 Alex</span>
-                    <span class="tag place-tag">📍 Eagle Peak</span>
-                    </div>
-                        </div>
-                        </div>
-                    </div>
+                <div class="read-modal-tags"></div>
+                
+                <div class="read-modal-actions">
+                    <button class="btn-edit" onclick="editCurrentEntry()">
+                        <span>✏️</span>
+                        <span>Edit</span>
+                    </button>
+                    <button class="btn-delete" onclick="deleteCurrentEntry()">
+                        <span>🗑️</span>
+                        <span>Delete</span>
+                    </button>
+                    <button class="btn-share" onclick="shareCurrentEntry()">
+                        <span>↗️</span>
+                        <span>Share</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- New Entry Modal -->
     <div class="entry-modal" id="newEntryModal">
@@ -1761,9 +2186,9 @@
             // Create FilePond instance
             const inputElement = document.querySelector('input[type="file"].filepond');
             const pond = FilePond.create(inputElement, {
-                labelIdle: '📷 Drop images here or <span class="filepond--label-action">Browse</span><br><small>Supports iPhone HEIC, JPG, PNG, GIF, WEBP</small>',
+                labelIdle: '📷 Drop images here or <span class="filepond--label-action">Browse</span><br><small>Supports iPhone HEIC, JPG, PNG, GIF, WEBP (up to 50MB)</small>',
                 acceptedFileTypes: ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp', 'image/heic', 'image/heif'],
-                maxFileSize: '10MB',
+                maxFileSize: '50MB',
                 maxFiles: 10,
                 credits: false,
                 allowReorder: true,
@@ -1771,11 +2196,13 @@
                 server: {
                     process: async (fieldName, file, metadata, load, error, progress, abort) => {
                         const formData = new FormData();
-                        formData.append('files', file);
+                        formData.append('files', file, file.name);  // Explicitly set filename
                         // ✅ FIX: Use authenticated user, not hardcoded 'default'
                         const session = window.zoeAuth?.getCurrentSession();
-                        const userId = session?.user_id || 'default';
+                        const userId = session?.user_info?.user_id || session?.user_id || 'default';
                         formData.append('user_id', userId);
+                        
+                        console.log('📤 Uploading file:', file.name, 'Size:', (file.size / 1024 / 1024).toFixed(2), 'MB');
                         
                         try {
                             const xhr = new XMLHttpRequest();
@@ -1798,11 +2225,23 @@
                                     }
                                     load(response[0].photo_id);
                                 } else {
-                                    error('Upload failed');
+                                    // Show detailed error message
+                                    try {
+                                        const errorData = JSON.parse(xhr.responseText);
+                                        const errorMsg = errorData.detail || errorData.message || 'Upload failed';
+                                        console.error('Upload error:', errorMsg);
+                                        error(errorMsg);
+                                    } catch (e) {
+                                        console.error('Upload failed with status:', xhr.status, xhr.responseText);
+                                        error(`Upload failed (${xhr.status})`);
+                                    }
                                 }
                             };
                             
-                            xhr.onerror = () => error('Upload failed');
+                            xhr.onerror = () => {
+                                console.error('Network error during upload');
+                                error('Network error - upload failed');
+                            };
                             
                             xhr.send(formData);
                             
@@ -1868,7 +2307,7 @@
         // Check API status
         async function checkApiStatus() {
             try {
-                const response = await fetch('/api/status', {
+                const response = await fetch('/api/health', {
                     method: 'GET',
                     headers: { 'Accept': 'application/json' }
                 });
@@ -1877,7 +2316,7 @@
                 if (response.ok) {
                     indicator.classList.remove('offline', 'connecting');
                     indicator.classList.add('online');
-                    indicator.textContent = 'API Online';
+                    indicator.textContent = 'Online';
             } else {
                     indicator.classList.remove('online', 'connecting');
                     indicator.classList.add('offline');
@@ -1891,6 +2330,277 @@
             }
         }
         
+        /**
+         * Detect photo orientation and apply appropriate layout class
+         */
+        function applyOrientationLayout(entryCard, photoUrl) {
+            const img = new Image();
+            
+            img.onload = function() {
+                const aspectRatio = this.width / this.height;
+                
+                // Remove any existing layout classes
+                entryCard.classList.remove('portrait-layout', 'landscape-layout', 'square-layout');
+                
+                if (aspectRatio < 0.85) {
+                    // Portrait (taller than wide)
+                    entryCard.classList.add('portrait-layout');
+                    console.log('📱 Portrait layout:', this.width, 'x', this.height, 'aspect:', aspectRatio.toFixed(2));
+                } else if (aspectRatio > 1.15) {
+                    // Landscape (wider than tall)
+                    entryCard.classList.add('landscape-layout');
+                    console.log('🖼️ Landscape layout:', this.width, 'x', this.height, 'aspect:', aspectRatio.toFixed(2));
+                } else {
+                    // Square-ish (ratio ~1:1)
+                    entryCard.classList.add('square-layout');
+                    console.log('⬜ Square layout:', this.width, 'x', this.height, 'aspect:', aspectRatio.toFixed(2));
+                }
+            };
+            
+            img.onerror = function() {
+                // Default to landscape if can't load
+                entryCard.classList.add('landscape-layout');
+                console.warn('Failed to load image for orientation detection, using landscape layout');
+            };
+            
+            img.src = photoUrl;
+        }
+        
+        /**
+         * Format date for display
+         */
+        function formatEntryDate(dateString) {
+            const date = new Date(dateString);
+            const now = new Date();
+            const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));
+            
+            if (diffDays === 0) return 'Today';
+            if (diffDays === 1) return 'Yesterday';
+            if (diffDays < 7) return date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+        }
+        
+        /**
+         * Format time for display
+         */
+        function formatEntryTime(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        }
+        
+        /**
+         * Truncate text to specified length
+         */
+        function truncateText(text, maxLength) {
+            if (!text) return '';
+            if (text.length <= maxLength) return text;
+            return text.substring(0, maxLength).trim() + '...';
+        }
+        
+        /**
+         * Render a single journal entry with adaptive layout
+         */
+        function renderJournalEntry(entry) {
+            const entryCard = document.createElement('div');
+            entryCard.className = 'entry-card';
+            entryCard.onclick = () => openReadEntry(entry);
+            
+            // Parse photos if it's a JSON string
+            let photos = [];
+            if (entry.photos) {
+                if (typeof entry.photos === 'string') {
+                    try {
+                        photos = JSON.parse(entry.photos);
+                    } catch (e) {
+                        console.warn('Failed to parse photos JSON:', entry.photos);
+                    }
+                } else if (Array.isArray(entry.photos)) {
+                    photos = entry.photos;
+                }
+            }
+            
+            // Build HTML
+            let html = '';
+            
+            // Add photo if available
+            if (photos && photos.length > 0) {
+                const photoUrl = photos[0]; // Use first photo
+                html += `<img src="${photoUrl}" alt="${entry.title || 'Journal entry'}" class="entry-image" loading="lazy">`;
+            }
+            
+            // Add content
+            html += `
+                <div class="entry-content">
+                    <div class="entry-header">
+                        <div>
+                            <div class="entry-title">${entry.title || 'Untitled'}</div>
+                            <div class="entry-time">${formatEntryTime(entry.created_at)} · ${estimateReadTime(entry.content)} min read</div>
+                        </div>
+                    </div>
+                    <div class="entry-text">${truncateText(entry.content, 150)}</div>
+                    ${renderEntryFooter(entry)}
+                </div>
+            `;
+            
+            entryCard.innerHTML = html;
+            
+            // Apply orientation-based layout if photo exists
+            if (photos && photos.length > 0) {
+                applyOrientationLayout(entryCard, photos[0]);
+            } else {
+                entryCard.classList.add('text-only');
+            }
+            
+            return entryCard;
+        }
+        
+        /**
+         * Estimate reading time
+         */
+        function estimateReadTime(text) {
+            if (!text) return 1;
+            const wordsPerMinute = 200;
+            const words = text.trim().split(/\s+/).length;
+            return Math.max(1, Math.ceil(words / wordsPerMinute));
+        }
+        
+        /**
+         * Render entry footer (tags, privacy)
+         */
+        function renderEntryFooter(entry) {
+            let html = '<div class="entry-footer">';
+            
+            // Tags
+            html += '<div class="entry-tags">';
+            if (entry.tags && entry.tags.length > 0) {
+                entry.tags.forEach(tag => {
+                    html += `<span class="tag">${tag}</span>`;
+                });
+            }
+            if (entry.place_tags && entry.place_tags.length > 0) {
+                entry.place_tags.forEach(place => {
+                    html += `<span class="tag place-tag">📍 ${place}</span>`;
+                });
+            }
+            html += '</div>';
+            
+            // Privacy badge
+            const privacyLabels = {
+                'private': 'Private',
+                'inner_circle': 'Inner Circle',
+                'family': 'Family',
+                'public': 'Public'
+            };
+            html += `
+                <div class="privacy-badge">
+                    <div class="privacy-icon">
+                        <div class="privacy-inner-circle"></div>
+                    </div>
+                    <span>${privacyLabels[entry.privacy_level] || 'Private'}</span>
+                </div>
+            `;
+            
+            html += '</div>';
+            return html;
+        }
+        
+        /**
+         * Load journal entries from API
+         */
+        async function loadJournalEntries() {
+            try {
+                console.log('📔 Loading journal entries...');
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                
+                const response = await fetch(`/api/journal/entries?user_id=${userId}`, {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to load entries: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                const entries = data.entries || data; // Handle both {entries: []} and direct array
+                console.log(`📔 Loaded ${entries.length} journal entries`);
+                
+                if (!entries || entries.length === 0) {
+                    console.log('No entries found - showing demo content');
+                    return; // Keep demo entries if no real entries
+                }
+                
+                // Find the timeline view container
+                const timelineView = document.getElementById('timelineView');
+                if (!timelineView) {
+                    console.warn('Timeline view element not found');
+                    return;
+                }
+                
+                // Clear existing entries (keep timeline-line)
+                const timelineLine = timelineView.querySelector('.timeline-line');
+                timelineView.innerHTML = '';
+                if (timelineLine) {
+                    timelineView.appendChild(timelineLine);
+                }
+                
+                // Sort entries by date (newest first)
+                entries.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+                
+                // Group entries by date for display
+                const entriesByDate = {};
+                entries.forEach(entry => {
+                    const dateKey = formatEntryDate(entry.created_at);
+                    if (!entriesByDate[dateKey]) {
+                        entriesByDate[dateKey] = [];
+                    }
+                    entriesByDate[dateKey].push(entry);
+                });
+                
+                // Render entries
+                Object.keys(entriesByDate).forEach((dateLabel, index) => {
+                    // Add month separator if first entry of the day
+                    if (index === 0 || dateLabel.includes('Today') || dateLabel.includes('Yesterday')) {
+                        const monthSeparator = document.createElement('div');
+                        monthSeparator.className = 'timeline-month-separator';
+                        const date = new Date(entriesByDate[dateLabel][0].created_at);
+                        const monthLabel = date.toLocaleDateString([], { month: 'long', year: 'numeric' });
+                        monthSeparator.innerHTML = `<div class="month-label">${monthLabel}</div>`;
+                        timelineView.appendChild(monthSeparator);
+                    }
+                    
+                    const dateEntries = entriesByDate[dateLabel];
+                    
+                    dateEntries.forEach(entry => {
+                        const timelineEntry = document.createElement('div');
+                        timelineEntry.className = 'timeline-entry';
+                        
+                        timelineEntry.innerHTML = `
+                            <div class="entry-spacer"></div>
+                            <div class="timeline-dot-container">
+                                <div class="timeline-dot"></div>
+                            </div>
+                            <div id="entry-card-${entry.id}"></div>
+                        `;
+                        
+                        timelineView.appendChild(timelineEntry);
+                        
+                        // Render the entry card
+                        const entryCardContainer = timelineEntry.querySelector(`#entry-card-${entry.id}`);
+                        const entryCard = renderJournalEntry(entry);
+                        entryCardContainer.replaceWith(entryCard);
+                    });
+                });
+                
+                console.log('✅ Journal entries rendered with adaptive layouts');
+                
+            } catch (error) {
+                console.error('Failed to load journal entries:', error);
+                // Keep demo entries on error
+            }
+        }
+        
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', () => {
             updateTimeDate();
@@ -1900,6 +2610,9 @@
             setInterval(checkApiStatus, 30000); // Check every 30 seconds
             
             loadNotifications();
+            
+            // Load real journal entries (replaces demo content if entries exist)
+            loadJournalEntries();
         });
 
         // View switching
@@ -1920,12 +2633,172 @@
         });
 
         // Entry modals
-        function openReadEntry() {
-            document.getElementById('readEntryModal').classList.add('active');
+        let currentEntry = null;
+        
+        function openReadEntry(entry) {
+            currentEntry = entry;
+            const modal = document.getElementById('readEntryModal');
+            
+            // Parse photos
+            let photos = [];
+            if (entry.photos) {
+                if (typeof entry.photos === 'string') {
+                    try {
+                        photos = JSON.parse(entry.photos);
+                    } catch (e) {
+                        console.warn('Failed to parse photos JSON:', entry.photos);
+                    }
+                } else if (Array.isArray(entry.photos)) {
+                    photos = entry.photos;
+                }
+            }
+            
+            // Update modal header image
+            const headerImg = modal.querySelector('.read-modal-image');
+            if (photos && photos.length > 0) {
+                headerImg.src = photos[0];
+                headerImg.alt = entry.title || 'Journal entry';
+                headerImg.style.display = 'block';
+            } else {
+                headerImg.style.display = 'none';
+            }
+            
+            // Update title
+            const titleEl = modal.querySelector('.read-modal-title');
+            titleEl.textContent = entry.title || 'Untitled';
+            
+            // Update metadata
+            const metaEl = modal.querySelector('.read-modal-meta');
+            const date = new Date(entry.created_at);
+            const dateStr = date.toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' });
+            const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            const readTime = estimateReadTime(entry.content);
+            
+            let metaHTML = `<span>📅 ${dateStr}</span>`;
+            metaHTML += `<span>🕐 ${timeStr}</span>`;
+            if (entry.location) metaHTML += `<span>📍 ${entry.location}</span>`;
+            if (entry.place_tags && entry.place_tags.length > 0) {
+                metaHTML += `<span>📍 ${entry.place_tags.join(', ')}</span>`;
+            }
+            metaHTML += `<span>📖 ${readTime} min read</span>`;
+            metaEl.innerHTML = metaHTML;
+            
+            // Update content
+            const textEl = modal.querySelector('.read-modal-text');
+            textEl.textContent = entry.content || '';
+            
+            // Update tags
+            const tagsEl = modal.querySelector('.read-modal-tags');
+            tagsEl.innerHTML = '';
+            if (entry.tags && entry.tags.length > 0) {
+                entry.tags.forEach(tag => {
+                    const tagSpan = document.createElement('span');
+                    tagSpan.className = 'tag';
+                    tagSpan.textContent = tag;
+                    tagsEl.appendChild(tagSpan);
+                });
+            }
+            if (entry.place_tags && entry.place_tags.length > 0) {
+                entry.place_tags.forEach(place => {
+                    const tagSpan = document.createElement('span');
+                    tagSpan.className = 'tag place-tag';
+                    tagSpan.textContent = `📍 ${place}`;
+                    tagsEl.appendChild(tagSpan);
+                });
+            }
+            
+            // Add people if available
+            if (entry.people && entry.people.length > 0) {
+                entry.people.forEach(person => {
+                    const tagSpan = document.createElement('span');
+                    tagSpan.className = 'tag person-tag';
+                    tagSpan.textContent = `👤 ${person.name || person}`;
+                    tagsEl.appendChild(tagSpan);
+                });
+            }
+            
+            modal.classList.add('active');
         }
 
         function closeReadEntry() {
             document.getElementById('readEntryModal').classList.remove('active');
+            currentEntry = null;
+        }
+        
+        function editCurrentEntry() {
+            if (!currentEntry) return;
+            
+            // Close read modal
+            closeReadEntry();
+            
+            // TODO: Implement edit functionality
+            // For now, just show alert
+            alert(`Edit functionality coming soon!\n\nEntry ID: ${currentEntry.id}\nTitle: ${currentEntry.title}`);
+            
+            // Later: Open edit modal with pre-filled data
+            // openEditEntry(currentEntry);
+        }
+        
+        async function deleteCurrentEntry() {
+            if (!currentEntry) return;
+            
+            const confirmed = confirm(`Are you sure you want to delete "${currentEntry.title}"?\n\nThis action cannot be undone.`);
+            if (!confirmed) return;
+            
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                
+                const response = await fetch(`/api/journal/entries/${currentEntry.id}?user_id=${userId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to delete entry: ${response.status}`);
+                }
+                
+                console.log('✅ Entry deleted:', currentEntry.id);
+                
+                // Close modal
+                closeReadEntry();
+                
+                // Reload entries
+                loadJournalEntries();
+                
+                // Show success message
+                alert('✅ Entry deleted successfully');
+                
+            } catch (error) {
+                console.error('Failed to delete entry:', error);
+                alert('❌ Failed to delete entry. Please try again.');
+            }
+        }
+        
+        function shareCurrentEntry() {
+            if (!currentEntry) return;
+            
+            // Create shareable text
+            const shareText = `${currentEntry.title}\n\n${currentEntry.content}`;
+            
+            // Try Web Share API first
+            if (navigator.share) {
+                navigator.share({
+                    title: currentEntry.title,
+                    text: shareText,
+                }).then(() => {
+                    console.log('✅ Entry shared successfully');
+                }).catch((error) => {
+                    console.log('Share cancelled or failed:', error);
+                });
+            } else {
+                // Fallback: Copy to clipboard
+                navigator.clipboard.writeText(shareText).then(() => {
+                    alert('✅ Entry copied to clipboard!');
+                }).catch((error) => {
+                    console.error('Failed to copy:', error);
+                    alert('❌ Failed to copy entry');
+                });
+            }
         }
 
         // Close modals on background click
@@ -1969,6 +2842,24 @@
 
         function closeNotifications() {
             document.getElementById('notificationsPanel').classList.remove('open');
+        }
+
+        // Mobile menu toggle
+        function toggleMobileMenu() {
+            if (window.innerWidth > 768) { window.location.href = 'index.html'; return; }
+            const menu = document.getElementById('mobileNavMenu');
+            const overlay = document.getElementById('mobileNavOverlay');
+            if (menu && overlay) {
+                menu.classList.toggle('open');
+                overlay.classList.toggle('open');
+            }
+        }
+
+        function handleLogout() {
+            if (window.innerWidth <= 768) {
+                toggleMobileMenu();
+            }
+            logout();
         }
 
         async function loadNotifications() {

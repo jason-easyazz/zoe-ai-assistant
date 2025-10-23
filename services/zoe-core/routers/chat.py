@@ -871,6 +871,7 @@ async def execute_mcp_tool(tool_name: str, arguments: dict, user_id: str) -> dic
                 f"http://zoe-mcp-server:8003/tools/{tool_name}",
                 json={
                     **arguments,
+                    "user_id": user_id,
                     "_auth_token": "default",
                     "_session_id": "default"
                 },

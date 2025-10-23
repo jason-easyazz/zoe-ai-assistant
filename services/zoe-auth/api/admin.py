@@ -209,6 +209,7 @@ async def update_user(
 @router.delete("/users/{user_id}")
 async def delete_user(
     user_id: str,
+    permanent: bool = Query(False, description="Permanently delete user data"),
     current_session = Depends(require_permission("users.delete"))
 ):
     """
@@ -216,6 +217,7 @@ async def delete_user(
     
     Args:
         user_id: User ID to delete
+        permanent: If true, permanently delete. Otherwise just deactivate.
         current_session: Current admin session
         
     Returns:
@@ -227,15 +229,33 @@ async def delete_user(
             raise HTTPException(status_code=400, detail="Cannot delete your own account")
 
         with auth_db.get_connection() as conn:
-            # Deactivate instead of deleting for audit purposes
-            conn.execute("""
-                UPDATE users 
-                SET is_active = 0, updated_at = ?
-                WHERE user_id = ?
-            """, (datetime.now().isoformat(), user_id))
-            
-            if conn.total_changes == 0:
-                raise HTTPException(status_code=404, detail="User not found")
+            if permanent:
+                # Permanently delete user and all related data
+                # Delete related records first (foreign key constraints)
+                conn.execute("DELETE FROM passcodes WHERE user_id = ?", (user_id,))
+                # Note: Permissions are role-based, not per-user, so no user_permissions table
+                conn.execute("DELETE FROM audit_logs WHERE user_id = ?", (user_id,))
+                conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
+                
+                # Delete user
+                conn.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+                
+                if conn.total_changes == 0:
+                    raise HTTPException(status_code=404, detail="User not found")
+                    
+                message = "User permanently deleted"
+            else:
+                # Deactivate instead of deleting for audit purposes
+                conn.execute("""
+                    UPDATE users 
+                    SET is_active = 0, updated_at = ?
+                    WHERE user_id = ?
+                """, (datetime.now().isoformat(), user_id))
+                
+                if conn.total_changes == 0:
+                    raise HTTPException(status_code=404, detail="User not found")
+                    
+                message = "User deactivated successfully"
 
         # Invalidate all user sessions
         session_manager.invalidate_user_sessions(user_id)
@@ -243,7 +263,7 @@ async def delete_user(
         # Clear permission cache
         rbac_manager.permission_cache.invalidate_user(user_id)
 
-        return {"message": "User deleted successfully"}
+        return {"message": message}
 
     except HTTPException:
         raise
@@ -313,6 +333,139 @@ async def unlock_user_account(
     except Exception as e:
         logger.error(f"Account unlock error: {e}")
         raise HTTPException(status_code=500, detail="Failed to unlock account")
+
+class PasscodeSetRequest(BaseModel):
+    """Admin passcode set request"""
+    passcode: str = Field(..., min_length=4, max_length=8, pattern=r'^\d+$')
+
+@router.post("/users/{user_id}/passcode")
+async def set_user_passcode(
+    user_id: str,
+    request: PasscodeSetRequest,
+    current_session = Depends(require_permission("users.update"))
+):
+    """
+    Set or update passcode for a user (admin only)
+    
+    Args:
+        user_id: User ID to set passcode for
+        request: Passcode details
+        current_session: Current admin session
+        
+    Returns:
+        Success message
+    """
+    try:
+        # Verify user exists
+        user_info = auth_manager.get_user_info(user_id)
+        if not user_info:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Set passcode
+        success, message = passcode_manager.create_passcode(
+            user_id,
+            request.passcode
+        )
+
+        if success:
+            return {"message": f"Passcode set for user {user_info['username']}"}
+        else:
+            raise HTTPException(status_code=400, detail=message)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Set user passcode error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to set passcode")
+
+@router.delete("/users/{user_id}/passcode")
+async def remove_user_passcode(
+    user_id: str,
+    current_session = Depends(require_permission("users.update"))
+):
+    """
+    Remove passcode from a user (admin only)
+    
+    Args:
+        user_id: User ID to remove passcode from
+        current_session: Current admin session
+        
+    Returns:
+        Success message
+    """
+    try:
+        # Verify user exists
+        user_info = auth_manager.get_user_info(user_id)
+        if not user_info:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Remove passcode
+        success = passcode_manager.disable_passcode(user_id)
+
+        if success:
+            return {"message": f"Passcode removed from user {user_info['username']}"}
+        else:
+            raise HTTPException(status_code=404, detail="No passcode found for this user")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Remove user passcode error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to remove passcode")
+
+@router.get("/users/{user_id}/sessions")
+async def get_user_sessions(
+    user_id: str,
+    current_session = Depends(require_permission("users.read"))
+):
+    """
+    Get all active sessions for a specific user (admin only)
+    
+    Args:
+        user_id: User ID to get sessions for
+        current_session: Current admin session
+        
+    Returns:
+        List of active sessions for the user
+    """
+    try:
+        # Get user info first to verify user exists
+        user_info = auth_manager.get_user_info(user_id)
+        if not user_info:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Get user sessions
+        user_sessions = session_manager.get_user_sessions(user_id)
+        
+        sessions = []
+        for session in user_sessions:
+            session_info = {
+                "session_id": session.session_id,
+                "user_id": session.user_id,
+                "session_type": session.session_type.value,
+                "auth_method": session.auth_method.value,
+                "device_info": session.device_info,
+                "ip_address": session.metadata.get("ip_address") if session.metadata else None,
+                "user_agent": session.metadata.get("user_agent") if session.metadata else None,
+                "created_at": session.created_at.isoformat(),
+                "last_activity": session.last_activity.isoformat(),
+                "expires_at": session.expires_at.isoformat(),
+                "is_current": session.session_id == current_session.session_id
+            }
+            sessions.append(session_info)
+        
+        return {
+            "user_id": user_id,
+            "username": user_info["username"],
+            "sessions": sessions,
+            "total": len(sessions)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get user sessions error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get user sessions")
 
 # Role Management Endpoints
 @router.get("/roles")

@@ -6,7 +6,7 @@ Supports different session types with varying security levels
 import secrets
 import json
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, asdict
 from enum import Enum
@@ -14,8 +14,8 @@ import logging
 import hashlib
 import threading
 
-from ..models.database import auth_db, AuthSession, SessionType, AuthMethod
-from .rbac import rbac_manager, AccessContext
+from models.database import auth_db, AuthSession, SessionType, AuthMethod
+from core.rbac import rbac_manager, AccessContext
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ class SessionSecurityPolicy:
             session_type=SessionType.STANDARD,
             default_duration_minutes=480,  # 8 hours
             can_escalate=False,
-            max_concurrent=5,
+            max_concurrent=50,  # Increased to allow multiple devices/PWAs
             persistent=True
         ),
         SessionType.PASSCODE: SessionConfig(
@@ -93,7 +93,7 @@ class SessionSecurityPolicy:
             session_type=SessionType.SSO,
             default_duration_minutes=480,  # 8 hours
             can_escalate=False,
-            max_concurrent=5,
+            max_concurrent=50,  # Increased to allow multiple devices/PWAs
             persistent=True
         )
     }
@@ -189,6 +189,7 @@ class EnhancedSessionManager:
                 return session
             elif session:
                 # Session expired, remove it
+                logger.debug(f"Session expired, removing: {session_id[:20]}...")
                 self._remove_session(session_id)
                 
             return None
@@ -256,11 +257,11 @@ class EnhancedSessionManager:
         with self.session_lock:
             session.session_type = SessionType.STANDARD
             session.auth_method = AuthMethod.PASSWORD
-            session.metadata["escalated_at"] = datetime.now().isoformat()
+            session.metadata["escalated_at"] = datetime.now(timezone.utc).isoformat()
             
             # Extend expiration for standard session
             config = SessionSecurityPolicy.get_config(SessionType.STANDARD)
-            session.expires_at = datetime.now() + timedelta(minutes=config.default_duration_minutes)
+            session.expires_at = datetime.now(timezone.utc) + timedelta(minutes=config.default_duration_minutes)
             
             self._save_session_to_db(session)
             
@@ -276,8 +277,8 @@ class EnhancedSessionManager:
 
         with self.session_lock:
             config = SessionSecurityPolicy.get_config(session.session_type)
-            session.expires_at = datetime.now() + timedelta(minutes=config.default_duration_minutes)
-            session.last_activity = datetime.now()
+            session.expires_at = datetime.now(timezone.utc) + timedelta(minutes=config.default_duration_minutes)
+            session.last_activity = datetime.now(timezone.utc)
             self._save_session_to_db(session)
 
         return True
@@ -384,7 +385,7 @@ class EnhancedSessionManager:
                     WHERE key_hash = ? AND is_active = 1 AND expires_at > ?
                 """, (
                     hashlib.sha256(api_key.encode()).hexdigest(),
-                    datetime.now().isoformat()
+                    datetime.now(timezone.utc).isoformat()
                 ))
                 
                 row = cursor.fetchone()
@@ -442,9 +443,9 @@ class EnhancedSessionManager:
                 session_type=session_type,
                 auth_method=request.auth_method,
                 device_info=request.device_info,
-                created_at=datetime.now(),
-                last_activity=datetime.now(),
-                expires_at=datetime.now() + timedelta(minutes=config.default_duration_minutes),
+                created_at=datetime.now(timezone.utc),
+                last_activity=datetime.now(timezone.utc),
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=config.default_duration_minutes),
                 is_active=True,
                 permissions_cache=rbac_manager.list_user_permissions(request.user_id),
                 role_cache=rbac_manager.get_user_role(request.user_id),
@@ -459,6 +460,7 @@ class EnhancedSessionManager:
                 self.active_sessions[session.session_id] = session
                 self._save_session_to_db(session)
 
+            logger.debug(f"Session created for user {request.user_id}: {len(self.active_sessions)} total active")
             return session
 
         except Exception as e:
@@ -481,7 +483,7 @@ class EnhancedSessionManager:
     def _is_session_valid(self, session: AuthSession) -> bool:
         """Check if session is still valid"""
         return (session.is_active and 
-                datetime.now() < session.expires_at)
+                datetime.now(timezone.utc) < session.expires_at)
 
     def _is_rate_limited(self, user_id: str, ip_address: Optional[str]) -> bool:
         """Check if user/IP is rate limited"""
@@ -538,7 +540,7 @@ class EnhancedSessionManager:
                            role_cache, metadata
                     FROM auth_sessions 
                     WHERE is_active = 1 AND expires_at > ?
-                """, (datetime.now().isoformat(),))
+                """, (datetime.now(timezone.utc).isoformat(),))
 
                 for row in cursor.fetchall():
                     session = AuthSession(
@@ -577,7 +579,8 @@ class EnhancedSessionManager:
         cleanup_thread.start()
 
     def _cleanup_expired_sessions(self):
-        """Clean up expired sessions"""
+        """Clean up expired sessions from memory and database"""
+        # Clean up in-memory sessions
         with self.session_lock:
             expired = [
                 sid for sid, session in self.active_sessions.items()
@@ -588,7 +591,37 @@ class EnhancedSessionManager:
                 self._remove_session(session_id)
 
             if expired:
-                logger.info(f"Cleaned up {len(expired)} expired sessions")
+                logger.info(f"Cleaned up {len(expired)} expired in-memory sessions")
+        
+        # Clean up expired sessions from database (auth_sessions table)
+        try:
+            with auth_db.get_connection() as conn:
+                # Clean up sessions table (if it exists in auth.db)
+                try:
+                    cursor = conn.execute(
+                        "DELETE FROM sessions WHERE expires_at < ?",
+                        (datetime.now(timezone.utc).isoformat(),)
+                    )
+                    deleted = cursor.rowcount
+                    if deleted > 0:
+                        logger.info(f"Cleaned up {deleted} expired sessions from database")
+                except sqlite3.OperationalError:
+                    pass  # Table doesn't exist in this database
+                
+                # Clean up auth_sessions table (main zoe.db)
+                try:
+                    cursor = conn.execute(
+                        "DELETE FROM auth_sessions WHERE expires_at < ?",
+                        (datetime.now(timezone.utc).isoformat(),)
+                    )
+                    deleted = cursor.rowcount
+                    if deleted > 0:
+                        logger.info(f"Cleaned up {deleted} expired auth_sessions from database")
+                except sqlite3.OperationalError:
+                    pass  # Table doesn't exist in this database
+                    
+        except Exception as e:
+            logger.error(f"Failed to cleanup database sessions: {e}")
 
     def _get_resource_owner(self, resource: Optional[str]) -> Optional[str]:
         """Get owner of resource for permission checks"""
@@ -619,7 +652,7 @@ class EnhancedSessionManager:
                         "session_type": session.session_type.value,
                         "device": request.device_info.get("type", "unknown")
                     }),
-                    datetime.now().isoformat()
+                    datetime.now(timezone.utc).isoformat()
                 ))
         except Exception as e:
             logger.error(f"Failed to log successful auth: {e}")
@@ -640,7 +673,7 @@ class EnhancedSessionManager:
                         "reason": reason,
                         "device": request.device_info.get("type", "unknown")
                     }),
-                    datetime.now().isoformat()
+                    datetime.now(timezone.utc).isoformat()
                 ))
         except Exception as e:
             logger.error(f"Failed to log failed auth: {e}")
@@ -658,7 +691,7 @@ class EnhancedSessionManager:
                     self.active_sessions[session_id].user_id,
                     "session_escalation", "session", "success",
                     json.dumps({"session_id": session_id}),
-                    datetime.now().isoformat()
+                    datetime.now(timezone.utc).isoformat()
                 ))
         except Exception as e:
             logger.error(f"Failed to log escalation: {e}")
@@ -676,7 +709,7 @@ class EnhancedSessionManager:
                     self.active_sessions.get(session_id, {}).get("user_id", "unknown"),
                     "session_escalation", "session", "failure",
                     json.dumps({"session_id": session_id, "reason": reason}),
-                    datetime.now().isoformat()
+                    datetime.now(timezone.utc).isoformat()
                 ))
         except Exception as e:
             logger.error(f"Failed to log escalation failure: {e}")
