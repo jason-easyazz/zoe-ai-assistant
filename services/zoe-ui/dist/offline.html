@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Offline - Zoe AI</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            padding: 20px;
+        }
+        
+        .container {
+            text-align: center;
+            max-width: 500px;
+        }
+        
+        .orb {
+            width: clamp(120px, 30vw, 180px);
+            height: clamp(120px, 30vw, 180px);
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            margin: 0 auto 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: clamp(48px, 12vw, 72px);
+            box-shadow: 
+                0 0 60px rgba(123, 97, 255, 0.4),
+                0 0 120px rgba(90, 224, 224, 0.2);
+            animation: pulse 3s ease-in-out infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 0.8;
+            }
+            50% { 
+                transform: scale(1.05);
+                opacity: 1;
+            }
+        }
+        
+        h1 {
+            font-size: clamp(28px, 6vw, 36px);
+            font-weight: 300;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        p {
+            font-size: clamp(16px, 3vw, 18px);
+            color: rgba(255, 255, 255, 0.7);
+            line-height: 1.6;
+            margin-bottom: 32px;
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 14px 32px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 12px;
+            font-weight: 500;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            box-shadow: 0 8px 24px rgba(123, 97, 255, 0.3);
+            border: none;
+            cursor: pointer;
+            margin: 8px;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 32px rgba(123, 97, 255, 0.4);
+        }
+        
+        .btn:active {
+            transform: translateY(0);
+        }
+        
+        .status {
+            margin-top: 40px;
+            padding: 16px 24px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.8);
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ef4444;
+            margin-right: 8px;
+            animation: blink 2s ease-in-out infinite;
+        }
+        
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+        
+        .cached-pages {
+            margin-top: 40px;
+            text-align: left;
+        }
+        
+        .cached-pages h3 {
+            font-size: 18px;
+            font-weight: 500;
+            margin-bottom: 16px;
+            color: rgba(255, 255, 255, 0.9);
+        }
+        
+        .cached-list {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .cached-list li {
+            padding: 12px 16px;
+            margin-bottom: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            transition: all 0.2s ease;
+        }
+        
+        .cached-list li:hover {
+            background: rgba(255, 255, 255, 0.15);
+            transform: translateX(4px);
+        }
+        
+        .cached-list a {
+            color: white;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 15px;
+        }
+        
+        .cached-list a::before {
+            content: '📄';
+            font-size: 18px;
+        }
+    </style>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
+</head>
+<body>
+    <div class="container">
+        <div class="orb">📡</div>
+        
+        <h1>You're Offline</h1>
+        <p>
+            It looks like you've lost your internet connection. 
+            Don't worry, some features of Zoe are still available offline.
+        </p>
+        
+        <button class="btn" onclick="attemptReconnect()">Try Again</button>
+        <a href="/" class="btn" style="background: rgba(255, 255, 255, 0.1);">Go to Home</a>
+        
+        <div class="status">
+            <span class="status-indicator"></span>
+            <strong>Offline Mode</strong>
+            <div style="margin-top: 8px; font-size: 13px; opacity: 0.8;">
+                You'll automatically reconnect when internet is available
+            </div>
+        </div>
+        
+        <div class="cached-pages" id="cachedPages">
+            <h3>📦 Available Offline Pages:</h3>
+            <ul class="cached-list">
+                <li><a href="/">Home</a></li>
+                <li><a href="/dashboard.html">Dashboard</a></li>
+                <li><a href="/calendar.html">Calendar</a></li>
+                <li><a href="/lists.html">Lists</a></li>
+                <li><a href="/chat.html">Chat</a></li>
+            </ul>
+        </div>
+    </div>
+    
+    <script>
+        // Attempt to reconnect
+        function attemptReconnect() {
+            const btn = event.target;
+            btn.textContent = 'Checking...';
+            btn.disabled = true;
+            
+            fetch('/api/health', { 
+                method: 'HEAD',
+                cache: 'no-cache'
+            })
+            .then(() => {
+                btn.textContent = 'Connected! ✓';
+                setTimeout(() => {
+                    window.location.reload();
+                }, 500);
+            })
+            .catch(() => {
+                btn.textContent = 'Still Offline';
+                setTimeout(() => {
+                    btn.textContent = 'Try Again';
+                    btn.disabled = false;
+                }, 2000);
+            });
+        }
+        
+        // Listen for online event
+        window.addEventListener('online', () => {
+            console.log('Back online!');
+            const status = document.querySelector('.status');
+            status.innerHTML = `
+                <span class="status-indicator" style="background: #22c55e; animation: none;"></span>
+                <strong>Connection Restored!</strong>
+                <div style="margin-top: 8px; font-size: 13px; opacity: 0.8;">
+                    Reloading page...
+                </div>
+            `;
+            setTimeout(() => {
+                window.location.reload();
+            }, 1500);
+        });
+        
+        // Check for cached pages
+        if ('caches' in window) {
+            caches.keys().then(cacheNames => {
+                console.log('Available caches:', cacheNames);
+            });
+        }
+        
+        console.log('📴 Offline page loaded');
+    </script>
+</body>
+</html>
+

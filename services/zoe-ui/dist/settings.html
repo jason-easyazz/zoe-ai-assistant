@@ -534,6 +534,64 @@
             .setting-item { flex-direction: column; align-items: flex-start; gap: 12px; }
             .setting-control { width: 100%; justify-content: flex-end; }
             .more-grid { grid-template-columns: 1fr; }
+            
+            /* User Management mobile adjustments */
+            #user-management .form-input,
+            #user-management .form-select,
+            #user-management .btn { font-size: 14px !important; min-height: 44px !important; }
+        }
+        
+        @media (max-width: 768px) {
+            /* Stack user creation form vertically on mobile */
+            #user-management > div:first-child > div:last-child {
+                grid-template-columns: 1fr !important;
+            }
+        }
+
+        /* Mobile Navigation Menu */
+        .mobile-nav-menu {
+            position: fixed; top: 0; left: -280px; width: 280px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.3); z-index: 2000;
+            transition: left 0.3s ease; display: flex; flex-direction: column;
+        }
+        .mobile-nav-menu.open { left: 0; }
+        .mobile-nav-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .mobile-nav-header h3 { margin: 0; font-size: 20px; font-weight: 600; color: #333; }
+        .mobile-nav-close {
+            width: 40px; height: 40px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 24px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: all 0.3s ease;
+        }
+        .mobile-nav-close:active { background: rgba(255, 255, 255, 0.5); }
+        .mobile-nav-content { flex: 1; overflow-y: auto; padding: 10px; }
+        .mobile-nav-item {
+            display: flex; align-items: center; gap: 12px; padding: 16px; margin: 4px 0;
+            color: #666; text-decoration: none; font-size: 16px; font-weight: 500;
+            border-radius: 12px; transition: all 0.3s ease;
+        }
+        .mobile-nav-item:active { background: rgba(123, 97, 255, 0.1); color: #7B61FF; }
+        .mobile-nav-item.active { background: rgba(123, 97, 255, 0.15); color: #7B61FF; font-weight: 600; }
+        .mobile-nav-item.logout { color: #ff4444; }
+        .mobile-nav-divider { height: 1px; background: rgba(255, 255, 255, 0.3); margin: 10px 0; }
+        .mobile-nav-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.3); z-index: 1999; opacity: 0;
+            pointer-events: none; transition: opacity 0.3s ease;
+        }
+        .mobile-nav-overlay.open { opacity: 1; pointer-events: auto; }
+        
+        /* Responsive: hide nav-menu on mobile, show mini-orb */
+        @media (max-width: 768px) {
+            .nav-menu { display: none !important; }
+            .mini-orb { display: flex !important; }
+        }
+        @media (min-width: 769px) {
+            .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
         }
     </style>
     <script src="js/auth.js"></script>
@@ -633,13 +691,180 @@
             0%, 100% { opacity: 1; transform: scale(1); }
             50% { opacity: 0.7; transform: scale(1.2); }
         }
-        </style>
+        
+
+        /* Navigation Bar - Standardized */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400;
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications { animation: notificationPulse 2s ease-in-out infinite; }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        
+        .api-indicator { 
+            font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 8px; 
+            display: flex; align-items: center; gap: 6px; 
+        }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.connecting { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.connecting::before { background: #ea580c; }
+        
+        /* Time/Date Display */
+        .time-date-display {
+            display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time { font-size: 16px; font-weight: 500; color: #333; line-height: 1.2; }
+        .current-date { font-size: 11px; color: #666; line-height: 1.2; }
+
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center; 
+        }
+        .notifications-title { font-size: 18px; font-weight: 600; color: #333; margin: 0; }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content { padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title { font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px; }
+        .notification-meta { font-size: 12px; color: #666; display: flex; gap: 10px; }
+        .notification-time { color: #7B61FF; font-weight: 500; }
+        .no-notifications { text-align: center; color: #666; font-size: 14px; padding: 40px 20px; }
+
+    </style>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
 </head>
 <body>
     <!-- Navigation -->
     <div class="nav-bar">
         <div class="nav-left">
-            <div class="mini-orb" onclick="handleLogout()"></div>
+            <div class="mini-orb" onclick="toggleMobileMenu()"></div>
             <div class="nav-menu">
                 <a href="chat.html" class="nav-item">Chat</a>
                 <a href="dashboard.html" class="nav-item">Dashboard</a>
@@ -652,26 +877,74 @@
         <div class="nav-right">
             <div class="api-indicator connecting" id="apiStatus">Connecting</div>
             
-            
             <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
             
-            <!-- User Menu -->
-            <div class="user-menu" onclick="toggleUserDropdown()">
-                <div class="user-avatar" id="userAvatar">?</div>
-                
-                <div class="user-dropdown" id="userDropdown">
-                    <a href="#" class="dropdown-item" onclick="showUserProfile()">Profile</a>
-                    <a href="#" class="dropdown-item" onclick="showSecuritySettings()">Security</a>
-                    <div class="dropdown-divider"></div>
-                    <a href="#" class="dropdown-item" onclick="switchUser()">Switch User</a>
-                    <a href="#" class="dropdown-item" onclick="upgradeSession()" id="upgradeSessionItem" style="display: none;">Upgrade Session</a>
-                    <div class="dropdown-divider"></div>
-                    <a href="admin.html" class="dropdown-item" id="adminLink" style="display: none;">Admin Dashboard</a>
-                    <div class="dropdown-divider" id="adminDivider" style="display: none;"></div>
-                    <a href="#" class="dropdown-item" onclick="logout()">Logout</a>
+            <!-- Time/Date Display -->
+            <div class="time-date-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- Mobile Navigation Menu -->
+    <div class="mobile-nav-menu" id="mobileNavMenu">
+        <div class="mobile-nav-header">
+            <h3>Navigation</h3>
+            <button class="mobile-nav-close" onclick="toggleMobileMenu()">✕</button>
+        </div>
+        <div class="mobile-nav-content">
+            <a href="chat.html" class="mobile-nav-item">💬 Chat</a>
+            <a href="dashboard.html" class="mobile-nav-item">📊 Dashboard</a>
+            <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
+            <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
+            <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
+            <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
+            <a href="settings.html" class="mobile-nav-item active">⚙️ Settings</a>
+            <div class="mobile-nav-divider"></div>
+            <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
+        </div>
+    </div>
+    <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
     </div>
 
     <!-- Notifications Panel -->
@@ -792,40 +1065,50 @@
             <div class="settings-section" id="userManagementSection" style="display: none;">
                 <div class="section-header" onclick="toggleSection('user-management')">
                     <div class="section-title">User Management</div>
-                    <div class="section-subtitle">Create and manage users (Admin only)</div>
+                    <div class="section-subtitle">Create and manage system users</div>
                 </div>
                 <div class="section-content" id="user-management">
-                    <!-- Create New User -->
-                    <div class="setting-item" style="flex-direction: column; align-items: stretch;">
-                        <div class="setting-info" style="margin-bottom: 15px;">
-                            <div class="setting-name">Create New User</div>
-                            <div class="setting-description">Add a new user to the system</div>
-                        </div>
-                        <div style="display: flex; flex-direction: column; gap: 10px;">
-                            <input type="text" id="newUsername" class="form-input" placeholder="Username" style="width: 100%;">
-                            <input type="email" id="newEmail" class="form-input" placeholder="Email" style="width: 100%;">
-                            <input type="password" id="newPassword" class="form-input" placeholder="Password (min 8 characters)" style="width: 100%;">
-                            <select id="newUserRole" class="form-select" style="width: 100%;">
+                    <!-- Create New User - Compact -->
+                    <div style="background: rgba(123, 97, 255, 0.05); border-radius: 8px; padding: 12px; margin-bottom: 12px;">
+                        <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: #333;">➕ Create New User</div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr auto auto; gap: 8px;">
+                            <input type="text" id="newUsername" class="form-input" placeholder="Username" style="min-height: 36px; padding: 6px 10px; font-size: 13px;">
+                            <input type="email" id="newEmail" class="form-input" placeholder="Email" style="min-height: 36px; padding: 6px 10px; font-size: 13px;">
+                            <input type="password" id="newPassword" class="form-input" placeholder="Password" style="min-height: 36px; padding: 6px 10px; font-size: 13px;">
+                            <select id="newUserRole" class="form-select" style="min-height: 36px; padding: 6px 10px; font-size: 13px;">
                                 <option value="user">User</option>
                                 <option value="admin">Admin</option>
-                                <option value="family_member">Family Member</option>
+                                <option value="family_member">Family</option>
                                 <option value="child">Child</option>
                                 <option value="guest">Guest</option>
                             </select>
-                            <button onclick="createNewUser()" class="btn" style="align-self: flex-end;">Create User</button>
+                            <button onclick="createNewUser()" class="btn primary" style="padding: 6px 14px; min-height: 36px; font-size: 13px; white-space: nowrap;">Create</button>
+                            <button onclick="clearNewUserForm()" class="btn" style="padding: 6px 10px; min-height: 36px; font-size: 13px;">✕</button>
                         </div>
                     </div>
 
-                    <!-- User List -->
-                    <div class="setting-item" style="flex-direction: column; align-items: stretch;">
-                        <div class="setting-info" style="margin-bottom: 15px;">
-                            <div class="setting-name">Existing Users</div>
-                            <div class="setting-description">View and manage all users</div>
-                        </div>
-                        <div id="userList" style="display: flex; flex-direction: column; gap: 10px;">
-                            <div style="text-align: center; padding: 20px; color: #666;">Loading users...</div>
-                        </div>
-                        <button onclick="loadUserList()" class="btn" style="align-self: flex-start; margin-top: 10px;">Refresh</button>
+                    <!-- Filters - Compact -->
+                    <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                        <input type="text" id="userSearchInput" class="form-input" placeholder="🔍 Search..." style="flex: 1; min-height: 36px; padding: 6px 10px; font-size: 13px;" oninput="filterUserList()">
+                        <select id="userRoleFilter" class="form-select" style="min-height: 36px; padding: 6px 10px; font-size: 13px; width: 120px;" onchange="filterUserList()">
+                            <option value="all">All Roles</option>
+                            <option value="admin">Admin</option>
+                            <option value="user">User</option>
+                            <option value="family_member">Family</option>
+                            <option value="child">Child</option>
+                            <option value="guest">Guest</option>
+                        </select>
+                        <select id="userStatusFilter" class="form-select" style="min-height: 36px; padding: 6px 10px; font-size: 13px; width: 120px;" onchange="filterUserList()">
+                            <option value="all">All Status</option>
+                            <option value="active">Active</option>
+                            <option value="inactive">Inactive</option>
+                        </select>
+                        <button onclick="loadUserList()" class="btn" style="padding: 6px 10px; min-height: 36px; font-size: 13px;">🔄</button>
+                    </div>
+
+                    <!-- User List - Compact Table Style -->
+                    <div id="userList" style="max-height: 500px; overflow-y: auto;">
+                        <div style="text-align: center; padding: 20px; color: #666; font-size: 13px;">Loading users...</div>
                     </div>
                 </div>
             </div>
@@ -1080,6 +1363,236 @@
                                 <option value="hourly">Every hour</option>
                                 <option value="daily">Daily</option>
                             </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Notification Settings -->
+            <div class="settings-section">
+                <div class="section-header" onclick="toggleSection('notifications')">
+                    <div class="section-title">🔔 Notification Settings</div>
+                    <div class="section-subtitle">Configure push notifications and reminders</div>
+                    <div class="section-arrow">▼</div>
+                </div>
+                <div class="section-content" id="notifications-content" style="display: none;">
+                    <div class="settings-grid">
+                        <!-- Notification Status -->
+                        <div class="setting-card">
+                            <div class="setting-header">
+                                <div class="setting-title">Push Notifications</div>
+                                <div class="setting-description" id="notification-status-text">Check status...</div>
+                            </div>
+                            <div class="setting-controls">
+                                <button class="btn-primary" id="enable-notifications-btn" onclick="enableNotifications()" style="display: none;">
+                                    Enable Notifications
+                                </button>
+                                <button class="btn-secondary" id="test-notification-btn" onclick="sendTestNotification()" style="display: none;">
+                                    Send Test
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Calendar Reminders -->
+                        <div class="setting-card">
+                            <div class="setting-header">
+                                <div class="setting-title">📅 Calendar Reminders</div>
+                                <div class="setting-description">Get notified before your events</div>
+                            </div>
+                            <div class="setting-controls">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="calendar-reminders" onchange="updateNotificationPref('calendar_reminders', this.checked)">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Reminder Timing -->
+                        <div class="setting-card" id="calendar-timing-card">
+                            <div class="setting-header">
+                                <div class="setting-title">Reminder Timing</div>
+                                <div class="setting-description">How many minutes before events</div>
+                            </div>
+                            <div class="setting-controls">
+                                <select id="calendar-reminder-minutes" class="setting-select" onchange="updateNotificationPref('calendar_reminder_minutes', parseInt(this.value))">
+                                    <option value="5">5 minutes</option>
+                                    <option value="10">10 minutes</option>
+                                    <option value="15" selected>15 minutes</option>
+                                    <option value="30">30 minutes</option>
+                                    <option value="60">1 hour</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Task Due Alerts -->
+                        <div class="setting-card">
+                            <div class="setting-header">
+                                <div class="setting-title">✅ Task Due Alerts</div>
+                                <div class="setting-description">Notify when tasks are due soon</div>
+                            </div>
+                            <div class="setting-controls">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="task-due-alerts" onchange="updateNotificationPref('task_due_alerts', this.checked)">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Task Due Hours -->
+                        <div class="setting-card" id="task-timing-card">
+                            <div class="setting-header">
+                                <div class="setting-title">Task Alert Timing</div>
+                                <div class="setting-description">Alert how many hours before due</div>
+                            </div>
+                            <div class="setting-controls">
+                                <select id="task-due-hours" class="setting-select" onchange="updateNotificationPref('task_due_hours', parseInt(this.value))">
+                                    <option value="1">1 hour</option>
+                                    <option value="4">4 hours</option>
+                                    <option value="12">12 hours</option>
+                                    <option value="24" selected>24 hours</option>
+                                    <option value="48">48 hours</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Shopping List Updates -->
+                        <div class="setting-card">
+                            <div class="setting-header">
+                                <div class="setting-title">🛒 Shopping List Updates</div>
+                                <div class="setting-description">Notify when lists are shared/updated</div>
+                            </div>
+                            <div class="setting-controls">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="shopping-updates" onchange="updateNotificationPref('shopping_updates', this.checked)">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Chat Messages -->
+                        <div class="setting-card">
+                            <div class="setting-header">
+                                <div class="setting-title">💬 Chat Messages</div>
+                                <div class="setting-description">Notify about new messages</div>
+                            </div>
+                            <div class="setting-controls">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="chat-messages" onchange="updateNotificationPref('chat_messages', this.checked)">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Home Assistant Alerts -->
+                        <div class="setting-card">
+                            <div class="setting-header">
+                                <div class="setting-title">🏠 Home Assistant Alerts</div>
+                                <div class="setting-description">Smart home notifications</div>
+                            </div>
+                            <div class="setting-controls">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="home-assistant-alerts" onchange="updateNotificationPref('home_assistant_alerts', this.checked)">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Journal Prompts -->
+                        <div class="setting-card">
+                            <div class="setting-header">
+                                <div class="setting-title">📝 Journal Prompts</div>
+                                <div class="setting-description">Daily journal reminders</div>
+                            </div>
+                            <div class="setting-controls">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="journal-prompts" onchange="updateNotificationPref('journal_prompts', this.checked)">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Journal Prompt Time -->
+                        <div class="setting-card" id="journal-timing-card">
+                            <div class="setting-header">
+                                <div class="setting-title">Journal Prompt Time</div>
+                                <div class="setting-description">When to send journal reminder</div>
+                            </div>
+                            <div class="setting-controls">
+                                <input type="time" id="journal-prompt-time" class="setting-input" value="20:00" onchange="updateNotificationPref('journal_prompt_time', this.value)">
+                            </div>
+                        </div>
+
+                        <!-- Birthday Reminders -->
+                        <div class="setting-card">
+                            <div class="setting-header">
+                                <div class="setting-title">🎉 Birthday Reminders</div>
+                                <div class="setting-description">Get notified of birthdays</div>
+                            </div>
+                            <div class="setting-controls">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="birthday-reminders" onchange="updateNotificationPref('birthday_reminders', this.checked)">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Quiet Hours -->
+                        <div class="setting-card">
+                            <div class="setting-header">
+                                <div class="setting-title">🌙 Quiet Hours</div>
+                                <div class="setting-description">Disable notifications during specific hours</div>
+                            </div>
+                            <div class="setting-controls">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="quiet-hours-enabled" onchange="updateNotificationPref('quiet_hours_enabled', this.checked)">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Quiet Hours Start -->
+                        <div class="setting-card" id="quiet-hours-start-card">
+                            <div class="setting-header">
+                                <div class="setting-title">Quiet Hours Start</div>
+                                <div class="setting-description">When to start quiet hours</div>
+                            </div>
+                            <div class="setting-controls">
+                                <input type="time" id="quiet-hours-start" class="setting-input" value="22:00" onchange="updateNotificationPref('quiet_hours_start', this.value)">
+                            </div>
+                        </div>
+
+                        <!-- Quiet Hours End -->
+                        <div class="setting-card" id="quiet-hours-end-card">
+                            <div class="setting-header">
+                                <div class="setting-title">Quiet Hours End</div>
+                                <div class="setting-description">When to end quiet hours</div>
+                            </div>
+                            <div class="setting-controls">
+                                <input type="time" id="quiet-hours-end" class="setting-input" value="08:00" onchange="updateNotificationPref('quiet_hours_end', this.value)">
+                            </div>
+                        </div>
+
+                        <!-- Active Devices -->
+                        <div class="setting-card">
+                            <div class="setting-header">
+                                <div class="setting-title">📱 Active Devices</div>
+                                <div class="setting-description" id="devices-count">Loading...</div>
+                            </div>
+                            <div class="setting-controls">
+                                <button class="btn-secondary" onclick="loadDevices()">
+                                    Refresh
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Devices List -->
+                        <div id="devices-list" class="setting-card" style="display: none;">
+                            <div class="setting-header">
+                                <div class="setting-title">Your Devices</div>
+                            </div>
+                            <div id="devices-container" style="padding: 10px 0;">
+                                <!-- Devices will be listed here -->
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1344,6 +1857,97 @@
                                 </select>
                             </div>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Weather Settings -->
+            <div class="settings-section">
+                <div class="section-header" onclick="toggleSection('weather')">
+                    <div class="section-title">☀️ Weather Settings</div>
+                    <div class="section-subtitle">Configure location and display preferences</div>
+                </div>
+                <div class="section-content" id="weather">
+                    
+                    <!-- Location Mode -->
+                    <div class="setting-subsection">
+                        <div class="subsection-title">Location Mode</div>
+                        
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <div class="setting-name">Use Current Device Location</div>
+                                <div class="setting-description">
+                                    Automatically detect your location (requires location permission)
+                                </div>
+                            </div>
+                            <div class="setting-control">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="use-current-location">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div id="location-permission-status" style="padding: 10px; margin-top: 8px; border-radius: 8px; background: #f0f9ff; color: #0369a1; font-size: 13px; display: none;">
+                            <span id="location-status-icon">ℹ️</span>
+                            <span id="location-status-text">Location permission required</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Location Setting -->
+                    <div class="setting-subsection" id="manual-location-section">
+                        <div class="subsection-title">Saved Location</div>
+                        
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <div class="setting-name">Current Location</div>
+                                <div class="setting-description" id="current-weather-location">
+                                    Loading...
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <div class="setting-name">Change Location</div>
+                                <div class="setting-description">Search for a city</div>
+                            </div>
+                            <div class="setting-control">
+                                <input type="text" id="weather-location-search" 
+                                       placeholder="Search city..." 
+                                       class="text-input"
+                                       style="width: 250px;">
+                            </div>
+                        </div>
+                        
+                        <div id="location-search-results" style="display: none; margin: 10px 0; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                            <!-- Search results populated dynamically -->
+                        </div>
+                    </div>
+                    
+                    <!-- Temperature Unit -->
+                    <div class="setting-subsection">
+                        <div class="subsection-title">Temperature Unit</div>
+                        
+                        <div class="setting-item">
+                            <div class="setting-info">
+                                <div class="setting-name">Display Unit</div>
+                                <div class="setting-description">Choose Celsius or Fahrenheit</div>
+                            </div>
+                            <div class="setting-control">
+                                <select id="temperature-unit" class="select-input">
+                                    <option value="celsius">Celsius (°C)</option>
+                                    <option value="fahrenheit">Fahrenheit (°F)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Save Button -->
+                    <div class="setting-item">
+                        <button onclick="saveWeatherSettings()" class="btn-primary">
+                            Save Weather Settings
+                        </button>
                     </div>
                 </div>
             </div>
@@ -1827,13 +2431,13 @@
                     <div class="more-item-icon">⚡</div>
                     <div class="more-item-label">Workflows</div>
                 </div>
-                <div class="more-item" onclick="alert('Coming soon!')">
-                    <div class="more-item-icon">📊</div>
-                    <div class="more-item-label">Analytics</div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
                 </div>
-                <div class="more-item" onclick="alert('Coming soon!')">
-                    <div class="more-item-icon">🔍</div>
-                    <div class="more-item-label">Search</div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
                 </div>
             </div>
         </div>
@@ -3317,6 +3921,24 @@
             document.getElementById('notificationsPanel').classList.remove('open');
         }
 
+        // Mobile menu toggle
+        function toggleMobileMenu() {
+            if (window.innerWidth > 768) { window.location.href = 'index.html'; return; }
+            const menu = document.getElementById('mobileNavMenu');
+            const overlay = document.getElementById('mobileNavOverlay');
+            if (menu && overlay) {
+                menu.classList.toggle('open');
+                overlay.classList.toggle('open');
+            }
+        }
+
+        function handleLogout() {
+            if (window.innerWidth <= 768) {
+                toggleMobileMenu();
+            }
+            logout();
+        }
+
         async function loadNotifications() {
             try {
                 const response = await apiRequest('/reminders/notifications/pending');
@@ -3404,6 +4026,8 @@
         // Authentication functions now handled by auth.js
 
         // User Management Functions (Admin Only)
+        let allUsers = []; // Store all users for filtering
+
         async function checkAdminAccess() {
             try {
                 const user = await window.zoeAuth.getCurrentUser();
@@ -3418,6 +4042,13 @@
             } catch (error) {
                 console.error('Error checking admin access:', error);
             }
+        }
+
+        function clearNewUserForm() {
+            document.getElementById('newUsername').value = '';
+            document.getElementById('newEmail').value = '';
+            document.getElementById('newPassword').value = '';
+            document.getElementById('newUserRole').value = 'user';
         }
 
         async function createNewUser() {
@@ -3456,11 +4087,8 @@
                     const result = await response.json();
                     showNotification(`User ${username} created successfully!`, 'success');
                     
-                    // Clear form
-                    document.getElementById('newUsername').value = '';
-                    document.getElementById('newEmail').value = '';
-                    document.getElementById('newPassword').value = '';
-                    document.getElementById('newUserRole').value = 'user';
+                    // Clear form using the helper function
+                    clearNewUserForm();
                     
                     // Reload user list
                     loadUserList();
@@ -3476,7 +4104,7 @@
 
         async function loadUserList() {
             const userListDiv = document.getElementById('userList');
-            userListDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #666;">Loading users...</div>';
+            userListDiv.innerHTML = '<div style="text-align: center; padding: 30px; color: #999; font-size: 13px;">⏳ Loading users...</div>';
 
             try {
                 const session = window.zoeAuth.getCurrentSession();
@@ -3488,61 +4116,126 @@
 
                 if (response.ok) {
                     const data = await response.json();
-                    displayUserList(data.users);
+                    allUsers = data.users; // Store for filtering
+                    displayUserList(allUsers);
                 } else {
-                    userListDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #ef4444;">Failed to load users</div>';
+                    userListDiv.innerHTML = '<div style="text-align: center; padding: 30px; color: #ef4444; font-size: 13px;">❌ Failed to load users</div>';
                 }
             } catch (error) {
                 console.error('Error loading users:', error);
-                userListDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #ef4444;">Connection error</div>';
+                userListDiv.innerHTML = '<div style="text-align: center; padding: 30px; color: #ef4444; font-size: 13px;">❌ Connection error</div>';
             }
         }
+
+        function filterUserList() {
+            const searchTerm = document.getElementById('userSearchInput').value.toLowerCase();
+            const roleFilter = document.getElementById('userRoleFilter').value;
+            const statusFilter = document.getElementById('userStatusFilter').value;
+
+            const filteredUsers = allUsers.filter(user => {
+                // Search filter
+                const matchesSearch = !searchTerm || 
+                    user.username.toLowerCase().includes(searchTerm) ||
+                    (user.email && user.email.toLowerCase().includes(searchTerm));
+
+                // Role filter
+                const matchesRole = roleFilter === 'all' || user.role === roleFilter;
+
+                // Status filter
+                const matchesStatus = statusFilter === 'all' || 
+                    (statusFilter === 'active' && user.is_active) ||
+                    (statusFilter === 'inactive' && !user.is_active);
+
+                return matchesSearch && matchesRole && matchesStatus;
+            });
+
+            displayUserList(filteredUsers);
+        }
+
+        // Store user data globally for safer access
+        window.userDataStore = window.userDataStore || {};
 
         function displayUserList(users) {
             const userListDiv = document.getElementById('userList');
             
             if (users.length === 0) {
-                userListDiv.innerHTML = '<div style="text-align: center; padding: 20px; color: #666;">No users found</div>';
+                userListDiv.innerHTML = '<div style="text-align: center; padding: 30px; color: #999; font-size: 13px;">No users found</div>';
                 return;
             }
 
-            const userCards = users.map(user => `
-                <div style="background: white; border-radius: 8px; padding: 15px; border: 1px solid #e1e5e9;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <div style="font-weight: 600; font-size: 16px;">${escapeHtml(user.username)}</div>
-                            <div style="font-size: 14px; color: #666; margin-top: 4px;">${escapeHtml(user.email || 'No email')}</div>
-                            <div style="display: flex; gap: 10px; margin-top: 8px;">
-                                <span style="background: ${getRoleBadgeColor(user.role)}; color: white; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500;">
-                                    ${escapeHtml(user.role)}
-                                </span>
-                                <span style="color: #666; font-size: 12px;">
-                                    ${user.is_active ? '✅ Active' : '❌ Inactive'}
-                                </span>
-                                ${user.active_sessions ? `<span style="color: #666; font-size: 12px;">🔗 ${user.active_sessions} sessions</span>` : ''}
-                            </div>
-                        </div>
-                        <div style="display: flex; gap: 8px;">
-                            <button onclick="resetUserPassword('${user.user_id}', '${escapeHtml(user.username)}')" 
-                                    class="btn" style="padding: 6px 12px; font-size: 13px;">
-                                Reset Password
-                            </button>
-                            ${!user.is_active ? 
-                                `<button onclick="activateUser('${user.user_id}')" 
-                                         class="btn" style="padding: 6px 12px; font-size: 13px;">
-                                    Activate
-                                </button>` : 
-                                `<button onclick="deactivateUser('${user.user_id}', '${escapeHtml(user.username)}')" 
-                                         class="btn" style="padding: 6px 12px; font-size: 13px; background: #ef4444;">
-                                    Deactivate
-                                </button>`
-                            }
-                        </div>
-                    </div>
-                </div>
-            `).join('');
+            // Store all user data in global store
+            users.forEach(user => {
+                window.userDataStore[user.user_id] = user;
+            });
 
-            userListDiv.innerHTML = userCards;
+            // Create compact table-like layout
+            let html = `
+                <div style="background: white; border-radius: 8px; border: 1px solid #e1e5e9; overflow: hidden;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                        <thead>
+                            <tr style="background: #f8f9fa; border-bottom: 2px solid #e1e5e9;">
+                                <th style="padding: 8px 12px; text-align: left; font-weight: 600; color: #666; font-size: 11px; text-transform: uppercase;">User</th>
+                                <th style="padding: 8px 12px; text-align: left; font-weight: 600; color: #666; font-size: 11px; text-transform: uppercase;">Email</th>
+                                <th style="padding: 8px 12px; text-align: center; font-weight: 600; color: #666; font-size: 11px; text-transform: uppercase;">Role</th>
+                                <th style="padding: 8px 12px; text-align: center; font-weight: 600; color: #666; font-size: 11px; text-transform: uppercase;">Status</th>
+                                <th style="padding: 8px 12px; text-align: center; font-weight: 600; color: #666; font-size: 11px; text-transform: uppercase;">Sessions</th>
+                                <th style="padding: 8px 12px; text-align: right; font-weight: 600; color: #666; font-size: 11px; text-transform: uppercase;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+
+            users.forEach(user => {
+                const roleBadge = `<span style="background: ${getRoleBadgeColor(user.role)}; color: white; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600;">${escapeHtml(user.role)}</span>`;
+                const statusBadge = user.is_active ? 
+                    '<span style="color: #22c55e;">✓</span>' : 
+                    '<span style="color: #ef4444;">✕</span>';
+                const sessionCount = user.active_sessions > 0 ? 
+                    `<span style="color: #7B61FF; font-weight: 600;">${user.active_sessions}</span>` : 
+                    '<span style="color: #999;">0</span>';
+
+                html += `
+                    <tr style="border-bottom: 1px solid #f0f0f0;">
+                        <td style="padding: 10px 12px;">
+                            <div style="font-weight: 600; color: #333;">${escapeHtml(user.username)}</div>
+                            <div style="font-size: 10px; color: #999; font-family: monospace;">${user.user_id.substring(0, 8)}...</div>
+                        </td>
+                        <td style="padding: 10px 12px; color: #666; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                            ${escapeHtml(user.email || '—')}
+                        </td>
+                        <td style="padding: 10px 12px; text-align: center;">
+                            ${roleBadge}
+                        </td>
+                        <td style="padding: 10px 12px; text-align: center; font-size: 16px;">
+                            ${statusBadge}
+                        </td>
+                        <td style="padding: 10px 12px; text-align: center;">
+                            ${sessionCount}
+                        </td>
+                        <td style="padding: 10px 12px; text-align: right;">
+                            <div style="display: flex; gap: 4px; justify-content: flex-end; flex-wrap: wrap;">
+                                <button onclick="editUserById('${user.user_id}')" class="btn" style="padding: 4px 8px; font-size: 11px; min-height: 28px;" title="Edit">✏️</button>
+                                <button onclick="resetUserPasswordById('${user.user_id}')" class="btn" style="padding: 4px 8px; font-size: 11px; min-height: 28px;" title="Reset Password">🔑</button>
+                                <button onclick="managePinCodeForUser('${user.user_id}')" class="btn" style="padding: 4px 8px; font-size: 11px; min-height: 28px; ${user.has_passcode ? 'background: #3b82f6; color: white;' : ''}" title="${user.has_passcode ? 'Manage PIN Code' : 'Set PIN Code'}">${user.has_passcode ? '🔢' : '➕🔢'}</button>
+                                ${user.active_sessions > 0 ? `<button onclick="viewUserSessionsById('${user.user_id}')" class="btn" style="padding: 4px 8px; font-size: 11px; min-height: 28px;" title="View Sessions">🔗</button>` : ''}
+                                ${!user.is_active ? 
+                                    `<button onclick="activateUserById('${user.user_id}')" class="btn" style="padding: 4px 8px; font-size: 11px; min-height: 28px; background: #22c55e; color: white;" title="Activate">✓</button>` : 
+                                    `<button onclick="deactivateUserById('${user.user_id}')" class="btn" style="padding: 4px 8px; font-size: 11px; min-height: 28px; background: #f59e0b; color: white;" title="Deactivate">⏸</button>`
+                                }
+                                <button onclick="deleteUserPermanentlyById('${user.user_id}')" class="btn danger" style="padding: 4px 8px; font-size: 11px; min-height: 28px;" title="Delete">🗑️</button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += `
+                        </tbody>
+                    </table>
+                </div>
+            `;
+
+            userListDiv.innerHTML = html;
         }
 
         function getRoleBadgeColor(role) {
@@ -3560,6 +4253,68 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // Wrapper functions that safely retrieve user data from store
+        function editUserById(userId) {
+            const user = window.userDataStore[userId];
+            if (!user) {
+                console.error('User not found in store:', userId);
+                showNotification('User data not found', 'error');
+                return;
+            }
+            editUser(userId, user.username);
+        }
+
+        function resetUserPasswordById(userId) {
+            const user = window.userDataStore[userId];
+            if (!user) {
+                console.error('User not found in store:', userId);
+                showNotification('User data not found', 'error');
+                return;
+            }
+            resetUserPassword(userId, user.username);
+        }
+
+        function viewUserSessionsById(userId) {
+            const user = window.userDataStore[userId];
+            if (!user) {
+                console.error('User not found in store:', userId);
+                showNotification('User data not found', 'error');
+                return;
+            }
+            viewUserSessions(userId, user.username);
+        }
+
+        function activateUserById(userId) {
+            const user = window.userDataStore[userId];
+            if (!user) {
+                console.error('User not found in store:', userId);
+                showNotification('User data not found', 'error');
+                return;
+            }
+            activateUser(userId);
+        }
+
+        function deactivateUserById(userId) {
+            const user = window.userDataStore[userId];
+            if (!user) {
+                console.error('User not found in store:', userId);
+                showNotification('User data not found', 'error');
+                return;
+            }
+            deactivateUser(userId, user.username);
+        }
+
+        function deleteUserPermanentlyById(userId) {
+            const user = window.userDataStore[userId];
+            if (!user) {
+                console.error('User not found in store:', userId);
+                showNotification('User data not found', 'error');
+                return;
+            }
+            console.log('🗑️ deleteUserPermanentlyById called:', { userId, username: user.username });
+            deleteUserPermanently(userId, user.username);
         }
 
         async function resetUserPassword(userId, username) {
@@ -3590,14 +4345,74 @@
             }
         }
 
-        async function deactivateUser(userId, username) {
-            if (!confirm(`Deactivate user ${username}? They will not be able to log in.`)) {
+        async function managePinCodeForUser(userId) {
+            const user = window.userDataStore[userId];
+            if (!user) {
+                showNotification('User data not found', 'error');
+                return;
+            }
+
+            // Check if user already has a PIN
+            if (user.has_passcode) {
+                const action = confirm(`User ${user.username} already has a PIN code.\n\nClick OK to set a new PIN, or Cancel to remove the existing PIN.`);
+                
+                if (action) {
+                    // Set new PIN
+                    await setPinCodeForUser(userId, user.username);
+                } else {
+                    // Remove PIN
+                    await removePinCodeForUser(userId, user.username);
+                }
+            } else {
+                // Set new PIN
+                await setPinCodeForUser(userId, user.username);
+            }
+        }
+
+        async function setPinCodeForUser(userId, username) {
+            const pin = prompt(`Set PIN code for ${username}:\n\n(4-8 digits)`);
+            
+            if (!pin) {
+                return; // User cancelled
+            }
+
+            if (!/^\d{4,8}$/.test(pin)) {
+                showNotification('PIN must be 4-8 digits', 'error');
                 return;
             }
 
             try {
                 const session = window.zoeAuth.getCurrentSession();
-                const response = await fetch(`/api/admin/users/${userId}`, {
+                const response = await fetch(`/api/admin/users/${userId}/passcode`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Session-ID': session.session_id
+                    },
+                    body: JSON.stringify({ passcode: pin })
+                });
+
+                if (response.ok) {
+                    showNotification(`PIN code set for ${username}`, 'success');
+                    loadUserList(); // Refresh the list
+                } else {
+                    const error = await response.json();
+                    showNotification(error.detail || 'Failed to set PIN code', 'error');
+                }
+            } catch (error) {
+                console.error('Error setting PIN code:', error);
+                showNotification('Connection error', 'error');
+            }
+        }
+
+        async function removePinCodeForUser(userId, username) {
+            if (!confirm(`Remove PIN code for ${username}?`)) {
+                return;
+            }
+
+            try {
+                const session = window.zoeAuth.getCurrentSession();
+                const response = await fetch(`/api/admin/users/${userId}/passcode`, {
                     method: 'DELETE',
                     headers: {
                         'X-Session-ID': session.session_id
@@ -3605,15 +4420,73 @@
                 });
 
                 if (response.ok) {
-                    showNotification(`User ${username} deactivated`, 'success');
-                    loadUserList();
+                    showNotification(`PIN code removed for ${username}`, 'success');
+                    loadUserList(); // Refresh the list
                 } else {
                     const error = await response.json();
-                    showNotification(error.detail || 'Failed to deactivate user', 'error');
+                    showNotification(error.detail || 'Failed to remove PIN code', 'error');
+                }
+            } catch (error) {
+                console.error('Error removing PIN code:', error);
+                showNotification('Connection error', 'error');
+            }
+        }
+
+        async function deactivateUser(userId, username) {
+            console.log('deactivateUser called:', { userId, username });
+            
+            if (!confirm(`Deactivate user ${username}? They will not be able to log in.`)) {
+                console.log('User cancelled deactivation');
+                return;
+            }
+
+            try {
+                // Check if auth system is available
+                if (!window.zoeAuth) {
+                    console.error('zoeAuth not available');
+                    showNotification('Authentication system not available', 'error');
+                    return;
+                }
+                
+                const session = window.zoeAuth.getCurrentSession();
+                if (!session || !session.session_id) {
+                    console.error('No valid session found:', session);
+                    showNotification('You must be logged in to deactivate users', 'error');
+                    return;
+                }
+                
+                console.log('Making DELETE request (deactivate) to:', `/api/admin/users/${userId}`);
+                
+                const response = await fetch(`/api/admin/users/${userId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'X-Session-ID': session.session_id
+                    }
+                });
+
+                console.log('Response status:', response.status);
+
+                if (response.ok) {
+                    showNotification(`User ${username} deactivated`, 'success');
+                    console.log('User deactivated successfully');
+                    loadUserList();
+                } else {
+                    const errorText = await response.text();
+                    console.error('Deactivate failed. Status:', response.status, 'Response:', errorText);
+                    
+                    let errorMessage = 'Failed to deactivate user';
+                    try {
+                        const error = JSON.parse(errorText);
+                        errorMessage = error.detail || error.message || errorMessage;
+                    } catch (e) {
+                        errorMessage = errorText || errorMessage;
+                    }
+                    
+                    showNotification(errorMessage, 'error');
                 }
             } catch (error) {
                 console.error('Error deactivating user:', error);
-                showNotification('Connection error', 'error');
+                showNotification(`Connection error: ${error.message}`, 'error');
             }
         }
 
@@ -3641,6 +4514,245 @@
             } catch (error) {
                 console.error('Error activating user:', error);
                 showNotification('Connection error', 'error');
+            }
+        }
+
+        async function editUser(userId, username) {
+            // Find the user in allUsers array
+            const user = allUsers.find(u => u.user_id === userId);
+            if (!user) {
+                showNotification('User not found', 'error');
+                return;
+            }
+
+            // Create modal for editing
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0, 0, 0, 0.5); display: flex;
+                align-items: center; justify-content: center; z-index: 10000;
+            `;
+            modal.innerHTML = `
+                <div style="background: white; border-radius: 16px; padding: 30px; max-width: 500px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+                    <h3 style="margin: 0 0 20px 0; font-size: 20px; color: #333;">✏️ Edit User: ${escapeHtml(username)}</h3>
+                    
+                    <div style="display: flex; flex-direction: column; gap: 15px;">
+                        <div>
+                            <label style="display: block; font-size: 14px; font-weight: 500; color: #666; margin-bottom: 6px;">Email</label>
+                            <input type="email" id="editEmail" class="form-input" value="${escapeHtml(user.email || '')}" style="width: 100%;">
+                        </div>
+                        
+                        <div>
+                            <label style="display: block; font-size: 14px; font-weight: 500; color: #666; margin-bottom: 6px;">Role</label>
+                            <select id="editRole" class="form-select" style="width: 100%;">
+                                <option value="user" ${user.role === 'user' ? 'selected' : ''}>👤 User</option>
+                                <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>⚙️ Admin</option>
+                                <option value="family_member" ${user.role === 'family_member' ? 'selected' : ''}>👨‍👩‍👧 Family Member</option>
+                                <option value="child" ${user.role === 'child' ? 'selected' : ''}>👶 Child</option>
+                                <option value="guest" ${user.role === 'guest' ? 'selected' : ''}>👋 Guest</option>
+                            </select>
+                        </div>
+                        
+                        <div style="display: flex; gap: 10px; margin-top: 10px;">
+                            <button onclick="saveUserEdit('${userId}')" class="btn primary" style="flex: 1;">Save Changes</button>
+                            <button onclick="this.closest('div[style*=\\'position: fixed\\']').remove()" class="btn" style="flex: 1;">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+
+        async function saveUserEdit(userId) {
+            const email = document.getElementById('editEmail').value.trim();
+            const role = document.getElementById('editRole').value;
+
+            try {
+                const session = window.zoeAuth.getCurrentSession();
+                const response = await fetch(`/api/admin/users/${userId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Session-ID': session.session_id
+                    },
+                    body: JSON.stringify({
+                        email: email || null,
+                        role: role
+                    })
+                });
+
+                if (response.ok) {
+                    showNotification('User updated successfully', 'success');
+                    // Close modal
+                    const modal = document.querySelector('div[style*="position: fixed"]');
+                    if (modal) modal.remove();
+                    // Reload user list
+                    loadUserList();
+                } else {
+                    const error = await response.json();
+                    showNotification(error.detail || 'Failed to update user', 'error');
+                }
+            } catch (error) {
+                console.error('Error updating user:', error);
+                showNotification('Connection error', 'error');
+            }
+        }
+
+        async function viewUserSessions(userId, username) {
+            try {
+                const session = window.zoeAuth.getCurrentSession();
+                const response = await fetch(`/api/admin/users/${userId}/sessions`, {
+                    headers: {
+                        'X-Session-ID': session.session_id
+                    }
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    displayUserSessions(username, data.sessions);
+                } else {
+                    showNotification('Failed to load sessions', 'error');
+                }
+            } catch (error) {
+                console.error('Error loading sessions:', error);
+                showNotification('Connection error', 'error');
+            }
+        }
+
+        function displayUserSessions(username, sessions) {
+            const modal = document.createElement('div');
+            modal.style.cssText = `
+                position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+                background: rgba(0, 0, 0, 0.5); display: flex;
+                align-items: center; justify-content: center; z-index: 10000;
+            `;
+            
+            const sessionsList = sessions.length === 0 ? 
+                '<div style="text-align: center; padding: 30px; color: #666;">No active sessions</div>' :
+                sessions.map(s => `
+                    <div style="background: #f9fafb; border-radius: 8px; padding: 15px; margin-bottom: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: start;">
+                            <div>
+                                <div style="font-weight: 500; font-size: 14px; margin-bottom: 4px;">Session ID: ${s.session_id.substring(0, 16)}...</div>
+                                <div style="font-size: 12px; color: #666;">Created: ${new Date(s.created_at).toLocaleString()}</div>
+                                <div style="font-size: 12px; color: #666;">Last Activity: ${new Date(s.last_activity).toLocaleString()}</div>
+                                ${s.ip_address ? `<div style="font-size: 12px; color: #666;">IP: ${s.ip_address}</div>` : ''}
+                            </div>
+                            <button onclick="revokeSession('${s.session_id}', '${username}')" class="btn danger" style="padding: 6px 12px; font-size: 12px;">
+                                Revoke
+                            </button>
+                        </div>
+                    </div>
+                `).join('');
+
+            modal.innerHTML = `
+                <div style="background: white; border-radius: 16px; padding: 30px; max-width: 600px; width: 90%; max-height: 70vh; overflow-y: auto; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h3 style="margin: 0; font-size: 20px; color: #333;">🔗 Active Sessions for ${escapeHtml(username)}</h3>
+                        <button onclick="this.closest('div[style*=\\'position: fixed\\']').remove()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #666;">×</button>
+                    </div>
+                    ${sessionsList}
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+
+        async function revokeSession(sessionId, username) {
+            if (!confirm(`Revoke this session? The user will be logged out from that device.`)) {
+                return;
+            }
+
+            try {
+                const session = window.zoeAuth.getCurrentSession();
+                const response = await fetch(`/api/auth/sessions/${sessionId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'X-Session-ID': session.session_id
+                    }
+                });
+
+                if (response.ok) {
+                    showNotification('Session revoked successfully', 'success');
+                    // Close and reload
+                    const modal = document.querySelector('div[style*="position: fixed"]');
+                    if (modal) modal.remove();
+                    loadUserList();
+                } else {
+                    const error = await response.json();
+                    showNotification(error.detail || 'Failed to revoke session', 'error');
+                }
+            } catch (error) {
+                console.error('Error revoking session:', error);
+                showNotification('Connection error', 'error');
+            }
+        }
+
+        async function deleteUserPermanently(userId, username) {
+            console.log('deleteUserPermanently called:', { userId, username });
+            
+            // Multiple confirmation for permanent deletion
+            if (!confirm(`⚠️ PERMANENT DELETE: Are you sure you want to permanently delete user "${username}"?\n\nThis action CANNOT be undone! All user data will be lost.`)) {
+                console.log('User cancelled first confirmation');
+                return;
+            }
+
+            const confirmText = prompt(`Type "${username}" to confirm permanent deletion:`);
+            console.log('Confirmation text entered:', confirmText);
+            
+            if (confirmText !== username) {
+                showNotification('Deletion cancelled - username did not match', 'info');
+                console.log('Username mismatch. Expected:', username, 'Got:', confirmText);
+                return;
+            }
+
+            try {
+                // Check if auth system is available
+                if (!window.zoeAuth) {
+                    console.error('zoeAuth not available');
+                    showNotification('Authentication system not available', 'error');
+                    return;
+                }
+                
+                const session = window.zoeAuth.getCurrentSession();
+                if (!session || !session.session_id) {
+                    console.error('No valid session found:', session);
+                    showNotification('You must be logged in to delete users', 'error');
+                    return;
+                }
+                
+                console.log('Making DELETE request to:', `/api/admin/users/${userId}?permanent=true`);
+                console.log('Session ID:', session.session_id.substring(0, 16) + '...');
+                
+                const response = await fetch(`/api/admin/users/${userId}?permanent=true`, {
+                    method: 'DELETE',
+                    headers: {
+                        'X-Session-ID': session.session_id
+                    }
+                });
+
+                console.log('Response status:', response.status);
+                
+                if (response.ok) {
+                    showNotification(`User ${username} permanently deleted`, 'success');
+                    console.log('User deleted successfully');
+                    loadUserList();
+                } else {
+                    const errorText = await response.text();
+                    console.error('Delete failed. Status:', response.status, 'Response:', errorText);
+                    
+                    let errorMessage = 'Failed to delete user';
+                    try {
+                        const error = JSON.parse(errorText);
+                        errorMessage = error.detail || error.message || errorMessage;
+                    } catch (e) {
+                        errorMessage = errorText || errorMessage;
+                    }
+                    
+                    showNotification(errorMessage, 'error');
+                }
+            } catch (error) {
+                console.error('Error deleting user:', error);
+                showNotification(`Connection error: ${error.message}`, 'error');
             }
         }
 
@@ -3688,6 +4800,597 @@
                 .catch(err => console.error('Failed to load Zoe orb:', err));
         };
         document.head.appendChild(orbScript);
+    
+
+        // Navigation helper functions
+        function openMoreOverlay() {
+            document.getElementById('moreOverlay').classList.add('active');
+        }
+        
+        function closeMoreOverlay() {
+            document.getElementById('moreOverlay').classList.remove('active');
+        }
+        
+        function navigateToPage(page) {
+            window.location.href = page;
+        }
+        
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+            const notificationBtn = document.querySelector('.notifications-btn');
+            if (notificationBtn) notificationBtn.classList.remove('has-notifications');
+        }
+        
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+        
+        async function loadNotifications() {
+            try {
+                const response = await apiRequest('/reminders/notifications/pending');
+                const notifications = response.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+        
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            if (notifications.length > 0 && notificationBtn) {
+                notificationBtn.classList.add('has-notifications');
+            } else if (notificationBtn) {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
+                     onclick="handleNotificationClick(${notification.id})">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${formatNotificationTime(notification.notification_time)}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        function formatNotificationTime(timeStr) {
+            const date = new Date(timeStr);
+            const now = new Date();
+            const diff = now - date;
+            const minutes = Math.floor(diff / 60000);
+            const hours = Math.floor(minutes / 60);
+            const days = Math.floor(hours / 24);
+            
+            if (minutes < 1) return 'Just now';
+            if (minutes < 60) return `${minutes}m ago`;
+            if (hours < 24) return `${hours}h ago`;
+            return `${days}d ago`;
+        }
+        
+        async function handleNotificationClick(notificationId) {
+            try {
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
+                    method: 'POST'
+                });
+                loadNotifications();
+            } catch (error) {
+                console.error('Failed to acknowledge notification:', error);
+            }
+            closeNotifications();
+        }
+        
+        // Update time/date display
+        function updateTimeDate() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            const timeElement = document.getElementById('currentTime');
+            const dateElement = document.getElementById('currentDate');
+            
+            if (timeElement) timeElement.textContent = timeString;
+            if (dateElement) dateElement.textContent = dateString;
+        }
+        
+        // Initialize time/date updates
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function() {
+                updateTimeDate();
+                setInterval(updateTimeDate, 60000);
+                loadNotifications();
+            });
+        } else {
+            updateTimeDate();
+            setInterval(updateTimeDate, 60000);
+            loadNotifications();
+        }
+
+        // ===== PUSH NOTIFICATION SETTINGS =====
+
+        /**
+         * Initialize notification settings
+         */
+        async function initNotificationSettings() {
+            try {
+                // Check if push notifications are supported
+                if (!window.zoePushNotifications) {
+                    console.log('⚠️ Push notifications not loaded yet, waiting...');
+                    setTimeout(initNotificationSettings, 500);
+                    return;
+                }
+
+                // Check current status
+                const supported = window.zoePushNotifications.isSupported();
+                const permission = window.zoePushNotifications.getPermissionStatus();
+                const subscribed = await window.zoePushNotifications.isSubscribed();
+
+                updateNotificationStatus(supported, permission, subscribed);
+
+                // Load preferences
+                await loadNotificationPreferences();
+
+                // Load active devices
+                await loadDevices();
+
+            } catch (error) {
+                console.error('Error initializing notification settings:', error);
+            }
+        }
+
+        /**
+         * Update notification status display
+         */
+        function updateNotificationStatus(supported, permission, subscribed) {
+            const statusText = document.getElementById('notification-status-text');
+            const enableBtn = document.getElementById('enable-notifications-btn');
+            const testBtn = document.getElementById('test-notification-btn');
+
+            if (!supported) {
+                statusText.textContent = '❌ Not supported on this browser';
+                statusText.style.color = '#999';
+                return;
+            }
+
+            if (permission === 'denied') {
+                statusText.textContent = '❌ Permission denied - Enable in browser settings';
+                statusText.style.color = '#e74c3c';
+                return;
+            }
+
+            if (permission === 'default') {
+                statusText.textContent = '⚠️ Not enabled';
+                statusText.style.color = '#f39c12';
+                enableBtn.style.display = 'inline-block';
+                return;
+            }
+
+            if (permission === 'granted' && subscribed) {
+                statusText.textContent = '✅ Enabled and active';
+                statusText.style.color = '#27ae60';
+                testBtn.style.display = 'inline-block';
+            } else if (permission === 'granted') {
+                statusText.textContent = '⚠️ Permission granted, subscribing...';
+                statusText.style.color = '#f39c12';
+                // Auto-subscribe
+                window.zoePushNotifications.subscribe()
+                    .then(() => {
+                        statusText.textContent = '✅ Enabled and active';
+                        statusText.style.color = '#27ae60';
+                        testBtn.style.display = 'inline-block';
+                    })
+                    .catch(err => {
+                        console.error('Auto-subscribe failed:', err);
+                    });
+            }
+        }
+
+        /**
+         * Enable notifications
+         */
+        async function enableNotifications() {
+            try {
+                const granted = await window.zoePushNotifications.requestPermission();
+                if (granted) {
+                    await window.zoePushNotifications.subscribe();
+                    const subscribed = await window.zoePushNotifications.isSubscribed();
+                    updateNotificationStatus(true, 'granted', subscribed);
+                    showNotification('Notifications enabled! 🎉', 'success');
+                } else {
+                    showNotification('Permission denied', 'error');
+                }
+            } catch (error) {
+                console.error('Error enabling notifications:', error);
+                showNotification('Failed to enable notifications', 'error');
+            }
+        }
+
+        /**
+         * Send test notification
+         */
+        async function sendTestNotification() {
+            try {
+                const result = await window.zoePushNotifications.sendTest();
+                showNotification('Test notification sent! Check your device 📱', 'success');
+            } catch (error) {
+                console.error('Error sending test:', error);
+                showNotification('Failed to send test notification', 'error');
+            }
+        }
+
+        /**
+         * Load notification preferences from backend
+         */
+        async function loadNotificationPreferences() {
+            try {
+                const response = await fetch('/api/push/preferences');
+                if (!response.ok) {
+                    throw new Error('Failed to load preferences');
+                }
+
+                const prefs = await response.json();
+
+                // Update UI with preferences
+                document.getElementById('calendar-reminders').checked = prefs.calendar_reminders;
+                document.getElementById('calendar-reminder-minutes').value = prefs.calendar_reminder_minutes;
+                document.getElementById('task-due-alerts').checked = prefs.task_due_alerts;
+                document.getElementById('task-due-hours').value = prefs.task_due_hours;
+                document.getElementById('shopping-updates').checked = prefs.shopping_updates;
+                document.getElementById('chat-messages').checked = prefs.chat_messages;
+                document.getElementById('home-assistant-alerts').checked = prefs.home_assistant_alerts;
+                document.getElementById('journal-prompts').checked = prefs.journal_prompts;
+                document.getElementById('journal-prompt-time').value = prefs.journal_prompt_time;
+                document.getElementById('birthday-reminders').checked = prefs.birthday_reminders;
+                document.getElementById('quiet-hours-enabled').checked = prefs.quiet_hours_enabled;
+                document.getElementById('quiet-hours-start').value = prefs.quiet_hours_start;
+                document.getElementById('quiet-hours-end').value = prefs.quiet_hours_end;
+
+                console.log('✅ Loaded notification preferences');
+
+            } catch (error) {
+                console.error('Error loading preferences:', error);
+                // Use defaults if loading fails
+            }
+        }
+
+        /**
+         * Update a notification preference
+         */
+        async function updateNotificationPref(key, value) {
+            try {
+                const preferences = {
+                    [key]: value
+                };
+
+                const response = await fetch('/api/push/preferences', {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(preferences)
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to update preference');
+                }
+
+                console.log(`✅ Updated ${key} to ${value}`);
+                showNotification('Preference updated', 'success');
+
+            } catch (error) {
+                console.error('Error updating preference:', error);
+                showNotification('Failed to update preference', 'error');
+            }
+        }
+
+        /**
+         * Load active devices with push subscriptions
+         */
+        async function loadDevices() {
+            try {
+                const response = await fetch('/api/push/subscriptions');
+                if (!response.ok) {
+                    throw new Error('Failed to load devices');
+                }
+
+                const data = await response.json();
+                const devices = data.subscriptions || [];
+
+                // Update count
+                const countText = document.getElementById('devices-count');
+                countText.textContent = `${devices.length} device(s) subscribed`;
+
+                // Show devices list
+                if (devices.length > 0) {
+                    const devicesList = document.getElementById('devices-list');
+                    const devicesContainer = document.getElementById('devices-container');
+
+                    devicesContainer.innerHTML = devices.map(device => `
+                        <div style="padding: 10px; margin: 5px 0; background: rgba(0,0,0,0.02); border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <div style="font-weight: 500; font-size: 14px;">
+                                    ${device.device_type === 'mobile' ? '📱' : device.device_type === 'tablet' ? '📱' : '💻'} 
+                                    ${device.device_type.charAt(0).toUpperCase() + device.device_type.slice(1)}
+                                </div>
+                                <div style="font-size: 12px; color: #666;">
+                                    ${device.endpoint_domain}
+                                </div>
+                            </div>
+                            <div style="font-size: 12px; color: #999;">
+                                ID: ${device.id}
+                            </div>
+                        </div>
+                    `).join('');
+
+                    devicesList.style.display = 'block';
+                } else {
+                    document.getElementById('devices-list').style.display = 'none';
+                }
+
+            } catch (error) {
+                console.error('Error loading devices:', error);
+                document.getElementById('devices-count').textContent = 'Failed to load devices';
+            }
+        }
+
+        /**
+         * Show notification message
+         */
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed;
+                top: 80px;
+                right: 20px;
+                background: ${type === 'error' ? '#e74c3c' : type === 'success' ? '#27ae60' : '#7B61FF'};
+                color: white;
+                padding: 12px 20px;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: 500;
+                z-index: 9999;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+                animation: slideIn 0.3s ease;
+            `;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+
+            setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease';
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        }
+
+        // ========================================
+        // Weather Settings Functions
+        // ========================================
+        
+        // Load weather settings
+        async function loadWeatherSettings() {
+            try {
+                const userId = localStorage.getItem('user_id') || 'default';
+                const response = await fetch(`/api/weather/preferences?user_id=${userId}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    // Update use current location toggle
+                    const useCurrentLocation = data.use_current_location || false;
+                    document.getElementById('use-current-location').checked = useCurrentLocation;
+                    
+                    // Show/hide manual location section
+                    toggleLocationMode(useCurrentLocation);
+                    
+                    // Update location display
+                    if (!useCurrentLocation) {
+                        document.getElementById('current-weather-location').textContent = 
+                            `${data.location.city}, ${data.location.country}`;
+                    } else {
+                        document.getElementById('current-weather-location').textContent = 
+                            'Using device location';
+                    }
+                    
+                    // Update temperature unit
+                    document.getElementById('temperature-unit').value = 
+                        data.temperature_unit || 'celsius';
+                }
+            } catch (error) {
+                console.error('Failed to load weather settings:', error);
+                document.getElementById('current-weather-location').textContent = 
+                    'San Francisco, US (default)';
+            }
+        }
+        
+        function toggleLocationMode(useCurrent) {
+            const manualSection = document.getElementById('manual-location-section');
+            const statusDiv = document.getElementById('location-permission-status');
+            
+            if (useCurrent) {
+                manualSection.style.opacity = '0.5';
+                manualSection.style.pointerEvents = 'none';
+                statusDiv.style.display = 'block';
+                
+                // Check location permission
+                if (navigator.geolocation && navigator.permissions) {
+                    navigator.permissions.query({name: 'geolocation'}).then(result => {
+                        if (result.state === 'granted') {
+                            document.getElementById('location-status-icon').textContent = '✅';
+                            document.getElementById('location-status-text').textContent = 
+                                'Location permission granted - using current location';
+                        } else if (result.state === 'prompt') {
+                            document.getElementById('location-status-icon').textContent = '⚠️';
+                            document.getElementById('location-status-text').textContent = 
+                                'Please allow location access when prompted';
+                        } else {
+                            document.getElementById('location-status-icon').textContent = '❌';
+                            document.getElementById('location-status-text').textContent = 
+                                'Location permission denied - enable in browser settings';
+                        }
+                    }).catch(() => {
+                        document.getElementById('location-status-icon').textContent = 'ℹ️';
+                        document.getElementById('location-status-text').textContent = 
+                            'Location services will be used when available';
+                    });
+                } else {
+                    document.getElementById('location-status-icon').textContent = 'ℹ️';
+                    document.getElementById('location-status-text').textContent = 
+                        'Location services will be used when available';
+                }
+            } else {
+                manualSection.style.opacity = '1';
+                manualSection.style.pointerEvents = 'auto';
+                statusDiv.style.display = 'none';
+            }
+        }
+        
+        // Add event listener for toggle (needs to be set after DOM load)
+        document.addEventListener('DOMContentLoaded', function() {
+            const toggleElement = document.getElementById('use-current-location');
+            if (toggleElement) {
+                toggleElement.addEventListener('change', (e) => {
+                    toggleLocationMode(e.target.checked);
+                    saveWeatherSettings();
+                });
+            }
+        });
+
+        // Location search with debounce
+        let weatherSearchTimeout;
+        const weatherLocationInput = document.getElementById('weather-location-search');
+        if (weatherLocationInput) {
+            weatherLocationInput.addEventListener('input', (e) => {
+                clearTimeout(weatherSearchTimeout);
+                const query = e.target.value.trim();
+                
+                if (query.length < 3) {
+                    document.getElementById('location-search-results').style.display = 'none';
+                    return;
+                }
+                
+                weatherSearchTimeout = setTimeout(() => searchLocation(query), 500);
+            });
+        }
+
+        async function searchLocation(query) {
+            try {
+                const response = await fetch(`/api/weather/location/search?query=${encodeURIComponent(query)}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    displayLocationResults(data.results);
+                }
+            } catch (error) {
+                console.error('Location search failed:', error);
+            }
+        }
+
+        function displayLocationResults(results) {
+            const container = document.getElementById('location-search-results');
+            
+            if (!results || results.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+            
+            container.innerHTML = results.map(loc => `
+                <div class="location-result-item" 
+                     onclick="selectLocation(${loc.lat}, ${loc.lon}, '${loc.name.replace(/'/g, "\\'")}', '${loc.country.replace(/'/g, "\\'")}')"
+                     style="padding: 12px; cursor: pointer; border-bottom: 1px solid #e5e7eb; transition: background 0.2s;">
+                    <div style="font-weight: 500; color: #333;">${loc.name}</div>
+                    <div style="font-size: 12px; color: #666; margin-top: 2px;">
+                        ${loc.admin1 ? loc.admin1 + ', ' : ''}${loc.country}
+                    </div>
+                </div>
+            `).join('');
+            
+            // Add hover effect via inline style since we're using dynamic content
+            container.querySelectorAll('.location-result-item').forEach(item => {
+                item.addEventListener('mouseenter', function() {
+                    this.style.background = '#f8f9fa';
+                });
+                item.addEventListener('mouseleave', function() {
+                    this.style.background = 'white';
+                });
+            });
+            
+            container.style.display = 'block';
+        }
+
+        function selectLocation(lat, lon, city, country) {
+            // Store selected location temporarily
+            window.selectedWeatherLocation = { lat, lon, city, country };
+            
+            // Update display
+            document.getElementById('current-weather-location').textContent = city;
+            document.getElementById('weather-location-search').value = '';
+            document.getElementById('location-search-results').style.display = 'none';
+            
+            // Auto-save
+            saveWeatherSettings();
+        }
+
+        async function saveWeatherSettings() {
+            try {
+                const userId = localStorage.getItem('user_id') || 'default';
+                const temperatureUnit = document.getElementById('temperature-unit').value;
+                const useCurrentLocation = document.getElementById('use-current-location').checked;
+                
+                const payload = {
+                    user_id: userId,
+                    temperature_unit: temperatureUnit,
+                    use_current_location: useCurrentLocation
+                };
+                
+                // Only include saved location if NOT using current location
+                if (!useCurrentLocation && window.selectedWeatherLocation) {
+                    payload.latitude = window.selectedWeatherLocation.lat;
+                    payload.longitude = window.selectedWeatherLocation.lon;
+                    payload.city = window.selectedWeatherLocation.city;
+                    payload.country = window.selectedWeatherLocation.country;
+                    delete window.selectedWeatherLocation;
+                }
+                
+                const response = await fetch('/api/weather/preferences', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (response.ok) {
+                    showNotification('Weather settings saved successfully', 'success');
+                    
+                    // Refresh weather widget if it exists
+                    if (window.WidgetRegistry) {
+                        const weatherWidget = window.WidgetRegistry.get('weather');
+                        if (weatherWidget) {
+                            setTimeout(() => weatherWidget.update(), 500);
+                        }
+                    }
+                } else {
+                    showNotification('Failed to save weather settings', 'error');
+                }
+            } catch (error) {
+                console.error('Error saving weather settings:', error);
+                showNotification('Failed to save weather settings', 'error');
+            }
+        }
+
+        // Initialize notification settings when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            // Wait a bit for push notifications script to load
+            setTimeout(initNotificationSettings, 1000);
+            
+            // Load weather settings
+            loadWeatherSettings();
+        });
+
     </script>
 </body>
 </html>

@@ -186,3 +186,10 @@ find . -type f -size +10M -not -path "./.git/*"
 - `.cursorrules` - Cursor AI rules
 
 
+
+
+
+
+
+
+

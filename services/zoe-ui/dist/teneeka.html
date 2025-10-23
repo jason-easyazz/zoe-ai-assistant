@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Week View - Zoe</title>
+    <style>
+        /* Zoe's ACTUAL Design System from glass.css */
+        :root {
+            /* Zoe Brand Colors */
+            --primary-purple: #7B61FF;
+            --primary-teal: #5AE0E0;
+            --primary-gradient: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            
+            /* Glass Morphism */
+            --glass-bg: rgba(255, 255, 255, 0.6);
+            --glass-bg-light: rgba(255, 255, 255, 0.4);
+            --glass-border: rgba(255, 255, 255, 0.4);
+            --glass-border-light: rgba(255, 255, 255, 0.2);
+            --blur-amount: 40px;
+            
+            /* Typography */
+            --font-family-primary: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+            --font-size-sm: 14px;
+            --font-size-base: 16px;
+            --font-size-lg: 18px;
+            --font-size-xl: 20px;
+            --font-size-2xl: 24px;
+            --font-weight-normal: 400;
+            --font-weight-medium: 500;
+            --font-weight-semibold: 600;
+            --font-weight-bold: 700;
+            
+            /* Spacing */
+            --spacing-sm: 8px;
+            --spacing-md: 16px;
+            --spacing-lg: 24px;
+            --spacing-xl: 32px;
+            
+            /* Border Radius */
+            --border-radius-small: 8px;
+            --border-radius-medium: 12px;
+            --border-radius-card: 16px;
+            --border-radius-xl: 24px;
+            
+            /* Shadows */
+            --shadow-medium: 0 4px 16px rgba(0, 0, 0, 0.15);
+            --shadow-large: 0 8px 32px rgba(0, 0, 0, 0.2);
+            --shadow-purple: 0 8px 32px rgba(123, 97, 255, 0.3);
+            
+            /* Touch Targets */
+            --min-touch-target: 44px;
+            --touch-padding: 12px;
+            
+            /* Animation */
+            --transition-base: 0.3s ease;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-family-primary);
+            font-size: var(--font-size-base);
+            font-weight: var(--font-weight-normal);
+            background: linear-gradient(135deg, #e0f2fe 0%, #f0e7ff 100%);
+            color: #333;
+            min-height: 100vh;
+            padding: var(--spacing-md);
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .week-container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding-bottom: 80px;
+        }
+
+        /* Glass Card - Base Component */
+        .glass-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(var(--blur-amount));
+            -webkit-backdrop-filter: blur(var(--blur-amount));
+            border: 1px solid var(--glass-border);
+            border-radius: var(--border-radius-card);
+            padding: var(--spacing-lg);
+            box-shadow: var(--shadow-medium);
+            transition: all var(--transition-base);
+        }
+
+        .glass-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-large);
+        }
+
+        /* Week Header - Sticky */
+        .week-header {
+            position: sticky;
+            top: var(--spacing-md);
+            z-index: 100;
+            margin-bottom: var(--spacing-lg);
+        }
+
+        .week-title {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--spacing-md);
+        }
+
+        .week-title h2 {
+            font-size: var(--font-size-2xl);
+            font-weight: var(--font-weight-bold);
+            color: #333;
+        }
+
+        .week-nav {
+            display: flex;
+            gap: var(--spacing-sm);
+        }
+
+        .nav-btn {
+            width: 36px;
+            height: 36px;
+            background: var(--glass-bg-light);
+            border: 1px solid var(--glass-border-light);
+            border-radius: var(--border-radius-small);
+            color: var(--primary-purple);
+            font-size: var(--font-size-lg);
+            cursor: pointer;
+            transition: all var(--transition-base);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .nav-btn:hover {
+            background: var(--glass-bg);
+            transform: scale(1.05);
+        }
+
+        .week-stats {
+            display: flex;
+            gap: var(--spacing-md);
+        }
+
+        .stat {
+            flex: 1;
+            padding: var(--spacing-sm) var(--spacing-md);
+            background: var(--glass-bg-light);
+            border: 1px solid var(--glass-border-light);
+            border-radius: var(--border-radius-medium);
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+            font-weight: var(--font-weight-semibold);
+            font-size: var(--font-size-base);
+        }
+
+        /* Day Tiles */
+        .days-container {
+            display: flex;
+            flex-direction: column;
+            gap: var(--spacing-md);
+        }
+
+        .day-tile {
+            padding: var(--spacing-lg);
+        }
+
+        .day-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--spacing-md);
+            padding-bottom: var(--spacing-md);
+            border-bottom: 1px solid var(--glass-border-light);
+        }
+
+        .day-name {
+            font-size: var(--font-size-lg);
+            font-weight: var(--font-weight-bold);
+            color: #333;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .day-date {
+            font-size: var(--font-size-2xl);
+            font-weight: var(--font-weight-bold);
+            color: var(--primary-purple);
+            opacity: 0.7;
+        }
+
+        .day-items {
+            display: flex;
+            flex-direction: column;
+            gap: var(--spacing-sm);
+            min-height: 60px;
+        }
+
+        /* Event Items */
+        .event-item {
+            background: var(--glass-bg-light);
+            border: 1px solid var(--glass-border-light);
+            border-radius: var(--border-radius-medium);
+            padding: var(--spacing-md);
+            cursor: pointer;
+            transition: all var(--transition-base);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .event-item::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            background: var(--primary-purple);
+        }
+
+        .event-item.type-client::before {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        }
+
+        .event-item.type-todo::before {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        }
+
+        .event-item.type-personal::before {
+            background: var(--primary-gradient);
+        }
+
+        .event-item:hover {
+            background: var(--glass-bg);
+            transform: translateX(4px);
+            box-shadow: var(--shadow-medium);
+        }
+
+        .event-content {
+            display: flex;
+            align-items: flex-start;
+            gap: var(--spacing-md);
+        }
+
+        .event-icon {
+            font-size: 24px;
+            min-width: 28px;
+        }
+
+        .event-details {
+            flex: 1;
+        }
+
+        .event-title {
+            font-size: var(--font-size-base);
+            font-weight: var(--font-weight-semibold);
+            color: #333;
+            margin-bottom: 4px;
+        }
+
+        .event-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: var(--spacing-sm);
+            font-size: var(--font-size-sm);
+            color: #666;
+        }
+
+        .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .budget-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-weight: var(--font-weight-semibold);
+            font-size: var(--font-size-sm);
+        }
+
+        .budget-badge.income {
+            background: rgba(16, 185, 129, 0.15);
+            color: #059669;
+        }
+
+        .budget-badge.expense {
+            background: rgba(239, 68, 68, 0.15);
+            color: #dc2626;
+        }
+
+        .empty-day {
+            text-align: center;
+            padding: var(--spacing-xl);
+            color: #999;
+            font-style: italic;
+        }
+
+        /* Quick Add Button */
+        .quick-add-btn {
+            width: 100%;
+            margin-top: var(--spacing-md);
+            padding: var(--touch-padding);
+            background: var(--glass-bg-light);
+            border: 2px dashed var(--glass-border-light);
+            border-radius: var(--border-radius-medium);
+            color: var(--primary-purple);
+            font-size: var(--font-size-base);
+            font-weight: var(--font-weight-medium);
+            cursor: pointer;
+            transition: all var(--transition-base);
+            min-height: var(--min-touch-target);
+        }
+
+        .quick-add-btn:hover {
+            background: var(--glass-bg);
+            border-color: var(--primary-purple);
+            transform: scale(1.02);
+        }
+
+        /* Quick Add Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(8px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: var(--spacing-md);
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--glass-bg);
+            backdrop-filter: blur(var(--blur-amount));
+            border: 1px solid var(--glass-border);
+            border-radius: var(--border-radius-xl);
+            padding: var(--spacing-xl);
+            max-width: 500px;
+            width: 100%;
+            box-shadow: var(--shadow-large);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--spacing-lg);
+        }
+
+        .modal-header h3 {
+            font-size: var(--font-size-xl);
+            font-weight: var(--font-weight-bold);
+            color: #333;
+        }
+
+        .modal-close {
+            width: 32px;
+            height: 32px;
+            background: var(--glass-bg-light);
+            border: 1px solid var(--glass-border-light);
+            border-radius: var(--border-radius-small);
+            color: #666;
+            font-size: var(--font-size-lg);
+            cursor: pointer;
+            transition: all var(--transition-base);
+        }
+
+        .modal-close:hover {
+            background: var(--glass-bg);
+            color: #333;
+        }
+
+        .type-selector {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: var(--spacing-sm);
+            margin-bottom: var(--spacing-lg);
+        }
+
+        .type-btn {
+            padding: var(--spacing-md);
+            background: var(--glass-bg-light);
+            border: 2px solid transparent;
+            border-radius: var(--border-radius-medium);
+            color: #666;
+            font-weight: var(--font-weight-medium);
+            cursor: pointer;
+            transition: all var(--transition-base);
+        }
+
+        .type-btn.active {
+            background: var(--glass-bg);
+            border-color: var(--primary-purple);
+            color: var(--primary-purple);
+        }
+
+        .form-group {
+            margin-bottom: var(--spacing-md);
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: var(--spacing-sm);
+            font-size: var(--font-size-sm);
+            font-weight: var(--font-weight-medium);
+            color: #666;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: var(--touch-padding);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--border-radius-small);
+            background: var(--glass-bg);
+            font-size: var(--font-size-base);
+            font-family: inherit;
+            color: #333;
+            transition: all var(--transition-base);
+            min-height: var(--min-touch-target);
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--primary-purple);
+            background: white;
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: var(--spacing-md);
+        }
+
+        .btn-primary {
+            width: 100%;
+            padding: var(--spacing-md) var(--spacing-lg);
+            background: var(--primary-gradient);
+            color: white;
+            border: none;
+            border-radius: var(--border-radius-medium);
+            font-size: var(--font-size-base);
+            font-weight: var(--font-weight-semibold);
+            cursor: pointer;
+            box-shadow: var(--shadow-purple);
+            transition: all var(--transition-base);
+            min-height: var(--min-touch-target);
+        }
+
+        .btn-primary:hover {
+            transform: scale(1.05);
+            box-shadow: 0 12px 40px rgba(123, 97, 255, 0.4);
+        }
+
+        /* Floating Action Button */
+        .fab {
+            position: fixed;
+            bottom: var(--spacing-lg);
+            right: var(--spacing-lg);
+            width: 56px;
+            height: 56px;
+            background: var(--primary-gradient);
+            border: none;
+            border-radius: var(--border-radius-card);
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            box-shadow: var(--shadow-purple);
+            transition: all var(--transition-base);
+            z-index: 100;
+        }
+
+        .fab:hover {
+            transform: scale(1.1);
+            box-shadow: 0 16px 64px rgba(123, 97, 255, 0.5);
+        }
+
+        @media (max-width: 480px) {
+            body {
+                padding: var(--spacing-sm);
+            }
+
+            .week-header {
+                top: var(--spacing-sm);
+            }
+
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="week-container">
+        
+        <!-- Week Header (Sticky) -->
+        <div class="week-header">
+            <div class="glass-card">
+                <div class="week-title">
+                    <h2>Week Oct 20-26</h2>
+                    <div class="week-nav">
+                        <button class="nav-btn">‹</button>
+                        <button class="nav-btn">›</button>
+                    </div>
+                </div>
+                <div class="week-stats">
+                    <div class="stat">
+                        <span>💰</span>
+                        <span>$705</span>
+                    </div>
+                    <div class="stat">
+                        <span>💳</span>
+                        <span>$1,502</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Day Tiles -->
+        <div class="days-container">
+            
+            <!-- Monday -->
+            <div class="day-tile glass-card">
+                <div class="day-header">
+                    <span class="day-name">Monday</span>
+                    <span class="day-date">20</span>
+                </div>
+                <div class="day-items">
+                    <div class="event-item type-personal">
+                        <div class="event-content">
+                            <span class="event-icon">🌅</span>
+                            <div class="event-details">
+                                <div class="event-title">AM BYE</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item type-todo">
+                        <div class="event-content">
+                            <span class="event-icon">📞🐾</span>
+                            <div class="event-details">
+                                <div class="event-title">Claim - cyto & revisit</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item type-client">
+                        <div class="event-content">
+                            <span class="event-icon">🧹</span>
+                            <div class="event-details">
+                                <div class="event-title">Ash</div>
+                                <div class="event-meta">
+                                    <span class="meta-item">🕐 10:30am</span>
+                                    <span class="budget-badge income">💰 $75</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item type-client">
+                        <div class="event-content">
+                            <span class="event-icon">🧹</span>
+                            <div class="event-details">
+                                <div class="event-title">Butch</div>
+                                <div class="event-meta">
+                                    <span class="meta-item">📝 Wed, none</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <button class="quick-add-btn" onclick="openQuickAdd('2025-10-20', 'Monday')">+ Quick add to Monday</button>
+            </div>
+
+            <!-- Tuesday -->
+            <div class="day-tile glass-card">
+                <div class="day-header">
+                    <span class="day-name">Tuesday</span>
+                    <span class="day-date">21</span>
+                </div>
+                <div class="day-items">
+                    <div class="event-item type-client">
+                        <div class="event-content">
+                            <span class="event-icon">🧹</span>
+                            <div class="event-details">
+                                <div class="event-title">Amy</div>
+                                <div class="event-meta">
+                                    <span class="meta-item">🕐 10/10:30am - 1/1:30pm</span>
+                                    <span class="budget-badge income">💰 $85</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item type-client">
+                        <div class="event-content">
+                            <span class="event-icon">🧹</span>
+                            <div class="event-details">
+                                <div class="event-title">Lisa</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item type-todo">
+                        <div class="event-content">
+                            <span class="event-icon">⛽</span>
+                            <div class="event-details">
+                                <div class="event-title">FUEL</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item type-personal">
+                        <div class="event-content">
+                            <span class="event-icon">🏀</span>
+                            <div class="event-details">
+                                <div class="event-title">Basketball</div>
+                                <div class="event-meta">
+                                    <span class="meta-item">🕐 7:50PM</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item type-todo">
+                        <div class="event-content">
+                            <span class="event-icon">💰</span>
+                            <div class="event-details">
+                                <div class="event-title">Send Saša $23 for YouTube</div>
+                                <div class="event-meta">
+                                    <span class="budget-badge expense">💳 $23</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <button class="quick-add-btn" onclick="openQuickAdd('2025-10-21', 'Tuesday')">+ Quick add to Tuesday</button>
+            </div>
+
+            <!-- Wednesday -->
+            <div class="day-tile glass-card">
+                <div class="day-header">
+                    <span class="day-name">Wednesday</span>
+                    <span class="day-date">22</span>
+                </div>
+                <div class="day-items">
+                    <div class="event-item type-personal">
+                        <div class="event-content">
+                            <span class="event-icon">🌅</span>
+                            <div class="event-details">
+                                <div class="event-title">AM BYE</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item type-personal">
+                        <div class="event-content">
+                            <span class="event-icon">👩‍💼</span>
+                            <div class="event-details">
+                                <div class="event-title">Appointment</div>
+                                <div class="event-meta">
+                                    <span class="meta-item">🕐 9:30am</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item type-client">
+                        <div class="event-content">
+                            <span class="event-icon">🧹</span>
+                            <div class="event-details">
+                                <div class="event-title">Lynette</div>
+                                <div class="event-meta">
+                                    <span class="meta-item">🕐 11/11:30am - 1:30/2pm</span>
+                                    <span class="budget-badge income">💰 $75</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item type-client">
+                        <div class="event-content">
+                            <span class="event-icon">🧹</span>
+                            <div class="event-details">
+                                <div class="event-title">Katrina B (floors)</div>
+                                <div class="event-meta">
+                                    <span class="meta-item">🕐 1:30/2:30pm</span>
+                                    <span class="budget-badge income">💰 $60</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <button class="quick-add-btn" onclick="openQuickAdd('2025-10-22', 'Wednesday')">+ Quick add to Wednesday</button>
+            </div>
+
+            <!-- Thursday -->
+            <div class="day-tile glass-card">
+                <div class="day-header">
+                    <span class="day-name">Thursday</span>
+                    <span class="day-date">23</span>
+                </div>
+                <div class="day-items">
+                    <div class="event-item type-client">
+                        <div class="event-content">
+                            <span class="event-icon">🧹</span>
+                            <div class="event-details">
+                                <div class="event-title">Aimee</div>
+                                <div class="event-meta">
+                                    <span class="budget-badge income">💰 $95</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item type-client">
+                        <div class="event-content">
+                            <span class="event-icon">🧹</span>
+                            <div class="event-details">
+                                <div class="event-title">Louise Van Wyk</div>
+                                <div class="event-meta">
+                                    <span class="budget-badge income">💰 $110</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item type-todo">
+                        <div class="event-content">
+                            <span class="event-icon">🛒</span>
+                            <div class="event-details">
+                                <div class="event-title">Buy deer antler & lilac treat dispenser</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <button class="quick-add-btn" onclick="openQuickAdd('2025-10-23', 'Thursday')">+ Quick add to Thursday</button>
+            </div>
+
+            <!-- Friday -->
+            <div class="day-tile glass-card">
+                <div class="day-header">
+                    <span class="day-name">Friday</span>
+                    <span class="day-date">24</span>
+                </div>
+                <div class="day-items">
+                    <div class="event-item type-personal">
+                        <div class="event-content">
+                            <span class="event-icon">🎂🐾</span>
+                            <div class="event-details">
+                                <div class="event-title">Bella - 8 years old</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item type-client">
+                        <div class="event-content">
+                            <span class="event-icon">🧹</span>
+                            <div class="event-details">
+                                <div class="event-title">NEW Kaitlyn Lau</div>
+                                <div class="event-meta">
+                                    <span class="meta-item">🕐 10/10:30am?</span>
+                                    <span class="budget-badge income">💰 $80?</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="event-item type-client">
+                        <div class="event-content">
+                            <span class="event-icon">🧹</span>
+                            <div class="event-details">
+                                <div class="event-title">Anna (3-4hrs)</div>
+                                <div class="event-meta">
+                                    <span class="meta-item">🕐 12/12:30pm?</span>
+                                    <span class="budget-badge income">💰 $120?</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <button class="quick-add-btn" onclick="openQuickAdd('2025-10-24', 'Friday')">+ Quick add to Friday</button>
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- Quick Add Modal -->
+    <div class="modal-overlay" id="quickAddModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Quick Add</h3>
+                <button class="modal-close" onclick="closeQuickAdd()">✕</button>
+            </div>
+
+            <div class="type-selector">
+                <button class="type-btn active" data-type="event">📅 Event</button>
+                <button class="type-btn" data-type="todo">✅ Todo</button>
+                <button class="type-btn" data-type="client">🧹 Client</button>
+            </div>
+
+            <form id="quickAddForm">
+                <div class="form-group">
+                    <label class="form-label">Title</label>
+                    <input type="text" class="form-input" placeholder="e.g., Amy, Buy milk, Call plumber" required>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">Time</label>
+                        <input type="time" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Emoji</label>
+                        <input type="text" class="form-input" placeholder="🧹" maxlength="2">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="form-label">💰 Income ($)</label>
+                        <input type="number" class="form-input" placeholder="85">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">💳 Expense ($)</label>
+                        <input type="number" class="form-input" placeholder="50">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Notes (optional)</label>
+                    <input type="text" class="form-input" placeholder="Any additional details...">
+                </div>
+
+                <button type="submit" class="btn-primary">Add to <span id="selectedDay">Monday</span></button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Floating Action Button -->
+    <button class="fab" onclick="alert('Menu:\n• Copy Template\n• New Week\n• Settings')">⚡</button>
+
+    <script>
+        let selectedDate = null;
+
+        // Type selector
+        document.querySelectorAll('.type-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.type-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+            });
+        });
+
+        // Quick add modal
+        function openQuickAdd(date, dayName) {
+            selectedDate = date;
+            document.getElementById('selectedDay').textContent = dayName;
+            document.getElementById('quickAddModal').classList.add('active');
+        }
+
+        function closeQuickAdd() {
+            document.getElementById('quickAddModal').classList.remove('active');
+            document.getElementById('quickAddForm').reset();
+        }
+
+        // Form submission
+        document.getElementById('quickAddForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            alert('Would create event/todo:\n' +
+                  'Date: ' + selectedDate + '\n' +
+                  'Type: ' + document.querySelector('.type-btn.active').dataset.type + '\n' +
+                  'API: POST /api/calendar/events');
+            closeQuickAdd();
+        });
+
+        // Close modal on outside click
+        document.getElementById('quickAddModal').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) closeQuickAdd();
+        });
+    </script>
+</body>
+</html>

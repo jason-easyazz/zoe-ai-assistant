@@ -13,7 +13,8 @@ from core.rbac import rbac_manager
 
 logger = logging.getLogger(__name__)
 
-security = HTTPBearer()
+# Make HTTPBearer optional (auto_error=False)
+security = HTTPBearer(auto_error=False)
 
 def get_session_id_from_header(
     x_session_id: Annotated[Optional[str], Header(alias="X-Session-ID")] = None
@@ -22,7 +23,7 @@ def get_session_id_from_header(
     return x_session_id
 
 def get_session_id_from_bearer_token(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)
 ) -> Optional[str]:
     """Extract session ID from Authorization Bearer token"""
     return credentials.credentials if credentials else None
@@ -52,9 +53,10 @@ def get_current_session(
             status_code=401,
             detail="Authentication required. Provide session ID in X-Session-ID header or Authorization Bearer token."
         )
-
+    
     session = session_manager.get_session(session_id)
     if not session:
+        logger.warning(f"Session not found or expired: {session_id[:20]}...")
         raise HTTPException(
             status_code=401,
             detail="Invalid or expired session. Please authenticate again."

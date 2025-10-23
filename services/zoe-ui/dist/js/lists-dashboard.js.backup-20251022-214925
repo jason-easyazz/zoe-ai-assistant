@@ -1,0 +1,553 @@
+/**
+ * Lists Dashboard - Recreated using EXACT dashboard tasks widget structure
+ * Version: 2.0.0
+ */
+
+class ListsDashboard {
+    constructor() {
+        this.grid = null;
+        this.lists = [];
+        this.isEditMode = false;
+        
+        // Define the 5 permanent core lists that cannot be deleted
+        this.PERMANENT_LISTS = [
+            { type: 'shopping', name: 'Shopping', color: 'orange', icon: '🛒' },
+            { type: 'work', name: 'Work', color: 'blue', icon: '💼' },
+            { type: 'personal', name: 'Personal', color: 'purple', icon: '📝' },
+            { type: 'reminders', name: 'Reminders', color: 'red', icon: '🔔' },
+            { type: 'bucket', name: 'Bucket List', color: 'teal', icon: '🪣' }
+        ];
+    }
+    
+    async init() {
+        console.log('🎯 Initializing Lists Dashboard (Dashboard Tasks Structure)');
+        
+        const gridElement = document.getElementById('listsGrid');
+        if (!gridElement) {
+            console.error('Lists grid not found');
+            return;
+        }
+        
+        // Initialize Gridstack with same config as dashboard
+        this.grid = GridStack.init({
+            column: 12,
+            cellHeight: 70,
+            margin: 16,
+            float: true,
+            animate: true,
+            // Enable NATIVE resize with handles (EXACT match to dashboard)
+            resizable: {
+                handles: 'e, se, s, sw, w'  // All sides except top
+            },
+            // Ensure resizing is enabled globally
+            disableResize: false,
+            // Mobile-friendly responsive columns (EXACT match to dashboard)
+            disableOneColumnMode: false,
+            columnOpts: {
+                breakpoints: [
+                    {w: 768, c: 6},   // Tablet: 6 columns
+                    {w: 480, c: 4}    // Mobile: 4 columns
+                ]
+            },
+            // Start in view mode (locked)
+            staticGrid: true,
+            // Drag from anywhere except interactive elements (EXACT match to dashboard)
+            draggable: {
+                scroll: true,
+                appendTo: 'body',
+                cancel: 'button, input, select, textarea, a'
+            },
+            // Enable native remove button
+            removable: '.trash-zone',
+            removeTimeout: 100
+        }, gridElement);
+        
+        // Save layout on any grid change (EXACT match to dashboard)
+        this.grid.on('change', () => {
+            if (this.isEditMode) {
+                this.saveLayout();
+            }
+        });
+        
+        // Handle resize events for dynamic content adjustment
+        this.grid.on('resizestop', (event, el) => {
+            const widget = el.querySelector('.widget');
+            if (widget) {
+                this.updateListColumns(widget);
+            }
+        });
+        
+        // Load lists and render
+        await this.loadLists();
+        this.loadLayoutAndRender();
+        
+        // Expose globally
+        window.listsDashboard = this;
+        console.log('✅ Lists Dashboard ready!');
+    }
+    
+    toggleEditMode() {
+        this.isEditMode = !this.isEditMode;
+        document.body.classList.toggle('edit-mode', this.isEditMode);
+        
+        // Enable/disable Gridstack dragging & resizing (EXACT match to dashboard)
+        this.grid.setStatic(!this.isEditMode);
+        
+        // Show/hide add list button
+        const addBtn = document.querySelector('.fab-add-list');
+        if (addBtn) {
+            addBtn.style.opacity = this.isEditMode ? '1' : '0';
+            addBtn.style.pointerEvents = this.isEditMode ? 'auto' : 'none';
+        }
+        
+        // Update edit button icon
+        const fabEditIcon = document.getElementById('fabEditIcon');
+        if (fabEditIcon) {
+            fabEditIcon.textContent = this.isEditMode ? '✅' : '✏️';
+        }
+        
+        console.log(`Edit mode: ${this.isEditMode ? 'ON' : 'OFF'}`);
+        
+        // Save layout when exiting edit mode
+        if (!this.isEditMode) {
+            this.saveLayout();
+        }
+    }
+    
+    createList(name, type, color, icon) {
+        console.log(`Creating list: ${name} (${type}, ${color})`);
+        
+        const listId = `list_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const list = {
+            id: listId,
+            name: name,
+            type: type,
+            color: color,
+            icon: icon,
+            items: []
+        };
+        
+        this.lists.push(list);
+        
+        // Create HTML using EXACT dashboard tasks widget structure
+        const listHTML = `
+            <div class="widget" data-widget-type="list">
+                <div class="widget-header">
+                    <div class="widget-title">${icon} ${name}</div>
+                    <div class="widget-badge" id="badge-${listId}">0</div>
+                </div>
+                <div class="widget-content">
+                    <input type="text" 
+                           class="add-item-input" 
+                           placeholder="Add item..."
+                           onkeypress="if(event.key==='Enter' && this.value.trim()) { window.listsDashboard.addItem('${listId}', this.value.trim()); this.value=''; }"
+                           onclick="event.stopPropagation()">
+                    <div id="items-${listId}" class="loading-widget">
+                        <div class="spinner"></div>
+                        Loading items...
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // Add to Gridstack
+        const gridItem = this.grid.addWidget({
+            w: 3,
+            h: 4,
+            minW: 3,
+            maxW: 12,
+            minH: 3,
+            maxH: 16,
+            content: listHTML,
+            id: listId
+        });
+        
+        // Add remove button
+        this.addRemoveButton(gridItem);
+        
+        // Initialize items display
+        this.renderListItems(listId);
+        
+        // Save
+        this.saveLists();
+        
+        console.log(`✅ Created list: ${name}`);
+        return gridItem;
+    }
+    
+    isPermanentList(listId) {
+        // Check if this is one of the 5 permanent core lists
+        const permanentTypes = this.PERMANENT_LISTS.map(p => p.type);
+        const list = this.lists.find(l => l.id === listId);
+        return list && permanentTypes.includes(list.type);
+    }
+    
+    addRemoveButton(gridItem) {
+        const listId = gridItem.getAttribute('gs-id');
+        
+        // Don't add remove button for permanent lists
+        if (this.isPermanentList(listId)) {
+            console.log(`⚠️ Not adding remove button for permanent list: ${listId}`);
+            return;
+        }
+        
+        const removeBtn = document.createElement('div');
+        removeBtn.className = 'widget-remove-btn';
+        removeBtn.innerHTML = '×';
+        removeBtn.onclick = (e) => {
+            e.stopPropagation();
+            this.removeWidget(gridItem);
+        };
+        gridItem.querySelector('.widget').appendChild(removeBtn);
+    }
+    
+    removeWidget(widget) {
+        const listId = widget.getAttribute('id');
+        this.lists = this.lists.filter(l => l.id !== listId);
+        this.grid.removeWidget(widget);
+        this.saveLists();
+        console.log(`🗑️ Removed list: ${listId}`);
+    }
+    
+    addItem(listId, text) {
+        const list = this.lists.find(l => l.id === listId);
+        if (!list) return;
+        
+        const item = {
+            id: `item_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            text: text,
+            completed: false,
+            created: new Date()
+        };
+        
+        list.items.push(item);
+        this.renderListItems(listId);
+        this.saveLists();
+        
+        console.log(`✅ Added item to ${list.name}:`, text);
+    }
+    
+    toggleItem(listId, itemId) {
+        const list = this.lists.find(l => l.id === listId);
+        if (!list) return;
+        
+        const item = list.items.find(i => i.id === itemId);
+        if (!item) return;
+        
+        item.completed = !item.completed;
+        this.renderListItems(listId);
+        this.saveLists();
+    }
+    
+    deleteItem(listId, itemId) {
+        const list = this.lists.find(l => l.id === listId);
+        if (!list) return;
+        
+        list.items = list.items.filter(i => i.id !== itemId);
+        this.renderListItems(listId);
+        this.saveLists();
+    }
+    
+    renderListItems(listId) {
+        const container = document.getElementById(`items-${listId}`);
+        const list = this.lists.find(l => l.id === listId);
+        const badge = document.getElementById(`badge-${listId}`);
+        
+        if (!container || !list) return;
+        
+        // Remove loading class
+        container.classList.remove('loading-widget');
+        
+        if (list.items.length === 0) {
+            container.innerHTML = '<div style="text-align: center; color: #666; font-style: italic;">No items yet</div>';
+            if (badge) badge.textContent = '0';
+            return;
+        }
+        
+        const activeItems = list.items.filter(i => !i.completed);
+        if (badge) badge.textContent = activeItems.length;
+        
+        // Render items using EXACT dashboard tasks widget structure
+        container.innerHTML = list.items.map(item => `
+            <div class="task-item ${list.color}" style="padding: 12px; border-radius: 8px; margin-bottom: 8px; cursor: grab; transition: all 0.3s; display: flex; align-items: center; gap: 10px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); ${item.completed ? 'opacity: 0.5; text-decoration: line-through;' : ''}">
+                <input type="checkbox" class="task-checkbox" onchange="window.listsDashboard.toggleItem('${listId}', '${item.id}')" style="width: 18px; height: 18px; cursor: pointer;" ${item.completed ? 'checked' : ''}>
+                <div class="task-text" style="flex: 1; font-size: 14px; font-weight: 500;">${item.text}</div>
+                <div onclick="window.listsDashboard.deleteItem('${listId}', '${item.id}')" style="font-size: 12px; color: #dc2626; font-weight: 600; cursor: pointer; padding: 4px;">×</div>
+            </div>
+        `).join('');
+    }
+    
+    saveLayout() {
+        // Get layout with full widget data (w and h included)
+        const layout = this.grid.save(false);  // false = don't save HTML content
+        
+        // Ensure all items have w and h (critical for proper positioning)
+        const cleanLayout = layout.map(item => {
+            const w = Math.max(3, item.w || 4);
+            const h = Math.max(4, item.h || 6);
+            return {
+                x: item.x,
+                y: item.y,
+                w,
+                h,
+                minW: 3,
+                maxW: 12,
+                minH: 4,
+                maxH: 16,
+                id: item.id
+            };
+        });
+        
+        localStorage.setItem('lists-layout', JSON.stringify(cleanLayout));
+        console.log('💾 Layout saved with dimensions:', cleanLayout);
+    }
+    
+    saveLists() {
+        localStorage.setItem('lists-data', JSON.stringify(this.lists));
+        console.log('💾 Lists data saved');
+    }
+    
+    async loadLists() {
+        try {
+            // Ensure the 5 permanent lists always exist
+            const permanentLists = [];
+            
+            // Load each permanent list type from API
+            for (const permanentDef of this.PERMANENT_LISTS) {
+                try {
+                    const response = await fetch(`/api/lists/${permanentDef.type}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        
+                        if (data.lists && Array.isArray(data.lists) && data.lists.length > 0) {
+                            // Use the first list of this type from the API
+                            const apiList = data.lists[0];
+                            const list = {
+                                id: `list_${permanentDef.type}_permanent`,
+                                name: permanentDef.name,
+                                type: permanentDef.type,
+                                color: permanentDef.color,
+                                icon: permanentDef.icon,
+                                isPermanent: true,
+                                items: (apiList.items || []).map(item => ({
+                                    id: `item_${item.id}`,
+                                    text: item.text,
+                                    completed: item.completed || false,
+                                    created: new Date(item.created_at || Date.now())
+                                }))
+                            };
+                            permanentLists.push(list);
+                        } else {
+                            // Create empty permanent list
+                            permanentLists.push({
+                                id: `list_${permanentDef.type}_permanent`,
+                                name: permanentDef.name,
+                                type: permanentDef.type,
+                                color: permanentDef.color,
+                                icon: permanentDef.icon,
+                                isPermanent: true,
+                                items: []
+                            });
+                        }
+                    } else {
+                        // API failed, create empty permanent list
+                        permanentLists.push({
+                            id: `list_${permanentDef.type}_permanent`,
+                            name: permanentDef.name,
+                            type: permanentDef.type,
+                            color: permanentDef.color,
+                            icon: permanentDef.icon,
+                            isPermanent: true,
+                            items: []
+                        });
+                    }
+                } catch (error) {
+                    console.log(`Failed to load ${permanentDef.type} list:`, error);
+                    // Create empty permanent list even if API fails
+                    permanentLists.push({
+                        id: `list_${permanentDef.type}_permanent`,
+                        name: permanentDef.name,
+                        type: permanentDef.type,
+                        color: permanentDef.color,
+                        icon: permanentDef.icon,
+                        isPermanent: true,
+                        items: []
+                    });
+                }
+            }
+            
+            // TODO: Load custom user-created lists here
+            const customLists = [];
+            
+            this.lists = [...permanentLists, ...customLists];
+            console.log('📡 Loaded lists (5 permanent + custom):', this.lists);
+            return;
+        } catch (error) {
+            console.log('📡 API not available, creating permanent lists:', error);
+        }
+        
+        // Fallback: Create the 5 permanent lists
+        this.lists = this.PERMANENT_LISTS.map(def => ({
+            id: `list_${def.type}_permanent`,
+            name: def.name,
+            type: def.type,
+            color: def.color,
+            icon: def.icon,
+            isPermanent: true,
+            items: []
+        }));
+        console.log('💾 Created permanent lists');
+    }
+    
+    loadLayoutAndRender() {
+        const savedLayout = localStorage.getItem('lists-layout');
+        if (savedLayout) {
+            const layout = JSON.parse(savedLayout);
+            this.loadFromLayout(layout);
+        } else {
+            // No saved layout, render all lists with default positioning
+            this.loadFromLayout([]);
+        }
+    }
+    
+    loadFromLayout(layout) {
+        // Clear existing widgets
+        this.grid.removeAll();
+        
+        // Create lists from saved data
+        this.lists.forEach((list, index) => {
+            const listHTML = `
+                <div class="widget" data-widget-type="list">
+                    <div class="widget-header">
+                        <div class="widget-title">${list.icon} ${list.name}</div>
+                        <div class="widget-badge" id="badge-${list.id}">0</div>
+                    </div>
+                    <div class="widget-content">
+                        <input type="text" 
+                               class="add-item-input" 
+                               placeholder="Add item..."
+                               onkeypress="if(event.key==='Enter' && this.value.trim()) { window.listsDashboard.addItem('${list.id}', this.value.trim()); this.value=''; }"
+                               onclick="event.stopPropagation()">
+                        <div id="items-${list.id}" class="loading-widget">
+                            <div class="spinner"></div>
+                            Loading items...
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Find saved position for this list, or use default
+            let savedItem = null;
+            if (layout && layout.length > 0) {
+                savedItem = layout.find(item => item.id === list.id);
+            }
+            
+            const gridItem = this.grid.addWidget({
+                x: savedItem ? savedItem.x : undefined,
+                y: savedItem ? savedItem.y : undefined,
+                w: savedItem ? savedItem.w : 4,  // Default 4 columns (matches dashboard tasks)
+                h: savedItem ? savedItem.h : 6,  // Default 6 rows (matches dashboard tasks)
+                minW: 3,  // Match dashboard minimum
+                maxW: 12,
+                minH: 4,  // Minimum 4 for header + items (like dashboard)
+                maxH: 16,
+                // Ensure widget-level resize is enabled
+                noResize: false,
+                resizable: { handles: 'e, se, s, sw, w' },
+                content: listHTML,
+                id: list.id,
+                autoPosition: !savedItem  // Only auto-position if no saved layout
+            });
+            
+            this.addRemoveButton(gridItem);
+            this.renderListItems(list.id);
+            
+            // Update columns for responsive layout
+            const widget = gridItem.querySelector('.widget');
+            if (widget) {
+                this.updateListColumns(widget);
+            }
+        });
+        
+        console.log('✅ Layout loaded');
+    }
+    
+    updateListColumns(widget) {
+        const widgetType = widget.getAttribute('data-widget-type');
+        if (!widgetType || !widgetType.includes('list')) {
+            return;
+        }
+        
+        const gridItem = widget.closest('.grid-stack-item');
+        const width = gridItem ? parseInt(gridItem.getAttribute('gs-w')) || 4 : 4;
+        
+        // Calculate columns based on width (EXACT match to dashboard)
+        let columns = 1;
+        if (width >= 6) columns = 2;
+        else if (width >= 4) columns = 1;
+        else columns = 1;
+        
+        const content = widget.querySelector('.widget-content');
+        if (content) {
+            content.style.gridTemplateColumns = `repeat(${columns}, 1fr)`;
+            console.log(`📊 List widget ${widgetType}: ${columns} columns (width: ${width})`);
+        }
+    }
+    
+    getDefaultNameForType(type) {
+        const nameMap = {
+            'shopping': 'Shopping',
+            'personal': 'Personal Todos',
+            'work': 'Work Todos',
+            'health': 'Health',
+            'family': 'Family',
+            'social': 'Social',
+            'routine': 'Routine',
+            'reminders': 'Reminders',
+            'bucket': 'Bucket List'
+        };
+        return nameMap[type] || 'List';
+    }
+    
+    getColorForType(type) {
+        const colorMap = {
+            'shopping': 'orange',
+            'personal': 'purple',
+            'work': 'blue',
+            'health': 'pink',
+            'family': 'indigo',
+            'social': 'green',
+            'routine': 'gray',
+            'reminders': 'red',
+            'bucket': 'teal'
+        };
+        return colorMap[type] || 'purple';
+    }
+    
+    getIconForType(type) {
+        const iconMap = {
+            'shopping': '🛒',
+            'personal': '📝',
+            'work': '💼',
+            'health': '🏥',
+            'family': '👨‍👩‍👧‍👦',
+            'social': '👥',
+            'routine': '🔄',
+            'reminders': '🔔',
+            'bucket': '🪣'
+        };
+        return iconMap[type] || '📝';
+    }
+}
+
+// Initialize when DOM is ready
+let listsDashboard = null;
+
+window.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => {
+        listsDashboard = new ListsDashboard();
+        listsDashboard.init();
+        window.listsDashboard = listsDashboard;
+        console.log('🎯 Lists Dashboard ready!');
+    }, 100);
+});

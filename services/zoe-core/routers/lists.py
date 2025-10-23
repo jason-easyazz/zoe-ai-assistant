@@ -4,15 +4,59 @@ Lists Management System
 Supports: Shopping, Bucket, Personal Todos, Work Todos, Custom
 With Martin-inspired productivity features
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from datetime import datetime, date
 import sqlite3
 import json
 import os
+import asyncio
 
 router = APIRouter(prefix="/api/lists", tags=["lists"])
+
+# WebSocket Connection Manager for real-time list updates
+class ListsWebSocketManager:
+    def __init__(self):
+        self.active_connections: Dict[str, Set[WebSocket]] = {}
+        self.lock = asyncio.Lock()
+    
+    async def connect(self, websocket: WebSocket, user_id: str):
+        await websocket.accept()
+        async with self.lock:
+            if user_id not in self.active_connections:
+                self.active_connections[user_id] = set()
+            self.active_connections[user_id].add(websocket)
+        print(f"✅ WebSocket connected for user {user_id} (total: {len(self.active_connections[user_id])})")
+    
+    async def disconnect(self, websocket: WebSocket, user_id: str):
+        async with self.lock:
+            if user_id in self.active_connections and websocket in self.active_connections[user_id]:
+                self.active_connections[user_id].remove(websocket)
+                if not self.active_connections[user_id]:
+                    del self.active_connections[user_id]
+        print(f"❌ WebSocket disconnected for user {user_id}")
+    
+    async def broadcast_to_user(self, user_id: str, message: Dict[str, Any]):
+        """Broadcast message to all connections for a specific user"""
+        async with self.lock:
+            if user_id not in self.active_connections:
+                return
+            connections = list(self.active_connections[user_id])
+        
+        dead_connections = []
+        for ws in connections:
+            try:
+                await ws.send_json(message)
+            except Exception as e:
+                print(f"⚠️ Failed to send to connection: {e}")
+                dead_connections.append(ws)
+        
+        # Clean up dead connections
+        for ws in dead_connections:
+            await self.disconnect(ws, user_id)
+
+lists_ws_manager = ListsWebSocketManager()
 
 # Martin-inspired productivity models (defined early to avoid import issues)
 class FocusSession(BaseModel):
@@ -907,6 +951,14 @@ async def create_list(
     conn.commit()
     conn.close()
     
+    # Broadcast update to WebSocket clients
+    await lists_ws_manager.broadcast_to_user(user_id, {
+        "type": "list_created",
+        "list_type": normalized_type,
+        "list_id": list_id,
+        "action": "created"
+    })
+    
     return {
         "id": list_id,
         "message": f"{list_type.title()} list created",
@@ -961,6 +1013,14 @@ async def update_list(
     
     conn.commit()
     conn.close()
+    
+    # Broadcast update to WebSocket clients
+    await lists_ws_manager.broadcast_to_user(user_id, {
+        "type": "list_updated",
+        "list_type": list_type,
+        "list_id": list_id,
+        "action": "updated"
+    })
     
     return {"message": "List updated", "id": list_id}
 
@@ -1478,4 +1538,28 @@ async def get_break_reminders(user_id: str = Query("default")):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting break reminders: {str(e)}")
+
+# WebSocket endpoint for real-time list updates
+@router.websocket("/ws/{user_id}")
+async def lists_websocket(websocket: WebSocket, user_id: str):
+    """WebSocket endpoint for real-time list synchronization across devices"""
+    await lists_ws_manager.connect(websocket, user_id)
+    try:
+        # Send initial connection confirmation
+        await websocket.send_json({
+            "type": "connected",
+            "message": "Lists WebSocket connected",
+            "user_id": user_id
+        })
+        
+        # Keep connection alive and handle pings
+        while True:
+            data = await websocket.receive_text()
+            # Echo back as heartbeat
+            await websocket.send_json({"type": "pong", "timestamp": datetime.now().isoformat()})
+    except WebSocketDisconnect:
+        await lists_ws_manager.disconnect(websocket, user_id)
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        await lists_ws_manager.disconnect(websocket, user_id)
 
