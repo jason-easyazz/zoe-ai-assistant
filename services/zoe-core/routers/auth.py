@@ -16,7 +16,7 @@ security = HTTPBearer(auto_error=False)  # Don't auto-raise, we'll handle it man
 SECRET_KEY = os.getenv("ZOE_AUTH_SECRET_KEY", "change-me-in-prod")
 ALGORITHM = "HS256"
 TOKEN_EXPIRE_HOURS = 24
-DB_PATH = "/app/data/zoe.db"
+DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 ZOE_AUTH_URL = os.getenv("ZOE_AUTH_INTERNAL_URL", "http://zoe-auth:8002")
 
 

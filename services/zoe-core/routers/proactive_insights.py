@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
+import os
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
@@ -14,7 +15,7 @@ class ProactiveSettings(BaseModel):
     max_suggestions: int = 5
 
 
-DB_PATH = "/app/data/zoe.db"
+DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 
 
 def _fetch_people(conn, user_id: str) -> List[Dict]:

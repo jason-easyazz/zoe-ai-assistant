@@ -122,7 +122,7 @@ class AIInvocationRequest(BaseModel):
     require_confirmation: bool = True
 
 # Database setup
-DB_PATH = "/app/data/zoe.db"
+DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 
 def init_tool_registry_db():
     """Initialize tool registry database"""

@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/memories", tags=["memories"])
 
 # Database path
 DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
-MEMORY_DB_PATH = "/app/data/memory.db"
+MEMORY_DB_PATH = os.getenv("MEMORY_DB_PATH", "/app/data/memory.db")
 
 # Initialize advanced memory system
 memory_system = MemorySystem(MEMORY_DB_PATH)

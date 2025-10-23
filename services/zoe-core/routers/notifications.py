@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Query
+import os
 from pydantic import BaseModel
 from enum import Enum
 from typing import Optional, Dict, Any, List, Set
@@ -35,7 +36,7 @@ class Notification(BaseModel):
     metadata: Optional[Dict[str, Any]]
 
 
-DB_PATH = "/app/data/zoe.db"
+DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 
 
 def init_notifications_db() -> None:
