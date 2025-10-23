@@ -228,8 +228,17 @@ class Dashboard {
         };
         
         const module = WidgetManager.modules[type];
+        
+        // Determine size class based on grid width
+        let sizeClass = 'size-medium'; // Default
+        if (config.defaultW <= 3) {
+            sizeClass = 'size-small';
+        } else if (config.defaultW >= 7) {
+            sizeClass = 'size-large';
+        }
+        
         const widgetHTML = `
-            <div class="widget" data-widget-type="${type}">
+            <div class="widget ${sizeClass}" data-widget-type="${type}">
                 ${module.getTemplate()}
             </div>
         `;
@@ -404,8 +413,16 @@ class Dashboard {
                 return;
             }
             
+            // Determine size class based on widget width
+            let sizeClass = 'size-medium'; // Default
+            if (item.w <= 3) {
+                sizeClass = 'size-small';
+            } else if (item.w >= 7) {
+                sizeClass = 'size-large';
+            }
+            
             const widgetHTML = `
-                <div class="widget" data-widget-type="${item.type}">
+                <div class="widget ${sizeClass}" data-widget-type="${item.type}">
                     ${module.getTemplate()}
                 </div>
             `;
