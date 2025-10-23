@@ -206,46 +206,31 @@
     box-sizing: border-box;
 }
 
-/* Ultra-responsive weather layouts using container queries */
-@container weather-widget (max-width: 280px) {
-    .weather-medium,
-    .weather-large {
-        display: none !important;
-    }
-    .weather-small {
-        display: flex !important;
-    }
+/* Ultra-responsive unified layout - ALWAYS shows all information */
+.weather-small,
+.weather-medium,
+.weather-large {
+    display: none !important;
 }
 
-@container weather-widget (min-width: 281px) and (max-width: 499px) {
-    .weather-small,
-    .weather-large {
-        display: none !important;
-    }
-    .weather-medium {
-        display: flex !important;
-    }
+/* Single unified responsive layout */
+.weather-unified {
+    display: flex !important;
+    flex-direction: column;
+    gap: clamp(0.5rem, 2cqh, 1.25rem);
+    padding: clamp(0.75rem, 3cqh, 1.5rem);
+    height: 100%;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
 }
 
-@container weather-widget (min-width: 500px) {
-    .weather-small,
-    .weather-medium {
-        display: none !important;
-    }
-    .weather-large {
-        display: flex !important;
-    }
-}
-
-/* Small layout - Minimal & Clean */
-.weather-small {
+/* Hero section - current conditions */
+.weather-hero {
+    display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    gap: clamp(0.5rem, 3cqh, 1rem);
-    text-align: center;
-    padding: clamp(0.75rem, 4cqh, 1.5rem);
-    height: 100%;
+    gap: clamp(0.25rem, 1cqh, 0.625rem);
 }
 
 .weather-icon-large {
