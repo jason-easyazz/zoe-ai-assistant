@@ -322,8 +322,16 @@ class Dashboard {
         this.grid.engine.nodes.forEach((node, index) => {
             const widget = node.el.querySelector('.widget');
             if (widget) {
+                const widgetType = widget.getAttribute('data-widget-type');
+                
+                // PROTECTION: Don't save widgets with invalid types
+                if (!widgetType || widgetType === 'undefined' || widgetType === 'null') {
+                    console.warn('⚠️ Skipping widget with invalid type:', widgetType);
+                    return;
+                }
+                
                 layout.push({
-                    type: widget.getAttribute('data-widget-type'),
+                    type: widgetType,
                     x: node.x,
                     y: node.y,
                     w: node.w,
@@ -333,28 +341,49 @@ class Dashboard {
             }
         });
         
-        localStorage.setItem(this.storageKey, JSON.stringify(layout));
-        console.log('💾 Layout saved:', layout.length, 'widgets');
+        // PROTECTION: Don't save if no valid widgets
+        if (layout.length === 0) {
+            console.error('❌ No valid widgets to save - layout corrupt, not saving');
+            return;
+        }
         
-        // TODO: Save to backend API
+        // Use LayoutProtection if available, otherwise fallback to simple save
+        if (window.LayoutProtection) {
+            LayoutProtection.saveLayout(this.storageKey, layout);
+        } else {
+            localStorage.setItem(this.storageKey, JSON.stringify(layout));
+            console.log('💾 Layout saved:', layout.length, 'widgets');
+        }
     }
     
     loadLayout() {
-        const saved = localStorage.getItem(this.storageKey);
+        // Use LayoutProtection if available
+        let layout = null;
         
-        if (saved) {
-            try {
-                const layout = JSON.parse(saved);
-                if (layout && layout.length > 0) {
-                    this.loadFromData(layout);
-                } else {
-                    this.createDefaultLayout();
-                }
-            } catch (e) {
-                console.error('Failed to load layout:', e);
-                this.createDefaultLayout();
+        if (window.LayoutProtection) {
+            layout = LayoutProtection.loadLayout(this.storageKey);
+            
+            if (layout === null) {
+                // Validation failed - clear corrupted data
+                console.warn('🔄 Clearing corrupted layout');
+                localStorage.removeItem(this.storageKey);
             }
         } else {
+            // Fallback to old method
+            const saved = localStorage.getItem(this.storageKey);
+            if (saved) {
+                try {
+                    layout = JSON.parse(saved);
+                } catch (e) {
+                    console.error('Failed to parse layout:', e);
+                }
+            }
+        }
+        
+        if (layout && Array.isArray(layout) && layout.length > 0) {
+            this.loadFromData(layout);
+        } else {
+            console.log('📐 No valid layout found - creating default');
             this.createDefaultLayout();
         }
     }
