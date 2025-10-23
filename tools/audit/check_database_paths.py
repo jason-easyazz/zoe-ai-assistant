@@ -32,15 +32,19 @@ ALLOWED_PATTERNS = [
     r'os\.environ\[["\']DATABASE_PATH["\']\]',
 ]
 
-# Files to skip
+# Files to skip (paths containing these strings)
 SKIP_PATTERNS = [
-    'test_*.py',
-    '*_test.py',
-    'docs/',
-    '.git/',
-    '__pycache__/',
-    'venv/',
-    'node_modules/',
+    '/tests/',  # All test files
+    '/docs/',
+    '/.git/',
+    '/__pycache__/',
+    '/venv/',
+    '/node_modules/',
+    '/scripts/utilities/',  # Utility scripts run on host, not in Docker
+    '/tools/audit/',  # Audit tools run on host
+    '/tools/cleanup/',  # Cleanup tools run on host
+    'check_database_paths.py',  # This file itself (contains examples)
+    'add_roadmap_tasks.py',  # One-time data seeding script
 ]
 
 def should_skip(filepath: Path) -> bool:
@@ -67,6 +71,10 @@ def check_file(filepath: Path) -> List[Tuple[int, str, str]]:
         for i, line in enumerate(lines, 1):
             # Skip comments
             if line.strip().startswith('#'):
+                continue
+            
+            # Skip print statements and docstrings (they contain examples)
+            if 'print(' in line or '"""' in line or "'''" in line:
                 continue
                 
             # Check for forbidden patterns
