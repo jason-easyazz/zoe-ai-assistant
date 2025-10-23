@@ -20,7 +20,10 @@ const WidgetManager = {
         
         // Create widget element
         const widget = document.createElement('div');
-        widget.className = 'widget size-small';
+        
+        // Use module's defaultSize if specified, otherwise size-small
+        const defaultSize = module.options?.defaultSize || 'size-small';
+        widget.className = `widget ${defaultSize}`;
         widget.setAttribute('data-widget-type', type);
         widget.innerHTML = module.getTemplate();
         
@@ -30,7 +33,7 @@ const WidgetManager = {
         // Initialize the module
         module.init(widget);
         
-        console.log(`Created widget: ${type}`);
+        console.log(`Created widget: ${type} (${defaultSize})`);
         return widget;
     },
     
