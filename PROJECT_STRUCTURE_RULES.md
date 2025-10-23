@@ -14,6 +14,43 @@ This document defines the **mandatory** structure and rules for the Zoe project.
 
 ---
 
+## 🗄️ DATABASE PATH RULES - CRITICAL
+
+### ⚠️ MANDATORY: Use Environment Variables for Database Paths
+
+**PROBLEM**: Docker containers map paths differently:
+- Host: `/home/pi/zoe/data/zoe.db`
+- Container: `/app/data/zoe.db`
+
+**SOLUTION**: Always use `os.getenv("DATABASE_PATH")`
+
+### ✅ CORRECT Pattern:
+```python
+import os
+
+def __init__(self, db_path: str = None):
+    if db_path is None:
+        db_path = os.getenv("DATABASE_PATH", "/home/pi/zoe/data/zoe.db")
+    self.db_path = db_path
+```
+
+### ❌ WRONG Pattern (Will Break in Docker):
+```python
+def __init__(self, db_path: str = "/home/pi/zoe/data/zoe.db"):  # HARDCODED!
+```
+
+### 🔒 Enforcement:
+- **Pre-commit hook** runs `tools/audit/check_database_paths.py`
+- **Blocks commits** with hardcoded database paths
+- **Run manually**: `python3 tools/audit/check_database_paths.py`
+
+### 📋 Affected Files:
+- All services in `services/zoe-core/services/`
+- All routers in `services/zoe-core/routers/`
+- Any new code that accesses databases
+
+---
+
 ## 📁 Mandatory Folder Structure
 
 ```

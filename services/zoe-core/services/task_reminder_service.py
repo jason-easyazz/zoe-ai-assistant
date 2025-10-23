@@ -5,6 +5,7 @@ Automatically sends push notifications for tasks that are due soon
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import aiosqlite
@@ -18,7 +19,9 @@ logger = logging.getLogger(__name__)
 class TaskReminderService:
     """Service for sending task due reminders"""
     
-    def __init__(self, db_path: str = "/home/pi/zoe/data/zoe.db"):
+    def __init__(self, db_path: str = None):
+        if db_path is None:
+            db_path = os.getenv("DATABASE_PATH", "/home/pi/zoe/data/zoe.db")
         self.db_path = db_path
         self.push_service = get_push_service()
         self.check_interval = 300  # Check every 5 minutes (less frequent than calendar)
