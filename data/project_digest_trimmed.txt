@@ -1,6 +1,6 @@
 ================================================================================
 ZOE AI ASSISTANT - PROJECT DIGEST
-Generated: 2025-10-23 02:00:01
+Generated: 2025-10-25 02:00:01
 ================================================================================
 
 ## Project Structure
@@ -21,13 +21,13 @@ Generated: 2025-10-23 02:00:01
 │   ├── vapid_private.pem
 │   └── vapid_public.pem
 ├── docs
-│   ├── api
 │   ├── architecture
 │   │   ├── ACTION_PLAN_PROGRESS.md
 │   │   ├── API_VERSIONING_STRATEGY.md
 │   │   ├── ARCHITECTURE_PROTECTION.md
 │   │   ├── ARCHITECTURE_REVIEW.md
 │   │   ├── CHAT_INTEGRATION_DIAGNOSIS.md
+│   │   ├── DASHBOARD_LAYOUT_PROTECTION.md
 │   │   ├── DATABASE_CONSOLIDATION_PLAN.md
 │   │   ├── DESKTOP_DASHBOARD_FIXES_COMPLETE.md
 │   │   ├── ERROR_HANDLING_STANDARD.md
@@ -48,15 +48,18 @@ Generated: 2025-10-23 02:00:01
 │   │   ├── user-isolation-audit.md
 │   │   └── ZOE_ORB_SYSTEM.md
 │   ├── archive
+│   │   ├── other
+│   │   └── reports
 │   ├── developer
 │   │   ├── continuation-prompt.txt
 │   │   └── SMART_CONTINUATION_PROMPT.txt
-│   ├── features
 │   ├── governance
 │   │   ├── BROWSER_CACHE_FIX.md
 │   │   ├── CLEANUP_SAFETY.md
 │   │   ├── CRITICAL_FILES.md
+│   │   ├── DATABASE_PATH_ENFORCEMENT.md
 │   │   ├── DELETION_PREVENTION_SYSTEM.md
+│   │   ├── ISSUE_ANALYSIS_OCT23.md
 │   │   ├── MANIFEST_SYSTEM.md
 │   │   ├── PROJECT_ORGANIZATION_COMPLETE.md
 │   │   ├── QUICK_REFERENCE.md
@@ -81,6 +84,8 @@ Generated: 2025-10-23 02:00:01
 │   │   ├── widget-development.md
 │   │   ├── widget-quick-start.md
 │   │   └── ZOE_ORB_COMPONENT_FIX.md
+│   ├── post-mortems
+│   │   └── 2025-10-23-system-failure-analysis.md
 │   ├── ENVIRONMENT_VARIABLES.md
 │   ├── EXPERT_ARCHITECTURE.md
 │   ├── GOVERNANCE_IMPLEMENTATION_COMPLETE.md
@@ -100,9 +105,7 @@ Generated: 2025-10-23 02:00:01
 │   │   ├── deploy-phase2-push-notifications.sh
 │   │   ├── deploy_v2.3.1.sh
 │   │   └── push_to_github.sh
-│   ├── development
 │   ├── maintenance
-│   │   ├── scripts
 │   │   ├── advanced_cleanup.py
 │   │   ├── aggressive_cleanup.py
 │   │   ├── archive_tagged_files.py
@@ -110,8 +113,4 @@ Generated: 2025-10-23 02:00:01
 │   │   ├── daily_consolidation.py
 │   │   ├── export_schema.sh
 │   │   ├── file_tags.json
-│   │   ├── git_history_cleanup.py
-│   │   ├── quarterly_archival.sh
-│   │   ├── setup_file_tagging.sh
-│   │   ├── tag_unused_files.py
-│   │   ├── TASK_SYSTEM_PROGRESS.md
+│   │   ├── git_
