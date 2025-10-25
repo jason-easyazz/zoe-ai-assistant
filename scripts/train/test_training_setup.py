@@ -156,6 +156,18 @@ def test_unsloth():
         print("     Training data collection works, but can't train yet")
         print("     Install: pip install unsloth")
         return False  # Not required, so return True anyway
+    except AssertionError as e:
+        if "CUDA" in str(e):
+            print("  ⚠️  Unsloth installed but CUDA not available")
+            print("     Training data collection works, but GPU training disabled")
+            print("     This is normal on Raspberry Pi - CPU training will be used")
+            return True  # CUDA not available is OK for CPU training
+        else:
+            print(f"  ❌ Unsloth error: {e}")
+            return False
+    except Exception as e:
+        print(f"  ❌ Unsloth test failed: {e}")
+        return False
     
     return True
 
