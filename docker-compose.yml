@@ -287,7 +287,7 @@ services:
     environment:
     - OPENAI_API_KEY=${OPENAI_API_KEY}
     - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-    - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-sk-1234567890abcdef}
+    - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-your-secret-key-change-this}
     command: ["litellm", "--config", "minimal_config.yaml", "--port", "8001"]
     networks:
     - zoe-network
