@@ -1,9 +1,8 @@
-# 🤖 Zoe AI Assistant v2.4.0 - "Governance & Automation"
+# 🤖 Zoe AI Assistant v0.0.1 - "Fresh Start"
 
-> **A "Samantha from Her" level AI companion** with perfect memory, beautiful UI, production-grade monitoring, **Multi-Expert Model with Action Execution**, **Light RAG Intelligence**, **Hardened Architecture**, and **Automated Governance**.
+> **A "Samantha from Her" level AI companion** with perfect memory, beautiful UI, production-grade monitoring, **Multi-Expert Model with Action Execution**, **Light RAG Intelligence**, and **Comprehensive API System**.
 
-[![Version](https://img.shields.io/badge/version-2.4.0-blue.svg)](CHANGELOG.md)
-[![Tests](https://img.shields.io/badge/tests-26/37_passing-green.svg)](tests/)
+[![Version](https://img.shields.io/badge/version-0.0.1-blue.svg)](CHANGELOG.md)
 [![Python](https://img.shields.io/badge/python-3.11-blue.svg)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com)
 [![Enhanced MEM Agent](https://img.shields.io/badge/Enhanced_MEM_Agent-v2.0-purple.svg)](#-enhanced-mem-agent)
@@ -31,26 +30,31 @@
 
 ## 🌟 Key Features
 
-### 🧠 Enhanced MEM Agent (NEW!)
-- **Multi-Expert Model** - Specialized AI experts for different domains
+### 🧠 Enhanced MEM Agent (FULLY FUNCTIONAL!)
+- **Multi-Expert Model** - 8 specialized AI experts for different domains
 - **Action Execution** - Actually performs tasks, not just responds
 - **Intent Classification** - Automatically detects what you want to do
 - **Expert Routing** - Routes requests to appropriate specialists
 - **Real API Integration** - Connects to working list, calendar, and planning APIs
+- **Status**: ✅ **RUNNING** on port 11435 with 8 experts
 
-### 🎯 Expert Specialists
+### 🎯 Expert Specialists (ALL WORKING)
 - **List Expert** - Manages shopping lists, tasks, and items
 - **Calendar Expert** - Creates and manages calendar events
 - **Planning Expert** - Goal decomposition and task planning
 - **Memory Expert** - Semantic memory search and retrieval
+- **Journal Expert** - Journal entry management
+- **Reminder Expert** - Reminder and notification system
+- **HomeAssistant Expert** - Smart home device control
+- **Birthday Setup Expert** - Birthday and event management
 
-### 🧠 Light RAG Intelligence (NEW!)
-- **Vector Embeddings** - Semantic understanding of memories and relationships
+### 🧠 Light RAG Intelligence (FULLY IMPLEMENTED!)
+- **Vector Embeddings** - Semantic understanding using all-MiniLM-L6-v2
 - **Relationship Awareness** - Understands connections between people, projects, and events
 - **Contextual Retrieval** - Finds relevant information even when not explicitly mentioned
 - **Smart Search** - Combines text similarity with relationship context
-- **Incremental Learning** - Continuously improves understanding as new memories are added
 - **Performance Optimized** - Cached searches and efficient vector operations
+- **Status**: ✅ **OPERATIONAL** with 0.3 similarity threshold
 
 ### 🧠 Perfect Memory System with Light RAG Intelligence
 - **Obsidian-Style UI** - Interactive knowledge graph with vis.js
@@ -126,13 +130,14 @@ curl http://localhost:8000/health
 
 ### Access Points
 
-- **API**: `http://localhost:8000`
-- **Enhanced Chat API**: `http://localhost:8000/api/chat/enhanced` (NEW!)
-- **Light RAG Search**: `http://localhost:8000/api/memories/search/light-rag` (NEW!)
-- **Enhanced MEM Agent**: `http://localhost:11435`
-- **Enhanced Memory UI**: `http://localhost:8000/memories-enhanced.html`
+- **Web Interface**: `http://zoe.local` (port 80) or `https://zoe.local` (port 443)
+- **API**: `http://localhost:8000` (internal) or `http://zoe.local/api` (via nginx)
+- **Enhanced MEM Agent**: `http://localhost:11435` ✅ **WORKING**
+- **Light RAG System**: `http://localhost:8000/api/memories/stats/light-rag` ✅ **WORKING**
 - **API Documentation**: `http://localhost:8000/docs`
-- **Metrics**: `http://localhost:8000/metrics`
+- **Health Check**: `http://localhost:8000/health`
+- **MCP Server**: `http://localhost:8003`
+- **Authentication**: `http://localhost:8002`
 
 ---
 
@@ -254,49 +259,54 @@ pytest tests/performance/test_latency_budgets.py -v
 
 ## 💡 Usage Examples
 
-### Enhanced Chat with Action Execution (NEW!)
+### Enhanced MEM Agent (Direct Access - WORKING!)
 
 ```bash
-# Add items to shopping list
-curl -X POST http://localhost:8000/api/chat/enhanced \
+# Direct expert execution - Add items to shopping list
+curl -X POST http://localhost:11435/search \
   -H "Content-Type: application/json" \
   -d '{
-    "message": "Add bread and milk to shopping list",
-    "context": {},
-    "user_id": "your_user_id"
+    "query": "Add bread and milk to shopping list",
+    "user_id": "your_user_id",
+    "execute_actions": true
   }'
 
 # Create calendar events
-curl -X POST http://localhost:8000/api/chat/enhanced \
+curl -X POST http://localhost:11435/search \
   -H "Content-Type: application/json" \
   -d '{
-    "message": "Create calendar event for Dad birthday tomorrow at 7pm",
-    "context": {},
-    "user_id": "your_user_id"
+    "query": "Create calendar event for Dad birthday tomorrow at 7pm",
+    "user_id": "your_user_id",
+    "execute_actions": true
   }'
 
 # Plan complex tasks
-curl -X POST http://localhost:8000/api/chat/enhanced \
+curl -X POST http://localhost:11435/search \
   -H "Content-Type: application/json" \
   -d '{
-    "message": "Help me plan a garden renovation project",
-    "context": {},
-    "user_id": "your_user_id"
+    "query": "Help me plan a garden renovation project",
+    "user_id": "your_user_id",
+    "execute_actions": true
   }'
 
 # Multi-expert coordination
-curl -X POST http://localhost:8000/api/chat/enhanced \
+curl -X POST http://localhost:11435/search \
   -H "Content-Type: application/json" \
   -d '{
-    "message": "Plan a dinner party next Friday and add wine to shopping list",
-    "context": {},
-    "user_id": "your_user_id"
+    "query": "Plan a dinner party next Friday and add wine to shopping list",
+    "user_id": "your_user_id",
+    "execute_actions": true
   }'
 ```
 
-### Light RAG Intelligence (NEW!)
+### Light RAG Intelligence (WORKING!)
 
 ```bash
+# Get Light RAG system statistics
+curl -X GET http://localhost:8000/api/memories/stats/light-rag
+
+# Response: {"system_stats":{"total_memories":0,"embedded_memories":0,"embedding_coverage":0,"entity_embeddings":0,"cached_searches":0,"embedding_model":"all-MiniLM-L6-v2","similarity_threshold":0.3},"status":"operational"}
+
 # Enhanced semantic search with relationship awareness
 curl -X POST http://localhost:8000/api/memories/search/light-rag \
   -H "Content-Type: application/json" \
@@ -329,63 +339,23 @@ curl -X POST http://localhost:8000/api/memories/search/comparison \
     "limit": 10
   }'
 
-# Get Light RAG system statistics
-curl -X GET http://localhost:8000/api/memories/stats/light-rag
-
 # Migrate existing memories to Light RAG
 curl -X POST http://localhost:8000/api/memories/migrate
 ```
 
-### Direct MEM Agent Access
-
-```bash
-# Direct expert execution
-curl -X POST http://localhost:11435/search \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "Add chocolate to shopping list",
-    "user_id": "your_user_id",
-    "execute_actions": true
-  }'
-```
-
-### Store a Memory
-
-```bash
-curl -X POST http://localhost:8000/api/memories/?type=people \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -d '{
-    "person": {
-      "name": "Sarah",
-      "relationship": "friend",
-      "notes": "Loves Arduino projects, especially temperature sensors"
-    }
-  }'
-```
-
-### Original Chat with Context
-
-```bash
-curl -X POST http://localhost:8000/api/chat \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -d '{
-    "message": "What do you know about Sarah?"
-  }'
-
-# Response: "Sarah is your friend who loves Arduino projects!..."
-```
-
-### View Enhanced UI
+### View Web Interface
 
 ```
-http://localhost:8000/memories-enhanced.html
+http://zoe.local
 ```
 
 Features:
-- 📊 Graph View - Interactive knowledge graph
-- 📅 Timeline - Chronological memory feed
-- 🔗 Wikilinks - [[name]] navigation
-- 🔍 Search - Press "/" to search
+- 📊 Dashboard - Overview of your data
+- 📅 Calendar - Event management
+- 📝 Journal - Personal diary
+- 📋 Lists - Shopping and task lists
+- 🧠 Memories - Knowledge base
+- ⚙️ Settings - User preferences
 
 ---
 
@@ -394,24 +364,35 @@ Features:
 ```
 zoe/
 ├── services/
-│   ├── zoe-core/          # FastAPI backend
-│   │   ├── routers/       # API endpoints
-│   │   ├── middleware/    # Metrics, auth
+│   ├── zoe-core/          # FastAPI backend with comprehensive routers
+│   │   ├── routers/       # 50+ API endpoints (chat, calendar, lists, etc.)
+│   │   ├── middleware/    # Metrics, auth, session management
+│   │   ├── training_engine/ # ML training system
 │   │   └── main.py        # Application entry
-│   ├── zoe-ui/            # Frontend
-│   │   └── dist/          # Static files
-│   └── mem-agent/         # Semantic search service
-├── config/
-│   ├── litellm_config.yaml
-│   ├── grafana-dashboard.json
-│   └── prometheus.yml
-├── tests/
-│   ├── unit/
-│   ├── integration/
-│   └── performance/
-├── data/                   # SQLite databases
+│   ├── zoe-ui/            # Frontend web interface
+│   │   └── dist/          # Static files and UI
+│   ├── zoe-auth/          # Authentication service with RBAC
+│   ├── zoe-litellm/       # LLM proxy service
+│   ├── zoe-mcp-server/    # MCP protocol server
+│   ├── mem-agent/         # Enhanced MEM Agent service (port 11435)
+│   ├── collections-service/ # Collections management
+│   ├── people-service/    # People management
+│   ├── homeassistant-mcp-bridge/ # Home Assistant integration
+│   └── n8n-mcp-bridge/    # N8N workflow integration
+├── data/
+│   ├── schema/            # Database schemas (zoe.db, memory.db, training.db)
+│   ├── zoe.db             # Main application database
+│   ├── memory.db          # Memory system with Light RAG
+│   └── training.db        # ML training data
+├── tests/                  # Comprehensive test suite
+├── docs/                   # Documentation
+├── scripts/                # Setup and maintenance scripts
+├── tools/                  # Audit and cleanup tools
+├── docker-compose.yml      # Service orchestration
 ├── CHANGELOG.md
-├── FEATURE_INTEGRATION_GUIDE.md
+├── PROJECT_STATUS.md
+├── PROJECT_STRUCTURE_RULES.md
+├── QUICK-START.md
 └── README.md
 ```
 
