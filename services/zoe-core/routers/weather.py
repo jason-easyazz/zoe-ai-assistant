@@ -421,16 +421,17 @@ async def get_preferences(user_id: str = Query("default", description="User ID")
     """Get user's weather preferences (location and temperature unit)"""
     return get_user_preferences(user_id)
 
+class WeatherPreferences(BaseModel):
+    user_id: str = "default"
+    temperature_unit: Optional[str] = None
+    use_current_location: Optional[bool] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
+
 @router.post("/preferences")
-async def update_preferences(
-    user_id: str = Query("default", description="User ID"),
-    temperature_unit: Optional[str] = Body(None),
-    use_current_location: Optional[bool] = Body(None),
-    latitude: Optional[float] = Body(None),
-    longitude: Optional[float] = Body(None),
-    city: Optional[str] = Body(None),
-    country: Optional[str] = Body(None)
-):
+async def update_preferences(preferences: WeatherPreferences):
     """Update user's weather preferences"""
     try:
         ensure_user_settings_table()
@@ -438,42 +439,43 @@ async def update_preferences(
         cursor = conn.cursor()
         
         # Update location if provided
-        if latitude is not None and longitude is not None:
+        if preferences.latitude is not None and preferences.longitude is not None:
             cursor.execute("""
                 INSERT OR REPLACE INTO user_settings 
                 (user_id, setting_key, setting_value, latitude, longitude, city, country, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (user_id, "location", f"{latitude},{longitude}", latitude, longitude, city, country))
+            """, (preferences.user_id, "location", f"{preferences.latitude},{preferences.longitude}", 
+                  preferences.latitude, preferences.longitude, preferences.city, preferences.country))
         
         # Update weather preferences (temperature unit and use_current_location)
-        if temperature_unit or use_current_location is not None:
+        if preferences.temperature_unit or preferences.use_current_location is not None:
             # Get current values first
             cursor.execute("""
                 SELECT temperature_unit, use_current_location 
                 FROM user_settings 
                 WHERE user_id = ? AND setting_key = 'weather_preferences'
-            """, (user_id,))
+            """, (preferences.user_id,))
             
             current = cursor.fetchone()
             current_temp_unit = current[0] if current else 'celsius'
             current_use_location = current[1] if current else 0
             
             # Use provided values or keep current
-            final_temp_unit = temperature_unit if temperature_unit else current_temp_unit
-            final_use_location = int(use_current_location) if use_current_location is not None else current_use_location
+            final_temp_unit = preferences.temperature_unit if preferences.temperature_unit else current_temp_unit
+            final_use_location = int(preferences.use_current_location) if preferences.use_current_location is not None else current_use_location
             
             cursor.execute("""
                 INSERT OR REPLACE INTO user_settings 
                 (user_id, setting_key, temperature_unit, use_current_location, updated_at)
                 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-            """, (user_id, "weather_preferences", final_temp_unit, final_use_location))
+            """, (preferences.user_id, "weather_preferences", final_temp_unit, final_use_location))
         
         conn.commit()
         conn.close()
         
         return {
             "message": "Weather preferences updated successfully",
-            "preferences": get_user_preferences(user_id)
+            "preferences": get_user_preferences(preferences.user_id)
         }
         
     except Exception as e:

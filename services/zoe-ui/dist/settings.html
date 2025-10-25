@@ -1071,19 +1071,19 @@
                     <!-- Create New User - Compact -->
                     <div style="background: rgba(123, 97, 255, 0.05); border-radius: 8px; padding: 12px; margin-bottom: 12px;">
                         <div style="font-weight: 600; font-size: 13px; margin-bottom: 8px; color: #333;">➕ Create New User</div>
-                        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr auto auto; gap: 8px;">
-                            <input type="text" id="newUsername" class="form-input" placeholder="Username" style="min-height: 36px; padding: 6px 10px; font-size: 13px;">
-                            <input type="email" id="newEmail" class="form-input" placeholder="Email" style="min-height: 36px; padding: 6px 10px; font-size: 13px;">
-                            <input type="password" id="newPassword" class="form-input" placeholder="Password" style="min-height: 36px; padding: 6px 10px; font-size: 13px;">
-                            <select id="newUserRole" class="form-select" style="min-height: 36px; padding: 6px 10px; font-size: 13px;">
+                        <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start;">
+                            <input type="text" id="newUsername" class="form-input" placeholder="Username" style="min-height: 36px; padding: 6px 10px; font-size: 13px; flex: 1; min-width: 150px;">
+                            <input type="email" id="newEmail" class="form-input" placeholder="Email" style="min-height: 36px; padding: 6px 10px; font-size: 13px; flex: 1; min-width: 150px;">
+                            <input type="password" id="newPassword" class="form-input" placeholder="Password" style="min-height: 36px; padding: 6px 10px; font-size: 13px; flex: 1; min-width: 150px;">
+                            <select id="newUserRole" class="form-select" style="min-height: 36px; padding: 6px 10px; font-size: 13px; flex: 0 0 120px;">
                                 <option value="user">User</option>
                                 <option value="admin">Admin</option>
                                 <option value="family_member">Family</option>
                                 <option value="child">Child</option>
                                 <option value="guest">Guest</option>
                             </select>
-                            <button onclick="createNewUser()" class="btn primary" style="padding: 6px 14px; min-height: 36px; font-size: 13px; white-space: nowrap;">Create</button>
-                            <button onclick="clearNewUserForm()" class="btn" style="padding: 6px 10px; min-height: 36px; font-size: 13px;">✕</button>
+                            <button onclick="createNewUser()" class="btn primary" style="padding: 6px 14px; min-height: 36px; font-size: 13px; white-space: nowrap; flex: 0 0 auto;">Create</button>
+                            <button onclick="clearNewUserForm()" class="btn" style="padding: 6px 10px; min-height: 36px; font-size: 13px; flex: 0 0 auto;">✕</button>
                         </div>
                     </div>
 
@@ -1865,22 +1865,27 @@
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('weather')">
                     <div class="section-title">☀️ Weather Settings</div>
-                    <div class="section-subtitle">Configure location and display preferences</div>
+                    <div class="section-subtitle">Configure location and temperature preferences</div>
                 </div>
                 <div class="section-content" id="weather">
                     
-                    <!-- Location Mode -->
-                    <div class="setting-subsection">
-                        <div class="subsection-title">Location Mode</div>
+                    <!-- Compact Weather Settings Card -->
+                    <div class="weather-setting-card">
                         
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <div class="setting-name">Use Current Device Location</div>
-                                <div class="setting-description">
-                                    Automatically detect your location (requires location permission)
+                        <!-- Temperature & Location Toggle Row -->
+                        <div class="weather-compact-row">
+                            <div class="weather-compact-item">
+                                <span class="weather-icon-small">🌡️</span>
+                                <span class="weather-label-small">Temperature</span>
+                                <div class="temp-unit-toggle">
+                                    <button class="temp-unit-btn active" data-unit="celsius" onclick="selectTempUnit('celsius')">°C</button>
+                                    <button class="temp-unit-btn" data-unit="fahrenheit" onclick="selectTempUnit('fahrenheit')">°F</button>
                                 </div>
                             </div>
-                            <div class="setting-control">
+                            
+                            <div class="weather-compact-item">
+                                <span class="weather-icon-small">📍</span>
+                                <span class="weather-label-small">Auto-detect</span>
                                 <label class="toggle-switch">
                                     <input type="checkbox" id="use-current-location">
                                     <span class="toggle-slider"></span>
@@ -1888,69 +1893,292 @@
                             </div>
                         </div>
                         
-                        <div id="location-permission-status" style="padding: 10px; margin-top: 8px; border-radius: 8px; background: #f0f9ff; color: #0369a1; font-size: 13px; display: none;">
+                        <!-- Location Permission Status -->
+                        <div id="location-permission-status" class="location-status-badge">
                             <span id="location-status-icon">ℹ️</span>
                             <span id="location-status-text">Location permission required</span>
                         </div>
-                    </div>
-                    
-                    <!-- Location Setting -->
-                    <div class="setting-subsection" id="manual-location-section">
-                        <div class="subsection-title">Saved Location</div>
                         
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <div class="setting-name">Current Location</div>
-                                <div class="setting-description" id="current-weather-location">
-                                    Loading...
+                        <!-- Manual Location -->
+                        <div id="manual-location-section">
+                            <div class="weather-divider"></div>
+                            
+                            <div class="location-compact-display">
+                                <span class="weather-icon-small">🌍</span>
+                                <div style="flex: 1;">
+                                    <div class="location-compact-label">Location</div>
+                                    <div class="location-compact-value" id="current-weather-location">Loading...</div>
                                 </div>
                             </div>
-                        </div>
-                        
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <div class="setting-name">Change Location</div>
-                                <div class="setting-description">Search for a city</div>
-                            </div>
-                            <div class="setting-control">
-                                <input type="text" id="weather-location-search" 
+                            
+                            <div class="location-search-container">
+                                <input type="text" 
+                                       id="weather-location-search" 
                                        placeholder="Search city..." 
-                                       class="text-input"
-                                       style="width: 250px;">
+                                       class="weather-search-input">
+                                <span class="search-icon">🔍</span>
+                            </div>
+                            
+                            <div id="location-search-results" class="location-results-dropdown">
+                                <!-- Search results populated dynamically -->
                             </div>
                         </div>
                         
-                        <div id="location-search-results" style="display: none; margin: 10px 0; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-                            <!-- Search results populated dynamically -->
-                        </div>
                     </div>
                     
-                    <!-- Temperature Unit -->
-                    <div class="setting-subsection">
-                        <div class="subsection-title">Temperature Unit</div>
-                        
-                        <div class="setting-item">
-                            <div class="setting-info">
-                                <div class="setting-name">Display Unit</div>
-                                <div class="setting-description">Choose Celsius or Fahrenheit</div>
-                            </div>
-                            <div class="setting-control">
-                                <select id="temperature-unit" class="select-input">
-                                    <option value="celsius">Celsius (°C)</option>
-                                    <option value="fahrenheit">Fahrenheit (°F)</option>
-                                </select>
-                            </div>
-                        </div>
+                    <!-- Auto-save notice -->
+                    <div class="weather-auto-save-notice">
+                        <span style="opacity: 0.7;">✓</span> Auto-saves
                     </div>
                     
-                    <!-- Save Button -->
-                    <div class="setting-item">
-                        <button onclick="saveWeatherSettings()" class="btn-primary">
-                            Save Weather Settings
-                        </button>
-                    </div>
                 </div>
             </div>
+            
+            <style>
+                /* Weather Settings - Compact Minimalist Design */
+                .weather-setting-card {
+                    background: linear-gradient(135deg, #f8fafc 0%, #ffffff 100%);
+                    border: 1px solid #e2e8f0;
+                    border-radius: 12px;
+                    padding: 16px;
+                    margin-bottom: 10px;
+                    transition: all 0.3s ease;
+                }
+                
+                .weather-setting-card:hover {
+                    border-color: #cbd5e1;
+                    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+                }
+                
+                /* Compact Row for Temperature & Toggle */
+                .weather-compact-row {
+                    display: flex;
+                    gap: 16px;
+                    align-items: center;
+                    justify-content: space-between;
+                }
+                
+                .weather-compact-item {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    flex: 1;
+                }
+                
+                .weather-icon-small {
+                    font-size: 18px;
+                    line-height: 1;
+                }
+                
+                .weather-label-small {
+                    font-size: 13px;
+                    font-weight: 500;
+                    color: #64748b;
+                    white-space: nowrap;
+                }
+                
+                /* Divider */
+                .weather-divider {
+                    height: 1px;
+                    background: linear-gradient(90deg, transparent 0%, #e2e8f0 50%, transparent 100%);
+                    margin: 12px 0;
+                }
+                
+                /* Temperature Unit Toggle - Compact */
+                .temp-unit-toggle {
+                    display: flex;
+                    gap: 4px;
+                    background: #f1f5f9;
+                    padding: 3px;
+                    border-radius: 8px;
+                }
+                
+                .temp-unit-btn {
+                    padding: 6px 16px;
+                    border: none;
+                    border-radius: 6px;
+                    background: transparent;
+                    color: #64748b;
+                    font-size: 13px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: all 0.2s ease;
+                }
+                
+                .temp-unit-btn:hover {
+                    color: #334155;
+                    background: rgba(255, 255, 255, 0.5);
+                }
+                
+                .temp-unit-btn.active {
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    box-shadow: 0 2px 6px rgba(102, 126, 234, 0.3);
+                }
+                
+                /* Location Status Badge - Compact */
+                .location-status-badge {
+                    display: none;
+                    margin-top: 10px;
+                    padding: 8px 12px;
+                    border-radius: 8px;
+                    background: linear-gradient(135deg, #dbeafe 0%, #e0e7ff 100%);
+                    font-size: 12px;
+                    color: #1e40af;
+                    align-items: center;
+                    gap: 6px;
+                }
+                
+                #location-status-icon {
+                    font-size: 14px;
+                }
+                
+                /* Compact Location Display */
+                .location-compact-display {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    margin-bottom: 10px;
+                }
+                
+                .location-compact-label {
+                    font-size: 11px;
+                    color: #64748b;
+                    text-transform: uppercase;
+                    letter-spacing: 0.05em;
+                    font-weight: 500;
+                    margin-bottom: 2px;
+                }
+                
+                .location-compact-value {
+                    font-size: 14px;
+                    color: #1e293b;
+                    font-weight: 600;
+                }
+                
+                /* Location Search - Compact */
+                .location-search-container {
+                    position: relative;
+                }
+                
+                .weather-search-input {
+                    width: 100%;
+                    padding: 8px 36px 8px 12px;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 8px;
+                    font-size: 13px;
+                    color: #1e293b;
+                    transition: all 0.2s ease;
+                    background: white;
+                }
+                
+                .weather-search-input:focus {
+                    outline: none;
+                    border-color: #667eea;
+                    box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.1);
+                }
+                
+                .weather-search-input::placeholder {
+                    color: #94a3b8;
+                }
+                
+                .search-icon {
+                    position: absolute;
+                    right: 12px;
+                    top: 50%;
+                    transform: translateY(-50%);
+                    font-size: 14px;
+                    opacity: 0.4;
+                    pointer-events: none;
+                }
+                
+                /* Location Results Dropdown - Compact */
+                .location-results-dropdown {
+                    display: none;
+                    margin-top: 6px;
+                    background: white;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 8px;
+                    overflow: hidden;
+                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+                    max-height: 240px;
+                    overflow-y: auto;
+                }
+                
+                .location-result-item {
+                    padding: 10px 12px;
+                    cursor: pointer;
+                    border-bottom: 1px solid #f1f5f9;
+                    transition: all 0.15s ease;
+                }
+                
+                .location-result-item:last-child {
+                    border-bottom: none;
+                }
+                
+                .location-result-item:hover {
+                    background: linear-gradient(90deg, #f8fafc 0%, #f1f5f9 100%);
+                }
+                
+                .location-result-name {
+                    font-weight: 600;
+                    color: #1e293b;
+                    font-size: 13px;
+                    margin-bottom: 2px;
+                }
+                
+                .location-result-details {
+                    font-size: 11px;
+                    color: #64748b;
+                }
+                
+                /* Auto-save Notice - Compact */
+                .weather-auto-save-notice {
+                    text-align: center;
+                    padding: 6px;
+                    font-size: 11px;
+                    color: #94a3b8;
+                    margin-top: 6px;
+                }
+                
+                /* Manual location section fade effect */
+                #manual-location-section.disabled {
+                    opacity: 0.4;
+                    pointer-events: none;
+                    filter: grayscale(0.3);
+                }
+                
+                /* Responsive adjustments */
+                @media (max-width: 640px) {
+                    .weather-compact-row {
+                        flex-direction: column;
+                        gap: 12px;
+                        align-items: stretch;
+                    }
+                    
+                    .weather-compact-item {
+                        justify-content: space-between;
+                    }
+                }
+                
+                /* Scrollbar styling for results */
+                .location-results-dropdown::-webkit-scrollbar {
+                    width: 6px;
+                }
+                
+                .location-results-dropdown::-webkit-scrollbar-track {
+                    background: #f1f5f9;
+                }
+                
+                .location-results-dropdown::-webkit-scrollbar-thumb {
+                    background: #cbd5e1;
+                    border-radius: 3px;
+                }
+                
+                .location-results-dropdown::-webkit-scrollbar-thumb:hover {
+                    background: #94a3b8;
+                }
+            </style>
 
             <!-- Data Management -->
             <div class="settings-section">
@@ -5174,6 +5402,18 @@
         // Weather Settings Functions
         // ========================================
         
+        // Temperature unit selection
+        function selectTempUnit(unit) {
+            // Update button states
+            document.querySelectorAll('.temp-unit-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.querySelector(`[data-unit="${unit}"]`).classList.add('active');
+            
+            // Auto-save
+            saveWeatherSettings();
+        }
+        
         // Load weather settings
         async function loadWeatherSettings() {
             try {
@@ -5198,9 +5438,12 @@
                             'Using device location';
                     }
                     
-                    // Update temperature unit
-                    document.getElementById('temperature-unit').value = 
-                        data.temperature_unit || 'celsius';
+                    // Update temperature unit buttons
+                    const tempUnit = data.temperature_unit || 'celsius';
+                    document.querySelectorAll('.temp-unit-btn').forEach(btn => {
+                        btn.classList.remove('active');
+                    });
+                    document.querySelector(`[data-unit="${tempUnit}"]`)?.classList.add('active');
                 }
             } catch (error) {
                 console.error('Failed to load weather settings:', error);
@@ -5214,9 +5457,8 @@
             const statusDiv = document.getElementById('location-permission-status');
             
             if (useCurrent) {
-                manualSection.style.opacity = '0.5';
-                manualSection.style.pointerEvents = 'none';
-                statusDiv.style.display = 'block';
+                manualSection.classList.add('disabled');
+                statusDiv.style.display = 'flex';
                 
                 // Check location permission
                 if (navigator.geolocation && navigator.permissions) {
@@ -5224,35 +5466,41 @@
                         if (result.state === 'granted') {
                             document.getElementById('location-status-icon').textContent = '✅';
                             document.getElementById('location-status-text').textContent = 
-                                'Location permission granted - using current location';
+                                'Location permission granted';
+                            statusDiv.style.background = 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)';
+                            statusDiv.style.color = '#065f46';
                         } else if (result.state === 'prompt') {
                             document.getElementById('location-status-icon').textContent = '⚠️';
                             document.getElementById('location-status-text').textContent = 
                                 'Please allow location access when prompted';
+                            statusDiv.style.background = 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)';
+                            statusDiv.style.color = '#92400e';
                         } else {
                             document.getElementById('location-status-icon').textContent = '❌';
                             document.getElementById('location-status-text').textContent = 
-                                'Location permission denied - enable in browser settings';
+                                'Location denied - enable in browser settings';
+                            statusDiv.style.background = 'linear-gradient(135deg, #fecaca 0%, #fca5a5 100%)';
+                            statusDiv.style.color = '#991b1b';
                         }
                     }).catch(() => {
                         document.getElementById('location-status-icon').textContent = 'ℹ️';
                         document.getElementById('location-status-text').textContent = 
-                            'Location services will be used when available';
+                            'Location will be used when available';
                     });
                 } else {
                     document.getElementById('location-status-icon').textContent = 'ℹ️';
                     document.getElementById('location-status-text').textContent = 
-                        'Location services will be used when available';
+                        'Location will be used when available';
                 }
             } else {
-                manualSection.style.opacity = '1';
-                manualSection.style.pointerEvents = 'auto';
+                manualSection.classList.remove('disabled');
                 statusDiv.style.display = 'none';
             }
         }
         
-        // Add event listener for toggle (needs to be set after DOM load)
+        // Add event listeners (needs to be set after DOM load)
         document.addEventListener('DOMContentLoaded', function() {
+            // Toggle for auto-detect location
             const toggleElement = document.getElementById('use-current-location');
             if (toggleElement) {
                 toggleElement.addEventListener('change', (e) => {
@@ -5260,34 +5508,79 @@
                     saveWeatherSettings();
                 });
             }
+            
+            // Location search with debounce
+            const weatherLocationInput = document.getElementById('weather-location-search');
+            if (weatherLocationInput) {
+                let weatherSearchTimeout;
+                
+                weatherLocationInput.addEventListener('input', (e) => {
+                    clearTimeout(weatherSearchTimeout);
+                    const query = e.target.value.trim();
+                    const resultsContainer = document.getElementById('location-search-results');
+                    
+                    if (query.length < 2) {
+                        resultsContainer.style.display = 'none';
+                        return;
+                    }
+                    
+                    // Show loading state immediately
+                    resultsContainer.innerHTML = `
+                        <div style="padding: 20px; text-align: center; color: #64748b;">
+                            <div style="font-size: 20px; margin-bottom: 8px;">🔍</div>
+                            <div>Searching locations...</div>
+                        </div>
+                    `;
+                    resultsContainer.style.display = 'block';
+                    
+                    // Search after short delay (reduced to 300ms for faster response)
+                    weatherSearchTimeout = setTimeout(() => searchLocation(query), 300);
+                });
+            }
         });
 
-        // Location search with debounce
-        let weatherSearchTimeout;
-        const weatherLocationInput = document.getElementById('weather-location-search');
-        if (weatherLocationInput) {
-            weatherLocationInput.addEventListener('input', (e) => {
-                clearTimeout(weatherSearchTimeout);
-                const query = e.target.value.trim();
+        async function searchLocation(query) {
+            const resultsContainer = document.getElementById('location-search-results');
+            
+            try {
+                // Add timeout to prevent long waits
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
                 
-                if (query.length < 3) {
-                    document.getElementById('location-search-results').style.display = 'none';
-                    return;
+                const response = await fetch(
+                    `/api/weather/location/search?query=${encodeURIComponent(query)}&limit=8`,
+                    { signal: controller.signal }
+                );
+                
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    throw new Error(`Search failed: ${response.status}`);
                 }
                 
-                weatherSearchTimeout = setTimeout(() => searchLocation(query), 500);
-            });
-        }
-
-        async function searchLocation(query) {
-            try {
-                const response = await fetch(`/api/weather/location/search?query=${encodeURIComponent(query)}`);
-                if (response.ok) {
-                    const data = await response.json();
+                const data = await response.json();
+                
+                if (!data.results || data.results.length === 0) {
+                    resultsContainer.innerHTML = `
+                        <div style="padding: 20px; text-align: center; color: #64748b;">
+                            <div style="font-size: 20px; margin-bottom: 8px;">🌍</div>
+                            <div>No locations found for "${query}"</div>
+                            <div style="font-size: 12px; margin-top: 4px; opacity: 0.7;">Try a different search term</div>
+                        </div>
+                    `;
+                } else {
                     displayLocationResults(data.results);
                 }
             } catch (error) {
                 console.error('Location search failed:', error);
+                const errorMsg = error.name === 'AbortError' ? 'Search timed out' : 'Search failed';
+                resultsContainer.innerHTML = `
+                    <div style="padding: 20px; text-align: center; color: #dc2626;">
+                        <div style="font-size: 20px; margin-bottom: 8px;">⚠️</div>
+                        <div>${errorMsg}</div>
+                        <div style="font-size: 12px; margin-top: 4px;">Please try again</div>
+                    </div>
+                `;
             }
         }
 
@@ -5302,23 +5595,13 @@
             container.innerHTML = results.map(loc => `
                 <div class="location-result-item" 
                      onclick="selectLocation(${loc.lat}, ${loc.lon}, '${loc.name.replace(/'/g, "\\'")}', '${loc.country.replace(/'/g, "\\'")}')"
-                     style="padding: 12px; cursor: pointer; border-bottom: 1px solid #e5e7eb; transition: background 0.2s;">
-                    <div style="font-weight: 500; color: #333;">${loc.name}</div>
-                    <div style="font-size: 12px; color: #666; margin-top: 2px;">
+                     data-city="${loc.name.replace(/'/g, "\\'")}" data-country="${loc.country.replace(/'/g, "\\'")}">
+                    <div class="location-result-name">${loc.name}</div>
+                    <div class="location-result-details">
                         ${loc.admin1 ? loc.admin1 + ', ' : ''}${loc.country}
                     </div>
                 </div>
             `).join('');
-            
-            // Add hover effect via inline style since we're using dynamic content
-            container.querySelectorAll('.location-result-item').forEach(item => {
-                item.addEventListener('mouseenter', function() {
-                    this.style.background = '#f8f9fa';
-                });
-                item.addEventListener('mouseleave', function() {
-                    this.style.background = 'white';
-                });
-            });
             
             container.style.display = 'block';
         }
@@ -5339,7 +5622,11 @@
         async function saveWeatherSettings() {
             try {
                 const userId = localStorage.getItem('user_id') || 'default';
-                const temperatureUnit = document.getElementById('temperature-unit').value;
+                
+                // Get temperature unit from active button
+                const activeTempBtn = document.querySelector('.temp-unit-btn.active');
+                const temperatureUnit = activeTempBtn ? activeTempBtn.dataset.unit : 'celsius';
+                
                 const useCurrentLocation = document.getElementById('use-current-location').checked;
                 
                 const payload = {
@@ -5364,7 +5651,7 @@
                 });
                 
                 if (response.ok) {
-                    showNotification('Weather settings saved successfully', 'success');
+                    showNotification('Weather settings saved ✓', 'success');
                     
                     // Refresh weather widget if it exists
                     if (window.WidgetRegistry) {

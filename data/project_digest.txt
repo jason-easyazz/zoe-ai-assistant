@@ -1,6 +1,6 @@
 ================================================================================
 ZOE AI ASSISTANT - PROJECT DIGEST
-Generated: 2025-10-23 02:00:01
+Generated: 2025-10-25 02:00:01
 ================================================================================
 
 ## Project Structure
@@ -21,13 +21,13 @@ Generated: 2025-10-23 02:00:01
 │   ├── vapid_private.pem
 │   └── vapid_public.pem
 ├── docs
-│   ├── api
 │   ├── architecture
 │   │   ├── ACTION_PLAN_PROGRESS.md
 │   │   ├── API_VERSIONING_STRATEGY.md
 │   │   ├── ARCHITECTURE_PROTECTION.md
 │   │   ├── ARCHITECTURE_REVIEW.md
 │   │   ├── CHAT_INTEGRATION_DIAGNOSIS.md
+│   │   ├── DASHBOARD_LAYOUT_PROTECTION.md
 │   │   ├── DATABASE_CONSOLIDATION_PLAN.md
 │   │   ├── DESKTOP_DASHBOARD_FIXES_COMPLETE.md
 │   │   ├── ERROR_HANDLING_STANDARD.md
@@ -48,15 +48,18 @@ Generated: 2025-10-23 02:00:01
 │   │   ├── user-isolation-audit.md
 │   │   └── ZOE_ORB_SYSTEM.md
 │   ├── archive
+│   │   ├── other
+│   │   └── reports
 │   ├── developer
 │   │   ├── continuation-prompt.txt
 │   │   └── SMART_CONTINUATION_PROMPT.txt
-│   ├── features
 │   ├── governance
 │   │   ├── BROWSER_CACHE_FIX.md
 │   │   ├── CLEANUP_SAFETY.md
 │   │   ├── CRITICAL_FILES.md
+│   │   ├── DATABASE_PATH_ENFORCEMENT.md
 │   │   ├── DELETION_PREVENTION_SYSTEM.md
+│   │   ├── ISSUE_ANALYSIS_OCT23.md
 │   │   ├── MANIFEST_SYSTEM.md
 │   │   ├── PROJECT_ORGANIZATION_COMPLETE.md
 │   │   ├── QUICK_REFERENCE.md
@@ -81,6 +84,8 @@ Generated: 2025-10-23 02:00:01
 │   │   ├── widget-development.md
 │   │   ├── widget-quick-start.md
 │   │   └── ZOE_ORB_COMPONENT_FIX.md
+│   ├── post-mortems
+│   │   └── 2025-10-23-system-failure-analysis.md
 │   ├── ENVIRONMENT_VARIABLES.md
 │   ├── EXPERT_ARCHITECTURE.md
 │   ├── GOVERNANCE_IMPLEMENTATION_COMPLETE.md
@@ -100,9 +105,7 @@ Generated: 2025-10-23 02:00:01
 │   │   ├── deploy-phase2-push-notifications.sh
 │   │   ├── deploy_v2.3.1.sh
 │   │   └── push_to_github.sh
-│   ├── development
 │   ├── maintenance
-│   │   ├── scripts
 │   │   ├── advanced_cleanup.py
 │   │   ├── aggressive_cleanup.py
 │   │   ├── archive_tagged_files.py
@@ -189,6 +192,10 @@ Generated: 2025-10-23 02:00:01
 │   │   └── zoe-superpowers.sh
 │   └── zoe-time-sync.service
 ├── services
+│   ├── collections-service
+│   ├── homeassistant-mcp-bridge
+│   ├── n8n-mcp-bridge
+│   ├── people-service
 │   ├── zoe-auth
 │   │   ├── api
 │   │   ├── core
@@ -309,9 +316,7 @@ Generated: 2025-10-23 02:00:01
 │       ├── nginx-dev.conf
 │       ├── nginx-livekit-proxy.conf
 │       └── VERSION.md
-├── templates
 ├── tests
-│   ├── fixtures
 │   ├── integration
 │   ├── results
 │   │   └── 20251008_121422
@@ -343,6 +348,7 @@ Generated: 2025-10-23 02:00:01
 │   ├── audit
 │   │   ├── analyze_databases.py
 │   │   ├── audit_references.py
+│   │   ├── check_database_paths.py
 │   │   ├── check_home_cleanliness.py
 │   │   ├── check_ui_health.sh
 │   │   ├── comprehensive_audit.py
@@ -370,6 +376,7 @@ Generated: 2025-10-23 02:00:01
 │   │   ├── final_cleanup.py
 │   │   ├── fix_api_urls.py
 │   │   ├── fix_references.py
+│   │   ├── fix_router_db_paths.py
 │   │   ├── fix_ui_reminders.py
 │   │   ├── migrate_to_unified_db.py
 │   │   ├── remove_duplicate_project.sh
@@ -391,157 +398,51 @@ Generated: 2025-10-23 02:00:01
 │   └── validation
 │       └── verify_cursor_fixes.sh
 ├── CHANGELOG.md
-├── CURSOR_IMPLEMENTATION_PLAN.md
-├── CURSOR_QUICKSTART_PROMPT.md
-├── DASHBOARD_INTEGRATION_STATUS.md
-├── DEPLOY-PWA-NOW.md
-├── DEVELOPER_DASHBOARD_READY.md
 ├── docker-compose.mem-agent.yml
 ├── docker-compose.override.yml
 ├── docker-compose.yml
 ├── PROJECT_STATUS.md
 ├── PROJECT_STRUCTURE_RULES.md
-├── PWA-DEPLOYMENT-SUCCESS.md
-├── PWA-IMPLEMENTATION-COMPLETE.md
-├── PWA-QUICK-START.md
 ├── pytest.ini
 ├── QUICK-START.md
 ├── README.md
 ├── test_architecture.py
-├── test_delete_user.html
 └── verify_updates.sh
 
-72 directories, 333 files
+73 directories, 330 files
 
 ## Git Status
 
-A  CURSOR_IMPLEMENTATION_PLAN.md
-A  CURSOR_QUICKSTART_PROMPT.md
- M docs/RESTORATION_LOG_2025-10-19.md
- M docs/governance/BROWSER_CACHE_FIX.md
- M docs/governance/MANIFEST_SYSTEM.md
- M docs/governance/PROJECT_ORGANIZATION_COMPLETE.md
- M docs/governance/QUICK_REFERENCE.md
- M docs/governance/UI_ERROR_ANALYSIS.md
- M services/zoe-auth/Dockerfile
- M services/zoe-auth/api/admin.py
- M services/zoe-auth/api/auth.py
- M services/zoe-auth/api/dependencies.py
- M services/zoe-auth/api/touch_panel.py
- M services/zoe-auth/core/auth.py
- M services/zoe-auth/core/passcode.py
- M services/zoe-auth/core/rbac.py
- M services/zoe-auth/core/security.py
- M services/zoe-auth/core/sessions.py
- M services/zoe-auth/data/auth.db
- M services/zoe-auth/main.py
- M services/zoe-auth/models/database.py
- D services/zoe-auth/simple_main.py
- M services/zoe-auth/sso/homeassistant.py
- M services/zoe-auth/sso/matrix.py
- M services/zoe-auth/sso/n8n.py
- M services/zoe-auth/touch_panel/quick_auth.py
- M services/zoe-core/main.py
- M services/zoe-core/requirements.txt
- M services/zoe-core/routers/ai_task_integration.py.disabled
- M services/zoe-core/routers/calendar.py
- M services/zoe-core/routers/chat.py
- M services/zoe-core/routers/lists.py
- M services/zoe-core/routers/media.py
- M services/zoe-ui/dist/auth.html
- M services/zoe-ui/dist/calendar.html
- M services/zoe-ui/dist/chat-v2.html
- M services/zoe-ui/dist/chat.html
- M services/zoe-ui/dist/components/zoe-orb.html
- M services/zoe-ui/dist/dashboard.html
- M services/zoe-ui/dist/developer/index.html
- M services/zoe-ui/dist/developer/zoe_dashboard_demo.html
- M services/zoe-ui/dist/index.html
- M services/zoe-ui/dist/journal.html
- M services/zoe-ui/dist/js/auth.js
- M services/zoe-ui/dist/js/journal-ui-enhancements.js
- M services/zoe-ui/dist/js/widget-base.js
- M services/zoe-ui/dist/js/widget-system.js
- M services/zoe-ui/dist/lists.html
- M services/zoe-ui/dist/memories.html
+ M data/project_digest.txt
+ M data/project_digest_trimmed.txt
+ M docs/architecture/DASHBOARD_LAYOUT_PROTECTION.md
+ M docs/governance/DATABASE_PATH_ENFORCEMENT.md
+ M docs/post-mortems/2025-10-23-system-failure-analysis.md
+ M services/zoe-core/routers/weather.py
+ M services/zoe-ui/dist/css/widgets-fluid.css
+ M services/zoe-ui/dist/js/dashboard-protection.js
  M services/zoe-ui/dist/settings.html
- M services/zoe-ui/dist/touch/calendar.html
- M services/zoe-ui/dist/touch/dashboard.html
- M services/zoe-ui/dist/touch/index.html
- M services/zoe-ui/dist/touch/lists.html
- M services/zoe-ui/nginx.conf
- M tools/audit/validate_before_delete.py
- M tools/cleanup/safe_cleanup.py
-?? ._.DS_Store
-?? DASHBOARD_INTEGRATION_STATUS.md
-?? DEPLOY-PWA-NOW.md
-?? DEVELOPER_DASHBOARD_READY.md
-?? PWA-DEPLOYMENT-SUCCESS.md
-?? PWA-IMPLEMENTATION-COMPLETE.md
-?? PWA-QUICK-START.md
-?? data/project_digest.txt
-?? data/project_digest_temp.txt
-?? data/project_digest_trimmed.txt
-?? data/uploads/
-?? docs/architecture/PWA-PHASE1-COMPLETE.md
-?? docs/architecture/PWA-PHASE2-PROGRESS.md
-?? docs/architecture/navigation-standardization.md
-?? docs/architecture/user-isolation-audit.md
-?? docs/guides/PWA-INSTALLATION-TESTING.md
-?? docs/guides/iOS-SHORTCUTS-INTEGRATION.md
-?? scripts/utilities/generate-vapid-keys.py
-?? services/._.DS_Store
-?? services/zoe-core/data/zoe.db
-?? services/zoe-core/db/schema/push_subscriptions.sql
-?? services/zoe-core/routers/push.py
-?? services/zoe-core/services/
-?? services/zoe-ui/._.DS_Store
-?? services/zoe-ui/VERSION.md
-?? services/zoe-ui/dist/._teneeka.html
-?? services/zoe-ui/dist/apple-touch-icon.png
-?? services/zoe-ui/dist/clear-cache.html
-?? services/zoe-ui/dist/clear-session.html
-?? services/zoe-ui/dist/dashboard.html.backup-20251022-125807
-?? services/zoe-ui/dist/dashboard.html.broken-20251022-132414
-?? services/zoe-ui/dist/favicon-16.png
-?? services/zoe-ui/dist/favicon-32.png
-?? services/zoe-ui/dist/favicon.ico
-?? services/zoe-ui/dist/fix-isolation.html
-?? services/zoe-ui/dist/icons/
-?? services/zoe-ui/dist/js/dashboard.js
-?? services/zoe-ui/dist/js/list-configs.js
-?? services/zoe-ui/dist/js/lists-dashboard.js
-?? services/zoe-ui/dist/js/lists-dashboard.js.backup-20251022-214925
-?? services/zoe-ui/dist/js/masonry-grid.js
-?? services/zoe-ui/dist/js/push-notifications.js
-?? services/zoe-ui/dist/js/sw-registration.js
-?? services/zoe-ui/dist/js/websocket-sync.js
-?? services/zoe-ui/dist/lib/
-?? services/zoe-ui/dist/lists.html.backup-20251022
-?? services/zoe-ui/dist/lists.html.backup-20251022-214924
-?? services/zoe-ui/dist/offline.html
-?? services/zoe-ui/dist/session-debug.html
-?? services/zoe-ui/dist/standardize_navigation.py
-?? services/zoe-ui/dist/sw.js
-?? services/zoe-ui/dist/teneeka.html
-?? services/zoe-ui/dist/test-session.html
-?? test_delete_user.html
+ M tools/cleanup/fix_router_db_paths.py
 
 ## Recent Commits (Last 10)
 
-c262906 fix: Complete system fixes - Docker Compose, MCP server, and service health
-bf9ef67 fix: Restore critical files and touch interface after cleanup
-0beb480 chore: ULTRA-AGGRESSIVE cleanup - target zoe-core and zoe-ui
-c40b51f chore: AGGRESSIVE cleanup - remove all non-essential files
-a337703 chore: Advanced project cleanup - further size reduction
-d75a32d chore: Add GitHub cleanup verification script
-d5c6428 chore: Add git history cleanup script and update gitignore
-545cf97 chore: Comprehensive project cleanup and size optimization
-7471694 chore: Project structure cleanup and organization
-ba22a15 fix(security): Remove plaintext password from seed data comments
+8d4fb2a fix: center time widget content vertically
+6d3c9b9 fix: properly track widget files - fix overly broad 'core' ignore
+3c4a8c6 fix: remove duplicate weather from time widget
+0d773fd feat: fluid weather widget - always shows all information
+327d8d9 fix: perfect widget content fitting and spacing
+cb273c1 feat: ULTRA-PREMIUM widgets with advanced responsive design
+2b3d7a1 feat: beautiful responsive time & weather widgets
+d5d8923 fix: desktop dashboard weather widgets grey - add size classes
+cf9fa18 fix: lists dashboard weather widgets grey - add size classes
+fd03b54 fix: weather widget showing grey - respect defaultSize option
 
 ## Core Services
 
+collections-service
+homeassistant-mcp-bridge
+n8n-mcp-bridge
+people-service
 zoe-auth
 zoe-core
 zoe-litellm
@@ -663,26 +564,18 @@ tool_call_performance
 - README.md
 - CHANGELOG.md
 CHANGELOG.md
-CURSOR_IMPLEMENTATION_PLAN.md
-CURSOR_QUICKSTART_PROMPT.md
-DASHBOARD_INTEGRATION_STATUS.md
-DEPLOY-PWA-NOW.md
-DEVELOPER_DASHBOARD_READY.md
 PROJECT_STATUS.md
 PROJECT_STRUCTURE_RULES.md
-PWA-DEPLOYMENT-SUCCESS.md
-PWA-IMPLEMENTATION-COMPLETE.md
+QUICK-START.md
+README.md
 
 ## Files Changed Recently (Last 7 Days)
 
 services/zoe-core/preference_learner.py
 services/zoe-core/cross_agent_collaboration.py
-services/zoe-core/training_engine/data_collector.py
-services/zoe-core/training_engine/__init__.py
 services/zoe-core/predictive_intelligence.py
 services/zoe-core/route_llm.py
 services/zoe-core/router_loader.py
-services/zoe-core/temporal_memory_integration.py
 services/zoe-core/context_optimizer.py
 services/zoe-core/database_migrations.py
 services/zoe-core/developer/n8n/simple_generator.py
@@ -693,6 +586,9 @@ services/zoe-core/developer/docker/manager.py
 services/zoe-core/developer/__init__.py
 services/zoe-core/ai_client.py
 services/zoe-core/memvid_archiver.py
-services/zoe-core/memory_consolidation.py
 services/zoe-core/routers/health_dashboard.py
+services/zoe-core/routers/chat.py
+services/zoe-core/routers/task_executor.py
+services/zoe-core/routers/settings_ui.py
+services/zoe-core/routers/cross_agent_collaboration.py
 
