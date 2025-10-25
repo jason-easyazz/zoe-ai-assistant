@@ -16,6 +16,15 @@ data/uploads/
 data/project_digest*.txt
 data/time_location_settings.json
 
+# Personal learning archives and memvid data
+data/learning-archives/
+data/memvid/
+data/archives/
+
+# Database backup files
+data/*.db.backup*
+data/*.db-backup*
+
 # Docker volumes
 volumes/
 
