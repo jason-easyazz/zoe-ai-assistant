@@ -8,6 +8,22 @@ data/*.db-wal
 # But DO track schema files
 !data/schema/
 !data/schema/*.sql
+
+# SECURITY: Never commit secrets or API keys
+.env
+.env.local
+.env.production
+.env.staging
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cert
+*secret*
+*password*
+*token*
+*api_key*
 data/billing/
 data/logs/
 data/backup/
