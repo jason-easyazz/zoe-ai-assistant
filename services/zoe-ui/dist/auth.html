@@ -540,6 +540,13 @@
                 const mode = urlParams.get('mode');
                 const user = urlParams.get('user');
                 const first = urlParams.get('first');
+                const setup = urlParams.get('setup');
+
+                // Handle password setup mode
+                if (setup) {
+                    this.showPasswordSetup(setup);
+                    return;
+                }
 
                 // Pre-fill username if provided
                 if (user && user !== 'guest') {
