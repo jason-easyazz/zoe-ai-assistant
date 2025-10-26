@@ -24,15 +24,18 @@
         }
 
         .auth-container {
-            background: rgba(255, 255, 255, 0.6);
+            background: rgba(255, 255, 255, 0.7);
             backdrop-filter: blur(40px);
-            border-radius: 16px;
-            padding: 40px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            -webkit-backdrop-filter: blur(40px);
+            border-radius: 24px;
+            padding: 48px;
+            box-shadow: 
+                0 8px 32px rgba(0, 0, 0, 0.08),
+                0 2px 8px rgba(0, 0, 0, 0.04);
             width: 100%;
-            max-width: 420px;
-            border: 1px solid rgba(255, 255, 255, 0.4);
-            transition: all 0.3s ease;
+            max-width: 460px;
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .zoe-logo {
@@ -41,39 +44,54 @@
         }
 
         .orb {
-            width: 60px;
-            height: 60px;
+            width: 80px;
+            height: 80px;
             border-radius: 50%;
             background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            margin: 0 auto 15px;
+            margin: 0 auto 20px;
             display: flex;
             align-items: center;
             justify-content: center;
             color: white;
-            font-size: 24px;
+            font-size: 32px;
             font-weight: bold;
             transition: all 0.3s ease;
-            animation: mini-breathe 3s ease-in-out infinite;
+            animation: breathe 4s ease-in-out infinite;
+            box-shadow: 
+                0 8px 32px rgba(123, 97, 255, 0.3),
+                0 4px 16px rgba(90, 224, 224, 0.2);
         }
 
-        @keyframes mini-breathe {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
+        @keyframes breathe {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 
+                    0 8px 32px rgba(123, 97, 255, 0.3),
+                    0 4px 16px rgba(90, 224, 224, 0.2);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 
+                    0 12px 40px rgba(123, 97, 255, 0.4),
+                    0 6px 20px rgba(90, 224, 224, 0.3);
+            }
         }
 
         .title {
-            font-size: 28px;
-            font-weight: 600;
-            color: #333;
+            font-size: 32px;
+            font-weight: 700;
+            color: #1a1a1a;
             text-align: center;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
+            letter-spacing: -0.5px;
         }
 
         .subtitle {
             color: #666;
             text-align: center;
-            margin-bottom: 30px;
-            font-size: 14px;
+            margin-bottom: 35px;
+            font-size: 15px;
+            font-weight: 400;
         }
 
         .auth-tabs {
