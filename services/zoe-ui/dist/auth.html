@@ -534,7 +534,8 @@
 
             detectTouchPanel() {
                 const urlParams = new URLSearchParams(window.location.search);
-                if (urlParams.get('mode') === 'touch' || window.innerWidth >= 1024) {
+                // Only enable touch panel mode if explicitly requested
+                if (urlParams.get('mode') === 'touch') {
                     document.body.classList.add('touch-panel-mode');
                     this.switchTab('passcode');
                 }
