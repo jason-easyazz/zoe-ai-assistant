@@ -122,6 +122,7 @@
     "QUICK-START.md",
     "PROJECT_STATUS.md",
     "PROJECT_STRUCTURE_RULES.md",
+    "DATABASE_PROTECTION_RULES.md",
     "pytest.ini",
     ".cursorrules",
     ".gitignore",
