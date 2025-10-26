@@ -1125,9 +1125,9 @@
                         messageBox.style.background = '#d4edda';
                         messageBox.style.color = '#155724';
                         
-                        // Reload page after 2 seconds to show login form
+                        // Redirect to index.html (login page) after 2 seconds
                         setTimeout(() => {
-                            window.location.reload();
+                            window.location.href = '/index.html';
                         }, 2000);
                     } else {
                         messageBox.textContent = data.message || 'Failed to set password';
