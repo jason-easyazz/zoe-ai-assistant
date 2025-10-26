@@ -1017,6 +1017,9 @@
 
                 if (data.success) {
                     handleSuccessfulLogin(data);
+                } else if (data.error_message === 'PASSWORD_SETUP_REQUIRED') {
+                    // Redirect to auth.html for password setup
+                    window.location.href = '/auth.html?setup=' + encodeURIComponent(username);
                 } else {
                     showMessage(data.error_message || 'Login failed', 'error');
                 }
