@@ -1,9 +1,10 @@
 """Add Zoe Evolution v3.0 roadmap tasks to developer task system"""
+import os
 import sqlite3
 import json
 from datetime import datetime
 
-conn = sqlite3.connect('/home/pi/zoe/data/developer_tasks.db')
+conn = sqlite3.connect(os.getenv('DATABASE_PATH', '/app/data/zoe.db'))
 cursor = conn.cursor()
 
 # Ensure table exists
