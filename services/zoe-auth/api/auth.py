@@ -48,6 +48,12 @@ class PasswordChangeRequest(BaseModel):
     current_password: str
     new_password: str = Field(..., min_length=8)
 
+class InitialPasswordSetupRequest(BaseModel):
+    """Initial password setup for new users"""
+    username: str = Field(..., min_length=1, max_length=50)
+    new_password: str = Field(..., min_length=8)
+    confirm_password: str = Field(..., min_length=8)
+
 class PasscodeSetupRequest(BaseModel):
     """Passcode setup request model"""
     passcode: str = Field(..., min_length=4, max_length=8, pattern=r'^\d+$')
@@ -95,7 +101,7 @@ async def get_user_profiles():
         with auth_db.get_connection() as conn:
             cursor = conn.execute("""
                 SELECT user_id, username, role
-                FROM users
+                FROM auth_users
                 WHERE is_active = 1
                 ORDER BY username
             """)
@@ -183,7 +189,7 @@ async def login(request: LoginRequest, http_request: Request):
         
         # Look up user by username first
         with auth_db.get_connection() as conn:
-            cursor = conn.execute("SELECT user_id FROM users WHERE username = ?", (request.username,))
+            cursor = conn.execute("SELECT user_id, password_hash FROM auth_users WHERE username = ?", (request.username,))
             user_row = cursor.fetchone()
             
             if not user_row:
@@ -193,6 +199,16 @@ async def login(request: LoginRequest, http_request: Request):
                 )
             
             user_id = user_row["user_id"]
+            password_hash = user_row["password_hash"]
+            
+            # Check if user needs to set password (NULL or 'SETUP_REQUIRED' password_hash)
+            if password_hash is None or password_hash == 'SETUP_REQUIRED':
+                return AuthResponse(
+                    success=False,
+                    error_message="PASSWORD_SETUP_REQUIRED",
+                    requires_escalation=True,
+                    user_info={"user_id": user_id, "username": request.username}
+                )
         
         # Now verify password with user_id
         auth_result = auth_manager.verify_password(user_id, request.password, ip_address)
@@ -256,7 +272,7 @@ async def login_passcode(request: PasscodeLoginRequest, http_request: Request):
         # Get user ID from username
         with auth_db.get_connection() as conn:
             cursor = conn.execute(
-                "SELECT user_id FROM users WHERE username = ? AND is_active = 1",
+                "SELECT user_id FROM auth_users WHERE username = ? AND is_active = 1",
                 (request.username,)
             )
             row = cursor.fetchone()
@@ -510,6 +526,66 @@ async def get_user_profile(current_session = Depends(get_current_session)):
         UserResponse with user details
     """
     return await get_current_user(current_session)
+
+@router.post("/password/setup")
+async def setup_initial_password(request: InitialPasswordSetupRequest, http_request: Request):
+    """
+    Set initial password for users with NULL password_hash
+    This is used for first-time login after account creation
+    
+    Args:
+        request: Username and new password
+        http_request: FastAPI request object
+        
+    Returns:
+        Success message and session
+    """
+    try:
+        # Validate passwords match
+        if request.new_password != request.confirm_password:
+            raise HTTPException(status_code=400, detail="Passwords do not match")
+        
+        # Look up user
+        with auth_db.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT user_id, password_hash FROM auth_users WHERE username = ?",
+                (request.username,)
+            )
+            user_row = cursor.fetchone()
+            
+            if not user_row:
+                raise HTTPException(status_code=404, detail="User not found")
+            
+            user_id = user_row["user_id"]
+            password_hash = user_row["password_hash"]
+            
+            # Only allow if password is NULL or 'SETUP_REQUIRED' (not set)
+            if password_hash is not None and password_hash != 'SETUP_REQUIRED':
+                raise HTTPException(status_code=400, detail="Password already set. Use password change instead.")
+            
+            # Set the new password using auth_manager
+            import bcrypt
+            new_hash = bcrypt.hashpw(request.new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            
+            conn.execute(
+                "UPDATE auth_users SET password_hash = ?, updated_at = ? WHERE user_id = ?",
+                (new_hash, datetime.utcnow(), user_id)
+            )
+            
+            logger.info(f"Initial password set for user: {request.username}")
+            
+            return {
+                "success": True,
+                "message": "Password set successfully. You can now log in.",
+                "user_id": user_id,
+                "username": request.username
+            }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Initial password setup error: {e}")
+        raise HTTPException(status_code=500, detail="Password setup failed")
 
 @router.post("/password/change")
 async def change_password(request: PasswordChangeRequest,

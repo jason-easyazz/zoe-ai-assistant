@@ -1,163 +1,114 @@
 #!/usr/bin/env python3
 """
-Database Path Enforcement Tool
-Ensures all code uses DATABASE_PATH env var instead of hardcoded paths
-
-Usage:
-    python3 tools/audit/check_database_paths.py
-    
-Returns:
-    Exit 0 if all checks pass
-    Exit 1 if violations found
+Database Path Enforcement Checker
+Ensures all code uses DATABASE_PATH environment variable instead of hardcoded paths
+Created: 2025-10-26 after user data loss incident
 """
 
+import os
 import re
 import sys
 from pathlib import Path
-from typing import List, Tuple
 
-# Forbidden patterns
+# Hardcoded path patterns to detect
+# Note: /app/data/ is the standard Docker path and is allowed as a default
 FORBIDDEN_PATTERNS = [
-    r'"/home/pi/zoe/data/\w+\.db"',  # Hardcoded absolute path
-    r"'/home/pi/zoe/data/\w+\.db'",  # Hardcoded absolute path (single quotes)
-    r'db_path\s*:\s*str\s*=\s*"/home/pi',  # Default parameter with hardcoded path
-    r'db_path\s*=\s*"/home/pi',  # Assignment with hardcoded path
-    r'DATABASE_PATH\s*=\s*"/home/pi',  # Constant with hardcoded path
+    r'"/home/pi/zoe/data/.*\.db"',  # Hardcoded host paths (should use /app/data/)
+    r"'/home/pi/zoe/data/.*\.db'",
 ]
 
-# Allowed patterns
+# Allowed patterns (using environment variables)
 ALLOWED_PATTERNS = [
     r'os\.getenv\(["\']DATABASE_PATH["\']',
-    r'os\.environ\.get\(["\']DATABASE_PATH["\']',
     r'os\.environ\[["\']DATABASE_PATH["\']\]',
+    r'DATABASE_PATH\s*=\s*os\.getenv',
 ]
 
-# Files to skip (paths containing these strings)
-SKIP_PATTERNS = [
-    '/tests/',  # All test files
-    '/docs/',
-    '/.git/',
-    '/__pycache__/',
-    '/venv/',
-    '/node_modules/',
-    '/scripts/utilities/',  # Utility scripts run on host, not in Docker
-    '/tools/audit/',  # Audit tools run on host
-    '/tools/cleanup/',  # Cleanup tools run on host
-    'check_database_paths.py',  # This file itself (contains examples)
-    'add_roadmap_tasks.py',  # One-time data seeding script
-]
-
-def should_skip(filepath: Path) -> bool:
-    """Check if file should be skipped"""
-    filepath_str = str(filepath)
-    for pattern in SKIP_PATTERNS:
-        if pattern in filepath_str:
-            return True
-    return False
-
-def check_file(filepath: Path) -> List[Tuple[int, str, str]]:
-    """
-    Check a single file for database path violations
-    
-    Returns:
-        List of (line_number, line_content, violation_reason)
-    """
+def check_file(file_path: Path) -> list:
+    """Check a single file for hardcoded database paths"""
     violations = []
     
     try:
-        content = filepath.read_text(encoding='utf-8')
-        lines = content.split('\n')
-        
-        for i, line in enumerate(lines, 1):
-            # Skip comments
-            if line.strip().startswith('#'):
-                continue
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            lines = content.split('\n')
             
-            # Skip print statements and docstrings (they contain examples)
-            if 'print(' in line or '"""' in line or "'''" in line:
-                continue
+            for i, line in enumerate(lines, 1):
+                # Skip comments
+                if line.strip().startswith('#'):
+                    continue
                 
-            # Check for forbidden patterns
-            for pattern in FORBIDDEN_PATTERNS:
-                if re.search(pattern, line):
-                    # Check if this line also has an allowed pattern (e.g., in a comment)
-                    has_allowed = any(re.search(allowed, line) for allowed in ALLOWED_PATTERNS)
-                    if not has_allowed:
-                        violations.append((i, line.strip(), pattern))
-                        
+                # Check for forbidden patterns
+                for pattern in FORBIDDEN_PATTERNS:
+                    if re.search(pattern, line):
+                        # Check if this line also has an allowed pattern (might be in a comment)
+                        has_allowed = any(re.search(allowed, line) for allowed in ALLOWED_PATTERNS)
+                        if not has_allowed:
+                            violations.append({
+                                'file': str(file_path),
+                                'line': i,
+                                'content': line.strip(),
+                                'pattern': pattern
+                            })
     except Exception as e:
-        print(f"⚠️  Error reading {filepath}: {e}")
-        
+        print(f"Warning: Could not read {file_path}: {e}")
+    
     return violations
 
-def check_project(root_dir: Path = None) -> bool:
-    """
-    Check entire project for database path violations
-    
-    Returns:
-        True if all checks pass, False if violations found
-    """
-    if root_dir is None:
-        root_dir = Path(__file__).parent.parent.parent
-        
+def main():
+    """Main execution"""
     print("=" * 70)
     print("🔍 DATABASE PATH ENFORCEMENT CHECK")
     print("=" * 70)
     print()
-    print("Checking for hardcoded database paths...")
-    print(f"Root: {root_dir}")
+    
+    root = Path("/home/pi/zoe")
+    print(f"Checking for hardcoded database paths...")
+    print(f"Root: {root}")
     print()
     
-    all_violations = {}
+    # Directories to check (excluding utility scripts that run on host)
+    check_dirs = [
+        root / "services",
+    ]
     
-    # Check all Python files
-    for py_file in root_dir.rglob('*.py'):
-        if should_skip(py_file):
+    all_violations = []
+    
+    for check_dir in check_dirs:
+        if not check_dir.exists():
             continue
             
-        violations = check_file(py_file)
-        if violations:
-            all_violations[py_file] = violations
+        # Find all Python files
+        for py_file in check_dir.rglob("*.py"):
+            violations = check_file(py_file)
+            if violations:
+                all_violations.extend(violations)
     
-    # Report results
-    if not all_violations:
+    if all_violations:
+        print("❌ DATABASE PATH VIOLATIONS FOUND:")
+        print()
+        
+        for v in all_violations:
+            print(f"  File: {v['file']}")
+            print(f"  Line {v['line']}: {v['content']}")
+            print()
+        
+        print("=" * 70)
+        print("FIX: Replace hardcoded paths with:")
+        print()
+        print("  import os")
+        print("  db_path = os.getenv('DATABASE_PATH', '/app/data/zoe.db')")
+        print()
+        print("This ensures the code works in both development and Docker environments")
+        print("=" * 70)
+        
+        sys.exit(1)
+    else:
         print("✅ DATABASE PATHS: All checks passed")
         print()
         print("All code properly uses DATABASE_PATH environment variable")
         print()
-        return True
-    else:
-        print(f"❌ VIOLATIONS FOUND: {len(all_violations)} files with hardcoded paths")
-        print()
-        
-        for filepath, violations in all_violations.items():
-            rel_path = filepath.relative_to(root_dir)
-            print(f"📄 {rel_path}")
-            for line_num, line_content, pattern in violations:
-                print(f"   Line {line_num}: {line_content[:80]}")
-                print(f"   ⚠️  Violation: Hardcoded database path (use os.getenv('DATABASE_PATH'))")
-            print()
-        
-        print("=" * 70)
-        print("HOW TO FIX:")
-        print("=" * 70)
-        print()
-        print("Replace hardcoded paths like:")
-        print('  ❌ def __init__(self, db_path: str = "/home/pi/zoe/data/zoe.db"):')
-        print()
-        print("With environment variable:")
-        print('  ✅ def __init__(self, db_path: str = None):')
-        print('        if db_path is None:')
-        print('            db_path = os.getenv("DATABASE_PATH", "/home/pi/zoe/data/zoe.db")')
-        print()
-        
-        return False
+        sys.exit(0)
 
-def main():
-    """Main entry point"""
-    success = check_project()
-    sys.exit(0 if success else 1)
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-

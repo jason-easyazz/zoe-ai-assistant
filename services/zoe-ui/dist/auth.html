@@ -755,6 +755,9 @@
 
                     if (data.success) {
                         this.handleSuccessfulLogin(data);
+                    } else if (data.error_message === 'PASSWORD_SETUP_REQUIRED') {
+                        // User needs to set initial password
+                        this.showPasswordSetup(username);
                     } else {
                         this.showError(data.error_message || 'Login failed');
                     }
@@ -993,6 +996,115 @@
             handleForgotPassword() {
                 // Implement password reset flow
                 alert('Password reset functionality coming soon. Please contact an administrator.');
+            }
+
+            showPasswordSetup(username) {
+                // Hide login form, show password setup
+                const container = document.querySelector('.auth-container');
+                container.innerHTML = `
+                    <div class="zoe-logo">
+                        <div class="orb">Z</div>
+                        <div class="title">Set Your Password</div>
+                        <div class="subtitle">Welcome! Please create your password to continue.</div>
+                    </div>
+
+                    <div id="setupMessage" class="message-box" style="display: none;"></div>
+
+                    <form id="passwordSetupForm" class="auth-form active">
+                        <div class="form-group">
+                            <label class="form-label">Username</label>
+                            <input type="text" class="form-input" value="${username}" disabled>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">New Password</label>
+                            <input type="password" id="newPassword" class="form-input" 
+                                   placeholder="Enter new password" required minlength="8">
+                            <small style="color: #666; font-size: 12px;">Minimum 8 characters</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label class="form-label">Confirm Password</label>
+                            <input type="password" id="confirmPassword" class="form-input" 
+                                   placeholder="Confirm your password" required minlength="8">
+                        </div>
+
+                        <button type="submit" class="auth-btn" id="setupPasswordBtn">
+                            <span class="btn-text">Set Password</span>
+                        </button>
+                    </form>
+                `;
+
+                // Add form submission handler
+                document.getElementById('passwordSetupForm').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    await this.handlePasswordSetup(username);
+                });
+            }
+
+            async handlePasswordSetup(username) {
+                const newPassword = document.getElementById('newPassword').value;
+                const confirmPassword = document.getElementById('confirmPassword').value;
+                const btn = document.getElementById('setupPasswordBtn');
+                const messageBox = document.getElementById('setupMessage');
+
+                // Validate passwords match
+                if (newPassword !== confirmPassword) {
+                    messageBox.textContent = 'Passwords do not match';
+                    messageBox.style.display = 'block';
+                    messageBox.style.background = '#f8d7da';
+                    messageBox.style.color = '#721c24';
+                    return;
+                }
+
+                // Validate password length
+                if (newPassword.length < 8) {
+                    messageBox.textContent = 'Password must be at least 8 characters';
+                    messageBox.style.display = 'block';
+                    messageBox.style.background = '#f8d7da';
+                    messageBox.style.color = '#721c24';
+                    return;
+                }
+
+                this.setLoading(btn, true);
+
+                try {
+                    const response = await fetch(`${this.apiBase}/api/auth/password/setup`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            username,
+                            new_password: newPassword,
+                            confirm_password: confirmPassword
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (data.success) {
+                        messageBox.textContent = 'Password set successfully! Redirecting to login...';
+                        messageBox.style.display = 'block';
+                        messageBox.style.background = '#d4edda';
+                        messageBox.style.color = '#155724';
+                        
+                        // Reload page after 2 seconds to show login form
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 2000);
+                    } else {
+                        messageBox.textContent = data.message || 'Failed to set password';
+                        messageBox.style.display = 'block';
+                        messageBox.style.background = '#f8d7da';
+                        messageBox.style.color = '#721c24';
+                    }
+                } catch (error) {
+                    messageBox.textContent = 'Connection error. Please try again.';
+                    messageBox.style.display = 'block';
+                    messageBox.style.background = '#f8d7da';
+                    messageBox.style.color = '#721c24';
+                } finally {
+                    this.setLoading(btn, false);
+                }
             }
 
             setLoading(button, loading) {
