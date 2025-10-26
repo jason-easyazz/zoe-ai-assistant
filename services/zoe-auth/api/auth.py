@@ -548,7 +548,7 @@ async def setup_initial_password(request: InitialPasswordSetupRequest, http_requ
         # Look up user
         with auth_db.get_connection() as conn:
             cursor = conn.execute(
-                "SELECT user_id, password_hash FROM auth_users WHERE username = ?",
+                "SELECT user_id, password_hash FROM users WHERE username = ?",
                 (request.username,)
             )
             user_row = cursor.fetchone()
@@ -568,7 +568,7 @@ async def setup_initial_password(request: InitialPasswordSetupRequest, http_requ
             new_hash = bcrypt.hashpw(request.new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
             
             conn.execute(
-                "UPDATE auth_users SET password_hash = ?, updated_at = ? WHERE user_id = ?",
+                "UPDATE users SET password_hash = ?, updated_at = ? WHERE user_id = ?",
                 (new_hash, datetime.utcnow(), user_id)
             )
             
