@@ -101,8 +101,8 @@ async def get_user_profiles():
         with auth_db.get_connection() as conn:
             cursor = conn.execute("""
                 SELECT user_id, username, role
-                FROM auth_users
-                WHERE is_active = 1
+                FROM users
+                WHERE is_active = 1 AND user_id != 'system'
                 ORDER BY username
             """)
             
