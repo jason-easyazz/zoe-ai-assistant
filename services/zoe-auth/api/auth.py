@@ -189,7 +189,7 @@ async def login(request: LoginRequest, http_request: Request):
         
         # Look up user by username first
         with auth_db.get_connection() as conn:
-            cursor = conn.execute("SELECT user_id, password_hash FROM auth_users WHERE username = ?", (request.username,))
+            cursor = conn.execute("SELECT user_id, password_hash FROM users WHERE username = ?", (request.username,))
             user_row = cursor.fetchone()
             
             if not user_row:
