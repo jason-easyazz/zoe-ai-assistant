@@ -8,13 +8,13 @@ DELETE FROM users WHERE user_id != 'system';
 
 -- Create Admin Users (password_hash is SETUP_REQUIRED - will be set on first login)
 INSERT INTO users (user_id, username, email, password_hash, is_active, is_admin, role, created_at) VALUES
-('jason', 'jason', 'jason@easyazz.com', 'SETUP_REQUIRED', 1, 1, 'admin', CURRENT_TIMESTAMP),
-('andrew', 'andrew', 'andrew.beard@me.com', 'SETUP_REQUIRED', 1, 1, 'admin', CURRENT_TIMESTAMP);
+('jason', 'Jason', 'jason@easyazz.com', 'SETUP_REQUIRED', 1, 1, 'admin', CURRENT_TIMESTAMP),
+('andrew', 'Andrew', 'andrew.beard@me.com', 'SETUP_REQUIRED', 1, 1, 'admin', CURRENT_TIMESTAMP);
 
 -- Create Regular Users (password_hash is SETUP_REQUIRED - will be set on first login)
 INSERT INTO users (user_id, username, email, password_hash, is_active, is_admin, role, created_at) VALUES
-('teneeka', 'teneeka', 'Neek311@hotmail.com', 'SETUP_REQUIRED', 1, 0, 'user', CURRENT_TIMESTAMP),
-('asya', 'asya', 'asyachalik@outlook.com', 'SETUP_REQUIRED', 1, 0, 'user', CURRENT_TIMESTAMP);
+('teneeka', 'Teneeka', 'Neek311@hotmail.com', 'SETUP_REQUIRED', 1, 0, 'user', CURRENT_TIMESTAMP),
+('asya', 'Asya', 'asyachalik@outlook.com', 'SETUP_REQUIRED', 1, 0, 'user', CURRENT_TIMESTAMP);
 
 -- Verify users created
 SELECT 'Users created:' as status;
