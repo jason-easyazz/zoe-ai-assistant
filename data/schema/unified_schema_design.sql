@@ -18,7 +18,11 @@ CREATE TABLE users (
     permissions JSON DEFAULT '[]',
     settings_json JSON DEFAULT '{}',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    failed_login_attempts INTEGER DEFAULT 0,
+    locked_until TIMESTAMP,
+    last_login TIMESTAMP,
+    is_verified BOOLEAN DEFAULT 1
 );
 
 -- User sessions (consolidates from zoe.db, developer_tasks.db)
