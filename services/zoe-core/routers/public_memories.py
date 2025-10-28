@@ -2,8 +2,10 @@
 Public Memories Endpoint
 ========================
 
-A public endpoint for memories that works without authentication
-for the web interface
+⚠️ DEPRECATED: This endpoint bypasses authentication and should not be used.
+Use /api/people, /api/memories with proper authentication instead.
+
+This endpoint is kept for legacy compatibility but will be removed.
 """
 
 from fastapi import APIRouter, Query

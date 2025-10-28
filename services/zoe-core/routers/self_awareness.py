@@ -6,13 +6,14 @@ Provides endpoints for Zoe's self-awareness capabilities including
 identity management, self-reflection, and consciousness monitoring.
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import sys
 sys.path.append('/app')
 from self_awareness import self_awareness, SelfIdentity, SelfReflection, ConsciousnessState
+from auth import AuthenticatedSession, validate_session
 
 router = APIRouter(prefix="/api/self-awareness", tags=["self-awareness"])
 
@@ -41,7 +42,7 @@ class PerformanceMetrics(BaseModel):
     summary: Optional[str] = None
 
 @router.get("/identity")
-async def get_identity(user_id: str = Query("default", description="User ID for privacy isolation")):
+async def get_identity(session: AuthenticatedSession = Depends(validate_session)):
     """Get Zoe's current identity and self-concept for the specified user"""
     try:
         # Set user context for privacy isolation
@@ -63,8 +64,9 @@ async def get_identity(user_id: str = Query("default", description="User ID for 
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/identity")
-async def update_identity(identity_update: IdentityUpdate, user_id: str = Query("default", description="User ID for privacy isolation")):
+async def update_identity(identity_update: IdentityUpdate, session: AuthenticatedSession = Depends(validate_session)):
     """Update Zoe's identity for the specified user"""
+    user_id = session.user_id
     try:
         # Set user context for privacy isolation
         self_awareness.set_user_context(user_id)
@@ -95,8 +97,7 @@ async def update_identity(identity_update: IdentityUpdate, user_id: str = Query(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/self-description")
-async def get_self_description(user_id: str = Query("default", description="User ID for privacy isolation")):
-    """Get Zoe's self-description for the specified user"""
+async def get_self_description(session: AuthenticatedSession = Depends(validate_session)):
     try:
         self_awareness.set_user_context(user_id)
         description = await self_awareness.get_self_description()
@@ -105,8 +106,9 @@ async def get_self_description(user_id: str = Query("default", description="User
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/reflect/interaction")
-async def reflect_on_interaction(interaction_data: InteractionData, user_id: str = Query("default", description="User ID for privacy isolation")):
+async def reflect_on_interaction(interaction_data: InteractionData, session: AuthenticatedSession = Depends(validate_session)):
     """Trigger self-reflection on a recent interaction"""
+    user_id = session.user_id
     try:
         self_awareness.set_user_context(user_id)
         interaction_dict = interaction_data.dict()
@@ -127,8 +129,7 @@ async def reflect_on_interaction(interaction_data: InteractionData, user_id: str
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/reflect/performance")
-async def reflect_on_performance(performance_metrics: PerformanceMetrics, user_id: str = Query("default", description="User ID for privacy isolation")):
-    """Trigger self-reflection on performance"""
+async def reflect_on_performance(performance_metrics: PerformanceMetrics, session: AuthenticatedSession = Depends(validate_session)):
     try:
         self_awareness.set_user_context(user_id)
         metrics_dict = performance_metrics.dict()
@@ -154,6 +155,7 @@ async def get_reflections(
     reflection_type: Optional[str] = Query(None, description="Filter by reflection type")
 ):
     """Get recent self-reflections"""
+    user_id = session.user_id
     try:
         reflections = await self_awareness._get_recent_reflections(limit)
         
@@ -176,8 +178,7 @@ async def get_reflections(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/consciousness/update")
-async def update_consciousness(context: Dict[str, Any], user_id: str = Query("default", description="User ID for privacy isolation")):
-    """Update Zoe's current consciousness state"""
+async def update_consciousness(context: Dict[str, Any], session: AuthenticatedSession = Depends(validate_session)):
     try:
         consciousness = await self_awareness.update_consciousness(context)
         
@@ -196,8 +197,9 @@ async def update_consciousness(context: Dict[str, Any], user_id: str = Query("de
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/consciousness/current")
-async def get_current_consciousness(user_id: str = Query("default", description="User ID for privacy isolation")):
+async def get_current_consciousness(session: AuthenticatedSession = Depends(validate_session)):
     """Get Zoe's current consciousness state"""
+    user_id = session.user_id
     try:
         if self_awareness.consciousness is None:
             # Initialize with default context
@@ -221,8 +223,7 @@ async def get_current_consciousness(user_id: str = Query("default", description=
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/evaluation")
-async def get_self_evaluation(user_id: str = Query("default", description="User ID for privacy isolation")):
-    """Get comprehensive self-evaluation"""
+async def get_self_evaluation(session: AuthenticatedSession = Depends(validate_session)):
     try:
         evaluation = await self_awareness.self_evaluate()
         return {"evaluation": evaluation}
@@ -230,8 +231,9 @@ async def get_self_evaluation(user_id: str = Query("default", description="User 
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/status")
-async def get_self_awareness_status(user_id: str = Query("default", description="User ID for privacy isolation")):
+async def get_self_awareness_status(session: AuthenticatedSession = Depends(validate_session)):
     """Get overall self-awareness system status"""
+    user_id = session.user_id
     try:
         recent_reflections = await self_awareness._get_recent_reflections(limit=5)
         current_consciousness = self_awareness.consciousness

@@ -162,9 +162,9 @@ class AuthDatabase:
     def init_database(self):
         """Initialize all database tables"""
         with self.get_connection() as conn:
-            # Enhanced users table
+            # Enhanced users table (renamed to auth_users to avoid conflict with zoe-core)
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS users (
+                CREATE TABLE IF NOT EXISTS auth_users (
                     user_id TEXT PRIMARY KEY,
                     username TEXT UNIQUE NOT NULL,
                     email TEXT UNIQUE NOT NULL,

@@ -11,6 +11,7 @@ class TasksWidget extends WidgetModule {
             defaultSize: 'size-small',
             updateInterval: 60000 // Update every minute
         });
+        this.userId = null;
     }
     
     getTemplate() {
@@ -30,6 +31,11 @@ class TasksWidget extends WidgetModule {
     
     init(element) {
         super.init(element);
+        
+        // Get user session
+        const session = window.zoeAuth?.getCurrentSession();
+        this.userId = session?.user_info?.user_id || session?.user_id || 'default';
+        
         // Load tasks immediately after initialization
         this.loadTasks();
     }
@@ -40,7 +46,7 @@ class TasksWidget extends WidgetModule {
     
     async loadTasks() {
         try {
-            const response = await fetch('/api/lists/tasks');
+            const response = await fetch(`/api/lists/tasks?user_id=${this.userId}`);
             const data = await response.json();
             
             // Handle the response structure from lists API

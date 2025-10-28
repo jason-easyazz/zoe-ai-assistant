@@ -1,9 +1,8 @@
-from auth_integration import validate_session
 """
 Reminders Management System
 Handles time-based alerts, notifications, and recurring reminders
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date, time, timedelta
@@ -12,6 +11,7 @@ import json
 import os
 import asyncio
 from enum import Enum
+from auth_integration import validate_session, AuthenticatedSession
 
 router = APIRouter(prefix="/api/reminders", tags=["reminders"])
 
@@ -152,9 +152,10 @@ def init_reminders_db():
     conn.close()
 
 @router.post("/", response_model=Dict[str, Any])
-async def create_reminder(reminder: ReminderCreate, user_id: str = Query("default")):
+async def create_reminder(reminder: ReminderCreate, session: AuthenticatedSession = Depends(validate_session)):
     """Create a new reminder"""
     try:
+        user_id = session.user_id
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
@@ -206,7 +207,7 @@ async def create_reminder(reminder: ReminderCreate, user_id: str = Query("defaul
 
 @router.get("/", response_model=Dict[str, Any])
 async def get_reminders(
-    user_id: str = Query("default"),
+    session: AuthenticatedSession = Depends(validate_session),
     category: Optional[ReminderCategory] = Query(None),
     priority: Optional[ReminderPriority] = Query(None),
     is_active: bool = Query(True),
@@ -214,6 +215,7 @@ async def get_reminders(
 ):
     """Get reminders with optional filtering"""
     try:
+        user_id = session.user_id
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -256,9 +258,10 @@ async def get_reminders(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/today", response_model=Dict[str, Any])
-async def get_todays_reminders(user_id: str = Query("default")):
+async def get_todays_reminders(session: AuthenticatedSession = Depends(validate_session)):
     """Get today's reminders"""
     try:
+        user_id = session.user_id
         today = date.today()
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -294,10 +297,11 @@ async def get_todays_reminders(user_id: str = Query("default")):
 async def update_reminder(
     reminder_id: int,
     reminder_update: ReminderUpdate,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Update a reminder"""
     try:
+        user_id = session.user_id
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
@@ -375,9 +379,10 @@ async def update_reminder(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/{reminder_id}", response_model=Dict[str, Any])
-async def delete_reminder(reminder_id: int, user_id: str = Query("default")):
+async def delete_reminder(reminder_id: int, session: AuthenticatedSession = Depends(validate_session)):
     """Delete a reminder"""
     try:
+        user_id = session.user_id
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
@@ -403,10 +408,11 @@ async def delete_reminder(reminder_id: int, user_id: str = Query("default")):
 async def snooze_reminder(
     reminder_id: int,
     snooze_minutes: int = Query(5),
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Snooze a reminder"""
     try:
+        user_id = session.user_id
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
@@ -452,10 +458,11 @@ async def snooze_reminder(
 @router.post("/{reminder_id}/acknowledge", response_model=Dict[str, Any])
 async def acknowledge_reminder(
     reminder_id: int,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Acknowledge a reminder"""
     try:
+        user_id = session.user_id
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
@@ -480,9 +487,10 @@ async def acknowledge_reminder(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/notifications/pending", response_model=Dict[str, Any])
-async def get_pending_notifications(user_id: str = Query("default")):
+async def get_pending_notifications(session: AuthenticatedSession = Depends(validate_session)):
     """Get pending notifications"""
     try:
+        user_id = session.user_id
         now = datetime.now()
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -519,10 +527,11 @@ async def get_pending_notifications(user_id: str = Query("default")):
 @router.post("/notifications/{notification_id}/deliver", response_model=Dict[str, Any])
 async def mark_notification_delivered(
     notification_id: int,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Mark notification as delivered"""
     try:
+        user_id = session.user_id
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         

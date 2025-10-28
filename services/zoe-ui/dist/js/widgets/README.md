@@ -6,6 +6,7 @@ This directory contains all widget modules for the Zoe dashboard system.
 
 ```
 widgets/
+├── widget-manifest.json  # Widget metadata and configuration (NEW!)
 ├── core/           # Core widgets (built-in, always available)
 │   ├── events.js   # Calendar events widget
 │   ├── tasks.js    # Tasks and todos widget
@@ -17,6 +18,18 @@ widgets/
 │   └── zoe-orb.js  # Zoe AI assistant widget
 └── user/           # User-created widgets (custom, AI-generated, marketplace)
 ```
+
+## Manifest-Based Widget System
+
+**Version 2.0** - Widgets are now dynamically discovered from `widget-manifest.json`:
+
+- **Automatic Registration**: No hardcoded widget lists
+- **Page-Specific Widgets**: Dashboard vs Lists vs Touch mode
+- **Centralized Configuration**: All size constraints in one place  
+- **Easy Extension**: Add widgets by updating manifest
+- **Dynamic Discovery**: API endpoint provides widget metadata
+
+See `widget-manifest.json` for widget definitions and metadata.
 
 ## Core Widgets
 
@@ -73,9 +86,40 @@ widgets/
 - Conversation history
 - No auto-update (event-driven)
 
-## User Widgets
+## Adding New Widgets
 
-Place custom widgets in the `user/` directory:
+### Option 1: Manifest-Based (Recommended)
+
+1. Create your widget class in `core/` or `user/`
+2. Add entry to `widget-manifest.json`:
+```json
+{
+  "id": "my-widget",
+  "name": "MyWidget",
+  "displayName": "My Widget",
+  "description": "Does something cool",
+  "category": "utility",
+  "icon": "🔧",
+  "file": "core/my-widget.js",
+  "defaultSize": "size-small",
+  "dashboard": true,
+  "lists": false,
+  "touch": true,
+  "config": {
+    "minW": 3, "maxW": 6,
+    "minH": 3, "maxH": 5,
+    "defaultW": 3, "defaultH": 3
+  }
+}
+```
+3. Import script in HTML:
+```html
+<script src="js/widgets/core/my-widget.js"></script>
+```
+
+### Option 2: User Widgets
+
+Place custom widgets in `user/` and update manifest:
 
 ```javascript
 // user/my-custom-widget.js
@@ -91,14 +135,9 @@ class MyCustomWidget extends WidgetModule {
         return `<div>My Widget Content</div>`;
     }
 }
-
-WidgetRegistry.register('my-custom', new MyCustomWidget());
 ```
 
-Then import in dashboard HTML:
-```html
-<script src="js/widgets/user/my-custom-widget.js"></script>
-```
+Then add to `widget-manifest.json` and import in HTML.
 
 ## Creating Widgets
 
@@ -148,13 +187,16 @@ Access via:
 
 All widgets depend on:
 - `widget-base.js` - WidgetModule base class
-- `widget-system.js` - WidgetRegistry, WidgetManager, WidgetUpdater
+- `widget-system.js` - WidgetManager with manifest-based registration
+- `widget-manifest.json` - Widget metadata and configuration
 
 Load order in HTML:
 1. widget-base.js (defines WidgetModule)
-2. widget-system.js (defines registry/manager)
-3. Individual widget files
-4. Dashboard initialization
+2. widget-system.js (defines WidgetManager + manifest loader)
+3. Individual widget files (loads all widget classes)
+4. Dashboard initialization (auto-registers from manifest)
+
+**New in v2.0**: Widgets are automatically discovered and registered based on manifest!
 
 ## Versioning
 

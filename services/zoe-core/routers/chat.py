@@ -107,7 +107,7 @@ except ImportError as e:
     SATISFACTION_TRACKING_AVAILABLE = False
     satisfaction_system = None
 
-router = APIRouter(tags=["chat"])
+router = APIRouter(prefix="/api/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
 
 # Initialize mem-agent client for semantic search
@@ -909,11 +909,12 @@ import json as json_module
 @router.post("/api/chat/")
 @router.post("/api/chat")
 async def chat(
-    msg: ChatMessage, 
-    user_id: str = Query("default", description="User ID for privacy isolation"),
-    stream: bool = Query(False, description="Enable streaming response")
+    msg: ChatMessage,
+    stream: bool = Query(False, description="Enable streaming response"),
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Intelligent chat with perfect memory, routing, cross-system integration AND action execution!"""
+    user_id = session.user_id
     try:
         import time
         start_time = time.time()
@@ -949,6 +950,12 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
         
         if msg.context:
             context.update(msg.context)
+        
+        # Check for onboarding mode
+        onboarding_mode = msg.context.get("onboarding_mode", False) if msg.context else False
+        if onboarding_mode:
+            context["onboarding_mode"] = True
+            logger.info(f"🎓 Onboarding mode active for user {actual_user_id}")
         
         # Check for developer session queries (Phase 1: beads-inspired)
         session_query_patterns = [
@@ -1474,9 +1481,10 @@ async def provide_feedback(
     interaction_id: str,
     feedback_type: str = Query(..., description="thumbs_up, thumbs_down, or correction"),
     corrected_response: Optional[str] = None,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Allow user to rate/correct Zoe's responses for training"""
+    user_id = session.user_id
     try:
         if feedback_type == "correction":
             if not corrected_response:
@@ -1505,8 +1513,9 @@ async def provide_feedback(
         return {"error": str(e)}
 
 @router.get("/api/chat/training-stats")
-async def get_training_stats(user_id: str = Query("default")):
+async def get_training_stats(session: AuthenticatedSession = Depends(validate_session)):
     """Get training statistics for display in UI"""
+    user_id = session.user_id
     try:
         stats = await training_collector.get_stats(user_id)
         return {

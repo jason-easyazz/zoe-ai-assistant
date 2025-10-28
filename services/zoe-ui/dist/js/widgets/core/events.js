@@ -11,6 +11,7 @@ class EventsWidget extends WidgetModule {
             defaultSize: 'size-medium',
             updateInterval: 30000 // Update every 30 seconds
         });
+        this.userId = null;
     }
     
     getTemplate() {
@@ -19,7 +20,7 @@ class EventsWidget extends WidgetModule {
                 <div class="widget-title">📅 Today's Events</div>
                 <div class="widget-badge" id="eventsCount">0</div>
             </div>
-            <div class="widget-content">
+            <div class="widget-content events-widget-content">
                 <div id="eventsContent" class="loading-widget">
                     <div class="spinner"></div>
                     Loading events...
@@ -30,6 +31,16 @@ class EventsWidget extends WidgetModule {
     
     init(element) {
         super.init(element);
+        
+        // Ensure widget has proper height for flex layout
+        element.style.height = '100%';
+        element.style.display = 'flex';
+        element.style.flexDirection = 'column';
+        
+        // Get user session
+        const session = window.zoeAuth?.getCurrentSession();
+        this.userId = session?.user_info?.user_id || session?.user_id || 'default';
+        
         // Load events immediately after initialization
         this.loadEvents();
     }
@@ -40,7 +51,7 @@ class EventsWidget extends WidgetModule {
     
     async loadEvents() {
         try {
-            const response = await fetch('/api/calendar/events');
+            const response = await fetch(`/api/calendar/events?user_id=${this.userId}`);
             if (response.ok) {
                 const data = await response.json();
                 const events = Array.isArray(data) ? data : data.events || [];
@@ -80,17 +91,25 @@ class EventsWidget extends WidgetModule {
             // Remove loading widget class
             content.classList.remove('loading-widget');
             
+            // Ensure content fills available space
+            content.style.flex = '1';
+            content.style.overflow = 'auto';
+            content.style.minHeight = '0';
+            
             if (events.length === 0) {
-                content.innerHTML = '<div style="text-align: center; color: #666; font-style: italic;">No events today</div>';
+                content.innerHTML = '<div style="text-align: center; color: #666; font-style: italic; padding: 20px;">No events today</div>';
                 return;
             }
             
-            content.innerHTML = events.map(event => `
-                <div class="calendar-event-item ${event.category || 'personal'}" style="padding: 12px; border-radius: 8px; margin-bottom: 8px; cursor: pointer; transition: all 0.3s; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); border-left: 4px solid;">
+            // Create events list with proper spacing
+            const eventsHTML = events.map(event => `
+                <div class="calendar-event-item ${event.category || 'personal'}" style="padding: 12px; border-radius: 8px; cursor: pointer; transition: all 0.3s; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); border-left: 4px solid; width: 100%; box-sizing: border-box; margin-bottom: 8px;">
                     <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px;">${this.formatTime(event.start_time || event.time)}</div>
                     <div style="font-size: 14px; font-weight: 500;">${event.title}</div>
                 </div>
             `).join('');
+            
+            content.innerHTML = eventsHTML;
         }
     }
     

@@ -469,6 +469,20 @@
     </div>
 
     <script>
+        // Utility function to get user ID from session
+        function getUserId() {
+            try {
+                const sessionData = localStorage.getItem('zoe_session');
+                if (sessionData) {
+                    const session = JSON.parse(sessionData);
+                    return session.user_info?.user_id || session.user_id || 'default';
+                }
+            } catch (e) {
+                console.warn('Failed to get user session:', e);
+            }
+            return 'default';
+        }
+
         let isDarkTheme = false;
         let lists = [];
 
@@ -523,9 +537,12 @@
 
         async function loadLists() {
             try {
+                // Get user ID from session
+                const userId = getUserId();
+                
                 // Load different list types
                 const listTypes = ['personal_todos', 'work_todos', 'shopping', 'bucket'];
-                const listPromises = listTypes.map(type => fetch(`/api/lists/${type}`));
+                const listPromises = listTypes.map(type => fetch(`/api/lists/${type}?user_id=${userId}`));
                 
                 const responses = await Promise.all(listPromises);
                 const listData = await Promise.all(responses.map(r => r.json()));
@@ -616,8 +633,11 @@
 
         async function toggleItem(listType, itemIndex, currentStatus) {
             try {
+                // Get user ID
+                const userId = getUserId();
+                
                 // Update via API
-                const response = await fetch(`/api/lists/${listType}`, {
+                const response = await fetch(`/api/lists/${listType}?user_id=${userId}`, {
                     method: 'PUT',
                     headers: {
                         'Content-Type': 'application/json',
@@ -638,7 +658,8 @@
 
         async function getUpdatedItems(listType, itemIndex, completed) {
             try {
-                const response = await fetch(`/api/lists/${listType}`);
+                const userId = getUserId();
+                const response = await fetch(`/api/lists/${listType}?user_id=${userId}`);
                 const data = await response.json();
                 
                 if (data.lists && data.lists[0].items) {
@@ -658,7 +679,8 @@
             if (!text) return;
             
             try {
-                const response = await fetch(`/api/lists/${listType}`, {
+                const userId = getUserId();
+                const response = await fetch(`/api/lists/${listType}?user_id=${userId}`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',

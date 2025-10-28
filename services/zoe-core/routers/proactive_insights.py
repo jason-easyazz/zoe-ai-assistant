@@ -54,7 +54,7 @@ def _parse_date(value: Optional[str]) -> Optional[datetime]:
 @router.post("/relationship-check")
 async def relationship_check(
     background: BackgroundTasks,
-    user_id: str = Query("default"),
+    session: AuthenticatedSession = Depends(validate_session),
     days_overdue: int = Query(14, ge=1, le=180),
     max_suggestions: int = Query(5, ge=1, le=20),
 ):

@@ -200,6 +200,40 @@
     color: white !important;
 }
 
+/* Events widget - full height */
+.widget[data-widget-type="events"] {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.widget[data-widget-type="events"] .widget-content {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.events-widget-content {
+    width: 100%;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.events-widget-content #eventsContent {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+#eventsContent {
+    display: flex;
+    flex-direction: column;
+}
+
 /* Small weather widget */
 .weather-small {
     display: flex;

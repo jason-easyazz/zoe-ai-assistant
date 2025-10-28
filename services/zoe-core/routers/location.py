@@ -168,12 +168,12 @@ async def find_nearby_entries(
     lat: float = Query(..., description="Latitude"),
     lng: float = Query(..., description="Longitude"),
     radius: int = Query(5000, description="Search radius in meters"),
-    user_id: str = Query("default", description="User ID")
-):
+    session: AuthenticatedSession = Depends(validate_session)
     """
     Find journal entries or journey stops near a location
     Uses Haversine formula for distance calculation
     """
+    user_id = session.user_id
     import sqlite3
     import json
     import math

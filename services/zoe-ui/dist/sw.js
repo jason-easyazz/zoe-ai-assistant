@@ -7,8 +7,8 @@
 // Import Workbox from CDN (no build step needed)
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
-// Zoe UI Version 4.9.3 - Fixed pull-to-refresh on Android with better touch handling
-const SW_VERSION = '4.9.3';
+// Zoe UI Version 4.13.0 - Narrower Widget Grids
+const SW_VERSION = '4.13.0';
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -62,7 +62,28 @@ if (workbox) {
         })
     );
     
-    // 2. JavaScript - Cache First (fast loading, update in background)
+    // 2. JavaScript - Network First for widgets, Cache First for other JS
+    workbox.routing.registerRoute(
+        ({ request }) => {
+            // Check if it's a widget file - always network first
+            return request.destination === 'script' && request.url.includes('/widgets/');
+        },
+        new workbox.strategies.NetworkFirst({
+            cacheName: 'zoe-widgets',
+            networkTimeoutSeconds: 3,
+            plugins: [
+                new workbox.expiration.ExpirationPlugin({
+                    maxEntries: 50,
+                    maxAgeSeconds: 60 * 60 // 1 hour only
+                }),
+                new workbox.cacheableResponse.CacheableResponsePlugin({
+                    statuses: [0, 200]
+                })
+            ]
+        })
+    );
+    
+    // Other JavaScript - Cache First
     workbox.routing.registerRoute(
         ({ request }) => request.destination === 'script',
         new workbox.strategies.CacheFirst({
@@ -79,7 +100,27 @@ if (workbox) {
         })
     );
     
-    // 3. CSS - Cache First
+    // 3. CSS - Network First for widget CSS, Cache First for others
+    workbox.routing.registerRoute(
+        ({ request }) => {
+            return request.destination === 'style' && request.url.includes('/widgets/');
+        },
+        new workbox.strategies.NetworkFirst({
+            cacheName: 'zoe-widgets-css',
+            networkTimeoutSeconds: 3,
+            plugins: [
+                new workbox.expiration.ExpirationPlugin({
+                    maxEntries: 30,
+                    maxAgeSeconds: 60 * 60 // 1 hour only
+                }),
+                new workbox.cacheableResponse.CacheableResponsePlugin({
+                    statuses: [0, 200]
+                })
+            ]
+        })
+    );
+    
+    // Other CSS - Cache First
     workbox.routing.registerRoute(
         ({ request }) => request.destination === 'style',
         new workbox.strategies.CacheFirst({

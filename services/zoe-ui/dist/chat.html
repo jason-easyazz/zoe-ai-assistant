@@ -1220,6 +1220,10 @@
                 <h2 class="more-title">More Options</h2>
             </div>
             <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('people.html')">
+                    <div class="more-item-icon">👥</div>
+                    <div class="more-item-label">People</div>
+                </div>
                 <div class="more-item" onclick="navigateToPage('memories.html')">
                     <div class="more-item-icon">🧠</div>
                     <div class="more-item-label">Memories</div>
@@ -1849,7 +1853,10 @@
                     body: JSON.stringify({
                         message: message,
                         user_id: userId,
-                        context: { mode: 'main_chat' },
+                        context: { 
+                            mode: 'main_chat',
+                            onboarding_mode: isOnboardingMode
+                        },
                         session_id: currentSessionId || `session_${Date.now()}`
                     })
                 });
@@ -2452,7 +2459,7 @@
                 const [calendarData, tasksData, memoriesData] = await Promise.allSettled([
                     apiRequest(`/api/calendar/events/?user_id=${userId}&start_date=${startDate}&end_date=${endDate}`).catch(e => ({events: []})),
                     apiRequest(`/api/lists/?user_id=${userId}&list_name=personal_todos`).catch(e => ({items: []})),
-                    apiRequest(`/api/memories/proxy/people/?user_id=${userId}`).catch(e => ({people: []}))
+                    apiRequest(`/api/people?user_id=${userId}`).catch(e => ({people: []}))
                 ]);
                 
                 const suggestions = [];
@@ -2670,17 +2677,67 @@
             if (dateElement) dateElement.textContent = dateString;
         }
         
+        // Onboarding mode detection
+        let isOnboardingMode = false;
+        
+        // Check URL for onboarding parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('onboarding') === 'true') {
+            isOnboardingMode = true;
+            console.log('Onboarding mode activated');
+        }
+        
         // Initialize time/date updates
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', function() {
                 updateTimeDate();
                 setInterval(updateTimeDate, 60000);
                 loadNotifications();
+                
+                // Handle onboarding mode
+                if (isOnboardingMode) {
+                    handleOnboardingMode();
+                }
             });
         } else {
             updateTimeDate();
             setInterval(updateTimeDate, 60000);
             loadNotifications();
+            
+            if (isOnboardingMode) {
+                handleOnboardingMode();
+            }
+        }
+        
+        async function handleOnboardingMode() {
+            console.log('Starting onboarding conversation');
+            
+            // Add a welcome message to the chat
+            const messagesContainer = document.getElementById('messagesContainer');
+            const onboardingMessage = `
+                <div class="message-group assistant-message">
+                    <div class="message-avatar">
+                        <div class="avatar">Z</div>
+                    </div>
+                    <div class="message-bubble">
+                        <p><strong>Hi! I'm Zoe 👋</strong></p>
+                        <p>I'd love to get to know you better so I can be more helpful. Would you like to tell me about yourself?</p>
+                        <p>Here are some things I'd like to know:</p>
+                        <ul style="margin-top: 10px; padding-left: 20px;">
+                            <li>Your name and maybe where you're from</li>
+                            <li>What you're interested in or passionate about</li>
+                            <li>What you hope to use me for</li>
+                            <li>Anything else you'd like to share!</li>
+                        </ul>
+                        <p style="margin-top: 10px;">Just chat with me naturally and I'll learn about you as we talk. 😊</p>
+                    </div>
+                </div>
+            `;
+            
+            if (messagesContainer) {
+                messagesContainer.insertAdjacentHTML('beforeend', onboardingMessage);
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }
         }
 
     </script>

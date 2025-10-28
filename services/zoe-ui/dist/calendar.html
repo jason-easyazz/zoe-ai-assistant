@@ -1663,6 +1663,10 @@
                 <h2 class="more-title">More Options</h2>
             </div>
             <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('people.html')">
+                    <div class="more-item-icon">👥</div>
+                    <div class="more-item-label">People</div>
+                </div>
                 <div class="more-item" onclick="navigateToPage('memories.html')">
                     <div class="more-item-icon">🧠</div>
                     <div class="more-item-label">Memories</div>
@@ -3852,7 +3856,7 @@
         let peopleList = [];
         async function loadPeopleList() {
             try {
-                const data = await authedApiRequest('/memories/people');
+                const data = await authedApiRequest('/people');
                 peopleList = data.people || [];
                 
                 const select = document.getElementById('addAttendeeSelect');

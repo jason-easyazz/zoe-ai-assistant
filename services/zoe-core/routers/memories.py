@@ -363,13 +363,11 @@ class ImportantDateCreate(BaseModel):
 @router.get("/")
 async def get_memories(
     type: str = Query(..., description="Type: people, projects, or notes"),
-    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
-    session: Optional[AuthenticatedSession] = Depends(lambda: None),
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get memories by type"""
-    # For web interface compatibility, allow no authentication
-    if user_id is None:
-        user_id = session.user_id if session else 'default' 
+    user_id = session.user_id
+    user_id = session.user_id if session else 'default' 
     if type not in ["people", "projects", "notes"]:
         raise HTTPException(status_code=400, detail="Type must be people, projects, or notes")
     
@@ -455,15 +453,13 @@ async def get_memories(
 @router.post("/")
 async def create_memory(
     type: str = Query(..., description="Type: people, projects, or notes"),
-    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
     person: Optional[PersonCreate] = None,
     project: Optional[ProjectCreate] = None,
     note: Optional[NoteCreate] = None,
-    session: AuthenticatedSession = Depends(validate_session),
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Create a new memory"""
-    if user_id is None:
-        user_id = session.user_id
+    user_id = session.user_id
     if type not in ["people", "projects", "notes"]:
         raise HTTPException(status_code=400, detail="Type must be people, projects, or notes")
     
@@ -518,12 +514,10 @@ async def create_memory(
 async def get_memory(
     memory_id: int,
     type: str = Query(..., description="Type: people, projects, or notes"),
-    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
     session: AuthenticatedSession = Depends(validate_session),
 ):
     """Get a specific memory"""
-    if user_id is None:
-        user_id = session.user_id
+    user_id = session.user_id
     if type not in ["people", "projects", "notes"]:
         raise HTTPException(status_code=400, detail="Type must be people, projects, or notes")
     
@@ -589,15 +583,13 @@ async def get_memory(
 async def update_memory(
     memory_id: int,
     type: str = Query(..., description="Type: people, projects, or notes"),
-    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
     person: Optional[PersonCreate] = None,
     project: Optional[ProjectCreate] = None,
     note: Optional[NoteCreate] = None,
     session: AuthenticatedSession = Depends(validate_session),
 ):
     """Update a memory"""
-    if user_id is None:
-        user_id = session.user_id
+    user_id = session.user_id
     if type not in ["people", "projects", "notes"]:
         raise HTTPException(status_code=400, detail="Type must be people, projects, or notes")
     
@@ -665,12 +657,9 @@ async def update_memory(
 async def delete_memory(
     memory_id: int,
     type: str = Query(..., description="Type: people, projects, or notes"),
-    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
-    session: AuthenticatedSession = Depends(validate_session),
 ):
     """Delete a memory"""
-    if user_id is None:
-        user_id = session.user_id
+    user_id = session.user_id
     if type not in ["people", "projects", "notes"]:
         raise HTTPException(status_code=400, detail="Type must be people, projects, or notes")
     
@@ -953,12 +942,10 @@ async def get_memory_facts(
 # Collections endpoints
 @router.get("/collections")
 async def get_collections(
-    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
-    session: AuthenticatedSession = Depends(validate_session),
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get all collections for a user"""
-    if user_id is None:
-        user_id = session.user_id
+    user_id = session.user_id
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -991,12 +978,10 @@ async def get_collections(
 @router.post("/collections")
 async def create_collection(
     collection: CollectionCreate,
-    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
-    session: AuthenticatedSession = Depends(validate_session),
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Create a new collection"""
-    if user_id is None:
-        user_id = session.user_id
+    user_id = session.user_id
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -1020,12 +1005,10 @@ async def create_collection(
 @router.get("/collections/{collection_id}/tiles")
 async def get_tiles(
     collection_id: int,
-    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
-    session: AuthenticatedSession = Depends(validate_session),
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get all tiles in a collection"""
-    if user_id is None:
-        user_id = session.user_id
+    user_id = session.user_id
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -1063,12 +1046,10 @@ async def get_tiles(
 @router.post("/tiles")
 async def create_tile(
     tile: TileCreate,
-    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
-    session: AuthenticatedSession = Depends(validate_session),
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Create a new tile"""
-    if user_id is None:
-        user_id = session.user_id
+    user_id = session.user_id
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -1094,12 +1075,10 @@ async def create_tile(
 async def update_tile(
     tile_id: int,
     tile: TileCreate,
-    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
-    session: AuthenticatedSession = Depends(validate_session),
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Update a tile"""
-    if user_id is None:
-        user_id = session.user_id
+    user_id = session.user_id
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -1129,12 +1108,10 @@ async def update_tile(
 @router.delete("/tiles/{tile_id}")
 async def delete_tile(
     tile_id: int,
-    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
-    session: AuthenticatedSession = Depends(validate_session),
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Delete a tile"""
-    if user_id is None:
-        user_id = session.user_id
+    user_id = session.user_id
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -1154,12 +1131,10 @@ async def delete_tile(
 @router.get("/people/{person_id}/enhanced")
 async def get_enhanced_person(
     person_id: int,
-    user_id: str = Query(None, description="User ID (optional, defaults to auth user)"),
-    session: AuthenticatedSession = Depends(validate_session),
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get enhanced person data including timeline, activities, etc."""
-    if user_id is None:
-        user_id = session.user_id
+    user_id = session.user_id
     
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()

@@ -33,8 +33,7 @@ async def get_vapid_public_key():
 @router.post("/subscribe", response_model=PushSubscriptionResponse)
 async def subscribe_to_push(
     subscription: PushSubscriptionRequest,
-    user_id: str = Query("default")
-):
+    session: AuthenticatedSession = Depends(validate_session)
     """Subscribe user to push notifications"""
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -66,9 +65,10 @@ async def subscribe_to_push(
 @router.post("/unsubscribe", response_model=PushSubscriptionResponse)
 async def unsubscribe_from_push(
     subscription: PushSubscriptionRequest,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Unsubscribe from push notifications"""
+    user_id = session.user_id
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
@@ -90,8 +90,7 @@ async def unsubscribe_from_push(
 
 @router.get("/preferences")
 async def get_notification_preferences(
-    user_id: str = Query("default")
-):
+    session: AuthenticatedSession = Depends(validate_session)
     """Get user's notification preferences"""
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -109,9 +108,10 @@ async def get_notification_preferences(
 @router.put("/preferences")
 async def update_notification_preferences(
     preferences: NotificationPreferences,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Update user's notification preferences"""
+    user_id = session.user_id
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
@@ -137,8 +137,7 @@ async def update_notification_preferences(
 async def send_notification(
     payload: NotificationPayload,
     target_user_id: str,
-    user_id: str = Query("default")
-):
+    session: AuthenticatedSession = Depends(validate_session)
     """Send a notification to a specific user (admin/system use)"""
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -164,9 +163,10 @@ async def send_notification(
 @router.post("/test")
 async def send_test_notification(
     test_request: PushTestRequest,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Send a test notification to the current user"""
+    user_id = session.user_id
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
@@ -197,7 +197,7 @@ async def send_test_notification(
 
 @router.get("/subscriptions")
 async def get_user_subscriptions(
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get all active subscriptions for the current user"""
     if not user_id:
