@@ -339,14 +339,14 @@ async def upload_photos(
 @router.delete("/photo/{photo_id}")
 async def delete_photo(
     photo_id: str,
-    user_id: str = Query("default", description="User ID")
-):
+    session: AuthenticatedSession = Depends(validate_session)
     """Delete a photo and its thumbnail"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     # Get photo info
     cursor.execute("""
+        user_id = session.user_id
         SELECT file_path, thumbnail_path
         FROM uploaded_photos
         WHERE photo_id = ? AND user_id = ?
@@ -379,13 +379,13 @@ async def delete_photo(
 @router.get("/photo/{photo_id}")
 async def get_photo_info(
     photo_id: str,
-    user_id: str = Query("default", description="User ID")
-):
+    session: AuthenticatedSession = Depends(validate_session)
     """Get photo metadata"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     cursor.execute("""
+        user_id = session.user_id
         SELECT photo_id, filename, url, thumbnail_url, size_bytes, width, height,
                format, exif_data, created_at
         FROM uploaded_photos

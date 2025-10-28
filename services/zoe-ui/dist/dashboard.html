@@ -1854,6 +1854,10 @@
                 <h2 class="more-title">More Options</h2>
             </div>
             <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('people.html')">
+                    <div class="more-item-icon">👥</div>
+                    <div class="more-item-label">People</div>
+                </div>
                 <div class="more-item" onclick="navigateToPage('memories.html')">
                     <div class="more-item-icon">🧠</div>
                     <div class="more-item-label">Memories</div>
@@ -1987,17 +1991,9 @@
     <script src="js/widgets/core/bucket.js"></script>
     <script src="js/widgets/core/reminders.js"></script>
     <script src="js/widgets/core/dynamic-list.js"></script>
+    <script src="js/widgets/core/week-planner.js"></script>
     
-    <!-- Register all widgets immediately after they're loaded -->
-    <script>
-        console.log('🔧 Registering widgets...');
-        if (typeof registerAllWidgets === 'function') {
-            const count = registerAllWidgets();
-            console.log('✅ Widget registration complete:', count, 'modules');
-        } else {
-            console.error('❌ registerAllWidgets function not found!');
-        }
-    </script>
+    <!-- Widget registration will happen after dashboard.js is loaded -->
 
     <!-- Widget Library Functions -->
     <script>
@@ -2029,7 +2025,8 @@
                 { type: 'work', icon: '💼', name: 'Work', desc: 'Work tasks' },
                 { type: 'bucket', icon: '🎯', name: 'Bucket List', desc: 'Goals' },
                 { type: 'reminders', icon: '🔔', name: 'Reminders', desc: 'Reminders' },
-                { type: 'system', icon: '💻', name: 'System', desc: 'System info' }
+                { type: 'system', icon: '💻', name: 'System', desc: 'System info' },
+                { type: 'week-planner', icon: '📅', name: 'Week Planner', desc: 'Weekly events, lists, and transactions' }
             ];
             
             grid.innerHTML = availableWidgets.map(widget => `
@@ -2125,6 +2122,28 @@
     
     <!-- Clean Dashboard Implementation (Native Gridstack) -->
     <script src="js/dashboard.js"></script>
+    
+    <!-- Register all widgets AFTER dashboard.js has set up its listener -->
+    <script>
+        // Initialize widget registration
+        (async () => {
+            console.log('🔧 Registering widgets...');
+            window.widgetsRegistered = false;
+            
+            if (typeof registerAllWidgets === 'function') {
+                const count = await registerAllWidgets();
+                console.log('✅ Widget registration complete:', count, 'modules');
+                window.widgetsRegistered = true;
+                console.log('📢 Dispatching widgets-registered event');
+                window.dispatchEvent(new Event('widgets-registered'));
+            } else {
+                console.error('❌ registerAllWidgets function not found!');
+                window.widgetsRegistered = true; // Set to true even on error to prevent blocking
+                console.log('📢 Dispatching widgets-registered event (error case)');
+                window.dispatchEvent(new Event('widgets-registered'));
+            }
+        })();
+    </script>
 </body>
 </html>
 

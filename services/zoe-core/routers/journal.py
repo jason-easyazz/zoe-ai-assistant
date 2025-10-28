@@ -291,9 +291,10 @@ async def get_journal_entries(
     search: Optional[str] = Query(None, description="Search in title and content"),
     journey_id: Optional[int] = Query(None, description="Filter by journey"),
     person_id: Optional[int] = Query(None, description="Filter by person"),
-    user_id: str = Query("default", description="User ID")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get journal entries with optional filtering and people info"""
+    user_id = session.user_id
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
@@ -378,8 +379,9 @@ async def get_journal_entries(
 async def create_journal_entry(
     entry: JournalEntryCreate, 
     background_tasks: BackgroundTasks,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Create a new journal entry with enhanced features"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -438,8 +440,9 @@ async def create_journal_entry(
 
 @router.get("/entries/on-this-day")
 async def get_on_this_day_entries(
-    user_id: str = Query("default", description="User ID")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Get entries from this day in previous years (Day One feature)"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -491,8 +494,9 @@ async def get_on_this_day_entries(
 
 @router.get("/stats/streak")
 async def get_journaling_streak(
-    user_id: str = Query("default", description="User ID")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Calculate journaling streak (consecutive days)"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -553,8 +557,9 @@ async def get_journaling_streak(
 
 @router.get("/prompts")
 async def get_journal_prompts(
-    user_id: str = Query("default", description="User ID")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Get intelligent journal prompts based on recent activities, goals, and journeys"""
     prompts = []
     
@@ -652,16 +657,18 @@ async def get_journal_prompts(
 @router.post("/prompts/mark-prompted")
 async def mark_prompt_shown(
     prompt_id: str,
-    user_id: str = Query("default", description="User ID")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Mark that a prompt was shown to the user (prevents duplicates)"""
     # Could store this in a prompts_shown table if needed
     return {"message": "Prompt marked as shown", "prompt_id": prompt_id}
 
 # Keep existing endpoints below...
 @router.get("/{entry_id}")
-async def get_journal_entry(entry_id: int, user_id: str = Query("default")):
+async def get_journal_entry(entry_id: int, session: AuthenticatedSession = Depends(validate_session)):
     """Get a specific journal entry with people info"""
+    user_id = session.user_id
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
@@ -709,8 +716,9 @@ async def update_journal_entry(
     entry_id: int,
     entry_update: JournalEntryUpdate,
     background_tasks: BackgroundTasks,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Update a journal entry"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -772,7 +780,8 @@ async def update_journal_entry(
     return {"message": "Journal entry updated successfully"}
 
 @router.delete("/{entry_id}")
-async def delete_journal_entry(entry_id: int, user_id: str = Query("default")):
+async def delete_journal_entry(entry_id: int, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     """Delete a journal entry"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -789,7 +798,8 @@ async def delete_journal_entry(entry_id: int, user_id: str = Query("default")):
     return {"message": "Journal entry deleted successfully"}
 
 @router.get("/stats/mood")
-async def get_mood_stats(user_id: str = Query("default")):
+async def get_mood_stats(session: AuthenticatedSession = Depends(validate_session)):
+        user_id = session.user_id
     """Get mood statistics"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -818,8 +828,9 @@ async def get_mood_stats(user_id: str = Query("default")):
 async def get_monthly_stats(
     year: int = Query(None, description="Year filter"),
     month: int = Query(None, description="Month filter (1-12)"),
-    user_id: str = Query("default", description="User ID")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Get monthly journal statistics"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()

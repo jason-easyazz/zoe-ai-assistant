@@ -103,9 +103,7 @@ async def create_session(session: SessionCreate):
 
 @router.get("/", response_model=Dict[str, Any])
 async def get_sessions(
-    user_id: str = Query("default"),
-    limit: int = Query(50)
-):
+    session: AuthenticatedSession = Depends(validate_session),
     """Get user's chat sessions"""
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -113,6 +111,7 @@ async def get_sessions(
         cursor = conn.cursor()
         
         cursor.execute("""
+            user_id = session.user_id
             SELECT * FROM chat_sessions
             WHERE user_id = ?
             ORDER BY updated_at DESC
@@ -139,8 +138,7 @@ async def get_sessions(
 @router.get("/{session_id}/messages", response_model=Dict[str, Any])
 async def get_session_messages(
     session_id: str,
-    user_id: str = Query("default")
-):
+    session: AuthenticatedSession = Depends(validate_session)
     """Get all messages in a session"""
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -149,6 +147,7 @@ async def get_session_messages(
         
         # Verify session belongs to user
         cursor.execute("""
+            user_id = session.user_id
             SELECT * FROM chat_sessions WHERE id = ? AND user_id = ?
         """, (session_id, user_id))
         
@@ -193,8 +192,7 @@ async def get_session_messages(
 async def add_message(
     session_id: str,
     message: MessageCreate,
-    user_id: str = Query("default")
-):
+    session: AuthenticatedSession = Depends(validate_session)
     """Add a message to a session"""
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -202,6 +200,7 @@ async def add_message(
         
         # Verify session exists and belongs to user
         cursor.execute("""
+            user_id = session.user_id
             SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?
         """, (session_id, user_id))
         
@@ -241,8 +240,7 @@ async def add_message(
 async def update_session(
     session_id: str,
     update: SessionUpdate,
-    user_id: str = Query("default")
-):
+    session: AuthenticatedSession = Depends(validate_session)
     """Update session (e.g., rename)"""
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -250,6 +248,7 @@ async def update_session(
         
         if update.title:
             cursor.execute("""
+                user_id = session.user_id
                 UPDATE chat_sessions 
                 SET title = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND user_id = ?
@@ -271,14 +270,14 @@ async def update_session(
 @router.delete("/{session_id}", response_model=Dict[str, Any])
 async def delete_session(
     session_id: str,
-    user_id: str = Query("default")
-):
+    session: AuthenticatedSession = Depends(validate_session)
     """Delete a session and all its messages"""
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         cursor.execute("""
+            user_id = session.user_id
             DELETE FROM chat_sessions WHERE id = ? AND user_id = ?
         """, (session_id, user_id))
         

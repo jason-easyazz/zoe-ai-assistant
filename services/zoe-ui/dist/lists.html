@@ -1761,6 +1761,10 @@
                 <h2 class="more-title">More Options</h2>
             </div>
             <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('people.html')">
+                    <div class="more-item-icon">👥</div>
+                    <div class="more-item-label">People</div>
+                </div>
                 <div class="more-item" onclick="navigateToPage('memories.html')">
                     <div class="more-item-icon">🧠</div>
                     <div class="more-item-label">Memories</div>
@@ -1895,16 +1899,7 @@
     <script src="js/widgets/core/reminders.js"></script>
     <script src="js/widgets/core/dynamic-list.js"></script>
     
-    <!-- Register all widgets immediately after they're loaded -->
-    <script>
-        console.log('🔧 Registering widgets...');
-        if (typeof registerAllWidgets === 'function') {
-            const count = registerAllWidgets();
-            console.log('✅ Widget registration complete:', count, 'modules');
-        } else {
-            console.error('❌ registerAllWidgets function not found!');
-        }
-    </script>
+    <!-- Widget registration will happen after lists-dashboard.js is loaded -->
 
     <!-- Widget Library Functions -->
     <script>
@@ -1983,6 +1978,41 @@
         function navigateToPage(page) {
             window.location.href = page;
         }
+        
+        // Mobile menu toggle
+        function toggleMobileMenu() {
+            if (window.innerWidth > 768) { 
+                // On desktop, go to home
+                if (window.location.pathname !== '/lists.html' && window.location.pathname !== '/dashboard.html') {
+                    window.location.href = 'index.html';
+                }
+                return; 
+            }
+            
+            const menu = document.getElementById('mobileNavMenu');
+            const overlay = document.getElementById('mobileNavOverlay');
+            if (menu && overlay) {
+                menu.classList.toggle('open');
+                overlay.classList.toggle('open');
+            }
+        }
+
+        function handleLogout() {
+            if (window.innerWidth <= 768) {
+                toggleMobileMenu();
+            }
+            // Use zoeAuth.logout() if available, otherwise try window.logout
+            if (window.zoeAuth && typeof window.zoeAuth.logout === 'function') {
+                window.zoeAuth.logout();
+            } else if (typeof logout === 'function') {
+                logout();
+            } else {
+                console.error('logout function not found');
+                // Fallback: clear session and redirect
+                localStorage.removeItem('zoe_session');
+                window.location.href = 'index.html';
+            }
+        }
     </script>
 
     <!-- Gridstack.js Library (Local for Offline Support) -->
@@ -1993,6 +2023,28 @@
     
     <!-- Clean Dashboard Implementation (Native Gridstack) -->
     <script src="js/lists-dashboard.js"></script>
+    
+    <!-- Register all widgets AFTER lists-dashboard.js has set up its listener -->
+    <script>
+        // Initialize widget registration
+        (async () => {
+            console.log('🔧 Registering widgets...');
+            window.widgetsRegistered = false;
+            
+            if (typeof registerAllWidgets === 'function') {
+                const count = await registerAllWidgets();
+                console.log('✅ Widget registration complete:', count, 'modules');
+                window.widgetsRegistered = true;
+                console.log('📢 Dispatching widgets-registered event');
+                window.dispatchEvent(new Event('widgets-registered'));
+            } else {
+                console.error('❌ registerAllWidgets function not found!');
+                window.widgetsRegistered = true; // Set to true even on error to prevent blocking
+                console.log('📢 Dispatching widgets-registered event (error case)');
+                window.dispatchEvent(new Event('widgets-registered'));
+            }
+        })();
+    </script>
 </body>
 </html>
 

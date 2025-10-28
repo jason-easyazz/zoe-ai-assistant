@@ -301,18 +301,32 @@ const AmbientWidgets = (() => {
       if (!this.el) return;
       const { maxItems = 5 } = this.config;
       
+      // Get user ID from session (check localStorage for auth session)
+      let userId = 'default';
+      try {
+        const sessionData = localStorage.getItem('zoe_session');
+        if (sessionData) {
+          const session = JSON.parse(sessionData);
+          userId = session.user_info?.user_id || session.user_id || 'default';
+        }
+      } catch (e) {
+        console.warn('Failed to get user session:', e);
+      }
+      
       // Fetch lists from Zoe's backend
       let lists = [];
       try {
-        const response = await TouchCommon.fetchJSON('/api/lists/items?limit=' + maxItems);
-        lists = response.items || [];
+        const response = await TouchCommon.fetchJSON(`/api/lists/tasks?user_id=${userId}`);
+        // Convert tasks to list items format
+        lists = (response.tasks || []).map(task => ({
+          text: task.text || task.title,
+          list: task.list_name || task.list_category,
+          completed: task.completed || false
+        }));
       } catch (e) {
-        // Mock list items if API not available
-        lists = [
-          { text: 'Buy groceries', list: 'Shopping', completed: false },
-          { text: 'Call insurance company', list: 'Personal', completed: false },
-          { text: 'Plan weekend trip', list: 'Travel', completed: false }
-        ];
+        console.warn('Failed to load lists:', e);
+        // Show empty state instead of mock data
+        lists = [];
       }
       
       const items = lists.slice(0, maxItems).map(item => `

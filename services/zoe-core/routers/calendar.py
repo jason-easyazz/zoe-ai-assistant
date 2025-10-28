@@ -1,9 +1,9 @@
-from auth_integration import validate_session
+from auth_integration import validate_session, AuthenticatedSession
 """
 Calendar Management System
 Handles events, scheduling, and calendar operations with smart scheduling integration
 """
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any, Set
 from datetime import datetime, date, timedelta
@@ -237,6 +237,16 @@ def init_calendar_db():
         ON event_attendees(event_id)
     """)
     
+    # Add transaction_id and sort_order columns for week planner integration
+    try:
+        cursor.execute("ALTER TABLE events ADD COLUMN transaction_id INTEGER REFERENCES transactions(id)")
+    except Exception:
+        pass  # Column already exists
+    try:
+        cursor.execute("ALTER TABLE events ADD COLUMN sort_order INTEGER DEFAULT 0")
+    except Exception:
+        pass  # Column already exists
+    
     conn.commit()
     conn.close()
 
@@ -312,8 +322,9 @@ async def get_events(
     start_date: Optional[str] = Query(None, description="Start date filter (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date filter (YYYY-MM-DD)"),
     category: Optional[str] = Query(None, description="Category filter"),
-    user_id: str = Query("default", description="User ID")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Get events with optional filtering, including recurring events"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -410,10 +421,11 @@ async def get_events(
 async def update_single_occurrence(
     event_id: int,
     occurrence_date: str = Query(..., description="YYYY-MM-DD"),
-    user_id: str = Query("default"),
     update: EventUpdate = None,
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Update a single occurrence by adding an override on the master event."""
+    user_id = session.user_id
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT overrides FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
@@ -441,9 +453,10 @@ async def update_single_occurrence(
 async def delete_single_occurrence(
     event_id: int,
     occurrence_date: str = Query(..., description="YYYY-MM-DD"),
-    user_id: str = Query("default"),
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Exclude a single occurrence by adding the date to exdates."""
+    user_id = session.user_id
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT exdates FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
@@ -465,8 +478,9 @@ async def delete_single_occurrence(
     return {"message": "Occurrence excluded", "event_id": event_id, "occurrence_date": occurrence_date}
 
 @router.post("/events")
-async def create_event(event: EventCreate, user_id: str = Query("default")):
+async def create_event(event: EventCreate, session: AuthenticatedSession = Depends(validate_session)):
     """Create a new event"""
+    user_id = session.user_id
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -546,8 +560,9 @@ async def create_event(event: EventCreate, user_id: str = Query("default")):
     }}
 
 @router.get("/events/{event_id}")
-async def get_event(event_id: int, user_id: str = Query("default")):
+async def get_event(event_id: int, session: AuthenticatedSession = Depends(validate_session)):
     """Get a specific event"""
+    user_id = session.user_id
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -582,7 +597,8 @@ async def get_event(event_id: int, user_id: str = Query("default")):
     }
 
 @router.put("/events/{event_id}")
-async def update_event(event_id: int, event_update: EventUpdate, user_id: str = Query("default")):
+async def update_event(event_id: int, event_update: EventUpdate, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     """Update an event"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -674,7 +690,8 @@ async def update_event(event_id: int, event_update: EventUpdate, user_id: str = 
     return {"message": "No fields to update"}
 
 @router.delete("/events/{event_id}")
-async def delete_event(event_id: int, user_id: str = Query("default")):
+async def delete_event(event_id: int, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     """Delete an event"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -690,6 +707,35 @@ async def delete_event(event_id: int, user_id: str = Query("default")):
     
     return {"message": "Event deleted successfully"}
 
+@router.put("/events/{event_id}/move")
+async def move_event(event_id: int, new_date: str = Query(..., description="New date (YYYY-MM-DD)"), session: AuthenticatedSession = Depends(validate_session)):
+    """Move an event to a different date"""
+    user_id = session.user_id
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Verify event exists and belongs to user
+    cursor.execute("SELECT id FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Event not found")
+    
+    # Update the event date
+    cursor.execute("""
+        UPDATE events 
+        SET start_date = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+    """, (new_date, event_id, user_id))
+    
+    conn.commit()
+    conn.close()
+    
+    return {
+        "message": "Event moved successfully",
+        "id": event_id,
+        "start_date": new_date
+    }
+
 # Event Attendees Endpoints
 
 class AttendeeCreate(BaseModel):
@@ -698,8 +744,9 @@ class AttendeeCreate(BaseModel):
     notes: Optional[str] = None
 
 @router.post("/events/{event_id}/attendees")
-async def add_attendee(event_id: int, attendee: AttendeeCreate, user_id: str = Query("default")):
+async def add_attendee(event_id: int, attendee: AttendeeCreate, session: AuthenticatedSession = Depends(validate_session)):
     """Add an attendee to an event"""
+    user_id = session.user_id
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -750,7 +797,8 @@ async def add_attendee(event_id: int, attendee: AttendeeCreate, user_id: str = Q
     }
 
 @router.get("/events/{event_id}/attendees")
-async def get_attendees(event_id: int, user_id: str = Query("default")):
+async def get_attendees(event_id: int, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     """Get all attendees for an event"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -805,7 +853,8 @@ async def get_attendees(event_id: int, user_id: str = Query("default")):
     }
 
 @router.delete("/events/{event_id}/attendees/{person_id}")
-async def remove_attendee(event_id: int, person_id: int, user_id: str = Query("default")):
+async def remove_attendee(event_id: int, person_id: int, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     """Remove an attendee from an event"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -841,7 +890,8 @@ class PrepItemCreate(BaseModel):
     auto_add_to_list: Optional[bool] = False
 
 @router.post("/events/{event_id}/prep-items")
-async def add_prep_item(event_id: int, prep_item: PrepItemCreate, user_id: str = Query("default")):
+async def add_prep_item(event_id: int, prep_item: PrepItemCreate, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     """Add a prep item to an event"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -892,7 +942,8 @@ async def add_prep_item(event_id: int, prep_item: PrepItemCreate, user_id: str =
     }
 
 @router.get("/events/{event_id}/prep-items")
-async def get_prep_items(event_id: int, user_id: str = Query("default")):
+async def get_prep_items(event_id: int, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     """Get all prep items for an event"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -920,7 +971,8 @@ async def get_prep_items(event_id: int, user_id: str = Query("default")):
     }
 
 @router.put("/events/{event_id}/prep-items/{item_id}")
-async def update_prep_item(event_id: int, item_id: str, prep_item: PrepItemCreate, user_id: str = Query("default")):
+async def update_prep_item(event_id: int, item_id: str, prep_item: PrepItemCreate, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     """Update a prep item"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -969,7 +1021,8 @@ async def update_prep_item(event_id: int, item_id: str, prep_item: PrepItemCreat
     return {"message": "Prep item updated successfully"}
 
 @router.delete("/events/{event_id}/prep-items/{item_id}")
-async def delete_prep_item(event_id: int, item_id: str, user_id: str = Query("default")):
+async def delete_prep_item(event_id: int, item_id: str, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     """Delete a prep item"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -1010,7 +1063,8 @@ async def delete_prep_item(event_id: int, item_id: str, user_id: str = Query("de
     return {"message": "Prep item deleted successfully"}
 
 @router.post("/events/{event_id}/prep-items/{item_id}/complete")
-async def complete_prep_item(event_id: int, item_id: str, user_id: str = Query("default")):
+async def complete_prep_item(event_id: int, item_id: str, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     """Mark a prep item as complete or incomplete"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -1061,7 +1115,8 @@ class EventReminderCreate(BaseModel):
     message: Optional[str] = None
 
 @router.post("/events/{event_id}/reminders")
-async def create_event_reminder(event_id: int, reminder: EventReminderCreate, user_id: str = Query("default")):
+async def create_event_reminder(event_id: int, reminder: EventReminderCreate, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     """Create a reminder for an event"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -1112,7 +1167,8 @@ async def create_event_reminder(event_id: int, reminder: EventReminderCreate, us
         raise HTTPException(status_code=500, detail=f"Error creating reminder: {str(e)}")
 
 @router.get("/events/{event_id}/reminders")
-async def get_event_reminders(event_id: int, user_id: str = Query("default")):
+async def get_event_reminders(event_id: int, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     """Get all reminders for an event"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -1150,7 +1206,8 @@ async def get_event_reminders(event_id: int, user_id: str = Query("default")):
     }
 
 @router.delete("/reminders/{reminder_id}")
-async def delete_reminder(reminder_id: int, user_id: str = Query("default")):
+async def delete_reminder(reminder_id: int, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     """Delete a reminder"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -1234,8 +1291,9 @@ async def suggest_optimal_time(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/energy-patterns")
-async def get_energy_patterns(user_id: str = Query("default")):
+async def get_energy_patterns(session: AuthenticatedSession = Depends(validate_session)):
     """Get user's energy patterns for smart scheduling"""
+    user_id = session.user_id
     try:
         from routers.smart_scheduling import SmartScheduler
         scheduler = SmartScheduler()
@@ -1252,8 +1310,9 @@ async def schedule_event_with_smart_scheduling(
     task_type: str = Query("focus", description="Task type"),
     priority: int = Query(3, description="Priority level"),
     suggested_time: str = Query(..., description="Suggested time slot"),
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Schedule an event using smart scheduling suggestions"""
     try:
         # Parse suggested time (format: "2025-09-14T10:00:00")
@@ -1289,15 +1348,309 @@ async def schedule_event_with_smart_scheduling(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/events/today")
-async def get_todays_events(user_id: str = Query("default")):
+async def get_todays_events(session: AuthenticatedSession = Depends(validate_session)):
     """Get today's events"""
+    user_id = session.user_id
     today = date.today().isoformat()
     return await get_events(start_date=today, end_date=today, user_id=user_id)
+
+@router.get("/week")
+async def get_week_view(
+    start_date: str = Query(..., description="Monday of week (YYYY-MM-DD)"),
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    """Get aggregated week view with calendar events, list items, and transactions"""
+    user_id = session.user_id
+    import sys
+    print(f"[WEEK VIEW] user_id from session: {user_id}", file=sys.stderr)
+    
+    # Parse start date and calculate week range
+    try:
+        start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        # Ensure it's Monday
+        days_since_monday = start.weekday()
+        monday = start - timedelta(days=days_since_monday)
+        sunday = monday + timedelta(days=6)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Day names for grouping
+    days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+    week_data = {day: [] for day in days}
+    
+    # Get calendar events for the week
+    cursor.execute("""
+        SELECT id, title, description, start_date, start_time, end_date, end_time,
+               category, location, all_day, recurring, metadata, created_at, updated_at,
+               transaction_id, sort_order
+        FROM events 
+        WHERE user_id = ? AND start_date >= ? AND start_date <= ?
+        ORDER BY start_time ASC, sort_order ASC
+    """, (user_id, monday.isoformat(), sunday.isoformat()))
+    
+    events = cursor.fetchall()
+    
+    # Debug logging
+    import sys
+    print(f"[WEEK DEBUG] user_id={user_id}, monday={monday}, sunday={sunday}", file=sys.stderr)
+    print(f"[WEEK DEBUG] Found {len(events)} events", file=sys.stderr)
+    for evt in events[:3]:
+        print(f"[WEEK DEBUG] Event: {evt[:3]}", file=sys.stderr)
+    
+    # Get transactions for the week
+    cursor.execute("""
+        SELECT id, description, amount, type, transaction_date, status, payment_method,
+               person_id, calendar_event_id, list_item_id, metadata
+        FROM transactions
+        WHERE user_id = ? AND transaction_date >= ? AND transaction_date <= ?
+        ORDER BY transaction_date ASC, created_at ASC
+    """, (user_id, monday.isoformat(), sunday.isoformat()))
+    
+    transactions = cursor.fetchall()
+    
+    # Get list items with due_date for the week
+    cursor.execute("""
+        SELECT li.id, li.task_text, li.priority, li.completed, li.due_date, li.transaction_id,
+               l.name as list_name, l.list_type
+        FROM list_items li
+        JOIN lists l ON li.list_id = l.id
+        WHERE l.user_id = ? AND l.user_id = ? AND li.due_date IS NOT NULL AND li.due_date >= ? AND li.due_date <= ?
+        ORDER BY li.due_date ASC, li.sort_order ASC
+    """, (user_id, user_id, monday.isoformat(), sunday.isoformat()))
+    
+    list_items = cursor.fetchall()
+    
+    # Create transaction lookup by ID
+    transaction_map = {}
+    for txn in transactions:
+        txn_id, desc, amount, txn_type, txn_date, status, method, person_id, cal_id, list_id, metadata = txn
+        try:
+            metadata_json = json.loads(metadata) if metadata else {}
+        except:
+            metadata_json = {}
+        
+        # Get person name if exists
+        person_name = None
+        if person_id:
+            cursor.execute("SELECT name FROM people WHERE id = ?", (person_id,))
+            person_row = cursor.fetchone()
+            if person_row:
+                person_name = person_row[0]
+        
+        transaction_map[txn_id] = {
+            "id": txn_id,
+            "description": desc,
+            "amount": amount,
+            "type": txn_type,
+            "transaction_date": txn_date,
+            "status": status,
+            "payment_method": method,
+            "person": {"name": person_name} if person_name else None,
+            "calendar_event_id": cal_id,
+            "list_item_id": list_id
+        }
+    
+    # Process events
+    print(f"[WEEK] Processing {len(events)} events for week")
+    print(f"[WEEK] User ID: {user_id}, Week: {monday} to {sunday}")
+    for event in events:
+        try:
+            event_id, title, desc, start_date_str, start_time, end_date, end_time, category, location, all_day, recurring, metadata, created_at, updated_at, transaction_id, sort_order = event
+            
+            print(f"[WEEK] Processing: {title} on {start_date_str} at {start_time}")
+            
+            # Get transaction if linked
+            linked_transaction = None
+            if transaction_id and transaction_id in transaction_map:
+                linked_transaction = {
+                    "amount": transaction_map[transaction_id]["amount"],
+                    "type": transaction_map[transaction_id]["type"],
+                    "status": transaction_map[transaction_id]["status"]
+                }
+            
+            # Get day name
+            event_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+            day_index = (event_date - monday).days
+            print(f"[WEEK] Day index: {day_index}")
+            
+            if day_index < 0 or day_index >= 7:
+                print(f"[WEEK] Skipping event outside week range")
+                continue  # Skip if outside week range
+            
+            day_name = days[day_index]
+            print(f"[WEEK] Day name: {day_name}")
+            
+            # Determine icon based on title/category
+            icon = get_event_icon(title, category)
+            
+            # Format time - handle both string and time object types
+            time_str = None
+            if start_time:
+                if isinstance(start_time, str):
+                    # Already a string, use as-is or extract HH:MM
+                    time_str = start_time[:5] if len(start_time) >= 5 else start_time
+                else:
+                    # It's a time object, format it
+                    time_str = start_time.strftime("%H:%M")
+            
+            week_data[day_name].append({
+                "type": "calendar_event",
+                "id": event_id,
+                "title": title,
+                "time": time_str,
+                "description": desc,
+                "category": category,
+                "icon": icon,
+                "transaction": linked_transaction,
+                "sort_order": sort_order
+            })
+            print(f"[WEEK] Added to {day_name}: {title}")
+        except Exception as e:
+            print(f"[WEEK] Error processing event: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+    
+    # Process standalone transactions (not linked to events or lists)
+    for txn in transactions:
+        transaction_id = txn[0]
+        txn_data = transaction_map[transaction_id]
+        
+        if txn_data["calendar_event_id"] or txn_data["list_item_id"]:
+            continue  # Already linked to event or list
+        
+        txn_date = datetime.strptime(txn_data["transaction_date"], "%Y-%m-%d").date()
+        day_index = (txn_date - monday).days
+        day_name = days[day_index]
+        
+        week_data[day_name].append({
+            "type": "transaction",
+            "id": transaction_id,
+            "description": txn_data["description"],
+            "amount": txn_data["amount"],
+            "type": txn_data["type"],
+            "status": txn_data["status"],
+            "payment_method": txn_data["payment_method"],
+            "person": txn_data["person"]
+        })
+    
+    # Process list items
+    for item in list_items:
+        try:
+            item_id, task_text, priority, completed, due_date_str, transaction_id, list_name, list_type = item
+            
+            # Get transaction if linked
+            linked_transaction = None
+            if transaction_id and transaction_id in transaction_map:
+                linked_transaction = {
+                    "amount": transaction_map[transaction_id]["amount"],
+                    "type": transaction_map[transaction_id]["type"],
+                    "status": transaction_map[transaction_id]["status"]
+                }
+            
+            if not due_date_str:
+                continue
+            
+            due_date = datetime.strptime(due_date_str, "%Y-%m-%d").date()
+            
+            day_index = (due_date - monday).days
+            if day_index < 0 or day_index >= 7:
+                continue
+            
+            day_name = days[day_index]
+            
+            icon = get_list_item_icon(task_text)
+            
+            week_data[day_name].append({
+                "type": "list_item",
+                "id": item_id,
+                "text": task_text,
+                "priority": priority,
+                "completed": completed,
+                "list_name": list_name,
+                "list_type": list_type,
+                "icon": icon,
+                "transaction": linked_transaction
+            })
+        except Exception as e:
+            print(f"Error processing list item: {e}")
+            continue
+    
+    # Calculate financial totals
+    totals = {
+        "income_expected": 0,
+        "income_received": 0,
+        "expense_due": 0,
+        "expense_paid": 0
+    }
+    
+    cursor.execute("""
+        SELECT type, status, SUM(amount) as total
+        FROM transactions
+        WHERE user_id = ? AND transaction_date >= ? AND transaction_date <= ?
+        GROUP BY type, status
+    """, (user_id, monday.isoformat(), sunday.isoformat()))
+    
+    for row in cursor.fetchall():
+        txn_type, txn_status, total = row
+        if txn_type == "income":
+            if txn_status == "pending":
+                totals["income_expected"] = total
+            elif txn_status == "completed":
+                totals["income_received"] = total
+        elif txn_type == "expense":
+            if txn_status == "pending":
+                totals["expense_due"] = total
+            elif txn_status == "completed":
+                totals["expense_paid"] = total
+    
+    conn.close()
+    
+    return {
+        "days": week_data,
+        "totals": totals,
+        "week_start": monday.isoformat(),
+        "week_end": sunday.isoformat()
+    }
+
+def get_event_icon(title: str, category: str) -> str:
+    """Get icon for calendar event based on title and category"""
+    title_lower = title.lower()
+    if any(word in title_lower for word in ['clean', 'ash', 'amy', 'lynette', 'katrina', 'aimee', 'louise', 'anna']):
+        return "🧹"
+    elif category == "birthday":
+        return "🎂"
+    elif any(word in title_lower for word in ['call', 'phone']):
+        return "📞"
+    elif any(word in title_lower for word in ['meeting', 'appointment']):
+        return "📅"
+    elif any(word in title_lower for word in ['fuel', 'gas']):
+        return "⛽"
+    elif any(word in title_lower for word in ['basketball', 'sport', 'game']):
+        return "🏀"
+    elif "party" in title_lower or "birthday" in title_lower:
+        return "🎉"
+    else:
+        return "📅"
+
+def get_list_item_icon(text: str) -> str:
+    """Get icon for list item based on text"""
+    text_lower = text.lower()
+    if any(word in text_lower for word in ['call', 'phone', 'contact']):
+        return "📞"
+    elif any(word in text_lower for word in ['buy', 'get', 'shopping']):
+        return "🛒"
+    else:
+        return "✓"
 
 # Reminder endpoints integrated with calendar
 
 @router.post("/reminders/", response_model=Dict[str, Any])
-async def create_reminder(reminder: ReminderCreate, user_id: str = Query("default")):
+async def create_reminder(reminder: ReminderCreate, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     """Create a new reminder"""
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -1362,12 +1715,13 @@ async def create_reminder(reminder: ReminderCreate, user_id: str = Query("defaul
 
 @router.get("/reminders/", response_model=Dict[str, Any])
 async def get_reminders(
-    user_id: str = Query("default"),
+    session: AuthenticatedSession = Depends(validate_session),
     category: Optional[str] = Query(None),
     priority: Optional[str] = Query(None),
     limit: int = Query(50)
 ):
     """Get reminders with optional filtering"""
+    user_id = session.user_id
     try:
         conn = get_connection(row_factory=sqlite3.Row)
         cursor = conn.cursor()
@@ -1412,8 +1766,9 @@ async def get_reminders(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/reminders/today", response_model=Dict[str, Any])
-async def get_todays_reminders(user_id: str = Query("default")):
+async def get_todays_reminders(session: AuthenticatedSession = Depends(validate_session)):
     """Get today's reminders"""
+    user_id = session.user_id
     try:
         today = date.today().isoformat()
         conn = get_connection(row_factory=sqlite3.Row)

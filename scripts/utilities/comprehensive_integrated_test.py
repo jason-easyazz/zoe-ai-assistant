@@ -190,7 +190,7 @@ class ComprehensiveIntegratedTester:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 # Test LiteLLM health with proper authentication
-                headers = {"Authorization": "Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f"}
+                headers = {"Authorization": "Bearer sk-your-secret-key-here"}
                 litellm_response = await client.get("http://localhost:8001/health", headers=headers)
                 
                 if litellm_response.status_code == 200:

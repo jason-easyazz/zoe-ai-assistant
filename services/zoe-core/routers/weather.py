@@ -2,7 +2,7 @@
 Weather Service
 Provides weather data using Open-Meteo free API
 """
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, HTTPException, Query, Body, Depends
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import requests
@@ -10,6 +10,7 @@ import os
 from datetime import datetime
 import logging
 import sqlite3
+from auth_integration import validate_session, AuthenticatedSession
 
 logger = logging.getLogger(__name__)
 
@@ -212,11 +213,13 @@ def get_user_preferences(user_id: str = "default") -> Dict[str, Any]:
 
 @router.get("/")
 async def get_weather(
-    user_id: str = Query("default", description="User ID"),
+    session: AuthenticatedSession = Depends(validate_session),
     lat: Optional[float] = Query(None, description="Override latitude (for device location)"),
     lon: Optional[float] = Query(None, description="Override longitude (for device location)")
 ):
     """Get current weather data using Open-Meteo API"""
+    ensure_user_settings_table()  # Ensure table exists before querying
+    user_id = session.user_id
     
     # Use override coordinates if provided (for device location)
     if lat is not None and lon is not None:
@@ -274,21 +277,25 @@ async def get_weather(
 
 @router.get("/current")
 async def get_current_weather(
-    user_id: str = Query("default", description="User ID"),
+    session: AuthenticatedSession = Depends(validate_session),
     lat: Optional[float] = Query(None, description="Override latitude (for device location)"),
     lon: Optional[float] = Query(None, description="Override longitude (for device location)")
 ):
     """Get current weather data (alias for /)"""
-    return await get_weather(user_id, lat, lon)
+    ensure_user_settings_table()  # Ensure table exists before querying
+    user_id = session.user_id
+    return await get_weather(session, lat, lon)
 
 @router.get("/forecast")
 async def get_forecast(
     days: int = Query(7, description="Number of days for forecast (1-16)"),
-    user_id: str = Query("default", description="User ID"),
+    session: AuthenticatedSession = Depends(validate_session),
     lat: Optional[float] = Query(None, description="Override latitude (for device location)"),
     lon: Optional[float] = Query(None, description="Override longitude (for device location)")
 ):
     """Get weather forecast using Open-Meteo API"""
+    ensure_user_settings_table()  # Ensure table exists before querying
+    user_id = session.user_id
     
     # Use override coordinates if provided (for device location)
     if lat is not None and lon is not None:
@@ -359,9 +366,11 @@ async def get_forecast(
 @router.get("/hourly")
 async def get_hourly_forecast(
     hours: int = Query(24, description="Number of hours (1-168)"),
-    user_id: str = Query("default", description="User ID")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get hourly weather forecast"""
+    ensure_user_settings_table()  # Ensure table exists before querying
+    user_id = session.user_id
     location = get_user_location(user_id)
     temperature_unit = get_user_temperature_unit(user_id)
     hours = min(max(hours, 1), 168)  # Max 7 days (168 hours)
@@ -411,14 +420,18 @@ async def get_hourly_forecast(
         raise HTTPException(status_code=500, detail=f"Failed to fetch hourly forecast: {str(e)}")
 
 @router.get("/location")
-async def get_location(user_id: str = Query("default", description="User ID")):
+async def get_location(session: AuthenticatedSession = Depends(validate_session)):
     """Get current location coordinates"""
+    ensure_user_settings_table()  # Ensure table exists before querying
+    user_id = session.user_id
     location = get_user_location(user_id)
     return location
 
 @router.get("/preferences")
-async def get_preferences(user_id: str = Query("default", description="User ID")):
+async def get_preferences(session: AuthenticatedSession = Depends(validate_session)):
     """Get user's weather preferences (location and temperature unit)"""
+    ensure_user_settings_table()  # Ensure table exists before querying
+    user_id = session.user_id
     return get_user_preferences(user_id)
 
 class WeatherPreferences(BaseModel):
@@ -488,10 +501,11 @@ async def update_location(
     longitude: float = Body(...), 
     city: Optional[str] = Body(None),
     country: Optional[str] = Body(None),
-    user_id: str = Query("default", description="User ID")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Update user's location coordinates"""
     try:
+        user_id = session.user_id
         ensure_user_settings_table()
         conn = get_db_connection()
         cursor = conn.cursor()

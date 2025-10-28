@@ -457,6 +457,56 @@
         @media (min-width: 769px) {
             .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
         }
+        
+        /* Onboarding Prompt Modal */
+        .onboarding-prompt-modal {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(8px);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 10000; animation: fadeIn 0.3s ease;
+        }
+        .onboarding-prompt-content {
+            background: var(--glass-bg); backdrop-filter: blur(40px);
+            border-radius: 20px; padding: 40px; max-width: 400px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
+        }
+        .onboarding-zoe-orb {
+            width: 80px; height: 80px; border-radius: 50%;
+            background: linear-gradient(135deg, #7c3aed 0%, #0891b2 100%);
+            margin: 0 auto 20px; animation: breathe 4s ease-in-out infinite;
+        }
+        .onboarding-prompt-content h2 {
+            font-size: 24px; font-weight: 600; margin-bottom: 12px;
+            color: var(--text-primary);
+        }
+        .onboarding-prompt-content p {
+            font-size: 15px; color: var(--text-secondary);
+            margin-bottom: 24px; line-height: 1.6;
+        }
+        .onboarding-prompt-actions {
+            display: flex; gap: 12px; margin-bottom: 16px;
+        }
+        .onboarding-btn-primary, .onboarding-btn-secondary {
+            flex: 1; padding: 12px 24px; border-radius: 10px;
+            font-size: 15px; font-weight: 500; cursor: pointer;
+            transition: all 0.2s; border: none;
+        }
+        .onboarding-btn-primary {
+            background: linear-gradient(135deg, var(--purple), #0891b2);
+            color: white;
+        }
+        .onboarding-btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(124, 58, 237, 0.4); }
+        .onboarding-btn-secondary {
+            background: rgba(255, 255, 255, 0.6);
+            color: var(--text-secondary);
+        }
+        .onboarding-btn-secondary:hover { background: rgba(255, 255, 255, 0.8); }
+        .onboarding-skip-option {
+            display: block; font-size: 13px; color: var(--text-tertiary);
+            cursor: pointer;
+        }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
     </style>
     
     <!-- PWA Meta Tags -->
@@ -648,7 +698,7 @@
         async function loadPeople() {
             console.log("=== Loading People ===");
             try {
-                const response = await apiRequest('/people');
+                const response = await apiRequest('/api/people');
                 console.log("API Response:", response);
                 people = response.people.map(person => ({
                     id: `p${person.id}`,
@@ -867,8 +917,28 @@
         }
         
         function drawYouNode() {
-            const r = 36;
+            const r = 48;
             const breathe = 1 + Math.sin(breathePhase) * 0.02;
+            
+            // Draw completeness ring if available
+            if (userProfile && userProfile.profile_completeness > 0) {
+                const completeness = userProfile.profile_completeness || 0;
+                ctx.beginPath();
+                ctx.arc(0, 0, r + 8, 0, Math.PI * 2);
+                ctx.strokeStyle = 'rgba(124, 58, 237, 0.1)';
+                ctx.lineWidth = 4;
+                ctx.stroke();
+                
+                // Draw completeness arc
+                ctx.beginPath();
+                ctx.arc(0, 0, r + 8, -Math.PI/2, -Math.PI/2 + (completeness * 2 * Math.PI));
+                ctx.strokeStyle = '#10b981';
+                ctx.lineWidth = 4;
+                ctx.lineCap = 'round';
+                ctx.stroke();
+            }
+            
+            // Main node
             ctx.beginPath();
             ctx.arc(0, 0, r * breathe, 0, Math.PI * 2);
             const g = ctx.createRadialGradient(-r*0.3, -r*0.3, 0, 0, 0, r);
@@ -877,11 +947,24 @@
             g.addColorStop(1, '#7c3aed');
             ctx.fillStyle = g;
             ctx.fill();
+            
+            // Add glow effect
+            ctx.beginPath();
+            ctx.arc(0, 0, r * breathe * 1.3, 0, Math.PI * 2);
+            const glowGradient = ctx.createRadialGradient(0, 0, 0, 0, 0, r * breathe * 1.3);
+            glowGradient.addColorStop(0, 'rgba(168, 85, 247, 0.3)');
+            glowGradient.addColorStop(1, 'rgba(168, 85, 247, 0)');
+            ctx.fillStyle = glowGradient;
+            ctx.fill();
+            
             ctx.fillStyle = 'white';
-            ctx.font = 'bold 15px var(--font-text)';
+            ctx.font = 'bold 16px var(--font-text)';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText('You', 0, 0);
+            
+            // Display user's name if available
+            const userName = (userProfile && userProfile.name) ? userProfile.name : 'You';
+            ctx.fillText(userName.length > 8 ? userName.substring(0, 8) + '...' : userName, 0, 0);
         }
         
         function drawPerson(p) {
@@ -971,7 +1054,17 @@
         });
         
         canvas.addEventListener('mouseup', e => {
+            const rect = canvas.getBoundingClientRect();
+            const mx = (e.clientX - rect.left - centerX - offsetX) / scale;
+            const my = (e.clientY - rect.top - centerY - offsetY) / scale;
+            const distFromCenter = Math.sqrt(mx * mx + my * my);
             const clickDuration = Date.now() - mouseDownTime;
+            
+            // Check if clicking on center "You" node
+            if (!mouseDownItem && distFromCenter < 48 && clickDuration < DRAG_THRESHOLD) {
+                showUserProfile();
+                return;
+            }
             
             if (mouseDownItem && clickDuration < DRAG_THRESHOLD) {
                 if (mouseDownItem.type === 'person') {
@@ -1303,6 +1396,101 @@
             `;
         }
         
+        function showUserProfile() {
+            const panel = document.getElementById('detailPanel');
+            const icon = document.getElementById('detailIcon');
+            const name = document.getElementById('detailName');
+            const subtitle = document.getElementById('detailSubtitle');
+            const content = document.getElementById('detailContent');
+            
+            if (!userProfile) {
+                alert('Profile not loaded. Please refresh the page.');
+                return;
+            }
+            
+            icon.textContent = '👤';
+            name.textContent = userProfile.name || 'Your Profile';
+            subtitle.textContent = 'Profile Management';
+            
+            // Create profile content
+            const html = `
+                <div class="detail-section">
+                    <div class="section-title">Your Profile</div>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <div class="info-label">Name</div>
+                            <div class="info-value">${userProfile.name || 'Not set'}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Bio</div>
+                            <div class="info-value">${userProfile.bio || 'Not set'}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Location</div>
+                            <div class="info-value">${userProfile.location || 'Not set'}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Birthday</div>
+                            <div class="info-value">${userProfile.birthday || 'Not set'}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Profile Completeness</div>
+                            <div class="info-value">${Math.round((userProfile.profile_completeness || 0) * 100)}%</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Confidence Score</div>
+                            <div class="info-value">${Math.round((userProfile.confidence_score || 0) * 100)}%</div>
+                        </div>
+                    </div>
+                </div>
+                
+                ${userProfile.ai_insights ? `
+                <div class="detail-section">
+                    <div class="section-title">AI Insights</div>
+                    <div class="connection-health">
+                        <p>Based on my analysis of your conversations, journal entries, and activities, here's what I've learned about you:</p>
+                        ${userProfile.ai_insights.observed_patterns ? `
+                        <div class="tags-container">
+                            ${userProfile.ai_insights.observed_patterns.slice(0, 5).map(pattern => `
+                                <span class="tag">${pattern.type}</span>
+                            `).join('')}
+                        </div>
+                        ` : '<p class="info-value">No insights yet. Keep using Zoe!</p>'}
+                    </div>
+                </div>
+                ` : ''}
+                
+                <div class="detail-section">
+                    <div class="quick-actions">
+                        <div class="quick-action-btn" onclick="enrichProfile()"><div class="quick-action-icon">✨</div><div class="quick-action-label">Enrich</div></div>
+                        <div class="quick-action-btn" onclick="editUserProfile()"><div class="quick-action-icon">✏️</div><div class="quick-action-label">Edit</div></div>
+                    </div>
+                </div>
+            `;
+            
+            content.innerHTML = html;
+            panel.classList.add('open');
+        }
+        
+        async function enrichProfile() {
+            try {
+                await apiRequest('/api/user/profile/analyze', {
+                    method: 'POST'
+                });
+                alert('Analysis started! Your profile will be updated with new insights.');
+                await loadUserProfile();
+                showUserProfile();
+            } catch (error) {
+                console.error('Failed to start analysis:', error);
+                alert('Failed to start analysis');
+            }
+        }
+        
+        function editUserProfile() {
+            // Redirect to settings page for profile editing
+            window.location.href = 'settings.html?tab=profile';
+        }
+        
         function closeDetail() { document.getElementById('detailPanel').classList.remove('open'); }
         function showTooltip(x, y, t) { 
             const el = document.getElementById('tooltip'); 
@@ -1361,9 +1549,66 @@
             if (dateElement) dateElement.textContent = dateString;
         }
 
+        // User profile storage
+        let userProfile = null;
+        
+        async function loadUserProfile() {
+            try {
+                const response = await apiRequest('/api/user/profile');
+                userProfile = response;
+                
+                // Check if onboarding is needed
+                if (!userProfile.onboarding_completed) {
+                    showOnboardingPrompt();
+                }
+            } catch (error) {
+                console.error('Failed to load user profile:', error);
+            }
+        }
+        
+        function showOnboardingPrompt() {
+            const modal = document.createElement('div');
+            modal.className = 'onboarding-prompt-modal';
+            modal.innerHTML = `
+                <div class="onboarding-prompt-content">
+                    <div class="onboarding-zoe-orb"></div>
+                    <h2>Hi! I'm Zoe 👋</h2>
+                    <p>Would you like to do your onboarding now? It helps me learn about you so I can be more helpful!</p>
+                    <div class="onboarding-prompt-actions">
+                        <button class="onboarding-btn-primary" onclick="startOnboarding()">Let's do it!</button>
+                        <button class="onboarding-btn-secondary" onclick="closeOnboardingPrompt(this)">Maybe later</button>
+                    </div>
+                    <label class="onboarding-skip-option">
+                        <input type="checkbox" onchange="toggleOnboardingReminder(this.checked)">
+                        Don't ask again
+                    </label>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+        
+        function startOnboarding() {
+            window.location.href = 'chat.html?onboarding=true';
+        }
+        
+        function closeOnboardingPrompt(btn) {
+            btn.closest('.onboarding-prompt-modal').remove();
+        }
+        
+        function toggleOnboardingReminder(checked) {
+            if (checked) {
+                // Mark profile as onboarding completed (minimal)
+                apiRequest('/api/user/profile', {
+                    method: 'PUT',
+                    body: JSON.stringify({ onboarding_completed: true })
+                });
+            }
+        }
+        
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', async () => {
             updateAPIStatus();
+            await loadUserProfile();
             await loadPeople();
             updateSidebar();
             updateLegend();
@@ -1389,3 +1634,5 @@
     </script>
 </body>
 </html>
+
+

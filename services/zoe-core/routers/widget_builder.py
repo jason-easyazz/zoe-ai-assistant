@@ -85,6 +85,72 @@ def get_user_from_request(request: Request) -> Optional[str]:
 
 
 # ============================================================================
+# Widget Discovery Endpoints
+# ============================================================================
+
+@router.get("/available")
+def get_available_widgets():
+    """
+    Get list of available widget types from manifest
+    Returns widget metadata for frontend registration
+    """
+    import json
+    import os
+    
+    try:
+        # Read the widget manifest JSON file
+        manifest_path = os.path.join(
+            os.getenv("UI_DIR", "/app/services/zoe-ui/dist"), 
+            "js/widgets/widget-manifest.json"
+        )
+        
+        if not os.path.exists(manifest_path):
+            raise HTTPException(status_code=404, detail="Widget manifest not found")
+        
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
+        
+        return {
+            "version": manifest.get("version", "1.0.0"),
+            "widgets": manifest.get("widgets", []),
+            "categories": manifest.get("categories", [])
+        }
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Widget manifest not found")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Invalid manifest file")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error loading manifest: {str(e)}")
+
+
+@router.get("/{widget_id}/info")
+def get_widget_info(widget_id: str):
+    """
+    Get information about a specific widget
+    """
+    import json
+    import os
+    
+    try:
+        manifest_path = os.path.join(
+            os.getenv("UI_DIR", "/app/services/zoe-ui/dist"), 
+            "js/widgets/widget-manifest.json"
+        )
+        
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
+        
+        widget = next((w for w in manifest["widgets"] if w["id"] == widget_id), None)
+        
+        if not widget:
+            raise HTTPException(status_code=404, detail="Widget not found")
+        
+        return widget
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
 # Widget Marketplace Endpoints
 # ============================================================================
 

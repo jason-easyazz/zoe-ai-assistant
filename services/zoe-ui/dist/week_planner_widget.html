@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Week Planner - Zoe</title>
+    <style>
+        :root {
+            --primary-purple: #7B61FF;
+            --primary-teal: #5AE0E0;
+            --primary-gradient: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            --glass-bg: rgba(255, 255, 255, 0.6);
+            --glass-bg-light: rgba(255, 255, 255, 0.4);
+            --glass-border: rgba(255, 255, 255, 0.4);
+            --glass-border-light: rgba(255, 255, 255, 0.2);
+            --blur-amount: 40px;
+            --font-family-primary: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+            --spacing-sm: 8px;
+            --spacing-md: 16px;
+            --spacing-lg: 24px;
+            --border-radius-small: 8px;
+            --border-radius-medium: 12px;
+            --border-radius-card: 16px;
+            --shadow-medium: 0 4px 16px rgba(0, 0, 0, 0.15);
+            --shadow-large: 0 8px 32px rgba(0, 0, 0, 0.2);
+            --transition-base: 0.3s ease;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-family-primary);
+            background: linear-gradient(135deg, #e0f2fe 0%, #f0e7ff 100%);
+            padding: 2rem;
+            color: #333;
+            min-height: 100vh;
+        }
+
+        .widget-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: var(--glass-bg);
+            backdrop-filter: blur(var(--blur-amount));
+            -webkit-backdrop-filter: blur(var(--blur-amount));
+            border: 1px solid var(--glass-border);
+            border-radius: var(--border-radius-card);
+            padding: var(--spacing-lg);
+            box-shadow: var(--shadow-large);
+        }
+
+        .widget-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--spacing-lg);
+            padding-bottom: var(--spacing-lg);
+            border-bottom: 2px solid var(--glass-border-light);
+        }
+
+        .week-title h2 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+
+        .week-totals {
+            display: flex;
+            gap: var(--spacing-lg);
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .total-badge {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            background: var(--glass-bg-light);
+            border: 1px solid var(--glass-border-light);
+            border-radius: 12px;
+        }
+
+        .total-income {
+            color: #059669;
+        }
+
+        .total-expense {
+            color: #dc2626;
+        }
+
+        .week-nav {
+            display: flex;
+            gap: var(--spacing-sm);
+        }
+
+        .nav-btn {
+            width: 44px;
+            height: 44px;
+            background: var(--glass-bg-light);
+            border: 1px solid var(--glass-border-light);
+            border-radius: var(--border-radius-medium);
+            color: var(--primary-purple);
+            font-size: 1.3rem;
+            cursor: pointer;
+            transition: all var(--transition-base);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .nav-btn:hover {
+            background: var(--glass-bg);
+            transform: scale(1.05);
+            box-shadow: var(--shadow-medium);
+        }
+
+        .days-container {
+            display: flex;
+            flex-direction: column;
+            gap: var(--spacing-md);
+            max-height: 70vh;
+            overflow-y: auto;
+            padding-right: var(--spacing-sm);
+        }
+
+        .days-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .days-container::-webkit-scrollbar-track {
+            background: var(--glass-bg-light);
+            border-radius: 4px;
+        }
+
+        .days-container::-webkit-scrollbar-thumb {
+            background: var(--primary-gradient);
+            border-radius: 4px;
+        }
+
+        .day-tile {
+            background: var(--glass-bg-light);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border-light);
+            border-radius: var(--border-radius-card);
+            padding: var(--spacing-lg);
+            transition: all var(--transition-base);
+        }
+
+        .day-tile:hover {
+            background: var(--glass-bg);
+            box-shadow: var(--shadow-medium);
+        }
+
+        .day-tile.drag-over {
+            background: rgba(123, 97, 255, 0.15);
+            border-color: var(--primary-purple);
+            border-width: 2px;
+        }
+
+        .day-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--spacing-md);
+            padding-bottom: var(--spacing-md);
+            border-bottom: 1px solid var(--glass-border-light);
+        }
+
+        .day-name {
+            font-weight: 700;
+            font-size: 1.1rem;
+            color: #333;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .day-date {
+            font-weight: 700;
+            font-size: 1.5rem;
+            color: var(--primary-purple);
+            opacity: 0.8;
+        }
+
+        .day-events {
+            display: flex;
+            flex-direction: column;
+            gap: var(--spacing-sm);
+            min-height: 40px;
+            margin-bottom: var(--spacing-md);
+        }
+
+        .empty-day {
+            text-align: center;
+            padding: var(--spacing-lg);
+            color: #999;
+            font-style: italic;
+            font-size: 0.9rem;
+        }
+
+        .event-item {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-md);
+            padding: var(--spacing-md);
+            background: rgba(255, 255, 255, 0.8);
+            border: 1px solid var(--glass-border-light);
+            border-radius: var(--border-radius-medium);
+            cursor: move;
+            transition: all var(--transition-base);
+            position: relative;
+        }
+
+        .event-item:hover {
+            background: white;
+            box-shadow: var(--shadow-medium);
+            transform: translateX(4px);
+        }
+
+        .event-item.dragging {
+            opacity: 0.5;
+            transform: scale(0.95);
+        }
+
+        .event-item.editing {
+            border-color: var(--primary-purple);
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+
+        .drag-handle {
+            color: #ccc;
+            cursor: grab;
+            font-size: 1.1rem;
+            transition: color var(--transition-base);
+        }
+
+        .event-item:hover .drag-handle {
+            color: var(--primary-purple);
+        }
+
+        .drag-handle:active {
+            cursor: grabbing;
+        }
+
+        .event-icon {
+            font-size: 1.5rem;
+            min-width: 28px;
+        }
+
+        .event-content {
+            flex: 1;
+            font-size: 0.95rem;
+            color: #333;
+        }
+
+        .event-content input {
+            width: 100%;
+            border: none;
+            background: transparent;
+            font-family: inherit;
+            font-size: inherit;
+            color: inherit;
+            padding: 2px;
+            outline: none;
+        }
+
+        .event-budget {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        .budget-income {
+            background: rgba(16, 185, 129, 0.15);
+            color: #059669;
+        }
+
+        .budget-expense {
+            background: rgba(239, 68, 68, 0.15);
+            color: #dc2626;
+        }
+
+        .payment-btn {
+            width: 32px;
+            height: 32px;
+            background: var(--glass-bg-light);
+            border: 1px solid var(--glass-border-light);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all var(--transition-base);
+            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .payment-btn:hover {
+            background: var(--glass-bg);
+            transform: scale(1.1);
+        }
+
+        .payment-btn.confirmed {
+            background: rgba(16, 185, 129, 0.2);
+            border-color: #059669;
+            color: #059669;
+        }
+
+        .quick-actions {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 4px;
+            background: white;
+            border: 1px solid var(--glass-border);
+            border-radius: var(--border-radius-medium);
+            box-shadow: var(--shadow-large);
+            padding: 6px;
+            display: none;
+            gap: 6px;
+            z-index: 10;
+        }
+
+        .quick-actions.show {
+            display: flex;
+        }
+
+        .quick-action-btn {
+            padding: 8px 14px;
+            background: var(--glass-bg-light);
+            border: none;
+            border-radius: var(--border-radius-small);
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: all var(--transition-base);
+            white-space: nowrap;
+        }
+
+        .quick-action-btn:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: translateY(-2px);
+        }
+
+        .nl-input {
+            width: 100%;
+            padding: var(--spacing-md);
+            background: rgba(255, 255, 255, 0.5);
+            border: 2px dashed var(--glass-border-light);
+            border-radius: var(--border-radius-medium);
+            font-family: inherit;
+            font-size: 0.95rem;
+            color: #666;
+            transition: all var(--transition-base);
+        }
+
+        .nl-input:focus {
+            outline: none;
+            border-color: var(--primary-purple);
+            border-style: solid;
+            background: white;
+            color: #333;
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+
+        .nl-input::placeholder {
+            color: #999;
+            font-style: italic;
+        }
+
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 2rem;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--glass-bg);
+            backdrop-filter: blur(var(--blur-amount));
+            border: 1px solid var(--glass-border);
+            border-radius: var(--border-radius-card);
+            padding: var(--spacing-lg);
+            max-width: 500px;
+            width: 100%;
+            box-shadow: var(--shadow-large);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--spacing-lg);
+            padding-bottom: var(--spacing-md);
+            border-bottom: 1px solid var(--glass-border-light);
+        }
+
+        .modal-header h3 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #333;
+        }
+
+        .modal-close {
+            width: 36px;
+            height: 36px;
+            background: var(--glass-bg-light);
+            border: 1px solid var(--glass-border-light);
+            border-radius: var(--border-radius-small);
+            cursor: pointer;
+            font-size: 1.2rem;
+            color: #666;
+            transition: all var(--transition-base);
+        }
+
+        .modal-close:hover {
+            background: var(--glass-bg);
+            color: #333;
+        }
+
+        .form-group {
+            margin-bottom: var(--spacing-md);
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: var(--spacing-sm);
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: #666;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: var(--spacing-md);
+            background: white;
+            border: 1px solid var(--glass-border);
+            border-radius: var(--border-radius-small);
+            font-family: inherit;
+            font-size: 0.95rem;
+            transition: all var(--transition-base);
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--primary-purple);
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: var(--spacing-md);
+        }
+
+        .radio-group, .checkbox-group {
+            display: flex;
+            gap: var(--spacing-md);
+            margin-top: var(--spacing-sm);
+        }
+
+        .radio-label, .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: var(--spacing-md);
+            margin-top: var(--spacing-lg);
+        }
+
+        .btn {
+            flex: 1;
+            padding: var(--spacing-md) var(--spacing-lg);
+            border: none;
+            border-radius: var(--border-radius-medium);
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all var(--transition-base);
+        }
+
+        .btn-primary {
+            background: var(--primary-gradient);
+            color: white;
+            box-shadow: 0 4px 16px rgba(123, 97, 255, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 24px rgba(123, 97, 255, 0.4);
+        }
+
+        .btn-secondary {
+            background: var(--glass-bg-light);
+            color: #666;
+            border: 1px solid var(--glass-border-light);
+        }
+
+        .btn-secondary:hover {
+            background: var(--glass-bg);
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 1rem;
+            }
+
+            .widget-header {
+                flex-direction: column;
+                gap: var(--spacing-md);
+            }
+
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="widget-container">
+        
+        <div class="widget-header">
+            <div class="week-title">
+                <h2>Week Oct 20-26</h2>
+                <div class="week-totals">
+                    <div class="total-badge total-income">
+                        <span>💰</span>
+                        <span>$<span id="totalIncome">705</span></span>
+                    </div>
+                    <div class="total-badge total-expense">
+                        <span>💳</span>
+                        <span>$<span id="totalExpense">450</span></span>
+                    </div>
+                </div>
+            </div>
+            <div class="week-nav">
+                <button class="nav-btn" onclick="alert('Previous week')">‹</button>
+                <button class="nav-btn" onclick="alert('Next week')">›</button>
+            </div>
+        </div>
+
+        <div class="days-container">
+            
+            <!-- Monday -->
+            <div class="day-tile" data-day="monday" ondrop="drop(event)" ondragover="allowDrop(event)" ondragleave="dragLeave(event)">
+                <div class="day-header">
+                    <span class="day-name">Monday</span>
+                    <span class="day-date">20</span>
+                </div>
+                <div class="day-events">
+                    <div class="event-item" draggable="true" ondragstart="drag(event)">
+                        <span class="drag-handle">☰</span>
+                        <span class="event-icon">🧹</span>
+                        <div class="event-content" onclick="startEdit(this)">
+                            <span>Ash 10:30am</span>
+                        </div>
+                        <div class="event-budget budget-income">💰 $75</div>
+                        <button class="payment-btn confirmed">✓</button>
+                        <div class="quick-actions">
+                            <button class="quick-action-btn" onclick="openAdvancedEdit()">✏️ Edit</button>
+                            <button class="quick-action-btn" onclick="moveToTomorrow(this)">⬇️ Tomorrow</button>
+                            <button class="quick-action-btn" onclick="deleteEvent(this)">🗑️</button>
+                        </div>
+                    </div>
+                    <div class="event-item" draggable="true" ondragstart="drag(event)">
+                        <span class="drag-handle">☰</span>
+                        <span class="event-icon">📞</span>
+                        <div class="event-content" onclick="startEdit(this)">
+                            <span>Call vet - cyto & revisit</span>
+                        </div>
+                        <div class="quick-actions">
+                            <button class="quick-action-btn" onclick="openAdvancedEdit()">✏️ Edit</button>
+                            <button class="quick-action-btn" onclick="moveToTomorrow(this)">⬇️ Tomorrow</button>
+                            <button class="quick-action-btn" onclick="deleteEvent(this)">🗑️</button>
+                        </div>
+                    </div>
+                </div>
+                <input type="text" class="nl-input" placeholder="Type to add (e.g., 'Ash 10.30am' or 'Buy milk $15')" onkeypress="handleNLInput(event, 'monday')">
+            </div>
+
+            <!-- Tuesday -->
+            <div class="day-tile" data-day="tuesday" ondrop="drop(event)" ondragover="allowDrop(event)" ondragleave="dragLeave(event)">
+                <div class="day-header">
+                    <span class="day-name">Tuesday</span>
+                    <span class="day-date">21</span>
+                </div>
+                <div class="day-events">
+                    <div class="event-item" draggable="true" ondragstart="drag(event)">
+                        <span class="drag-handle">☰</span>
+                        <span class="event-icon">🧹</span>
+                        <div class="event-content" onclick="startEdit(this)">
+                            <span>Amy 10:30am 2hrs ❌❌</span>
+                        </div>
+                        <div class="event-budget budget-income">💰 $85</div>
+                        <button class="payment-btn" onclick="confirmPayment(this)">💰</button>
+                        <div class="quick-actions">
+                            <button class="quick-action-btn" onclick="openAdvancedEdit()">✏️ Edit</button>
+                            <button class="quick-action-btn" onclick="moveToTomorrow(this)">⬇️ Tomorrow</button>
+                            <button class="quick-action-btn" onclick="deleteEvent(this)">🗑️</button>
+                        </div>
+                    </div>
+                    <div class="event-item" draggable="true" ondragstart="drag(event)">
+                        <span class="drag-handle">☰</span>
+                        <span class="event-icon">⛽</span>
+                        <div class="event-content" onclick="startEdit(this)">
+                            <span>FUEL</span>
+                        </div>
+                        <div class="event-budget budget-expense">💳 $47</div>
+                        <button class="payment-btn confirmed">✓</button>
+                        <div class="quick-actions">
+                            <button class="quick-action-btn" onclick="openAdvancedEdit()">✏️ Edit</button>
+                            <button class="quick-action-btn" onclick="moveToTomorrow(this)">⬇️ Tomorrow</button>
+                            <button class="quick-action-btn" onclick="deleteEvent(this)">🗑️</button>
+                        </div>
+                    </div>
+                    <div class="event-item" draggable="true" ondragstart="drag(event)">
+                        <span class="drag-handle">☰</span>
+                        <span class="event-icon">🏀</span>
+                        <div class="event-content" onclick="startEdit(this)">
+                            <span>Basketball 7:50pm</span>
+                        </div>
+                        <div class="quick-actions">
+                            <button class="quick-action-btn" onclick="openAdvancedEdit()">✏️ Edit</button>
+                            <button class="quick-action-btn" onclick="moveToTomorrow(this)">⬇️ Tomorrow</button>
+                            <button class="quick-action-btn" onclick="deleteEvent(this)">🗑️</button>
+                        </div>
+                    </div>
+                </div>
+                <input type="text" class="nl-input" placeholder="Type to add..." onkeypress="handleNLInput(event, 'tuesday')">
+            </div>
+
+            <!-- Wednesday -->
+            <div class="day-tile" data-day="wednesday" ondrop="drop(event)" ondragover="allowDrop(event)" ondragleave="dragLeave(event)">
+                <div class="day-header">
+                    <span class="day-name">Wednesday</span>
+                    <span class="day-date">22</span>
+                </div>
+                <div class="day-events">
+                    <div class="event-item" draggable="true" ondragstart="drag(event)">
+                        <span class="drag-handle">☰</span>
+                        <span class="event-icon">🧹</span>
+                        <div class="event-content" onclick="startEdit(this)">
+                            <span>Lynette 11:30am</span>
+                        </div>
+                        <div class="event-budget budget-income">💰 $75</div>
+                        <button class="payment-btn" onclick="confirmPayment(this)">💰</button>
+                        <div class="quick-actions">
+                            <button class="quick-action-btn" onclick="openAdvancedEdit()">✏️ Edit</button>
+                            <button class="quick-action-btn" onclick="moveToTomorrow(this)">⬇️ Tomorrow</button>
+                            <button class="quick-action-btn" onclick="deleteEvent(this)">🗑️</button>
+                        </div>
+                    </div>
+                    <div class="event-item" draggable="true" ondragstart="drag(event)">
+                        <span class="drag-handle">☰</span>
+                        <span class="event-icon">🧹</span>
+                        <div class="event-content" onclick="startEdit(this)">
+                            <span>Katrina B (floors) 1:30pm</span>
+                        </div>
+                        <div class="event-budget budget-income">💰 $60</div>
+                        <button class="payment-btn" onclick="confirmPayment(this)">💰</button>
+                        <div class="quick-actions">
+                            <button class="quick-action-btn" onclick="openAdvancedEdit()">✏️ Edit</button>
+                            <button class="quick-action-btn" onclick="moveToTomorrow(this)">⬇️ Tomorrow</button>
+                            <button class="quick-action-btn" onclick="deleteEvent(this)">🗑️</button>
+                        </div>
+                    </div>
+                </div>
+                <input type="text" class="nl-input" placeholder="Type to add..." onkeypress="handleNLInput(event, 'wednesday')">
+            </div>
+
+            <!-- Thursday -->
+            <div class="day-tile" data-day="thursday" ondrop="drop(event)" ondragover="allowDrop(event)" ondragleave="dragLeave(event)">
+                <div class="day-header">
+                    <span class="day-name">Thursday</span>
+                    <span class="day-date">23</span>
+                </div>
+                <div class="day-events">
+                    <div class="event-item" draggable="true" ondragstart="drag(event)">
+                        <span class="drag-handle">☰</span>
+                        <span class="event-icon">🧹</span>
+                        <div class="event-content" onclick="startEdit(this)">
+                            <span>Aimee</span>
+                        </div>
+                        <div class="event-budget budget-income">💰 $95</div>
+                        <button class="payment-btn" onclick="confirmPayment(this)">💰</button>
+                        <div class="quick-actions">
+                            <button class="quick-action-btn" onclick="openAdvancedEdit()">✏️ Edit</button>
+                            <button class="quick-action-btn" onclick="moveToTomorrow(this)">⬇️ Tomorrow</button>
+                            <button class="quick-action-btn" onclick="deleteEvent(this)">🗑️</button>
+                        </div>
+                    </div>
+                    <div class="event-item" draggable="true" ondragstart="drag(event)">
+                        <span class="drag-handle">☰</span>
+                        <span class="event-icon">🧹</span>
+                        <div class="event-content" onclick="startEdit(this)">
+                            <span>Louise Van Wyk</span>
+                        </div>
+                        <div class="event-budget budget-income">💰 $110</div>
+                        <button class="payment-btn" onclick="confirmPayment(this)">💰</button>
+                        <div class="quick-actions">
+                            <button class="quick-action-btn" onclick="openAdvancedEdit()">✏️ Edit</button>
+                            <button class="quick-action-btn" onclick="moveToTomorrow(this)">⬇️ Tomorrow</button>
+                            <button class="quick-action-btn" onclick="deleteEvent(this)">🗑️</button>
+                        </div>
+                    </div>
+                </div>
+                <input type="text" class="nl-input" placeholder="Type to add..." onkeypress="handleNLInput(event, 'thursday')">
+            </div>
+
+            <!-- Friday -->
+            <div class="day-tile" data-day="friday" ondrop="drop(event)" ondragover="allowDrop(event)" ondragleave="dragLeave(event)">
+                <div class="day-header">
+                    <span class="day-name">Friday</span>
+                    <span class="day-date">24</span>
+                </div>
+                <div class="day-events">
+                    <div class="event-item" draggable="true" ondragstart="drag(event)">
+                        <span class="drag-handle">☰</span>
+                        <span class="event-icon">🎂</span>
+                        <div class="event-content" onclick="startEdit(this)">
+                            <span>Bella - 8 years old 🐾</span>
+                        </div>
+                        <div class="quick-actions">
+                            <button class="quick-action-btn" onclick="openAdvancedEdit()">✏️ Edit</button>
+                            <button class="quick-action-btn" onclick="moveToTomorrow(this)">⬇️ Tomorrow</button>
+                            <button class="quick-action-btn" onclick="deleteEvent(this)">🗑️</button>
+                        </div>
+                    </div>
+                    <div class="event-item" draggable="true" ondragstart="drag(event)">
+                        <span class="drag-handle">☰</span>
+                        <span class="event-icon">🧹</span>
+                        <div class="event-content" onclick="startEdit(this)">
+                            <span>Anna (3-4hrs) 12:30pm</span>
+                        </div>
+                        <div class="event-budget budget-income">💰 $120</div>
+                        <button class="payment-btn" onclick="confirmPayment(this)">💰</button>
+                        <div class="quick-actions">
+                            <button class="quick-action-btn" onclick="openAdvancedEdit()">✏️ Edit</button>
+                            <button class="quick-action-btn" onclick="moveToTomorrow(this)">⬇️ Tomorrow</button>
+                            <button class="quick-action-btn" onclick="deleteEvent(this)">🗑️</button>
+                        </div>
+                    </div>
+                </div>
+                <input type="text" class="nl-input" placeholder="Type to add..." onkeypress="handleNLInput(event, 'friday')">
+            </div>
+
+            <!-- Saturday -->
+            <div class="day-tile" data-day="saturday" ondrop="drop(event)" ondragover="allowDrop(event)" ondragleave="dragLeave(event)">
+                <div class="day-header">
+                    <span class="day-name">Saturday</span>
+                    <span class="day-date">25</span>
+                </div>
+                <div class="day-events">
+                    <div class="event-item" draggable="true" ondragstart="drag(event)">
+                        <span class="drag-handle">☰</span>
+                        <span class="event-icon">🎉</span>
+                        <div class="event-content" onclick="startEdit(this)">
+                            <span>Bella's party ???</span>
+                        </div>
+                        <div class="quick-actions">
+                            <button class="quick-action-btn" onclick="openAdvancedEdit()">✏️ Edit</button>
+                            <button class="quick-action-btn" onclick="moveToTomorrow(this)">⬇️ Tomorrow</button>
+                            <button class="quick-action-btn" onclick="deleteEvent(this)">🗑️</button>
+                        </div>
+                    </div>
+                </div>
+                <input type="text" class="nl-input" placeholder="Type to add..." onkeypress="handleNLInput(event, 'saturday')">
+            </div>
+
+            <!-- Sunday -->
+            <div class="day-tile" data-day="sunday" ondrop="drop(event)" ondragover="allowDrop(event)" ondragleave="dragLeave(event)">
+                <div class="day-header">
+                    <span class="day-name">Sunday</span>
+                    <span class="day-date">26</span>
+                </div>
+                <div class="day-events">
+                    <div class="empty-day">Nothing planned yet</div>
+                </div>
+                <input type="text" class="nl-input" placeholder="Type to add..." onkeypress="handleNLInput(event, 'sunday')">
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- Advanced Edit Modal -->
+    <div class="modal-overlay" id="advancedEditModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Edit Event</h3>
+                <button class="modal-close" onclick="closeAdvancedEdit()">✕</button>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Title</label>
+                <input type="text" class="form-input" value="Amy 10:30am">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">Date</label>
+                    <input type="date" class="form-input" value="2025-10-21">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Time</label>
+                    <input type="time" class="form-input" value="10:30">
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Budget Type</label>
+                <div class="radio-group">
+                    <label class="radio-label">
+                        <input type="radio" name="budgetType" value="income" checked>
+                        Income
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="budgetType" value="expense">
+                        Expense
+                    </label>
+                    <label class="radio-label">
+                        <input type="radio" name="budgetType" value="none">
+                        None
+                    </label>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label class="form-label">Amount</label>
+                    <input type="number" class="form-input" value="85">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Payment</label>
+                    <select class="form-input">
+                        <option value="bank">Bank</option>
+                        <option value="cash">Cash</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox">
+                    Payment Confirmed
+                </label>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeAdvancedEdit()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveAdvancedEdit()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let draggedElement = null;
+
+        function allowDrop(ev) {
+            ev.preventDefault();
+            ev.currentTarget.classList.add('drag-over');
+        }
+
+        function drag(ev) {
+            draggedElement = ev.target;
+            ev.target.classList.add('dragging');
+        }
+
+        function dragLeave(ev) {
+            ev.currentTarget.classList.remove('drag-over');
+        }
+
+        function drop(ev) {
+            ev.preventDefault();
+            ev.currentTarget.classList.remove('drag-over');
+            const dropZone = ev.currentTarget.querySelector('.day-events');
+            if (draggedElement && dropZone) {
+                dropZone.appendChild(draggedElement);
+                draggedElement.classList.remove('dragging');
+                draggedElement = null;
+            }
+        }
+
+        function startEdit(contentDiv) {
+            const span = contentDiv.querySelector('span');
+            const currentText = span.textContent;
+            span.innerHTML = `<input type="text" value="${currentText}" onblur="finishEdit(this)" onkeypress="checkEnter(event)">`;
+            const input = span.querySelector('input');
+            input.focus();
+            input.select();
+            contentDiv.closest('.event-item').classList.add('editing');
+        }
+
+        function finishEdit(input) {
+            const span = input.parentElement;
+            span.textContent = input.value;
+            input.closest('.event-item').classList.remove('editing');
+        }
+
+        function checkEnter(ev) {
+            if (ev.key === 'Enter') ev.target.blur();
+        }
+
+        function handleNLInput(ev, day) {
+            if (ev.key === 'Enter') {
+                const text = ev.target.value.trim();
+                if (text) {
+                    addEvent(day, parseNL(text));
+                    ev.target.value = '';
+                }
+            }
+        }
+
+        function parseNL(text) {
+            const hasMoney = /\$(\d+)/.exec(text);
+            let icon = '📝';
+            if (text.match(/clean|ash|amy|lisa/i)) icon = '🧹';
+            if (text.match(/call|phone/i)) icon = '📞';
+            if (text.match(/fuel|gas/i)) icon = '⛽';
+            if (text.match(/buy|get|shopping/i)) icon = '🛒';
+            
+            return {
+                title: text,
+                icon: icon,
+                amount: hasMoney ? parseInt(hasMoney[1]) : null,
+                isExpense: text.match(/buy|fuel|pay/i)
+            };
+        }
+
+        function addEvent(day, parsed) {
+            const dayTile = document.querySelector(`[data-day="${day}"]`);
+            const eventsContainer = dayTile.querySelector('.day-events');
+            const empty = eventsContainer.querySelector('.empty-day');
+            if (empty) empty.remove();
+            
+            const eventHTML = `
+                <div class="event-item" draggable="true" ondragstart="drag(event)">
+                    <span class="drag-handle">☰</span>
+                    <span class="event-icon">${parsed.icon}</span>
+                    <div class="event-content" onclick="startEdit(this)">
+                        <span>${parsed.title}</span>
+                    </div>
+                    ${parsed.amount ? `
+                        <div class="event-budget ${parsed.isExpense ? 'budget-expense' : 'budget-income'}">
+                            ${parsed.isExpense ? '💳' : '💰'} $${parsed.amount}
+                        </div>
+                        <button class="payment-btn" onclick="confirmPayment(this)">💰</button>
+                    ` : ''}
+                    <div class="quick-actions">
+                        <button class="quick-action-btn" onclick="openAdvancedEdit()">✏️ Edit</button>
+                        <button class="quick-action-btn" onclick="moveToTomorrow(this)">⬇️ Tomorrow</button>
+                        <button class="quick-action-btn" onclick="deleteEvent(this)">🗑️</button>
+                    </div>
+                </div>
+            `;
+            eventsContainer.insertAdjacentHTML('beforeend', eventHTML);
+        }
+
+        function confirmPayment(btn) {
+            if (confirm('Confirm payment?')) {
+                btn.classList.add('confirmed');
+                btn.textContent = '✓';
+                btn.onclick = null;
+            }
+        }
+
+        function moveToTomorrow(btn) {
+            const eventItem = btn.closest('.event-item');
+            const currentDay = eventItem.closest('.day-tile');
+            const days = Array.from(document.querySelectorAll('.day-tile'));
+            const currentIndex = days.indexOf(currentDay);
+            
+            if (currentIndex < days.length - 1) {
+                const nextDay = days[currentIndex + 1];
+                const nextEvents = nextDay.querySelector('.day-events');
+                const empty = nextEvents.querySelector('.empty-day');
+                if (empty) empty.remove();
+                nextEvents.appendChild(eventItem);
+            }
+        }
+
+        function deleteEvent(btn) {
+            if (confirm('Delete this event?')) {
+                btn.closest('.event-item').remove();
+            }
+        }
+
+        function openAdvancedEdit() {
+            document.getElementById('advancedEditModal').classList.add('active');
+        }
+
+        function closeAdvancedEdit() {
+            document.getElementById('advancedEditModal').classList.remove('active');
+        }
+
+        function saveAdvancedEdit() {
+            alert('Saved!');
+            closeAdvancedEdit();
+        }
+
+        // Show quick actions on long press
+        document.addEventListener('DOMContentLoaded', () => {
+            let pressTimer;
+            document.querySelectorAll('.event-item').forEach(item => {
+                item.addEventListener('mousedown', (e) => {
+                    if (e.target.closest('.drag-handle')) return;
+                    pressTimer = setTimeout(() => {
+                        const qa = item.querySelector('.quick-actions');
+                        qa.classList.add('show');
+                        setTimeout(() => qa.classList.remove('show'), 3000);
+                    }, 500);
+                });
+                item.addEventListener('mouseup', () => clearTimeout(pressTimer));
+                item.addEventListener('mouseleave', () => clearTimeout(pressTimer));
+            });
+        });
+    </script>
+</body>
+</html>

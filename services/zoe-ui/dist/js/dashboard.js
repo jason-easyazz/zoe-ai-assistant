@@ -9,65 +9,22 @@
 const DASHBOARD_VERSION = '1.0.0';
 console.log(`🎯 Zoe Dashboard v${DASHBOARD_VERSION} - Initializing...`);
 
-// Widget size constraints per type - Optimized for content display
-const WIDGET_CONFIGS = {
-    time: {
-        minW: 3, maxW: 8, minH: 3, maxH: 5,  // Display time/date/weather
-        defaultW: 4, defaultH: 4
-    },
-    weather: {
-        minW: 3, maxW: 6, minH: 3, maxH: 5,  // Better for forecast display
-        defaultW: 4, defaultH: 4
-    },
-    tasks: {
-        minW: 3, maxW: 12, minH: 4, maxH: 12,  // Minimum 4 rows for header + items
-        defaultW: 4, defaultH: 6
-    },
-    events: {
-        minW: 3, maxW: 12, minH: 4, maxH: 12,  // Minimum 4 rows for header + events
-        defaultW: 4, defaultH: 6
-    },
-    shopping: {
-        minW: 3, maxW: 8, minH: 4, maxH: 10,  // Minimum 4 for list header + items
-        defaultW: 4, defaultH: 5
-    },
-    'dynamic-list': {
-        minW: 3, maxW: 12, minH: 4, maxH: 12,
-        defaultW: 4, defaultH: 6
-    },
-    notes: {
-        minW: 3, maxW: 12, minH: 4, maxH: 10,  // Needs space for writing
-        defaultW: 4, defaultH: 5
-    },
-    home: {
-        minW: 3, maxW: 5, minH: 3, maxH: 4,  // Bigger for controls
-        defaultW: 3, defaultH: 3
-    },
-    reminders: {
-        minW: 3, maxW: 8, minH: 4, maxH: 8,
-        defaultW: 4, defaultH: 5
-    },
-    personal: {
-        minW: 3, maxW: 8, minH: 4, maxH: 6,
-        defaultW: 4, defaultH: 4
-    },
-    work: {
-        minW: 3, maxW: 10, minH: 4, maxH: 8,
-        defaultW: 4, defaultH: 5
-    },
-    bucket: {
-        minW: 3, maxW: 10, minH: 4, maxH: 10,
-        defaultW: 4, defaultH: 6
-    },
-    system: {
-        minW: 3, maxW: 6, minH: 3, maxH: 5,
-        defaultW: 3, defaultH: 3
-    },
-    'zoe-orb': {
-        minW: 3, maxW: 5, minH: 3, maxH: 4,  // Needs space for orb visual
-        defaultW: 3, defaultH: 3
+/**
+ * Get widget configuration from manifest
+ * Falls back to defaults if manifest not loaded
+ */
+function getWidgetConfig(widgetId) {
+    const config = WidgetManager.getWidgetConfig(widgetId);
+    if (config && config.config) {
+        return config.config;
     }
-};
+    
+    // Fallback defaults
+    return {
+        minW: 2, maxW: 12, minH: 2, maxH: 8,
+        defaultW: 3, defaultH: 3
+    };
+}
 
 class Dashboard {
     constructor() {
@@ -222,10 +179,7 @@ class Dashboard {
         
         console.log('✅ Widget type found:', type);
         
-        const config = WIDGET_CONFIGS[type] || {
-            minW: 2, maxW: 12, minH: 2, maxH: 8,
-            defaultW: 3, defaultH: 3
-        };
+        const config = getWidgetConfig(type);
         
         const module = WidgetManager.modules[type];
         
@@ -374,9 +328,7 @@ class Dashboard {
         this.grid.removeAll();
         
         layout.forEach(item => {
-            const config = WIDGET_CONFIGS[item.type] || {
-                minW: 2, maxW: 12, minH: 2, maxH: 8
-            };
+            const config = getWidgetConfig(item.type);
             const module = WidgetManager.modules[item.type];
             
             if (!module) {
@@ -426,13 +378,15 @@ class Dashboard {
     createDefaultLayout() {
         console.log('📐 Creating default layout');
         
-        const defaults = [
-            {type: 'time'},
-            {type: 'weather'},
-            {type: 'events'},
-            {type: 'tasks'},
-            {type: 'home'}
-        ];
+        // Get dashboard-specific widgets from manifest
+        const availableWidgets = WidgetManager.getAvailableWidgets('dashboard');
+        const defaults = availableWidgets.slice(0, 5).map(w => ({ type: w.id }));
+        
+        if (defaults.length === 0) {
+            // Fallback if manifest not loaded
+            const fallback = ['time', 'weather', 'events', 'tasks', 'home'];
+            defaults.push(...fallback.map(type => ({ type })));
+        }
         
         defaults.forEach(item => {
             this.addWidget(item.type);
@@ -442,30 +396,79 @@ class Dashboard {
     }
 }
 
-// Initialize dashboard when DOM is ready
+// Initialize dashboard when DOM is ready AND widgets are registered
 let dashboard = null;
+let initializationAttempted = false;
 
-window.addEventListener('DOMContentLoaded', () => {
-    // Wait for WidgetManager to be ready
-    setTimeout(() => {
-        if (typeof WidgetManager !== 'undefined') {
-            dashboard = new Dashboard();
-            dashboard.init();
-            window.dashboard = dashboard;
-            console.log('🎯 Dashboard ready with native Gridstack features!');
-            
-            // Initialize WebSocket for real-time updates
-            const session = window.zoeAuth?.getCurrentSession();
-            const userId = session?.user_info?.user_id || session?.user_id || 'default';
-            if (typeof ZoeWebSockets !== 'undefined') {
-                ZoeWebSockets.init(userId);
-                console.log('🔌 WebSocket sync initialized for user:', userId);
-            }
-        } else {
-            console.error('WidgetManager not loaded');
+function initializeDashboard() {
+    if (initializationAttempted) {
+        console.log('⚠️ Initialization already attempted, skipping');
+        return;
+    }
+    
+    initializationAttempted = true;
+    
+    if (typeof WidgetManager !== 'undefined' && window.widgetsRegistered) {
+        dashboard = new Dashboard();
+        dashboard.init();
+        window.dashboard = dashboard;
+        console.log('🎯 Dashboard ready with native Gridstack features!');
+        
+        // Initialize WebSocket for real-time updates
+        const session = window.zoeAuth?.getCurrentSession();
+        const userId = session?.user_info?.user_id || session?.user_id || 'default';
+        if (typeof ZoeWebSockets !== 'undefined') {
+            ZoeWebSockets.init(userId);
+            console.log('🔌 WebSocket sync initialized for user:', userId);
         }
-    }, 100);
-});
+    } else {
+        console.error('❌ Cannot initialize dashboard: WidgetManager not loaded or widgets not registered');
+        console.error('  WidgetManager exists:', typeof WidgetManager !== 'undefined');
+        console.error('  widgetsRegistered:', window.widgetsRegistered);
+        initializationAttempted = false; // Allow retry
+    }
+}
+
+// Set up event listener IMMEDIATELY when this script loads (before anything else)
+console.log('📝 Dashboard.js loading, setting up widget registration listener...');
+window.addEventListener('widgets-registered', () => {
+    console.log('🎯 Received widgets-registered event');
+    if (!initializationAttempted) {
+        setTimeout(() => initializeDashboard(), 50);
+    }
+}, { once: true });
+
+function setupDashboardInitialization() {
+    console.log('📄 DOMContentLoaded - checking widget registration state');
+    console.log('  widgetsRegistered:', window.widgetsRegistered);
+    console.log('  WidgetManager exists:', typeof WidgetManager !== 'undefined');
+    
+    // Check current state
+    if (window.widgetsRegistered && typeof WidgetManager !== 'undefined') {
+        console.log('✅ Widgets already registered, initializing immediately');
+        setTimeout(() => initializeDashboard(), 50);
+    } else {
+        console.log('⏳ Waiting for widgets-registered event or timeout...');
+        
+        // Fallback timeout - initialize dashboard after 2 seconds
+        setTimeout(() => {
+            if (!dashboard) {
+                console.warn('⚠️ Widget registration timeout - initializing dashboard anyway');
+                window.widgetsRegistered = true;
+                initializeDashboard();
+            }
+        }, 2000);
+    }
+}
+
+// Set up DOMContentLoaded handler
+if (document.readyState === 'loading') {
+    window.addEventListener('DOMContentLoaded', setupDashboardInitialization);
+} else {
+    // DOM already loaded, run immediately
+    console.log('⚠️ DOM already loaded when dashboard.js ran');
+    setupDashboardInitialization();
+}
 
 // Expose functions for HTML onclick handlers
 window.toggleEditMode = () => dashboard?.toggleEditMode();

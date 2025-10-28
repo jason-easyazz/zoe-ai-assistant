@@ -1,10 +1,10 @@
-from auth_integration import validate_session
+from auth_integration import validate_session, AuthenticatedSession
 """
 Lists Management System
 Supports: Shopping, Bucket, Personal Todos, Work Todos, Custom
 With Martin-inspired productivity features
 """
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any, Set
 from datetime import datetime, date
@@ -152,6 +152,20 @@ def init_lists_db():
     except:
         pass
     
+    # Add due_date, transaction_id, and sort_order columns for week planner integration
+    try:
+        cursor.execute("ALTER TABLE list_items ADD COLUMN due_date DATE")
+    except:
+        pass  # Column already exists
+    try:
+        cursor.execute("ALTER TABLE list_items ADD COLUMN transaction_id INTEGER REFERENCES transactions(id)")
+    except:
+        pass  # Column already exists
+    try:
+        cursor.execute("ALTER TABLE list_items ADD COLUMN sort_order INTEGER DEFAULT 0")
+    except:
+        pass  # Column already exists
+    
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_lists_category 
         ON lists(list_category, user_id)
@@ -211,8 +225,9 @@ class ListUpdate(BaseModel):
     category: Optional[str] = None
 
 @router.get("/tasks")
-async def get_all_tasks(user_id: str = Query("default")):
+async def get_all_tasks(session: AuthenticatedSession = Depends(validate_session)):
     """Get all tasks from personal and work todos for dashboard"""
+    user_id = session.user_id
     init_lists_db()
     conn = get_connection()
     cursor = conn.cursor()
@@ -403,8 +418,9 @@ async def create_list_from_template(
     list_type: str,
     template_category: str,
     list_name: str,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Create a new list from a template"""
     try:
         # Get the template data
@@ -458,8 +474,9 @@ async def create_list_from_template(
 @router.get("/time-analytics")
 async def get_time_analytics(
     list_type: Optional[str] = None,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Get time analytics across all lists"""
     try:
         conn = get_connection(row_factory=sqlite3.Row)
@@ -535,8 +552,9 @@ async def schedule_list_item(
     preferred_times: Optional[List[str]] = None,
     deadline: Optional[str] = None,
     energy_requirement: str = "medium",
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Schedule a list item using smart scheduling and add to calendar"""
     try:
         # Get the list item
@@ -607,8 +625,9 @@ async def confirm_schedule_list_item(
     energy_level: str = "medium",
     task_type: str = "focus",
     priority: int = 3,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Confirm schedule for a list item and add to calendar"""
     try:
         # Get the list item
@@ -718,8 +737,9 @@ async def confirm_schedule_list_item(
 async def get_scheduled_items(
     list_type: str,
     list_id: int,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Get all scheduled items from a list"""
     try:
         conn = get_connection(row_factory=sqlite3.Row)
@@ -754,8 +774,9 @@ async def get_scheduled_items(
         raise HTTPException(status_code=500, detail=f"Error fetching scheduled items: {str(e)}")
 
 @router.get("/productivity-analytics")
-async def get_productivity_analytics(user_id: str = Query("default")):
+async def get_productivity_analytics(session: AuthenticatedSession = Depends(validate_session)):
     """Get productivity analytics and insights"""
+    user_id = session.user_id
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -814,22 +835,23 @@ async def get_productivity_analytics(user_id: str = Query("default")):
 async def get_lists(
     list_type: str,
     category: Optional[str] = Query(None, description="Filter by category (personal/work)"),
-    user_id: str = Query("default", description="User ID")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Get all lists of a specific type with their items"""
     conn = get_connection()
     cursor = conn.cursor()
     
     if category:
         cursor.execute("""
-            SELECT l.id, l.name, l.list_type, l.list_category, l.description, l.created_at, l.updated_at
+            SELECT l.id, l.name, l.list_type, l.list_category, l.created_at, l.updated_at
             FROM lists l
             WHERE l.list_type = ? AND l.list_category = ? AND l.user_id = ?
             ORDER BY l.updated_at DESC
         """, (list_type, category, user_id))
     else:
         cursor.execute("""
-            SELECT l.id, l.name, l.list_type, l.list_category, l.description, l.created_at, l.updated_at
+            SELECT l.id, l.name, l.list_type, l.list_category, l.created_at, l.updated_at
             FROM lists l
             WHERE l.list_type = ? AND l.user_id = ?
             ORDER BY l.updated_at DESC
@@ -867,10 +889,10 @@ async def get_lists(
             "name": row[1],
             "list_type": row[2],
             "category": row[3],
-            "description": row[4],
+            "description": None,
             "items": items,
-            "created_at": row[5],
-            "updated_at": row[6]
+            "created_at": row[4],
+            "updated_at": row[5]
         })
     
     conn.close()
@@ -925,8 +947,9 @@ async def start_focus_session(session: FocusSession):
 async def create_list(
     list_type: str,
     list_data: ListCreate,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Create a new list"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -971,8 +994,9 @@ async def update_list(
     list_type: str,
     list_id: int,
     update_data: ListUpdate,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Update a list"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -1028,8 +1052,9 @@ async def update_list(
 async def delete_list(
     list_type: str,
     list_id: int,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Delete a list"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -1049,8 +1074,9 @@ async def share_list(
     list_type: str,
     list_id: int,
     share_with: List[str],
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Share a list with other users"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -1079,8 +1105,9 @@ async def set_item_reminder(
     due_time: Optional[str] = Query(None, description="Due time (HH:MM:SS)"),
     requires_acknowledgment: bool = Query(False, description="Requires acknowledgment"),
     snooze_minutes: int = Query(5, description="Snooze minutes"),
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Set a reminder for a list item"""
     try:
         conn = get_connection(row_factory=sqlite3.Row)
@@ -1130,8 +1157,9 @@ async def set_item_reminder(
 @router.get("/{list_type}/reminders/today")
 async def get_todays_reminders(
     list_type: str,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Get today's reminders for a specific list type"""
     try:
         today = date.today().isoformat()
@@ -1176,8 +1204,9 @@ async def estimate_item_time(
     estimated_duration_hours: Optional[float] = None,
     estimated_duration_days: Optional[float] = None,
     time_estimation_confidence: Optional[str] = "medium",
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Add time estimation to a list item"""
     try:
         conn = get_connection(row_factory=sqlite3.Row)
@@ -1229,8 +1258,9 @@ async def start_item_timer(
     list_type: str,
     list_id: int,
     item_index: int,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Start time tracking for a list item"""
     try:
         conn = get_connection(row_factory=sqlite3.Row)
@@ -1279,8 +1309,9 @@ async def stop_item_timer(
     list_type: str,
     list_id: int,
     item_index: int,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Stop time tracking for a list item and calculate actual duration"""
     try:
         conn = get_connection(row_factory=sqlite3.Row)
@@ -1343,8 +1374,9 @@ async def stop_item_timer(
 async def get_list_time_summary(
     list_type: str,
     list_id: int,
-    user_id: str = Query("default")
+    session: AuthenticatedSession = Depends(validate_session)
 ):
+    user_id = session.user_id
     """Get time summary for all items in a list"""
     try:
         conn = get_connection(row_factory=sqlite3.Row)
@@ -1432,8 +1464,9 @@ async def complete_focus_session(session_id: int, productivity_score: Optional[f
         raise HTTPException(status_code=500, detail=f"Error completing focus session: {str(e)}")
 
 @router.get("/focus-sessions")
-async def get_focus_sessions(user_id: str = Query("default")):
+async def get_focus_sessions(session: AuthenticatedSession = Depends(validate_session)):
     """Get focus session history"""
+    user_id = session.user_id
     try:
         conn = get_connection(row_factory=sqlite3.Row)
         cursor = conn.cursor()
@@ -1508,8 +1541,9 @@ async def create_break_reminder(reminder: BreakReminder):
         raise HTTPException(status_code=500, detail=f"Error creating break reminder: {str(e)}")
 
 @router.get("/break-reminders")
-async def get_break_reminders(user_id: str = Query("default")):
+async def get_break_reminders(session: AuthenticatedSession = Depends(validate_session)):
     """Get active break reminders"""
+    user_id = session.user_id
     try:
         conn = get_connection()
         cursor = conn.cursor()
@@ -1538,6 +1572,44 @@ async def get_break_reminders(user_id: str = Query("default")):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting break reminders: {str(e)}")
+
+@router.put("/items/{item_id}/move")
+async def move_list_item(
+    item_id: int,
+    new_date: str = Query(..., description="New due date (YYYY-MM-DD)"),
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    """Move a list item to a different due date"""
+    user_id = session.user_id
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Verify item exists and belongs to user via list ownership
+    cursor.execute("""
+        SELECT li.id FROM list_items li
+        JOIN lists l ON li.list_id = l.id
+        WHERE li.id = ? AND l.user_id = ?
+    """, (item_id, user_id))
+    
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="List item not found")
+    
+    # Update the item due_date
+    cursor.execute("""
+        UPDATE list_items 
+        SET due_date = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (new_date, item_id))
+    
+    conn.commit()
+    conn.close()
+    
+    return {
+        "message": "List item moved successfully",
+        "id": item_id,
+        "due_date": new_date
+    }
 
 # WebSocket endpoint for real-time list updates
 @router.websocket("/ws/{user_id}")

@@ -10,7 +10,7 @@ from fastapi import Header, HTTPException, Depends, Request
 from typing import Optional, Dict, Any
 
 ZOE_AUTH_URL = os.getenv("ZOE_AUTH_INTERNAL_URL", "http://zoe-auth:8002")
-DEV_MODE = os.getenv("ZOE_DEV_MODE", "true").lower() == "true"  # Enable dev mode by default
+DEV_MODE = os.getenv("ZOE_DEV_MODE", "false").lower() == "true"  # Disable dev mode by default
 
 class AuthenticatedSession:
     def __init__(self, session_id: str, user_id: str, permissions: list, role: str, dev_bypass: bool = False):

@@ -7,7 +7,7 @@
 class WeatherWidget extends WidgetModule {
     constructor() {
         super('weather', {
-            version: '1.0.0',
+            version: '1.1.0', // Updated for night/day icons and click behavior
             defaultSize: 'size-medium',
             updateInterval: 300000 // Update every 5 minutes
         });
@@ -25,16 +25,8 @@ class WeatherWidget extends WidgetModule {
                         <div class="weather-condition">Sunny</div>
                     </div>
                     
-                    <!-- Details grid - always visible, scales nicely -->
-                    <div class="weather-details-compact">
-                        <div class="detail-compact"><span>💨</span><span class="detail-value">12 km/h</span></div>
-                        <div class="detail-compact"><span>💧</span><span class="detail-value">65%</span></div>
-                        <div class="detail-compact"><span>🌡️</span><span class="detail-value">21°C</span></div>
-                        <div class="detail-compact"><span>👁️</span><span class="detail-value">10km</span></div>
-                    </div>
-                    
-                    <!-- Forecast - always visible, scales beautifully -->
-                    <div class="weather-forecast-compact">
+                    <!-- Forecast - 4 days to save space -->
+                    <div class="weather-forecast-compact" id="weather-forecast">
                         <div class="forecast-compact">
                             <div class="forecast-day-name">Mon</div>
                             <div class="forecast-icon">☀️</div>
@@ -68,6 +60,14 @@ class WeatherWidget extends WidgetModule {
                             </div>
                         </div>
                     </div>
+                    
+                    <!-- Collapsible details section - shown when clicked -->
+                    <div class="weather-details-compact" id="weather-details" style="display: none; margin-top: 0.3rem;">
+                        <div class="detail-compact"><span>💨 Wind</span><span class="detail-value">12 km/h</span></div>
+                        <div class="detail-compact"><span>💧 Humidity</span><span class="detail-value">65%</span></div>
+                        <div class="detail-compact"><span>🌡️ Feels Like</span><span class="detail-value">21°C</span></div>
+                        <div class="detail-compact"><span>👁️ Visibility</span><span class="detail-value">10km</span></div>
+                    </div>
                 </div>
             </div>
         `;
@@ -75,6 +75,41 @@ class WeatherWidget extends WidgetModule {
     
     init(element) {
         super.init(element);
+        
+        // Add click handler to shrink hero and show details
+        element.addEventListener('click', () => {
+            const hero = element.querySelector('.weather-hero');
+            const detailsSection = element.querySelector('#weather-details');
+            const forecast = element.querySelector('.weather-forecast-compact');
+            
+            if (hero && detailsSection) {
+                const isExpanded = !hero.classList.contains('weather-collapsed');
+                
+                if (isExpanded) {
+                    // Collapse: shrink hero, show details, hide forecast
+                    hero.classList.add('weather-collapsed');
+                    detailsSection.style.display = 'grid';
+                    if (forecast) forecast.style.display = 'none';
+                    
+                    // Trigger fade-in animation after brief delay
+                    setTimeout(() => {
+                        const details = detailsSection.querySelectorAll('.detail-compact');
+                        details.forEach((detail, index) => {
+                            setTimeout(() => {
+                                detail.style.transition = `opacity 0.3s ease, transform 0.3s ease`;
+                                detail.style.opacity = '1';
+                                detail.style.transform = 'translateY(0)';
+                            }, index * 50); // Staggered animation
+                        });
+                    }, 50);
+                } else {
+                    // Expand: restore hero, hide details, show forecast
+                    hero.classList.remove('weather-collapsed');
+                    detailsSection.style.display = 'none';
+                    if (forecast) forecast.style.display = 'grid';
+                }
+            }
+        });
         
         // Load weather data
         this.loadWeather();
@@ -127,9 +162,10 @@ class WeatherWidget extends WidgetModule {
                         const lat = position.coords.latitude;
                         const lon = position.coords.longitude;
                         
-                        // Fetch weather for current coordinates
+                        // Fetch weather for current coordinates with cache-busting
+                        const cacheBuster = `&_t=${Date.now()}`;
                         const response = await fetch(
-                            `/api/weather/current?user_id=${userId}&lat=${lat}&lon=${lon}`
+                            `/api/weather/current?user_id=${userId}&lat=${lat}&lon=${lon}${cacheBuster}`
                         );
                         if (response.ok) {
                             const data = await response.json();
@@ -139,7 +175,8 @@ class WeatherWidget extends WidgetModule {
                     async (error) => {
                         console.warn('Geolocation failed, using saved location:', error);
                         // Fallback to saved location if geolocation fails
-                        const response = await fetch(`/api/weather/current?user_id=${userId}`);
+                        const cacheBuster = `?_t=${Date.now()}`;
+                        const response = await fetch(`/api/weather/current?user_id=${userId}${cacheBuster}`);
                         if (response.ok) {
                             const data = await response.json();
                             this.updateWeatherDisplay(data);
@@ -152,8 +189,9 @@ class WeatherWidget extends WidgetModule {
                     }
                 );
             } else {
-                // Use saved location
-                const response = await fetch(`/api/weather/current?user_id=${userId}`);
+                // Use saved location with cache-busting timestamp
+                const cacheBuster = `?_t=${Date.now()}`;
+                const response = await fetch(`/api/weather/current?user_id=${userId}${cacheBuster}`);
                 if (response.ok) {
                     const data = await response.json();
                     this.updateWeatherDisplay(data);
@@ -175,7 +213,7 @@ class WeatherWidget extends WidgetModule {
         const tempUnit = data.temperature_unit === 'fahrenheit' ? '°F' : '°C';
         const temp = `${data.temperature}${tempUnit}`;
         
-        // Map condition to emoji
+        // Map condition to emoji (time-aware)
         const conditionEmoji = this.getWeatherEmoji(data.condition);
         
         // Update all size variants
@@ -191,19 +229,31 @@ class WeatherWidget extends WidgetModule {
             el.textContent = conditionEmoji;
         });
         
-        // Update details for medium/large sizes
-        const windDetails = element.querySelectorAll('.detail-item');
-        windDetails.forEach(detail => {
-            const text = detail.textContent;
-            if (text.includes('💨')) {
-                detail.innerHTML = `<span>💨</span> ${data.wind_speed} km/h`;
-            } else if (text.includes('💧')) {
-                detail.innerHTML = `<span>💧</span> ${data.humidity}%`;
-            }
-        });
+        // Update hidden details section
+        const detailsSection = element.querySelector('#weather-details');
+        if (detailsSection) {
+            const windEl = detailsSection.querySelector(':nth-child(1) .detail-value');
+            const humidityEl = detailsSection.querySelector(':nth-child(2) .detail-value');
+            const feelsLikeEl = detailsSection.querySelector(':nth-child(3) .detail-value');
+            const visEl = detailsSection.querySelector(':nth-child(4) .detail-value');
+            
+            if (windEl) windEl.textContent = `${data.wind_speed} km/h`;
+            if (humidityEl) humidityEl.textContent = `${data.humidity}%`;
+            if (feelsLikeEl) feelsLikeEl.textContent = `${data.temperature}°C`;
+            if (visEl) visEl.textContent = '10km';
+        }
         
-        // Update background class
+        // Update background class (with time-aware styling)
         this.updateWeatherBackground(data.condition);
+        
+        // Apply time-based theme
+        const hour = new Date().getHours();
+        const isNight = hour >= 19 || hour < 6;
+        if (isNight) {
+            element.classList.add('weather-nighttime');
+        } else {
+            element.classList.remove('weather-nighttime');
+        }
         
         // Load forecast for large widget
         if (element.classList.contains('size-large')) {
@@ -212,10 +262,14 @@ class WeatherWidget extends WidgetModule {
     }
     
     getWeatherEmoji(condition) {
+        const hour = new Date().getHours();
+        const isNight = hour >= 19 || hour < 6; // 7pm to 6am is night
+        
+        // Base condition map
         const conditionMap = {
-            'clear': '☀️',
-            'sunny': '☀️',
-            'partly-cloudy': '⛅',
+            'clear': isNight ? '🌙' : '☀️',
+            'sunny': isNight ? '🌙' : '☀️',
+            'partly-cloudy': isNight ? '☁️🌙' : '⛅',
             'cloudy': '☁️',
             'overcast': '☁️',
             'rain': '🌧️',
@@ -224,7 +278,15 @@ class WeatherWidget extends WidgetModule {
             'snow': '❄️',
             'fog': '🌫️'
         };
-        return conditionMap[condition.toLowerCase()] || '☀️';
+        
+        let emoji = conditionMap[condition.toLowerCase()] || '☀️';
+        
+        // If night and not explicitly night-related, use moon
+        if (isNight && condition.toLowerCase().includes('partly')) {
+            emoji = '☁️🌙';
+        }
+        
+        return emoji;
     }
     
     async loadForecast() {
@@ -236,12 +298,13 @@ class WeatherWidget extends WidgetModule {
             const prefs = await prefsResponse.json();
             
             if (prefs.use_current_location && navigator.geolocation) {
-                // Use device location for forecast
+                // Use device location for forecast (4 days)
                 navigator.geolocation.getCurrentPosition(
                     async (position) => {
                         const lat = position.coords.latitude;
                         const lon = position.coords.longitude;
-                        const response = await fetch(`/api/weather/forecast?days=4&user_id=${userId}&lat=${lat}&lon=${lon}`);
+                        const cacheBuster = `&_t=${Date.now()}`;
+                        const response = await fetch(`/api/weather/forecast?days=4&user_id=${userId}&lat=${lat}&lon=${lon}${cacheBuster}`);
                         if (response.ok) {
                             const data = await response.json();
                             this.updateForecastDisplay(data.forecast);
@@ -249,7 +312,8 @@ class WeatherWidget extends WidgetModule {
                     },
                     async () => {
                         // Fallback to saved location
-                        const response = await fetch(`/api/weather/forecast?days=4&user_id=${userId}`);
+                        const cacheBuster = `&_t=${Date.now()}`;
+                        const response = await fetch(`/api/weather/forecast?days=4&user_id=${userId}${cacheBuster}`);
                         if (response.ok) {
                             const data = await response.json();
                             this.updateForecastDisplay(data.forecast);
@@ -258,8 +322,9 @@ class WeatherWidget extends WidgetModule {
                     { maximumAge: 300000 }
                 );
             } else {
-                // Use saved location
-                const response = await fetch(`/api/weather/forecast?days=4&user_id=${userId}`);
+                // Use saved location with cache-busting (4 days)
+                const cacheBuster = `&_t=${Date.now()}`;
+                const response = await fetch(`/api/weather/forecast?days=4&user_id=${userId}${cacheBuster}`);
                 if (response.ok) {
                     const data = await response.json();
                     this.updateForecastDisplay(data.forecast);
@@ -271,16 +336,29 @@ class WeatherWidget extends WidgetModule {
     }
     
     updateForecastDisplay(forecast) {
-        const forecastContainer = this.element?.querySelector('.weather-forecast');
+        const forecastContainer = this.element?.querySelector('.weather-forecast-compact');
         if (!forecastContainer || !forecast) return;
         
         forecastContainer.innerHTML = forecast.slice(0, 4).map((day, index) => {
             const date = new Date(day.date);
             const dayName = date.toLocaleDateString('en-US', { weekday: 'short' });
-            const emoji = this.getWeatherEmoji(day.condition);
+            // For forecast, always use day icons (not time-specific)
+            const conditionMap = {
+                'clear': '☀️',
+                'sunny': '☀️',
+                'partly-cloudy': '⛅',
+                'cloudy': '☁️',
+                'overcast': '☁️',
+                'rain': '🌧️',
+                'drizzle': '🌦️',
+                'thunderstorm': '⛈️',
+                'snow': '❄️',
+                'fog': '🌫️'
+            };
+            const emoji = conditionMap[day.condition.toLowerCase()] || '☀️';
             
             return `
-                <div class="forecast-day">
+                <div class="forecast-compact">
                     <div class="forecast-day-name">${dayName}</div>
                     <div class="forecast-icon">${emoji}</div>
                     <div class="forecast-temps">

@@ -51,6 +51,72 @@ def __init__(self, db_path: str = "/home/pi/zoe/data/zoe.db"):  # HARDCODED!
 
 ---
 
+## 🔒 AUTHENTICATION & USER ISOLATION RULES - CRITICAL
+
+### ⚠️ MANDATORY: All User Data Endpoints Must Require Authentication
+
+**PROBLEM**: Endpoints with `user_id = Query("default")` or `Query(None)` allow:
+- Unauthorized access to user data
+- Users accessing other users' data
+- Complete bypass of authentication
+
+**SOLUTION**: Always use `session: AuthenticatedSession = Depends(validate_session)`
+
+### ✅ CORRECT Pattern:
+```python
+from fastapi import APIRouter, Depends
+from auth import AuthenticatedSession, validate_session
+
+@router.get("/data")
+async def get_user_data(
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    """Get data for authenticated user"""
+    user_id = session.user_id
+    # ... use user_id for database queries
+```
+
+### ❌ WRONG Patterns (Security Vulnerabilities):
+```python
+# WRONG: Hardcoded default user
+@router.get("/data")
+async def get_user_data(user_id: str = Query("default")):
+    pass
+
+# WRONG: Optional user_id without authentication
+@router.get("/data")
+async def get_user_data(user_id: str = Query(None)):
+    pass
+
+# WRONG: Optional authentication
+@router.get("/data")
+async def get_user_data(
+    user_id: str = Query(None),
+    session: Optional[AuthenticatedSession] = Depends(lambda: None)
+):
+    pass
+```
+
+### 🔒 Enforcement:
+- **Pre-commit hook** runs `tools/audit/check_authentication.py`
+- **Blocks commits** with insecure authentication patterns
+- **Run manually**: `python3 tools/audit/check_authentication.py`
+- **Auto-fix available**: `python3 scripts/utilities/fix_user_isolation.py`
+
+### 📋 Affected Endpoints:
+- **ALL** routers in `services/zoe-core/routers/` that access user data
+- Exceptions documented in `tools/audit/check_authentication.py`
+- Public endpoints should be explicitly marked as public
+
+### 🎯 Best Practices:
+1. **Always extract user_id first**: `user_id = session.user_id`
+2. **Never use 'default' user**: No hardcoded user IDs
+3. **Database queries must filter by user_id**: `WHERE user_id = ?`
+4. **Test with multiple users**: Verify isolation works
+5. **Mark exceptions explicitly**: Document why if no auth needed
+
+---
+
 ## 📁 Mandatory Folder Structure
 
 ```

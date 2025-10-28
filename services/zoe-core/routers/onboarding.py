@@ -358,7 +358,7 @@ except Exception as e:
 # ============================================================================
 
 @router.post("/start")
-async def start_onboarding(user_id: str = Query("default")):
+async def start_onboarding(session: AuthenticatedSession = Depends(validate_session)):
     """Start onboarding process for a new user"""
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -378,6 +378,7 @@ async def start_onboarding(user_id: str = Query("default")):
             else:
                 # Resume existing onboarding
                 cursor.execute("""
+                    user_id = session.user_id
                     SELECT current_phase, phase_progress
                     FROM user_onboarding WHERE user_id = ?
                 """, (user_id,))
@@ -430,11 +431,7 @@ async def start_onboarding(user_id: str = Query("default")):
 
 @router.post("/answer")
 async def submit_answer(
-    user_id: str = Query("default"),
-    question_id: str = Query(...),
-    response: str = Query(...),
-    metadata: Optional[str] = None
-):
+    session: AuthenticatedSession = Depends(validate_session),
     """Submit an answer to an onboarding question"""
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -442,6 +439,7 @@ async def submit_answer(
         
         # Get current onboarding state
         cursor.execute("""
+            user_id = session.user_id
             SELECT current_phase, responses, phase_progress
             FROM user_onboarding WHERE user_id = ?
         """, (user_id,))
@@ -551,13 +549,14 @@ async def submit_answer(
 
 
 @router.get("/progress")
-async def get_progress(user_id: str = Query("default")):
+async def get_progress(session: AuthenticatedSession = Depends(validate_session)):
     """Get onboarding progress for a user"""
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         cursor.execute("""
+            user_id = session.user_id
             SELECT current_phase, phase_progress, responses, is_complete
             FROM user_onboarding WHERE user_id = ?
         """, (user_id,))
@@ -591,13 +590,14 @@ async def get_progress(user_id: str = Query("default")):
 
 
 @router.get("/profile")
-async def get_user_profile(user_id: str = Query("default")):
+async def get_user_profile(session: AuthenticatedSession = Depends(validate_session)):
     """Get user's compatibility profile"""
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         cursor.execute("""
+            user_id = session.user_id
             SELECT profile_data, profile_completeness, confidence_score, last_updated
             FROM user_compatibility_profiles WHERE user_id = ?
         """, (user_id,))

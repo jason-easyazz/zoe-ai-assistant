@@ -134,6 +134,46 @@
     container-type: size;
     container-name: weather-widget;
     transition: background 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: pointer;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+/* Day-time weather backgrounds */
+.weather-sunny {
+    background: linear-gradient(135deg, #FFD700 0%, #FFA500 50%, #FF8C00 100%) !important;
+}
+
+.weather-partly-cloudy {
+    background: linear-gradient(135deg, #87CEEB 0%, #B0E0E6 100%) !important;
+}
+
+.weather-cloudy {
+    background: linear-gradient(135deg, #708090 0%, #778899 100%) !important;
+}
+
+.weather-rainy {
+    background: linear-gradient(135deg, #2F4F4F 0%, #4A5568 100%) !important;
+}
+
+.weather-stormy {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%) !important;
+}
+
+.weather-snowy {
+    background: linear-gradient(135deg, #C0C0C0 0%, #D3D3D3 100%) !important;
+}
+
+/* Night-time backgrounds - dark and moody */
+.weather-nighttime {
+    background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%) !important;
+}
+
+.weather-nighttime.weather-sunny {
+    background: linear-gradient(135deg, #1a1a2e 0%, #2d2d44 100%) !important;
+}
+
+.weather-nighttime.weather-partly-cloudy {
+    background: linear-gradient(135deg, #1a1a2e 0%, #2d2d44 100%) !important;
 }
 
 .weather-content {
@@ -154,12 +194,12 @@
     display: none !important;
 }
 
-/* Single unified responsive layout */
+/* Single unified responsive layout - compact */
 .weather-unified {
     display: flex !important;
     flex-direction: column;
-    gap: clamp(0.5rem, 2cqh, 1.25rem);
-    padding: clamp(0.75rem, 3cqh, 1.5rem);
+    gap: clamp(0.3rem, 1.2cqh, 0.6rem);
+    padding: clamp(0.4rem, 2cqh, 0.9rem);
     height: 100%;
     justify-content: center;
     align-items: center;
@@ -171,14 +211,27 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: clamp(0.25rem, 1cqh, 0.625rem);
+    gap: clamp(0.15rem, 0.7cqh, 0.4rem);
+    transition: all 0.3s ease;
+}
+
+/* Collapsed state - shrinks when clicked to make room for details */
+.weather-hero.weather-collapsed {
+    gap: clamp(0.05rem, 0.3cqh, 0.15rem);
 }
 
 .weather-icon-large {
-    font-size: clamp(3rem, 18cqw, 8rem);
+    font-size: clamp(2rem, 12cqw, 5rem);
     line-height: 1;
     filter: drop-shadow(0 4px 20px rgba(0,0,0,0.3));
     animation: weatherIconPulse 4s ease-in-out infinite, weatherIconReveal 0.8s ease-out;
+    transition: font-size 0.3s ease, transform 0.3s ease;
+}
+
+/* Collapsed icon - much smaller */
+.weather-hero.weather-collapsed .weather-icon-large {
+    font-size: clamp(1.25rem, 7cqw, 2.5rem);
+    animation: none; /* Stop pulse when collapsed */
 }
 
 @keyframes weatherIconPulse {
@@ -200,7 +253,7 @@
 }
 
 .weather-temp {
-    font-size: clamp(2rem, 12cqw, 5rem);
+    font-size: clamp(1.5rem, 9cqw, 3.5rem);
     font-weight: 100;
     line-height: 1;
     letter-spacing: -0.02em;
@@ -210,6 +263,13 @@
     -webkit-text-fill-color: transparent;
     background-clip: text;
     animation: tempFadeIn 0.6s ease-out 0.2s both;
+    transition: font-size 0.3s ease;
+}
+
+/* Collapsed temperature - smaller */
+.weather-hero.weather-collapsed .weather-temp {
+    font-size: clamp(1rem, 6cqw, 2rem);
+    animation: none; /* Stop fade-in when collapsed */
 }
 
 @keyframes tempFadeIn {
@@ -230,6 +290,13 @@
     text-transform: capitalize;
     letter-spacing: 0.03em;
     animation: conditionFadeIn 0.8s ease-out 0.4s both;
+    transition: font-size 0.3s ease;
+}
+
+/* Collapsed condition text - smaller */
+.weather-hero.weather-collapsed .weather-condition {
+    font-size: clamp(0.65rem, 3cqw, 1rem);
+    animation: none; /* Stop fade-in when collapsed */
 }
 
 @keyframes conditionFadeIn {
