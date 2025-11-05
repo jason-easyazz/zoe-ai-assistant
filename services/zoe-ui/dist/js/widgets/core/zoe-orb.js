@@ -23,18 +23,18 @@ class ZoeOrbWidget extends WidgetModule {
     getTemplate() {
         return `
             <div class="zoe-orb-container" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; min-height: 200px;">
-                <div class="zoe-orb" id="zoeOrb-${this.name}" onclick="window.zoeWidgets?.get('${this.name}')?.startConversation()" style="cursor: pointer;">
-                    <div class="zoe-status" id="zoeStatus-${this.name}">Tap to speak</div>
+                <div class="zoe-orb" id="zoeOrb-${this.type}" onclick="window.zoeWidgets?.get('${this.type}')?.startConversation()" style="cursor: pointer;">
+                    <div class="zoe-status" id="zoeStatus-${this.type}">Tap to speak</div>
                 </div>
             </div>
             
             <!-- Inline Chat Window -->
-            <div class="zoe-chat-overlay" id="zoeChat-${this.name}" style="display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.98); backdrop-filter: blur(20px); border-radius: inherit; z-index: 10; flex-direction: column;">
+            <div class="zoe-chat-overlay" id="zoeChat-${this.type}" style="display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.98); backdrop-filter: blur(20px); border-radius: inherit; z-index: 10; flex-direction: column;">
                 <div class="zoe-chat-header" style="padding: 12px; background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 100%); color: white; display: flex; justify-content: space-between; align-items: center; border-radius: inherit; border-bottom-left-radius: 0; border-bottom-right-radius: 0;">
                     <div class="zoe-chat-title" style="font-weight: 500; font-size: 14px;">Chat with Zoe</div>
-                    <button class="zoe-chat-close" onclick="window.zoeWidgets?.get('${this.name}')?.closeChat()" style="background: rgba(255,255,255,0.1); border: none; color: white; cursor: pointer; padding: 4px 8px; border-radius: 50%; width: 24px; height: 24px;">×</button>
+                    <button class="zoe-chat-close" onclick="window.zoeWidgets?.get('${this.type}')?.closeChat()" style="background: rgba(255,255,255,0.1); border: none; color: white; cursor: pointer; padding: 4px 8px; border-radius: 50%; width: 24px; height: 24px;">×</button>
                 </div>
-                <div class="zoe-chat-messages" id="zoeMessages-${this.name}" style="flex: 1; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px;">
+                <div class="zoe-chat-messages" id="zoeMessages-${this.type}" style="flex: 1; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px;">
                     <div class="zoe-message zoe" style="display: flex; align-items: flex-start; gap: 10px;">
                         <div class="zoe-message-avatar" style="width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #4ecdc4 0%, #44a08d 100%); color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px;">Z</div>
                         <div class="zoe-message-bubble" style="padding: 12px 16px; border-radius: 18px; font-size: 13px; background: rgba(248, 250, 252, 0.9); color: #334155; border: 1px solid rgba(226, 232, 240, 0.6); border-bottom-left-radius: 4px;">
@@ -43,9 +43,9 @@ class ZoeOrbWidget extends WidgetModule {
                     </div>
                 </div>
                 <div class="zoe-chat-input-area" style="padding: 12px; border-top: 1px solid rgba(226, 232, 240, 0.3); display: flex; gap: 8px; align-items: center; background: rgba(248, 250, 252, 0.5);">
-                    <textarea class="zoe-chat-input" id="zoeInput-${this.name}" placeholder="Type a message or use voice..." style="flex: 1; border: 1px solid rgba(226, 232, 240, 0.8); border-radius: 24px; padding: 10px 16px; font-size: 12px; resize: none; min-height: 36px; max-height: 120px; background: rgba(255,255,255,0.95); font-family: inherit;"></textarea>
-                    <button class="zoe-voice-btn" onclick="window.zoeWidgets?.get('${this.name}')?.startVoiceRecognition()" style="background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 100%); border: none; border-radius: 50%; width: 36px; height: 36px; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px;">🎤</button>
-                    <button class="zoe-send-btn" onclick="window.zoeWidgets?.get('${this.name}')?.sendMessage()" style="background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 100%); border: none; border-radius: 50%; width: 36px; height: 36px; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px;">➤</button>
+                    <textarea class="zoe-chat-input" id="zoeInput-${this.type}" placeholder="Type a message or use voice..." style="flex: 1; border: 1px solid rgba(226, 232, 240, 0.8); border-radius: 24px; padding: 10px 16px; font-size: 12px; resize: none; min-height: 36px; max-height: 120px; background: rgba(255,255,255,0.95); font-family: inherit;"></textarea>
+                    <button class="zoe-voice-btn" onclick="window.zoeWidgets?.get('${this.type}')?.startVoiceRecognition()" style="background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 100%); border: none; border-radius: 50%; width: 36px; height: 36px; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px;">🎤</button>
+                    <button class="zoe-send-btn" onclick="window.zoeWidgets?.get('${this.type}')?.sendMessage()" style="background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 100%); border: none; border-radius: 50%; width: 36px; height: 36px; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px;">➤</button>
                 </div>
             </div>
         `;
@@ -59,10 +59,10 @@ class ZoeOrbWidget extends WidgetModule {
         if (!window.zoeWidgets) {
             window.zoeWidgets = new Map();
         }
-        window.zoeWidgets.set(this.name, this);
+        window.zoeWidgets.set(this.type, this);
         
         // Setup text input Enter key handler
-        const input = this.element.querySelector(`#zoeInput-${this.name}`);
+        const input = this.element.querySelector(`#zoeInput-${this.type}`);
         if (input) {
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
@@ -85,13 +85,13 @@ class ZoeOrbWidget extends WidgetModule {
     }
     
     openChat() {
-        const chatOverlay = this.element.querySelector(`#zoeChat-${this.name}`);
+        const chatOverlay = this.element.querySelector(`#zoeChat-${this.type}`);
         if (chatOverlay) {
             chatOverlay.style.display = 'flex';
             this.chatOpen = true;
             
             // Focus input
-            const input = this.element.querySelector(`#zoeInput-${this.name}`);
+            const input = this.element.querySelector(`#zoeInput-${this.type}`);
             if (input) {
                 setTimeout(() => input.focus(), 100);
             }
@@ -99,7 +99,7 @@ class ZoeOrbWidget extends WidgetModule {
     }
     
     closeChat() {
-        const chatOverlay = this.element.querySelector(`#zoeChat-${this.name}`);
+        const chatOverlay = this.element.querySelector(`#zoeChat-${this.type}`);
         if (chatOverlay) {
             chatOverlay.style.display = 'none';
             this.chatOpen = false;
@@ -126,8 +126,8 @@ class ZoeOrbWidget extends WidgetModule {
         this.recognition.lang = 'en-US';
         this.recognition.maxAlternatives = 1;
         
-        const orb = this.element.querySelector(`#zoeOrb-${this.name}`);
-        const status = this.element.querySelector(`#zoeStatus-${this.name}`);
+        const orb = this.element.querySelector(`#zoeOrb-${this.type}`);
+        const status = this.element.querySelector(`#zoeStatus-${this.type}`);
         
         if (orb) orb.classList.add('listening');
         if (status) status.textContent = 'Listening...';
@@ -190,8 +190,8 @@ class ZoeOrbWidget extends WidgetModule {
     }
     
     resetState() {
-        const orb = this.element.querySelector(`#zoeOrb-${this.name}`);
-        const status = this.element.querySelector(`#zoeStatus-${this.name}`);
+        const orb = this.element.querySelector(`#zoeOrb-${this.type}`);
+        const status = this.element.querySelector(`#zoeStatus-${this.type}`);
         
         if (orb) orb.classList.remove('listening', 'processing');
         if (status) status.textContent = 'Tap to speak';
@@ -199,7 +199,7 @@ class ZoeOrbWidget extends WidgetModule {
     }
     
     async sendMessage() {
-        const input = this.element.querySelector(`#zoeInput-${this.name}`);
+        const input = this.element.querySelector(`#zoeInput-${this.type}`);
         if (!input) return;
         
         const message = input.value.trim();
@@ -212,7 +212,7 @@ class ZoeOrbWidget extends WidgetModule {
     }
     
     async processRequest(transcript) {
-        const orb = this.element.querySelector(`#zoeOrb-${this.name}`);
+        const orb = this.element.querySelector(`#zoeOrb-${this.type}`);
         if (orb) orb.classList.add('processing');
         
         this.showTypingIndicator();
@@ -256,7 +256,7 @@ class ZoeOrbWidget extends WidgetModule {
     }
     
     addMessage(text, sender) {
-        const messages = this.element.querySelector(`#zoeMessages-${this.name}`);
+        const messages = this.element.querySelector(`#zoeMessages-${this.type}`);
         if (!messages) return;
         
         const messageDiv = document.createElement('div');
@@ -309,12 +309,12 @@ class ZoeOrbWidget extends WidgetModule {
     }
     
     showTypingIndicator() {
-        const messages = this.element.querySelector(`#zoeMessages-${this.name}`);
+        const messages = this.element.querySelector(`#zoeMessages-${this.type}`);
         if (!messages) return;
         
         const typingDiv = document.createElement('div');
         typingDiv.className = 'zoe-typing-indicator';
-        typingDiv.id = `typing-${this.name}`;
+        typingDiv.id = `typing-${this.type}`;
         typingDiv.style.cssText = 'display: flex; align-items: center; gap: 10px; padding: 12px 16px; background: rgba(0, 0, 0, 0.05); border-radius: 18px; border-bottom-left-radius: 4px; max-width: 80px;';
         
         for (let i = 0; i < 3; i++) {
@@ -328,7 +328,7 @@ class ZoeOrbWidget extends WidgetModule {
     }
     
     hideTypingIndicator() {
-        const indicator = this.element.querySelector(`#typing-${this.name}`);
+        const indicator = this.element.querySelector(`#typing-${this.type}`);
         if (indicator) {
             indicator.remove();
         }
@@ -382,7 +382,7 @@ class ZoeOrbWidget extends WidgetModule {
         
         // Cleanup global reference
         if (window.zoeWidgets) {
-            window.zoeWidgets.delete(this.name);
+            window.zoeWidgets.delete(this.type);
         }
         
         super.destroy();

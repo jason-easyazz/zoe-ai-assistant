@@ -2171,6 +2171,8 @@
     <!-- Browser Image Compression -->
     <script src="https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.2/dist/browser-image-compression.js"></script>
     
+    <!-- Zoe Auth (must load first) -->
+    <script src="/js/auth.js"></script>
     <!-- Journal API Integration -->
     <script src="/js/journal-api.js"></script>
     <script src="/js/journal-ui-enhancements.js"></script>
@@ -2201,9 +2203,19 @@
                     process: async (fieldName, file, metadata, load, error, progress, abort) => {
                         const formData = new FormData();
                         formData.append('files', file, file.name);  // Explicitly set filename
-                        // ✅ FIX: Use authenticated user, not hardcoded 'default'
-                        const session = window.zoeAuth?.getCurrentSession();
-                        const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                        // Enforce authenticated user_id for user isolation
+                        const session = window.zoeAuth?.getCurrentSession?.();
+                        const userId = session?.user_info?.user_id || session?.user_id;
+                        if (!userId) {
+                            console.error('❌ Upload blocked: missing user_id/session');
+                            if (typeof window.zoeAuth?.enforceAuth === 'function') {
+                                window.zoeAuth.enforceAuth();
+                            }
+                            alert('Authentication required. Please log in again.');
+                            error('Authentication required');
+                            abort();
+                            return;
+                        }
                         formData.append('user_id', userId);
                         
                         console.log('📤 Uploading file:', file.name, 'Size:', (file.size / 1024 / 1024).toFixed(2), 'MB');
@@ -2211,6 +2223,13 @@
                         try {
                             const xhr = new XMLHttpRequest();
                             xhr.open('POST', '/api/media/upload');
+                            // Include session header; XHR bypasses fetch interceptor
+                            try {
+                                const sessionId = window.zoeAuth?.getSession?.();
+                                if (sessionId) {
+                                    xhr.setRequestHeader('X-Session-ID', sessionId);
+                                }
+                            } catch (_e) {}
                             
                             xhr.upload.onprogress = (e) => {
                                 if (e.lengthComputable) {
@@ -2509,15 +2528,15 @@
         }
         
         /**
-         * Load journal entries from API
+         * Legacy inline loader (kept for compatibility but not used)
          */
-        async function loadJournalEntries() {
+        async function loadJournalEntriesInline() {
             try {
-                console.log('📔 Loading journal entries...');
-                const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_info?.user_id || session?.user_id || 'default';
-                
-                const response = await fetch(`/api/journal/entries?user_id=${userId}`, {
+                // Deprecated: use journal-api.js loader instead
+                const session = window.zoeAuth?.getCurrentSession?.();
+                const userId = session?.user_info?.user_id || session?.user_id;
+                const qs = userId ? `?user_id=${encodeURIComponent(userId)}` : '';
+                const response = await fetch(`/api/journal/entries${qs}`, {
                     method: 'GET',
                     headers: { 'Accept': 'application/json' }
                 });
@@ -2528,7 +2547,6 @@
                 
                 const data = await response.json();
                 const entries = data.entries || data; // Handle both {entries: []} and direct array
-                console.log(`📔 Loaded ${entries.length} journal entries`);
                 
                 if (!entries || entries.length === 0) {
                     console.log('No entries found - showing demo content');
@@ -2597,13 +2615,15 @@
                     });
                 });
                 
-                console.log('✅ Journal entries rendered with adaptive layouts');
+                // Done
                 
             } catch (error) {
-                console.error('Failed to load journal entries:', error);
                 // Keep demo entries on error
             }
         }
+
+        // Allow journal-api.js to handle loading entries
+        // window.loadJournalEntries is defined in journal-api.js
         
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', () => {
@@ -2613,10 +2633,12 @@
             checkApiStatus();
             setInterval(checkApiStatus, 30000); // Check every 30 seconds
             
-            loadNotifications();
+            // Load notifications only when authenticated
+            if (window.zoeAuth?.isAuthenticated?.()) {
+                loadNotifications();
+            }
             
-            // Load real journal entries (replaces demo content if entries exist)
-            loadJournalEntries();
+            // Defer journal loading to gated logic in journal-api.js
         });
 
         // View switching
@@ -2636,11 +2658,11 @@
             });
         });
 
-        // Entry modals
-        let currentEntry = null;
+        // Entry modals - use window.currentEntry for global access
+        window.currentEntry = null;
         
         function openReadEntry(entry) {
-            currentEntry = entry;
+            window.currentEntry = entry;
             const modal = document.getElementById('readEntryModal');
             
             // Parse photos
@@ -2726,34 +2748,34 @@
 
         function closeReadEntry() {
             document.getElementById('readEntryModal').classList.remove('active');
-            currentEntry = null;
+            window.currentEntry = null;
         }
         
         function editCurrentEntry() {
-            if (!currentEntry) return;
+            if (!window.currentEntry) return;
             
             // Close read modal
             closeReadEntry();
             
             // TODO: Implement edit functionality
             // For now, just show alert
-            alert(`Edit functionality coming soon!\n\nEntry ID: ${currentEntry.id}\nTitle: ${currentEntry.title}`);
+            alert(`Edit functionality coming soon!\n\nEntry ID: ${window.currentEntry.id}\nTitle: ${window.currentEntry.title}`);
             
             // Later: Open edit modal with pre-filled data
             // openEditEntry(currentEntry);
         }
         
         async function deleteCurrentEntry() {
-            if (!currentEntry) return;
+            if (!window.currentEntry) return;
             
-            const confirmed = confirm(`Are you sure you want to delete "${currentEntry.title}"?\n\nThis action cannot be undone.`);
+            const confirmed = confirm(`Are you sure you want to delete "${window.currentEntry.title}"?\n\nThis action cannot be undone.`);
             if (!confirmed) return;
             
             try {
-                const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_info?.user_id || session?.user_id || 'default';
-                
-                const response = await fetch(`/api/journal/entries/${currentEntry.id}?user_id=${userId}`, {
+                const session = window.zoeAuth?.getCurrentSession?.();
+                const userId = session?.user_info?.user_id || session?.user_id;
+                const qs = userId ? `?user_id=${encodeURIComponent(userId)}` : '';
+                const response = await fetch(`/api/journal/${window.currentEntry.id}${qs}`, {
                     method: 'DELETE'
                 });
                 
@@ -2761,13 +2783,15 @@
                     throw new Error(`Failed to delete entry: ${response.status}`);
                 }
                 
-                console.log('✅ Entry deleted:', currentEntry.id);
+                console.log('✅ Entry deleted:', window.currentEntry.id);
                 
                 // Close modal
                 closeReadEntry();
                 
-                // Reload entries
-                loadJournalEntries();
+                // Reload entries via main API module if present
+                if (typeof window.loadJournalEntries === 'function') {
+                    window.loadJournalEntries();
+                }
                 
                 // Show success message
                 alert('✅ Entry deleted successfully');
@@ -2779,15 +2803,15 @@
         }
         
         function shareCurrentEntry() {
-            if (!currentEntry) return;
+            if (!window.currentEntry) return;
             
             // Create shareable text
-            const shareText = `${currentEntry.title}\n\n${currentEntry.content}`;
+            const shareText = `${window.currentEntry.title}\n\n${window.currentEntry.content}`;
             
             // Try Web Share API first
             if (navigator.share) {
                 navigator.share({
-                    title: currentEntry.title,
+                    title: window.currentEntry.title,
                     text: shareText,
                 }).then(() => {
                     console.log('✅ Entry shared successfully');

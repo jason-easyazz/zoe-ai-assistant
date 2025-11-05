@@ -8,7 +8,7 @@ set -e
 BACKUP_DIR="/home/pi/zoe/data/backups"
 DATA_DIR="/home/pi/zoe/data"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-MAX_BACKUPS=48  # Keep 12 days of 6-hourly backups
+MAX_BACKUPS=14  # Keep 3.5 days of 6-hourly backups (reduced from 48)
 
 # Create backup directory if it doesn't exist
 mkdir -p "$BACKUP_DIR"

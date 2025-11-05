@@ -307,6 +307,19 @@ self.addEventListener('message', (event) => {
         );
     }
     
+    if (event.data && event.data.type === 'CLEAR_CACHE') {
+        // Delete all zoe-* caches and take control
+        event.waitUntil((async () => {
+            const names = await caches.keys();
+            await Promise.all(names.filter(n => n.startsWith('zoe-')).map(n => caches.delete(n)));
+            // Ensure new SW takes control and clients reload
+            await self.skipWaiting();
+            await self.clients.claim();
+            const clientList = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+            clientList.forEach(client => client.postMessage({ type: 'CACHE_CLEARED', version: SW_VERSION }));
+        })());
+    }
+    
     if (event.data && event.data.type === 'GET_VERSION') {
         event.ports[0].postMessage({ version: SW_VERSION });
     }

@@ -134,14 +134,13 @@ services:
     - zoe-network
 
   homeassistant-mcp-bridge:
-    image: zoe-homeassistant-mcp-bridge:latest
+    build: ./services/homeassistant-mcp-bridge
     container_name: homeassistant-mcp-bridge
     restart: unless-stopped
     ports:
     - 8007:8007
-    # volumes:
-    # Source directory removed during cleanup, using pre-built image
-    # - ./services/homeassistant-mcp-bridge:/app
+    volumes:
+    - ./services/homeassistant-mcp-bridge:/app
     environment:
     - PYTHONUNBUFFERED=1
     - HA_BASE_URL=${HA_BASE_URL:-http://homeassistant:8123}
@@ -160,14 +159,13 @@ services:
     env_file:
     - .env
   n8n-mcp-bridge:
-    image: zoe-n8n-mcp-bridge:latest
+    build: ./services/n8n-mcp-bridge
     container_name: n8n-mcp-bridge
     restart: unless-stopped
     ports:
     - 8009:8009
-    # volumes:
-    # Source directory removed during cleanup, using pre-built image
-    # - ./services/n8n-mcp-bridge:/app
+    volumes:
+    - ./services/n8n-mcp-bridge:/app
     environment:
     - PYTHONUNBUFFERED=1
     - N8N_BASE_URL=${N8N_BASE_URL:-http://n8n:5678}
@@ -211,15 +209,13 @@ services:
   zoe-redis:
     image: redis:alpine
     container_name: zoe-redis
-    ports:
-    - 6379:6379
     volumes:
     - zoe_redis_data:/data
     networks:
     - zoe-network
     restart: unless-stopped
   zoe-whisper:
-    image: zoe-zoe-whisper:latest
+    build: ./services/zoe-whisper
     container_name: zoe-whisper
     ports:
     - 9001:9001
@@ -233,7 +229,7 @@ services:
     - zoe-network
     restart: unless-stopped
   zoe-tts:
-    image: zoe-zoe-tts:latest
+    build: ./services/zoe-tts
     container_name: zoe-tts
     ports:
     - 9002:9002
@@ -326,7 +322,7 @@ services:
     restart: unless-stopped
     volumes:
     - ./config/cloudflared-config.yml:/etc/cloudflared/config.yml:ro
-    - ./config/cloudflared-credentials.json:/etc/cloudflared/9343ddcf-c140-4919-9922-abff8bc02856.json:ro
+    - ./config/d417c04a-babc-48e4-85e6-a9badc20a7a6.json:/etc/cloudflared/d417c04a-babc-48e4-85e6-a9badc20a7a6.json:ro
     - ./config/cert.pem:/etc/cloudflared/cert.pem:ro
     networks:
     - zoe-network
@@ -357,13 +353,12 @@ services:
       retries: 3
       start_period: 10s
   zoe-voice-agent:
-    image: zoe-zoe-voice-agent:latest
+    build: ./services/zoe-voice-agent
     container_name: zoe-voice-agent
     ports:
     - 9003:9003
     volumes:
-    # Source directory removed during cleanup, using pre-built image
-    # - ./services/zoe-voice-agent:/app
+    - ./services/zoe-voice-agent:/app
     - ./data:/app/data
     environment:
     - PYTHONUNBUFFERED=1

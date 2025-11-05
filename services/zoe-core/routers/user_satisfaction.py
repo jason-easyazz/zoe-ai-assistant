@@ -164,3 +164,29 @@ async def get_satisfaction_levels():
         ]
     }
 
+@router.get("/status")
+async def get_satisfaction_status():
+    """Get user satisfaction system status"""
+    try:
+        return {
+            "status": "operational",
+            "service": "user-satisfaction",
+            "version": "1.0",
+            "features": [
+                "interaction_tracking",
+                "feedback_collection",
+                "satisfaction_metrics",
+                "explicit_ratings",
+                "implicit_signals",
+                "adaptive_learning"
+            ],
+            "satisfaction_levels": len(list(SatisfactionLevel)),
+            "feedback_types": len(list(FeedbackType))
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "service": "user-satisfaction",
+            "error": str(e)
+        }
+

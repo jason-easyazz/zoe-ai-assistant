@@ -809,6 +809,8 @@
             flex: 1;
             overflow-y: auto;
             padding: 20px;
+            /* Extra bottom padding so floating UI (e.g., Zoe orb) doesn't block last items */
+            padding-bottom: 120px;
         }
         
         .task-item {
@@ -1978,7 +1980,7 @@
         // Authenticated API request wrapper
         async function authedApiRequest(endpoint, options = {}) {
             const session = window.zoeAuth?.getCurrentSession();
-            const userId = session?.user_info?.user_id || session?.user_id || 'default';
+            const userId = session?.user_info?.user_id || session?.user_id;
             
             console.log('📅 Calendar API call for user:', userId, 'Endpoint:', endpoint);
             
@@ -4348,7 +4350,7 @@
             
             // Initialize WebSocket for real-time sync
             const session = window.zoeAuth?.getCurrentSession();
-            const userId = session?.user_info?.user_id || session?.user_id || 'default';
+            const userId = session?.user_info?.user_id || session?.user_id;
             if (window.ZoeWebSockets) {
                 ZoeWebSockets.init(userId);
                 console.log('✅ Real-time sync enabled via WebSocket');

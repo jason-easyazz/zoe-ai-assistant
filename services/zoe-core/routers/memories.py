@@ -46,6 +46,7 @@ def init_memories_db():
             email TEXT,
             address TEXT,
             notes TEXT,
+            profile TEXT,
             avatar_url TEXT,
             tags TEXT,
             metadata JSON,
@@ -53,6 +54,13 @@ def init_memories_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    
+    # Add profile column to existing tables (migration)
+    try:
+        cursor.execute("ALTER TABLE people ADD COLUMN profile TEXT")
+    except sqlite3.OperationalError:
+        # Column already exists
+        pass
     
     # Projects table
     cursor.execute("""
@@ -367,7 +375,6 @@ async def get_memories(
 ):
     """Get memories by type"""
     user_id = session.user_id
-    user_id = session.user_id if session else 'default' 
     if type not in ["people", "projects", "notes"]:
         raise HTTPException(status_code=400, detail="Type must be people, projects, or notes")
     
@@ -657,6 +664,7 @@ async def update_memory(
 async def delete_memory(
     memory_id: int,
     type: str = Query(..., description="Type: people, projects, or notes"),
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Delete a memory"""
     user_id = session.user_id

@@ -1,6 +1,6 @@
 ================================================================================
 ZOE AI ASSISTANT - PROJECT DIGEST
-Generated: 2025-10-28 02:00:01
+Generated: 2025-11-05 02:00:01
 ================================================================================
 
 ## Project Structure
@@ -17,6 +17,10 @@ Generated: 2025-10-28 02:00:01
 ├── config
 │   ├── nginx
 │   │   └── nginx-auth.conf
+│   ├── cert.pem
+│   ├── cloudflared-config.yml
+│   ├── cloudflared-credentials.json
+│   ├── d417c04a-babc-48e4-85e6-a9badc20a7a6.json
 │   ├── DEPLOYMENT_MANIFEST.json
 │   ├── vapid_private.pem
 │   └── vapid_public.pem
@@ -49,6 +53,7 @@ Generated: 2025-10-28 02:00:01
 │   │   ├── WIDGET_SYSTEM_V2.md
 │   │   └── ZOE_ORB_SYSTEM.md
 │   ├── archive
+│   │   ├── guides
 │   │   ├── other
 │   │   └── reports
 │   ├── developer
@@ -73,8 +78,12 @@ Generated: 2025-10-28 02:00:01
 │   │   ├── FILE_TAGGING_SYSTEM.md
 │   │   ├── iOS-SHORTCUTS-INTEGRATION.md
 │   │   ├── jetson-upgrade-checklist.md
+│   │   ├── journal-widget-guide.md
+│   │   ├── JOURNAL_WIDGET_SUMMARY.md
+│   │   ├── journal-widget-visual-example.md
 │   │   ├── memvid-integration.md
 │   │   ├── MIGRATION_TO_V2.4.md
+│   │   ├── PEOPLE_SYSTEM_GUIDE.md
 │   │   ├── pre-jetson-implementation-tracking.md
 │   │   ├── productivity-commands.md
 │   │   ├── project-evaluation-implementation.md
@@ -100,6 +109,23 @@ Generated: 2025-10-28 02:00:01
 │   ├── START_HERE.md
 │   └── TRAINING_OPTIONS.md
 ├── homeassistant
+│   ├── blueprints
+│   │   ├── automation
+│   │   └── script
+│   ├── deps
+│   ├── tts
+│   ├── automations.yaml
+│   ├── configuration.yaml
+│   ├── home-assistant.log
+│   ├── home-assistant.log.1
+│   ├── home-assistant.log.fault
+│   ├── home-assistant_v2.db-shm
+│   ├── home-assistant_v2.db-wal
+│   ├── scenes.yaml
+│   ├── scripts.yaml
+│   └── secrets.yaml
+├── logs
+│   └── disk-alerts.log
 ├── models
 │   └── adapters
 ├── scripts
@@ -112,6 +138,7 @@ Generated: 2025-10-28 02:00:01
 │   │   ├── aggressive_cleanup.py
 │   │   ├── archive_tagged_files.py
 │   │   ├── auto_backup.sh
+│   │   ├── check_disk_space.sh
 │   │   ├── comprehensive_cleanup.py
 │   │   ├── daily_consolidation.py
 │   │   ├── export_schema.sh
@@ -201,7 +228,15 @@ Generated: 2025-10-28 02:00:01
 ├── services
 │   ├── collections-service
 │   ├── homeassistant-mcp-bridge
+│   │   ├── Dockerfile
+│   │   ├── main.py
+│   │   └── requirements.txt
+│   ├── livekit
+│   │   └── config.yaml
 │   ├── n8n-mcp-bridge
+│   │   ├── Dockerfile
+│   │   ├── main.py
+│   │   └── requirements.txt
 │   ├── people-service
 │   ├── zoe-auth
 │   │   ├── api
@@ -316,16 +351,42 @@ Generated: 2025-10-28 02:00:01
 │   │   ├── requirements.txt
 │   │   ├── security.py
 │   │   └── simple_server.py
-│   └── zoe-ui
-│       ├── dist
-│       ├── AUTH_INTEGRATION_SUMMARY.md
-│       ├── nginx.conf
-│       ├── nginx.conf.backup
-│       ├── nginx-dev.conf
-│       ├── nginx-livekit-proxy.conf
-│       └── VERSION.md
+│   ├── zoe-tts
+│   │   ├── samples
+│   │   ├── app.py
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   └── voice_manager.py
+│   ├── zoe-ui
+│   │   ├── dist
+│   │   ├── AUTH_INTEGRATION_SUMMARY.md
+│   │   ├── nginx.conf
+│   │   ├── nginx.conf.backup
+│   │   ├── nginx-dev.conf
+│   │   ├── nginx-livekit-proxy.conf
+│   │   └── VERSION.md
+│   ├── zoe-voice-agent
+│   │   ├── agent.py
+│   │   ├── app.py
+│   │   ├── conversation_store.py
+│   │   ├── Dockerfile
+│   │   ├── entrypoint.sh
+│   │   ├── local_whisper_stt.py
+│   │   ├── requirements.txt
+│   │   ├── start.sh
+│   │   ├── streaming_tts.py
+│   │   └── zoe_llm.py
+│   └── zoe-whisper
+│       ├── app.py
+│       └── Dockerfile
 ├── tests
 │   ├── integration
+│   │   ├── test_conversation_quality.py
+│   │   ├── test_natural_language_full_system.py
+│   │   ├── test_people_full_integration.py
+│   │   └── test_people_system.py
+│   ├── manual
+│   │   └── test_people_ui.md
 │   ├── results
 │   │   └── 20251008_121422
 │   ├── unit
@@ -414,97 +475,102 @@ Generated: 2025-10-28 02:00:01
 ├── docker-compose.mem-agent.yml
 ├── docker-compose.override.yml
 ├── docker-compose.yml
-├── ENFORCEMENT_SUMMARY.md
+├── JOURNAL_WIDGET_SUMMARY.md
 ├── PROJECT_STATUS.md
 ├── PROJECT_STRUCTURE_RULES.md
-├── PROMPT_FOR_NEXT_CHAT.md
 ├── pytest.ini
 ├── QUICK-START.md
+├── QUICK_START_PEOPLE.md
 ├── README.md
-├── SECURITY_FIX_SUMMARY.md
 ├── test_architecture.py
-├── VERIFICATION_REPORT.md
+├── UI_BACKEND_INTEGRATION_MAP.md
 └── verify_updates.sh
 
-73 directories, 347 files
+86 directories, 394 files
 
 ## Git Status
 
- M DATABASE_PROTECTION_RULES.md
  M PROJECT_STATUS.md
- M PROJECT_STRUCTURE_RULES.md
-AD SECURITY_AUDIT_USER_ISOLATION.md
  M data/project_digest.txt
  M data/project_digest_trimmed.txt
- M scripts/maintenance/auto_backup.sh
- M scripts/utilities/archive/20251008_121422/create_simple_reliable_router.py
- M scripts/utilities/comprehensive_integrated_test.py
- M services/zoe-auth/models/database.py
- M services/zoe-core/auth_integration.py
- M services/zoe-core/routers/calendar.py
+ M docker-compose.override.yml
+ M docker-compose.yml
+ M homeassistant/.HA_VERSION
+ M homeassistant/.ha_run.lock
+ M services/zoe-core/cross_agent_collaboration.py
+ M services/zoe-core/light_rag_memory.py
  M services/zoe-core/routers/chat.py
  M services/zoe-core/routers/chat_sessions.py
+ M services/zoe-core/routers/cross_agent_collaboration.py
  M services/zoe-core/routers/journal.py
- M services/zoe-core/routers/journeys.py
- M services/zoe-core/routers/lists.py
- M services/zoe-core/routers/location.py
  M services/zoe-core/routers/media.py
  M services/zoe-core/routers/memories.py
- M services/zoe-core/routers/onboarding.py
- M services/zoe-core/routers/orchestrator.py
- M services/zoe-core/routers/proactive_insights.py
- M services/zoe-core/routers/public_memories.py
- M services/zoe-core/routers/push.py
- M services/zoe-core/routers/reminders.py
- M services/zoe-core/routers/self_awareness.py
- M services/zoe-core/routers/weather.py
- M services/zoe-core/routers/widget_builder.py
- M services/zoe-core/routers/workflows.py
+ M services/zoe-core/routers/people.py
+ M services/zoe-core/routers/temporal_memory.py
+ M services/zoe-core/routers/user_satisfaction.py
  M services/zoe-ui/dist/calendar.html
  M services/zoe-ui/dist/chat.html
- M services/zoe-ui/dist/css/glass.css
- M services/zoe-ui/dist/css/widgets-enhanced.css
- M services/zoe-ui/dist/css/widgets-fluid.css
- M services/zoe-ui/dist/css/widgets-premium.css
  M services/zoe-ui/dist/dashboard.html
  M services/zoe-ui/dist/journal.html
+ M services/zoe-ui/dist/js/auth.js
  M services/zoe-ui/dist/js/dashboard.js
+ M services/zoe-ui/dist/js/journal-api.js
+ M services/zoe-ui/dist/js/journal-ui-enhancements.js
  M services/zoe-ui/dist/js/lists-dashboard.js
- M services/zoe-ui/dist/js/widget-system.js
- M services/zoe-ui/dist/js/widgets/README.md
- M services/zoe-ui/dist/js/widgets/core/events.js
- M services/zoe-ui/dist/js/widgets/core/tasks.js
- M services/zoe-ui/dist/js/widgets/core/weather.js
+ M services/zoe-ui/dist/js/widgets/core/zoe-orb.js
  M services/zoe-ui/dist/lists.html
  M services/zoe-ui/dist/people.html
  M services/zoe-ui/dist/settings.html
  M services/zoe-ui/dist/sw.js
- M services/zoe-ui/dist/touch/js/ambient-widgets.js
- M services/zoe-ui/dist/touch/lists.html
-?? ENFORCEMENT_SUMMARY.md
-?? PROMPT_FOR_NEXT_CHAT.md
-?? SECURITY_FIX_SUMMARY.md
-?? VERIFICATION_REPORT.md
-?? docs/architecture/WIDGET_SYSTEM_V2.md
-?? docs/governance/ENHANCED_ENFORCEMENT.md
-?? scripts/utilities/fix_memories_auth.py
-?? scripts/utilities/fix_remaining_auth.py
-?? scripts/utilities/fix_user_isolation.py
-?? services/zoe-core/profile_analyzer.py
-?? services/zoe-core/routers/people.py
-?? services/zoe-core/routers/transactions.py
-?? services/zoe-core/routers/user_profile.py
-?? services/zoe-ui/dist/._week_planner_widget.html
-?? services/zoe-ui/dist/clear-cache-v2.html
-?? services/zoe-ui/dist/js/widgets/core/week-planner.js
-?? services/zoe-ui/dist/week_planner_widget.html
-?? tools/audit/best_practices_check.py
-?? tools/audit/check_authentication.py
-?? tools/audit/validate_changelog.py
-?? tools/audit/validate_commit_message.py
+ M test_architecture.py
+ M tests/test_light_rag.py
+ M tests/unit/test_auth_security.py
+ M tests/unit/test_experts.py
+?? JOURNAL_WIDGET_SUMMARY.md
+?? QUICK_START_PEOPLE.md
+?? UI_BACKEND_INTEGRATION_MAP.md
+?? docs/archive/reports/DATABASE_FIX_APPLIED.md
+?? docs/archive/reports/FINAL_COMPREHENSIVE_REPORT_20251101.md
+?? docs/archive/reports/PEOPLE_SYSTEM_ALL_FIXES_COMPLETE.md
+?? docs/archive/reports/PEOPLE_SYSTEM_COMPLETE.md
+?? docs/archive/reports/PEOPLE_SYSTEM_FINAL_COMPLETE.md
+?? docs/archive/reports/PEOPLE_UI_FIXES.md
+?? docs/archive/reports/VERIFICATION_COMPLETE_20251101.md
+?? docs/archive/reports/all_issues_fixed_20251101.md
+?? docs/archive/reports/comprehensive_review_20251101.md
+?? docs/archive/reports/conversation_testing_findings_20251101.md
+?? docs/archive/reports/fixes_applied_20251101.md
+?? docs/archive/reports/frontend_chat_integration_20251101.md
+?? docs/archive/reports/natural_language_test_results_20251101.md
+?? docs/archive/reports/post_restart_verification_20251101.md
+?? docs/archive/reports/test_failures_analysis_20251101.md
+?? docs/guides/JOURNAL_WIDGET_SUMMARY.md
+?? docs/guides/PEOPLE_SYSTEM_GUIDE.md
+?? docs/guides/journal-widget-guide.md
+?? docs/guides/journal-widget-visual-example.md
+?? homeassistant/automations.yaml
+?? homeassistant/blueprints/
+?? homeassistant/configuration.yaml
+?? homeassistant/scenes.yaml
+?? homeassistant/scripts.yaml
+?? scripts/maintenance/check_disk_space.sh
+?? services/homeassistant-mcp-bridge/
+?? services/livekit/
+?? services/n8n-mcp-bridge/
+?? services/zoe-core/routers/collections.py
+?? services/zoe-core/routers/notes.py
+?? services/zoe-core/services/person_expert.py
+?? services/zoe-tts/
+?? services/zoe-ui/dist/icons/orb-144.png
+?? services/zoe-ui/dist/js/widgets/core/journal.js
+?? services/zoe-voice-agent/
+?? services/zoe-whisper/
+?? tests/integration/
+?? tests/manual/
 
 ## Recent Commits (Last 10)
 
+8428085 feat(core): add new routers and enhancements; archive docs; auth checks
 93960ab fix(schema): add missing auth columns to users table
 58d46fb fix(auth): redirect to login page after password setup
 c8b558d fix(auth): correct table name in password setup endpoint
@@ -514,19 +580,22 @@ c7d1a54 fix(auth): match auth.html styling exactly to index.html
 7eeef47 fix(auth): match background color to index.html login overlay
 58439e5 style(auth): match auth.html styling to index.html
 348f8c5 fix(auth): query correct users table in login endpoint
-d927747 fix(auth): add password setup redirect from index.html
 
 ## Core Services
 
 collections-service
 homeassistant-mcp-bridge
+livekit
 n8n-mcp-bridge
 people-service
 zoe-auth
 zoe-core
 zoe-litellm
 zoe-mcp-server
+zoe-tts
 zoe-ui
+zoe-voice-agent
+zoe-whisper
 
 ## Available Routers
 
@@ -542,6 +611,7 @@ birthday_memories.py
 calendar.py
 chat.py
 chat_sessions.py
+collections.py
 cross_agent_collaboration.py
 developer_chat.py
 developer.py
@@ -559,7 +629,6 @@ __init__.py
 issues.py
 journal.py
 journeys.py
-lists.py
 
 ## Database Schemas
 
@@ -636,35 +705,26 @@ lists.py
 - CHANGELOG.md
 CHANGELOG.md
 DATABASE_PROTECTION_RULES.md
-ENFORCEMENT_SUMMARY.md
+JOURNAL_WIDGET_SUMMARY.md
 PROJECT_STATUS.md
 PROJECT_STRUCTURE_RULES.md
-PROMPT_FOR_NEXT_CHAT.md
 QUICK-START.md
+QUICK_START_PEOPLE.md
 README.md
-SECURITY_FIX_SUMMARY.md
-VERIFICATION_REPORT.md
+UI_BACKEND_INTEGRATION_MAP.md
 
 ## Files Changed Recently (Last 7 Days)
 
-services/zoe-core/profile_analyzer.py
-services/zoe-core/preference_learner.py
 services/zoe-core/cross_agent_collaboration.py
-services/zoe-core/context_cache.py
 services/zoe-core/light_rag_memory.py
-services/zoe-core/training_engine/data_collector.py
-services/zoe-core/training_engine/__init__.py
-services/zoe-core/project_analyzer.py
-services/zoe-core/predictive_intelligence.py
-services/zoe-core/claude_integration.py
-services/zoe-core/dynamic_router.py
-services/zoe-core/update_ai_router.py
-services/zoe-core/route_llm.py
-services/zoe-core/router_loader.py
-services/zoe-core/mem_agent_client.py
-services/zoe-core/development_metrics.py
-services/zoe-core/model_discovery.py
-services/zoe-core/api_key_loader.py
-services/zoe-core/temporal_memory.py
-services/zoe-core/migrate_to_user_auth.py
+services/zoe-core/routers/chat.py
+services/zoe-core/routers/cross_agent_collaboration.py
+services/zoe-core/routers/notes.py
+services/zoe-core/routers/temporal_memory.py
+services/zoe-core/routers/people.py
+services/zoe-core/routers/chat_sessions.py
+services/zoe-core/routers/collections.py
+services/zoe-core/routers/user_satisfaction.py
+services/zoe-core/routers/memories.py
+services/zoe-core/services/person_expert.py
 

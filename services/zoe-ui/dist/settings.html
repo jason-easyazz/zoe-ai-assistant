@@ -5421,7 +5421,8 @@
         // Load weather settings
         async function loadWeatherSettings() {
             try {
-                const userId = localStorage.getItem('user_id') || 'default';
+                const session = window.zoeAuth?.getCurrentSession?.();
+                const userId = session?.user_info?.user_id || session?.user_id;
                 const response = await fetch(`/api/weather/preferences?user_id=${userId}`);
                 if (response.ok) {
                     const data = await response.json();
@@ -5625,7 +5626,8 @@
 
         async function saveWeatherSettings() {
             try {
-                const userId = localStorage.getItem('user_id') || 'default';
+                const session = window.zoeAuth?.getCurrentSession?.();
+                const userId = session?.user_info?.user_id || session?.user_id;
                 
                 // Get temperature unit from active button
                 const activeTempBtn = document.querySelector('.temp-unit-btn.active');

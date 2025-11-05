@@ -286,14 +286,34 @@
     setupFetchInterceptor();
     
     // Auth enforcement can wait for DOM (needs UI elements)
+    async function populateUserProfile() {
+        try {
+            const user = await getCurrentUser();
+            if (user && (user.user_info?.user_id || user.user_id)) {
+                const current = getSessionObject() || {};
+                const merged = {
+                    ...current,
+                    user_id: current.user_id || user.user_id || user.user_info?.user_id,
+                    user_info: user.user_info || { user_id: user.user_id }
+                };
+                setSession(merged);
+                console.log('👤 Cached user profile in session');
+            }
+        } catch (_e) {}
+    }
+
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
             enforceAuth();
+            await populateUserProfile();
             console.log('✅ Zoe Auth initialized (DOMContentLoaded)');
         });
     } else {
         // DOM already loaded
-        enforceAuth();
-        console.log('✅ Zoe Auth initialized (immediate)');
+        (async () => {
+            enforceAuth();
+            await populateUserProfile();
+            console.log('✅ Zoe Auth initialized (immediate)');
+        })();
     }
 })();

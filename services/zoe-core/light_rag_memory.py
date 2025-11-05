@@ -157,6 +157,7 @@ class LightRAGMemorySystem:
                 name TEXT UNIQUE NOT NULL,
                 relationship TEXT,
                 notes TEXT,
+                profile TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )

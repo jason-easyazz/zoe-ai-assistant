@@ -36,6 +36,7 @@ def init_people_db():
             email TEXT,
             address TEXT,
             notes TEXT,
+            profile TEXT,
             avatar_url TEXT,
             tags TEXT,
             metadata JSON,
@@ -43,6 +44,13 @@ def init_people_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    
+    # Add profile column to existing tables (migration)
+    try:
+        cursor.execute("ALTER TABLE people ADD COLUMN profile TEXT")
+    except sqlite3.OperationalError:
+        # Column already exists
+        pass
     
     # Relationships table
     cursor.execute("""
@@ -641,4 +649,178 @@ async def search_people(
     conn.close()
     
     return {"people": people, "count": len(people)}
+
+@router.post("/actions/execute")
+async def execute_person_action(
+    action: Dict[str, Any],
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    """
+    Execute a person-related action via natural language interface
+    Used by the Person Expert for chat-based interactions
+    
+    Action format:
+    {
+        "action_type": "add_person|add_note|add_gift|log_conversation|etc",
+        "data": {...}
+    }
+    """
+    user_id = session.user_id
+    action_type = action.get("action_type")
+    data = action.get("data", {})
+    
+    try:
+        if action_type == "add_person":
+            # Add person
+            name = data.get("name")
+            relationship = data.get("relationship")
+            notes = data.get("notes")
+            birthday = data.get("birthday")
+            phone = data.get("phone")
+            email = data.get("email")
+            
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO people (user_id, name, relationship, birthday, phone, email, notes, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                user_id, name, relationship, birthday, phone, email, notes,
+                json.dumps({"added_via": "chat", "added_at": datetime.now().isoformat()})
+            ))
+            
+            person_id = cursor.lastrowid
+            conn.commit()
+            conn.close()
+            
+            return {
+                "success": True,
+                "message": f"Added {name} to your people!",
+                "person_id": person_id
+            }
+        
+        elif action_type == "add_note":
+            # Add note to person
+            person_id = data.get("person_id")
+            note_text = data.get("note")
+            
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT notes FROM people WHERE id = ? AND user_id = ?", (person_id, user_id))
+            result = cursor.fetchone()
+            
+            if not result:
+                conn.close()
+                return {"success": False, "message": "Person not found"}
+            
+            existing_notes = result[0]
+            updated_notes = f"{existing_notes}\n\n{datetime.now().strftime('%Y-%m-%d')}: {note_text}" if existing_notes else note_text
+            
+            cursor.execute("""
+                UPDATE people SET notes = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ?
+            """, (updated_notes, person_id, user_id))
+            
+            conn.commit()
+            conn.close()
+            
+            return {"success": True, "message": "Note added!"}
+        
+        elif action_type == "add_gift":
+            # Add gift idea
+            person_id = data.get("person_id")
+            gift_item = data.get("gift_item")
+            occasion = data.get("occasion", "unspecified")
+            
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO person_gifts (user_id, person_id, item, occasion, status)
+                VALUES (?, ?, ?, ?, 'idea')
+            """, (user_id, person_id, gift_item, occasion))
+            
+            conn.commit()
+            conn.close()
+            
+            return {"success": True, "message": "Gift idea added!"}
+        
+        elif action_type == "log_conversation":
+            # Log conversation
+            person_id = data.get("person_id")
+            topic = data.get("topic", "General")
+            notes = data.get("notes", "")
+            
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO person_conversations (user_id, person_id, topic, notes, conversation_date)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, person_id, topic, notes, datetime.now().strftime("%Y-%m-%d")))
+            
+            # Update last contact
+            cursor.execute("""
+                UPDATE people 
+                SET metadata = json_set(COALESCE(metadata, '{}'), '$.lastContact', ?),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND user_id = ?
+            """, (datetime.now().isoformat(), person_id, user_id))
+            
+            conn.commit()
+            conn.close()
+            
+            return {"success": True, "message": "Conversation logged!"}
+        
+        elif action_type == "search":
+            # Search people
+            query = data.get("query", "")
+            search_pattern = f"%{query}%"
+            
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT id, name, relationship, birthday, phone, email, notes
+                FROM people
+                WHERE user_id = ? AND (
+                    name LIKE ? OR relationship LIKE ? OR notes LIKE ?
+                )
+                LIMIT 10
+            """, (user_id, search_pattern, search_pattern, search_pattern))
+            
+            results = []
+            for row in cursor.fetchall():
+                results.append({
+                    "id": row[0],
+                    "name": row[1],
+                    "relationship": row[2],
+                    "birthday": row[3],
+                    "phone": row[4],
+                    "email": row[5],
+                    "notes": row[6]
+                })
+            
+            conn.close()
+            
+            return {
+                "success": True,
+                "results": results,
+                "count": len(results)
+            }
+        
+        else:
+            return {
+                "success": False,
+                "message": f"Unknown action type: {action_type}"
+            }
+    
+    except Exception as e:
+        logger.error(f"Error executing person action: {e}")
+        return {
+            "success": False,
+            "message": f"Error: {str(e)}"
+        }
 

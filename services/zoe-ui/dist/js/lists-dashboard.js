@@ -445,7 +445,7 @@ function initializeDashboard() {
         
         // Initialize WebSocket for real-time updates
         const session = window.zoeAuth?.getCurrentSession();
-        const userId = session?.user_info?.user_id || session?.user_id || 'default';
+        const userId = session?.user_info?.user_id || session?.user_id;
         if (typeof ZoeWebSockets !== 'undefined') {
             ZoeWebSockets.init(userId);
             console.log('🔌 WebSocket sync initialized for user:', userId);
@@ -466,6 +466,18 @@ window.addEventListener('widgets-registered', () => {
         setTimeout(() => initializeDashboard(), 50);
     }
 }, { once: true });
+
+// Reinitialize on BFCache restore or soft navigation where the page is resumed
+window.addEventListener('pageshow', (event) => {
+    // If coming from bfcache or if dashboard not ready, ensure init runs
+    if (event.persisted || !window.dashboard) {
+        console.log('🔄 pageshow detected (BFCache or resume) - ensuring lists dashboard initialization');
+        if (typeof WidgetManager !== 'undefined' && (window.widgetsRegistered || WidgetManager.manifestLoaded)) {
+            initializationAttempted = false;
+            setTimeout(() => initializeDashboard(), 50);
+        }
+    }
+});
 
 function setupDashboardInitialization() {
     console.log('📄 DOMContentLoaded - checking widget registration state');

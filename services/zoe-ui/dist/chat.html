@@ -1414,7 +1414,7 @@
         async function loadSessions() {
             try {
                 const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                const userId = session?.user_info?.user_id || session?.user_id;
                 
                 const response = await apiRequest(`/api/chat/sessions/?user_id=${userId}`);
                 const sessions = response.sessions || [];
@@ -1444,7 +1444,7 @@
         async function createOrGetCurrentSession() {
             if (!currentSessionId) {
                 const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                const userId = session?.user_info?.user_id || session?.user_id;
                 
                 console.log('💬 Creating/getting chat session for user:', userId);
                 
@@ -1522,7 +1522,7 @@
         async function loadSessionMessages(sessionId) {
             try {
                 const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                const userId = session?.user_info?.user_id || session?.user_id;
                 
                 const response = await apiRequest(`/api/chat/sessions/${sessionId}/messages/?user_id=${userId}`);
                 const messages = response.messages || [];
@@ -1552,7 +1552,7 @@
             
             try {
                 const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                const userId = session?.user_info?.user_id || session?.user_id;
                 
                 await apiRequest(`/api/chat/sessions/${currentSessionId}/messages/?user_id=${userId}`, {
                     method: 'POST',
@@ -1842,7 +1842,7 @@
 
             try {
                 const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                const userId = session?.user_info?.user_id || session?.user_id;
                 
                 // Call REAL streaming API with AG-UI protocol
                 const response = await fetch(`/api/chat/?user_id=${userId}&stream=true`, {
@@ -2068,7 +2068,7 @@
             if (interactionId && interactionId !== 'unknown') {
                 try {
                     const session = window.zoeAuth?.getCurrentSession();
-                    const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                    const userId = session?.user_info?.user_id || session?.user_id;
                     
                     const response = await fetch(`/api/chat/feedback/${interactionId}?feedback_type=thumbs_up&user_id=${userId}`, {
                         method: 'POST',
@@ -2097,7 +2097,7 @@
             if (interactionId && interactionId !== 'unknown') {
                 try {
                     const session = window.zoeAuth?.getCurrentSession();
-                    const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                    const userId = session?.user_info?.user_id || session?.user_id;
                     
                     const response = await fetch(`/api/chat/feedback/${interactionId}?feedback_type=thumbs_down&user_id=${userId}`, {
                         method: 'POST',
@@ -2130,7 +2130,7 @@
             if (correction && correction.trim()) {
                 try {
                     const session = window.zoeAuth?.getCurrentSession();
-                    const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                    const userId = session?.user_info?.user_id || session?.user_id;
                     
                     const response = await fetch(`/api/chat/feedback/${interactionId}?feedback_type=correction&user_id=${userId}`, {
                         method: 'POST',
@@ -2312,7 +2312,7 @@
             try {
                 // ✅ FIX: Get authenticated user
                 const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                const userId = session?.user_info?.user_id || session?.user_id;
                 
                 // Add to calendar
                 await apiRequest(`/calendar/events?user_id=${userId}`, {
@@ -2450,7 +2450,7 @@
             
             try {
                 const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                const userId = session?.user_info?.user_id || session?.user_id;
                 
                 // Get user context from all available services
                 const startDate = new Date().toISOString().split('T')[0];

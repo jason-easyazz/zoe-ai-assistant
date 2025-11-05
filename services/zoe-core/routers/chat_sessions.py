@@ -2,20 +2,20 @@
 Chat Sessions Management
 Implements session persistence for AG-UI chat interface
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import sqlite3
 import json
 import os
+from auth_integration import validate_session, AuthenticatedSession
 
 router = APIRouter(prefix="/api/chat/sessions", tags=["chat-sessions"])
 
 DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 
 class SessionCreate(BaseModel):
-    user_id: str
     title: Optional[str] = "New Chat"
     initial_message: Optional[str] = None
 
@@ -67,8 +67,12 @@ def init_sessions_db():
     conn.close()
 
 @router.post("/", response_model=Dict[str, Any])
-async def create_session(session: SessionCreate):
+async def create_session(
+    session_data: SessionCreate,
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Create a new chat session"""
+    user_id = session.user_id
     try:
         session_id = f"session_{int(datetime.now().timestamp() * 1000)}"
         
@@ -78,14 +82,14 @@ async def create_session(session: SessionCreate):
         cursor.execute("""
             INSERT INTO chat_sessions (id, user_id, title, metadata)
             VALUES (?, ?, ?, ?)
-        """, (session_id, session.user_id, session.title, json.dumps({})))
+        """, (session_id, user_id, session_data.title, json.dumps({})))
         
         # Add initial message if provided
-        if session.initial_message:
+        if session_data.initial_message:
             cursor.execute("""
                 INSERT INTO chat_messages (session_id, role, content)
                 VALUES (?, ?, ?)
-            """, (session_id, 'user', session.initial_message))
+            """, (session_id, 'user', session_data.initial_message))
             
             cursor.execute("""
                 UPDATE chat_sessions SET message_count = 1 WHERE id = ?
@@ -104,14 +108,16 @@ async def create_session(session: SessionCreate):
 @router.get("/", response_model=Dict[str, Any])
 async def get_sessions(
     session: AuthenticatedSession = Depends(validate_session),
+    limit: int = Query(50, description="Maximum number of sessions to return")
+):
     """Get user's chat sessions"""
+    user_id = session.user_id
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
         cursor.execute("""
-            user_id = session.user_id
             SELECT * FROM chat_sessions
             WHERE user_id = ?
             ORDER BY updated_at DESC
@@ -139,7 +145,9 @@ async def get_sessions(
 async def get_session_messages(
     session_id: str,
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Get all messages in a session"""
+    user_id = session.user_id
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -147,7 +155,6 @@ async def get_session_messages(
         
         # Verify session belongs to user
         cursor.execute("""
-            user_id = session.user_id
             SELECT * FROM chat_sessions WHERE id = ? AND user_id = ?
         """, (session_id, user_id))
         
@@ -193,14 +200,15 @@ async def add_message(
     session_id: str,
     message: MessageCreate,
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Add a message to a session"""
+    user_id = session.user_id
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         # Verify session exists and belongs to user
         cursor.execute("""
-            user_id = session.user_id
             SELECT id FROM chat_sessions WHERE id = ? AND user_id = ?
         """, (session_id, user_id))
         
@@ -241,14 +249,15 @@ async def update_session(
     session_id: str,
     update: SessionUpdate,
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Update session (e.g., rename)"""
+    user_id = session.user_id
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         if update.title:
             cursor.execute("""
-                user_id = session.user_id
                 UPDATE chat_sessions 
                 SET title = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND user_id = ?
@@ -271,13 +280,14 @@ async def update_session(
 async def delete_session(
     session_id: str,
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Delete a session and all its messages"""
+    user_id = session.user_id
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         cursor.execute("""
-            user_id = session.user_id
             DELETE FROM chat_sessions WHERE id = ? AND user_id = ?
         """, (session_id, user_id))
         

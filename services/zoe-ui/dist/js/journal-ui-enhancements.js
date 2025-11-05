@@ -36,9 +36,10 @@ async function setupPeopleAutocomplete() {
     // Load people from API
     async function loadPeople() {
         try {
-            const session = window.zoeAuth?.getCurrentSession();
-            const userId = session?.user_info?.user_id || session?.user_id || 'default';
-            const response = await fetch(`/api/memories/people?user_id=${userId}&limit=100`);
+            const session = window.zoeAuth?.getCurrentSession?.();
+            const userId = session?.user_info?.user_id || session?.user_id;
+            const qs = userId ? `?user_id=${encodeURIComponent(userId)}&limit=100` : `?limit=100`;
+            const response = await fetch(`/api/memories/people${qs}`);
             const data = await response.json();
             peopleList = data.people || [];
         } catch (error) {
@@ -302,9 +303,10 @@ window.publishEntryEnhanced = async function() {
     };
     
     try {
-        const session = window.zoeAuth?.getCurrentSession();
-        const userId = session?.user_info?.user_id || session?.user_id || 'default';
-        const response = await fetch(`/api/journal/entries?user_id=${userId}`, {
+        const session = window.zoeAuth?.getCurrentSession?.();
+        const userId = session?.user_info?.user_id || session?.user_id;
+        const qs = userId ? `?user_id=${encodeURIComponent(userId)}` : '';
+        const response = await fetch(`/api/journal/entries${qs}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(entryData)
@@ -314,9 +316,9 @@ window.publishEntryEnhanced = async function() {
         
         alert('✅ Journal entry published!');
         
-        // Reload timeline
-        if (typeof loadJournalEntries === 'function') {
-            loadJournalEntries();
+        // Optionally trigger a reload if loader is active
+        if (typeof window.loadJournalEntries === 'function') {
+            window.loadJournalEntries();
         }
         
         // Reset form
@@ -344,6 +346,9 @@ window.publishEntryEnhanced = async function() {
  * Show Entry Modal (Read View)
  */
 window.showEntryModal = function(entry) {
+    // Store entry reference for delete/edit operations
+    window.currentEntry = entry;
+    
     const modal = document.getElementById('readEntryModal');
     const modalBody = modal.querySelector('.read-modal-body');
     

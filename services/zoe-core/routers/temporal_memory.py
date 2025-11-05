@@ -263,3 +263,30 @@ async def get_temporal_memory_stats(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/status")
+async def get_temporal_memory_status():
+    """Get temporal memory system status"""
+    try:
+        return {
+            "status": "operational",
+            "service": "temporal-memory",
+            "version": "1.0",
+            "features": [
+                "episodic_memory",
+                "temporal_search",
+                "memory_decay",
+                "conversation_episodes",
+                "time_based_queries"
+            ],
+            "configuration": {
+                "decay_halflife_days": temporal_memory.decay_halflife_days,
+                "episode_timeouts": temporal_memory.episode_timeouts
+            }
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "service": "temporal-memory",
+            "error": str(e)
+        }
+

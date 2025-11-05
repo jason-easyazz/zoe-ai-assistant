@@ -1,6 +1,6 @@
 ================================================================================
 ZOE AI ASSISTANT - PROJECT DIGEST
-Generated: 2025-10-28 02:00:01
+Generated: 2025-11-05 02:00:01
 ================================================================================
 
 ## Project Structure
@@ -17,6 +17,10 @@ Generated: 2025-10-28 02:00:01
 ├── config
 │   ├── nginx
 │   │   └── nginx-auth.conf
+│   ├── cert.pem
+│   ├── cloudflared-config.yml
+│   ├── cloudflared-credentials.json
+│   ├── d417c04a-babc-48e4-85e6-a9badc20a7a6.json
 │   ├── DEPLOYMENT_MANIFEST.json
 │   ├── vapid_private.pem
 │   └── vapid_public.pem
@@ -49,6 +53,7 @@ Generated: 2025-10-28 02:00:01
 │   │   ├── WIDGET_SYSTEM_V2.md
 │   │   └── ZOE_ORB_SYSTEM.md
 │   ├── archive
+│   │   ├── guides
 │   │   ├── other
 │   │   └── reports
 │   ├── developer
@@ -73,8 +78,12 @@ Generated: 2025-10-28 02:00:01
 │   │   ├── FILE_TAGGING_SYSTEM.md
 │   │   ├── iOS-SHORTCUTS-INTEGRATION.md
 │   │   ├── jetson-upgrade-checklist.md
+│   │   ├── journal-widget-guide.md
+│   │   ├── JOURNAL_WIDGET_SUMMARY.md
+│   │   ├── journal-widget-visual-example.md
 │   │   ├── memvid-integration.md
 │   │   ├── MIGRATION_TO_V2.4.md
+│   │   ├── PEOPLE_SYSTEM_GUIDE.md
 │   │   ├── pre-jetson-implementation-tracking.md
 │   │   ├── productivity-commands.md
 │   │   ├── project-evaluation-implementation.md
@@ -100,17 +109,7 @@ Generated: 2025-10-28 02:00:01
 │   ├── START_HERE.md
 │   └── TRAINING_OPTIONS.md
 ├── homeassistant
-├── models
-│   └── adapters
-├── scripts
-│   ├── deployment
-│   │   ├── deploy-phase2-push-notifications.sh
-│   │   ├── deploy_v2.3.1.sh
-│   │   └── push_to_github.sh
-│   ├── maintenance
-│   │   ├── advanced_cleanup.py
-│   │   ├── aggressive_cleanup.py
-│   │   ├── archive_tagged_files.py
-│   │   ├── auto_backup.sh
-│   │   ├── comprehensive_cleanup.py
-│   │   ├── 
+│   ├── blueprints
+│   │   ├── automation
+│   │   └── script
+│   ├─�

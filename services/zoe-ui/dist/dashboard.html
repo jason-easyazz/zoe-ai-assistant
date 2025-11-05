@@ -760,219 +760,22 @@
             text-align: center;
         }
 
-        /* Weather sizing - hide/show based on widget size */
+        /* Weather sizing - handled by widgets-premium.css and widgets-fluid.css */
         .weather-content .weather-small,
         .weather-content .weather-medium,
         .weather-content .weather-large {
             display: none;
         }
 
-        /* Small widget (3 cols or less) - Basic info only */
-        .widget[data-widget-type="weather"][style*="span 3"] .weather-small,
-        .widget.size-small[data-widget-type="weather"] .weather-small {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-        }
+        /* Responsive sizing handled by clamp() in widgets-premium.css */
 
-        .weather-icon-large {
-            font-size: 64px;
-            margin-bottom: 8px;
-        }
-
-        .weather-temp {
-            font-size: 36px;
-            font-weight: 300;
-            margin-bottom: 4px;
-        }
-
-        .weather-condition {
-            font-size: 16px;
-            opacity: 0.9;
-        }
-
-        /* Medium widget (4-6 cols) - Add details */
-        .widget[data-widget-type="weather"][style*="span 4"] .weather-medium,
-        .widget[data-widget-type="weather"][style*="span 5"] .weather-medium,
-        .widget[data-widget-type="weather"][style*="span 6"] .weather-medium,
-        .widget.size-medium[data-widget-type="weather"] .weather-medium {
-            display: block;
-        }
-
-        .weather-current {
-            margin-bottom: 20px;
-        }
-
-        .weather-details {
-            display: flex;
-            gap: 16px;
-            justify-content: center;
-            flex-wrap: wrap;
-        }
-
-        .weather-detail-item {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 4px;
-        }
-
-        .detail-icon {
-            font-size: 24px;
-        }
-
-        .detail-label {
-            font-size: 12px;
-            opacity: 0.8;
-        }
-
-        .detail-value {
-            font-size: 16px;
-            font-weight: 600;
-        }
-
-        /* Large widget (7+ cols) - Show full forecast */
-        .widget[data-widget-type="weather"][style*="span 7"] .weather-large,
-        .widget[data-widget-type="weather"][style*="span 8"] .weather-large,
-        .widget[data-widget-type="weather"][style*="span 9"] .weather-large,
-        .widget[data-widget-type="weather"][style*="span 10"] .weather-large,
-        .widget[data-widget-type="weather"][style*="span 11"] .weather-large,
-        .widget[data-widget-type="weather"][style*="span 12"] .weather-large,
-        .widget.size-large[data-widget-type="weather"] .weather-large,
-        .widget.size-xlarge[data-widget-type="weather"] .weather-large {
-            display: flex;
-            gap: 24px;
-            align-items: flex-start;
-        }
-
-        .weather-main {
-            flex: 1;
-        }
-
-        .weather-details-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 12px;
-            margin-top: 16px;
-            font-size: 14px;
-        }
-
-        .detail-item {
-            opacity: 0.9;
-        }
-
-        .weather-forecast {
-            flex: 1;
-            display: flex;
-            gap: 12px;
-            justify-content: space-around;
-        }
-
-        .forecast-day {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .forecast-day-name {
-            font-size: 12px;
-            opacity: 0.8;
-            font-weight: 600;
-        }
-
-        .forecast-icon {
-            font-size: 32px;
-        }
-
-        .forecast-temps {
-            display: flex;
-            gap: 6px;
-            font-size: 14px;
-        }
-
-        .forecast-high {
-            font-weight: 600;
-        }
-
-        .forecast-low {
-            opacity: 0.7;
-        }
-
-        /* Time Widget - Beautiful Purple Gradient (Touch Dashboard Style) */
+        /* Time Widget - Responsive styling handled by widgets-premium.css */
+        /* Background gradient kept for compatibility */
         .widget[data-widget-type="time"] {
-            background: linear-gradient(180deg, #a855f7 0%, #7c3aed 50%, #6d28d9 100%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             position: relative;
             overflow: hidden;
-            padding: 40px 20px;
-            box-shadow: 0 12px 40px rgba(139, 92, 246, 0.3);
-        }
-
-
-        .time-widget-content {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: flex-start;
-            text-align: center;
-            width: 100%;
-            height: 100%;
-            padding-top: 20px;
-        }
-
-        .time-display {
-            font-size: 72px;
-            font-weight: 300;
-            color: white;
-            margin-bottom: 12px;
-            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-            line-height: 1;
-            letter-spacing: -2px;
-            font-family: 'DejaVu Sans', 'Liberation Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-        }
-
-        .date-display {
-            font-size: 22px;
-            color: rgba(255, 255, 255, 0.95);
-            margin-bottom: 24px;
-            font-weight: 400;
-            opacity: 0.95;
-        }
-
-        .weather-display {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-size: 18px;
-            color: rgba(255, 255, 255, 0.9);
-            font-weight: 400;
-        }
-
-        .weather-icon {
-            font-size: 24px;
-            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
-        }
-
-        /* Responsive time widget - smaller */
-        .widget[data-widget-type="time"][style*="span 3"] .time-display,
-        .widget[data-widget-type="time"].size-small .time-display {
-            font-size: 48px;
-            margin-bottom: 8px;
-        }
-
-        .widget[data-widget-type="time"][style*="span 3"] .date-display,
-        .widget[data-widget-type="time"].size-small .date-display {
-            font-size: 16px;
-            margin-bottom: 12px;
-        }
-
-        .widget[data-widget-type="time"][style*="span 3"] .weather-display,
-        .widget[data-widget-type="time"].size-small .weather-display {
-            font-size: 14px;
-            flex-wrap: wrap;
-            justify-content: center;
         }
         
         /* Task Items */
@@ -1983,6 +1786,7 @@
     <script src="js/widgets/core/system.js"></script>
     <script src="js/widgets/core/notes.js"></script>
     <script src="js/widgets/core/zoe-orb.js"></script>
+    <script src="js/widgets/core/journal.js"></script>
     
     <!-- List Widgets -->
     <script src="js/widgets/core/shopping.js"></script>
@@ -2016,10 +1820,12 @@
             const availableWidgets = [
                 { type: 'time', icon: '🕐', name: 'Clock', desc: 'Current time and date' },
                 { type: 'weather', icon: '🌤️', name: 'Weather', desc: 'Weather forecast' },
+                { type: 'zoe-orb', icon: '💬', name: 'Zoe Chat', desc: 'Chat with Zoe AI' },
                 { type: 'events', icon: '📅', name: 'Events', desc: 'Calendar events' },
                 { type: 'tasks', icon: '✅', name: 'Tasks', desc: 'Task list' },
                 { type: 'shopping', icon: '🛒', name: 'Shopping', desc: 'Shopping list' },
                 { type: 'notes', icon: '📝', name: 'Notes', desc: 'Quick notes' },
+                { type: 'journal', icon: '📔', name: 'Quick Journal', desc: 'Journal with photo & text' },
                 { type: 'home', icon: '🏠', name: 'Home', desc: 'Smart home controls' },
                 { type: 'personal', icon: '📝', name: 'Personal', desc: 'Personal list' },
                 { type: 'work', icon: '💼', name: 'Work', desc: 'Work tasks' },

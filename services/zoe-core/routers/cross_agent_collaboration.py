@@ -270,3 +270,31 @@ async def get_orchestration_stats(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/status")
+async def get_orchestration_status():
+    """Get orchestration system status"""
+    try:
+        # Get available experts
+        available_experts = [expert.value for expert in orchestrator.expert_endpoints.keys()]
+        
+        return {
+            "status": "operational",
+            "service": "orchestration",
+            "version": "1.0",
+            "features": [
+                "multi_expert_coordination",
+                "task_decomposition",
+                "parallel_execution",
+                "sequential_execution",
+                "result_synthesis"
+            ],
+            "available_experts": available_experts,
+            "expert_count": len(available_experts)
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "service": "orchestration",
+            "error": str(e)
+        }
+

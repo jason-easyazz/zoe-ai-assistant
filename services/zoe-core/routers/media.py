@@ -2,7 +2,7 @@
 Media Upload Router
 Handles photo uploads with compression, HEIC conversion, thumbnails, and EXIF preservation
 """
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Form
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Form, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from PIL import Image, ExifTags
@@ -15,6 +15,7 @@ from pathlib import Path
 import sqlite3
 import json
 import logging
+from auth_integration import validate_session, AuthenticatedSession
 
 logger = logging.getLogger(__name__)
 
@@ -340,13 +341,14 @@ async def upload_photos(
 async def delete_photo(
     photo_id: str,
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Delete a photo and its thumbnail"""
+    user_id = session.user_id
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     # Get photo info
     cursor.execute("""
-        user_id = session.user_id
         SELECT file_path, thumbnail_path
         FROM uploaded_photos
         WHERE photo_id = ? AND user_id = ?
@@ -380,12 +382,13 @@ async def delete_photo(
 async def get_photo_info(
     photo_id: str,
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Get photo metadata"""
+    user_id = session.user_id
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     cursor.execute("""
-        user_id = session.user_id
         SELECT photo_id, filename, url, thumbnail_url, size_bytes, width, height,
                format, exif_data, created_at
         FROM uploaded_photos

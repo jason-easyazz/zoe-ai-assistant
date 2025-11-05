@@ -4,12 +4,75 @@
  */
 
 const API_BASE = '/api'; // Use nginx proxy
-const USER_ID = 'default'; // TODO: Get from auth system
+
+// Resolve authenticated user id from Zoe Auth (fallback to undefined)
+function getUserId() {
+    try {
+        const session = window.zoeAuth?.getCurrentSession?.();
+        return session?.user_info?.user_id || session?.user_id || undefined;
+    } catch (_e) {
+        return undefined;
+    }
+}
+
+function withUserId(query = {}) {
+    const uid = getUserId();
+    return uid ? { user_id: uid, ...query } : { ...query };
+}
 
 // Global state
 let uploadedPhotos = [];
 let currentJourneyId = null;
 let currentStopId = null;
+let capabilities = {
+    supportsJournal: false,
+    supportsJourneys: false,
+    supportsPrompts: false,
+    supportsStreak: false
+};
+
+async function probe(pathWithQuery) {
+    try {
+        const res = await fetch(`${API_BASE}${pathWithQuery}`, { headers: { 'Accept': 'application/json' } });
+        if (res.status === 200) return true;
+        if (res.status === 401) return true; // exists but requires auth
+        if (res.status === 405) return true; // method not allowed implies route exists
+        return false;
+    } catch (_e) {
+        return false;
+    }
+}
+
+async function detectFeatureAvailability() {
+    // Ensure session has user_id cached for consistent user isolation
+    try {
+        if (!getUserId() && window.zoeAuth?.getCurrentUser) {
+            const user = await window.zoeAuth.getCurrentUser();
+            if (user && (user.user_info?.user_id || user.user_id) && window.zoeAuth?.setSession) {
+                const current = window.zoeAuth.getSessionObject?.() || {};
+                const merged = {
+                    ...current,
+                    user_id: current.user_id || user.user_id || user.user_info?.user_id,
+                    user_info: user.user_info || { user_id: user.user_id }
+                };
+                window.zoeAuth.setSession(merged);
+            }
+        }
+    } catch (_e) {}
+
+    // Probe endpoints; treat 200/401/405 as available
+    const [hasJournal, hasPrompts, hasStreak, hasJourneys] = await Promise.all([
+        probe('/journal/entries?limit=1'),
+        probe('/journal/prompts'),
+        probe('/journal/stats/streak'),
+        probe('/journeys')
+    ]);
+    capabilities.supportsJournal = !!hasJournal;
+    capabilities.supportsPrompts = !!hasPrompts;
+    capabilities.supportsStreak = !!hasStreak;
+    capabilities.supportsJourneys = !!hasJourneys;
+    return capabilities;
+}
 
 /**
  * API Helper Functions
@@ -36,16 +99,23 @@ async function apiCall(endpoint, options = {}) {
  * Journal Entries
  */
 async function loadJournalEntries(filters = {}) {
+    // Attempt load even if probing disabled it (backend may be present)
     const params = new URLSearchParams({
-        user_id: USER_ID,
         limit: 50,
-        ...filters
+        ...withUserId(filters)
     });
     
     try {
         const data = await apiCall(`/journal/entries?${params}`);
-        displayTimelineEntries(data.entries);
-        return data.entries;
+        // Accept multiple response shapes
+        const entries = Array.isArray(data)
+            ? data
+            : (data.entries || data.items || data.data || []);
+        if (!Array.isArray(entries)) {
+            throw new Error('Unexpected response shape for journal entries');
+        }
+        displayTimelineEntries(entries);
+        return entries;
     } catch (error) {
         console.error('Failed to load entries:', error);
         showError('Failed to load journal entries');
@@ -54,11 +124,16 @@ async function loadJournalEntries(filters = {}) {
 }
 
 async function loadOnThisDay() {
+    if (!capabilities.supportsJournal) return;
     try {
-        const data = await apiCall(`/journal/entries/on-this-day?user_id=${USER_ID}`);
-        
-        if (data.entries && data.entries.length > 0) {
-            displayOnThisDay(data);
+        const uid = getUserId();
+        const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : '';
+        const data = await apiCall(`/journal/entries/on-this-day${qs}`);
+        const entries = Array.isArray(data)
+            ? data
+            : (data.entries || data.items || data.data || []);
+        if (Array.isArray(entries) && entries.length > 0) {
+            displayOnThisDay({ entries, date: data.date || new Date().toLocaleDateString() });
         }
     } catch (error) {
         console.error('Failed to load On This Day:', error);
@@ -66,8 +141,11 @@ async function loadOnThisDay() {
 }
 
 async function loadJournalPrompts() {
+    if (!capabilities.supportsPrompts) return;
     try {
-        const data = await apiCall(`/journal/prompts?user_id=${USER_ID}`);
+        const uid = getUserId();
+        const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : '';
+        const data = await apiCall(`/journal/prompts${qs}`);
         
         if (data.prompts && data.prompts.length > 0) {
             displayPrompts(data.prompts);
@@ -79,7 +157,9 @@ async function loadJournalPrompts() {
 
 async function createJournalEntry(entryData) {
     try {
-        const response = await apiCall(`/journal/entries?user_id=${USER_ID}`, {
+        const uid = getUserId();
+        const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : '';
+        const response = await apiCall(`/journal/entries${qs}`, {
             method: 'POST',
             body: JSON.stringify(entryData)
         });
@@ -95,8 +175,11 @@ async function createJournalEntry(entryData) {
 }
 
 async function loadStreakData() {
+    if (!capabilities.supportsStreak) return;
     try {
-        const data = await apiCall(`/journal/stats/streak?user_id=${USER_ID}`);
+        const uid = getUserId();
+        const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : '';
+        const data = await apiCall(`/journal/stats/streak${qs}`);
         displayStreak(data);
     } catch (error) {
         console.error('Failed to load streak:', error);
@@ -112,12 +195,20 @@ async function uploadPhotos(files) {
     for (const file of files) {
         formData.append('files', file);
     }
-    formData.append('user_id', USER_ID);
+    const uid = getUserId();
+    if (!uid) {
+        console.error('❌ Photo upload blocked: missing user_id/session');
+        showError('Authentication required. Please log in again.');
+        throw new Error('Authentication required');
+    }
+    formData.append('user_id', uid);
     
     try {
+        const sessionId = window.zoeAuth?.getSession?.();
         const response = await fetch(`${API_BASE}/media/upload`, {
             method: 'POST',
-            body: formData
+            body: formData,
+            headers: sessionId ? { 'X-Session-ID': sessionId } : undefined
         });
         
         if (!response.ok) throw new Error('Upload failed');
@@ -136,7 +227,8 @@ async function uploadPhotos(files) {
  * Journeys
  */
 async function loadJourneys(status = null) {
-    const params = new URLSearchParams({ user_id: USER_ID });
+    if (!capabilities.supportsJourneys) return [];
+    const params = new URLSearchParams(withUserId({}));
     if (status) params.append('status', status);
     
     try {
@@ -152,7 +244,9 @@ async function loadJourneys(status = null) {
 
 async function loadJourneyDetails(journeyId) {
     try {
-        const journey = await apiCall(`/journeys/${journeyId}?user_id=${USER_ID}`);
+        const uid = getUserId();
+        const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : '';
+        const journey = await apiCall(`/journeys/${journeyId}${qs}`);
         displayJourneyDetails(journey);
         return journey;
     } catch (error) {
@@ -163,7 +257,9 @@ async function loadJourneyDetails(journeyId) {
 
 async function createJourneyCheckin(journeyId, checkinData) {
     try {
-        const response = await apiCall(`/journeys/${journeyId}/checkin?user_id=${USER_ID}`, {
+        const uid = getUserId();
+        const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : '';
+        const response = await apiCall(`/journeys/${journeyId}/checkin${qs}`, {
             method: 'POST',
             body: JSON.stringify(checkinData)
         });
@@ -437,8 +533,10 @@ function createPastJourneyCard(journey) {
  */
 window.openEntry = async function(entryId) {
     try {
-        const entry = await apiCall(`/journal/${entryId}?user_id=${USER_ID}`);
-        showEntryModal(entry);
+        const uid = getUserId();
+        const qs = uid ? `?user_id=${encodeURIComponent(uid)}` : '';
+        const entry = await apiCall(`/journal/${entryId}${qs}`);
+        showEntryModal(entry.entry || entry);
     } catch (error) {
         console.error('Failed to open entry:', error);
         showError('Failed to load entry');
@@ -539,11 +637,14 @@ function showError(message) {
  * Initialize on page load
  */
 document.addEventListener('DOMContentLoaded', () => {
-    loadJournalEntries();
-    loadOnThisDay();
-    loadJournalPrompts();
-    loadStreakData();
-    loadJourneys();
+    detectFeatureAvailability().then(() => {
+        // Only invoke features supported by the backend
+        loadJournalEntries();
+        loadOnThisDay();
+        loadJournalPrompts();
+        loadStreakData();
+        loadJourneys();
+    });
 });
 
 

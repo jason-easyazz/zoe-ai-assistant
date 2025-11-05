@@ -37,6 +37,7 @@ class ExpertType(Enum):
     WEATHER = "weather"
     HOMEASSISTANT = "homeassistant"
     TTS = "tts"
+    PERSON = "person"
 
 @dataclass
 class TaskDependency:
@@ -91,7 +92,8 @@ class ExpertOrchestrator:
             ExpertType.DEVELOPMENT: "/api/developer",
             ExpertType.WEATHER: "/api/weather",
             ExpertType.HOMEASSISTANT: "/api/homeassistant",
-            ExpertType.TTS: "/api/tts"
+            ExpertType.TTS: "/api/tts",
+            ExpertType.PERSON: "/api/people"
         }
         self.active_orchestrations = {}
         self.task_timeout = 30  # Default timeout in seconds
@@ -105,7 +107,8 @@ class ExpertOrchestrator:
             "reminder": "⏰",
             "weather": "🌤️",
             "homeassistant": "🏠",
-            "tts": "🔊"
+            "tts": "🔊",
+            "person": "👥"
         }
     
     async def orchestrate_task(self, user_id: str, request: str, 
@@ -196,6 +199,7 @@ class ExpertOrchestrator:
             - development: Code generation, debugging, technical tasks
             - weather: Weather information and forecasts
             - homeassistant: Smart home control and automation
+            - person: Manage people, contacts, relationships, birthdays, notes, gift ideas
             
             {learned_context if learned_context else ""}
             

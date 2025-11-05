@@ -29,10 +29,10 @@ def test_single_chat_router_only():
         print(f"❌ FAIL: Routers directory not found: {routers_path}")
         return False
     
-    # Find all chat*.py files (excluding archive)
+    # Find all chat*.py files (excluding archive and chat_sessions.py which manages sessions not chat routing)
     chat_files = []
     for file in glob.glob(f"{routers_path}/chat*.py"):
-        if "archive" not in file and "__pycache__" not in file:
+        if "archive" not in file and "__pycache__" not in file and "chat_sessions" not in file:
             chat_files.append(file)
     
     # Should only be chat.py

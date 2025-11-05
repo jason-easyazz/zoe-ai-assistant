@@ -2,7 +2,7 @@
 Journal Management System - Enhanced
 Handles personal journal entries, mood tracking, reflections, journeys, and prompts
 """
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date, timedelta
@@ -11,6 +11,7 @@ import json
 import os
 import httpx
 import asyncio
+from auth_integration import validate_session, AuthenticatedSession
 
 router = APIRouter(prefix="/api/journal", tags=["journal"])
 
@@ -799,8 +800,8 @@ async def delete_journal_entry(entry_id: int, session: AuthenticatedSession = De
 
 @router.get("/stats/mood")
 async def get_mood_stats(session: AuthenticatedSession = Depends(validate_session)):
-        user_id = session.user_id
     """Get mood statistics"""
+    user_id = session.user_id
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     

@@ -1,5 +1,5 @@
 """Intelligent Chat Router for Zoe v2.0 with RouteLLM + LiteLLM + Enhanced MEM Agent"""
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, Dict, List
 import httpx
@@ -13,6 +13,7 @@ import asyncio
 import time
 from datetime import datetime
 import os
+from auth_integration import validate_session, AuthenticatedSession
 
 # Setup logger IMMEDIATELY
 logger = logging.getLogger(__name__)
@@ -107,7 +108,7 @@ except ImportError as e:
     SATISFACTION_TRACKING_AVAILABLE = False
     satisfaction_system = None
 
-router = APIRouter(prefix="/api/chat", tags=["chat"])
+router = APIRouter(prefix="", tags=["chat"])
 logger = logging.getLogger(__name__)
 
 # Initialize mem-agent client for semantic search
