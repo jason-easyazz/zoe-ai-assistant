@@ -1,0 +1,12 @@
+# Raspberry Pi 5 CPU Override Configuration
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.pi.yml up
+
+services:
+  zoe-ollama:
+    environment:
+      - OLLAMA_NUM_THREADS=4
+
+  zoe-whisper:
+    environment:
+      - WHISPER_DEVICE=cpu
+

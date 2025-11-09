@@ -9,14 +9,14 @@ services:
     - ./services/zoe-core:/app
     - ./data:/app/data
     - /var/run/docker.sock:/var/run/docker.sock
-    - /home/pi/zoe:/home/pi/zoe:rw
+    - /home/zoe/assistant:/home/zoe/assistant:rw
     - /usr/bin/docker:/usr/bin/docker:ro
     - /proc:/host/proc:ro
     - /sys:/host/sys:ro
     environment:
     - PYTHONUNBUFFERED=1
     - DOCKER_HOST=unix:///var/run/docker.sock
-    - PROJECT_ROOT=/home/pi/zoe
+    - PROJECT_ROOT=/home/zoe/assistant
     - FULL_ACCESS=true
     - DATABASE_PATH=/app/data/zoe.db
     networks:
@@ -59,6 +59,64 @@ services:
       - python
       - -c
       - "import sqlite3; conn = sqlite3.connect('/app/data/zoe.db'); conn.close()"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+    - zoe-core
+    env_file:
+    - .env
+  zoe-code-execution:
+    build: ./services/zoe-code-execution
+    container_name: zoe-code-execution
+    restart: unless-stopped
+    ports:
+    - 8010:8010
+    volumes:
+    - ./services/zoe-code-execution:/app
+    - /tmp/zoe-code-workspace:/tmp/zoe-code-workspace
+    environment:
+    - PYTHONUNBUFFERED=1
+    - MCP_SERVER_URL=http://zoe-mcp-server:8003
+    networks:
+    - zoe-network
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8010/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+    - zoe-mcp-server
+    env_file:
+    - .env
+  zoe-mem-agent:
+    build: ./services/mem-agent
+    container_name: zoe-mem-agent
+    restart: unless-stopped
+    ports:
+    - 11435:8000
+    volumes:
+    - ./services/mem-agent:/app
+    - ./data:/app/data
+    - ./data/memory:/app/memory:ro
+    environment:
+    - PYTHONUNBUFFERED=1
+    - MEMORY_DIR=/app/memory
+    - DB_PATH=/app/data/zoe.db
+    - MAX_WORKERS=2
+    - TIMEOUT=2.0
+    networks:
+    - zoe-network
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8000/health
       interval: 30s
       timeout: 10s
       retries: 3
@@ -236,8 +294,7 @@ services:
     volumes:
     - zoe_neutts_models:/root/.cache/neutts
     - ./data/voice_profiles:/app/voice_profiles
-    # Source directory removed during cleanup, using pre-built image
-    # - ./services/zoe-tts/samples:/app/samples
+    - ./services/zoe-tts/samples:/app/samples
     devices:
     - /dev/snd:/dev/snd
     environment:

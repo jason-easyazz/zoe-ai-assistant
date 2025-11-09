@@ -1,0 +1,26 @@
+# Jetson Orin NX GPU Override Configuration
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.jetson.yml up
+
+services:
+  zoe-ollama:
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+
+  zoe-whisper:
+    runtime: nvidia
+    environment:
+      - WHISPER_DEVICE=cuda
+
+  zoe-tts:
+    runtime: nvidia
+
+  zoe-litellm:
+    runtime: nvidia
+
