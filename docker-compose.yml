@@ -300,19 +300,17 @@ services:
     networks:
     - zoe-network
     restart: unless-stopped
-  zoe-ollama:
-    image: dustynv/ollama:r36.2.0  # ✅ JETSON-OPTIMIZED: Better GPU detection
-    container_name: zoe-ollama
+  zoe-vllm:
+    build: ./services/zoe-vllm
+    container_name: zoe-vllm
     ports:
     - 11434:11434
     volumes:
-    - zoe_ollama_data:/root/.ollama
-    devices:  # ✅ JETSON: Explicitly mount GPU devices
-    - /dev/nvidia0:/dev/nvidia0
-    - /dev/nvidiactl:/dev/nvidiactl
-    - /dev/nvidia-modeset:/dev/nvidia-modeset
+    - ./models:/models:ro  # AWQ models from host
+    - ./services/zoe-vllm:/app
     environment:
-    - OLLAMA_GPU_LAYERS=-1
+    - CUDA_VISIBLE_DEVICES=0
+    - NVIDIA_VISIBLE_DEVICES=all
     networks:
     - zoe-network
     restart: unless-stopped
@@ -322,7 +320,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: all
+              count: 1
               capabilities: [gpu]
   zoe-redis:
     image: redis:alpine
@@ -407,7 +405,7 @@ services:
     - zoe-network
     restart: unless-stopped
     depends_on:
-    - zoe-ollama
+    - zoe-vllm
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8001/health -H 'Authorization: Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f' || exit 0"]
       interval: 30s
@@ -506,7 +504,6 @@ networks:
     name: zoe-network  # ✅ FIXED: Explicit name prevents "assistant_" prefix
     driver: bridge
 volumes:
-  zoe_ollama_data: null
   zoe_redis_data: null
   zoe_whisper_models: null
   zoe_neutts_models: null

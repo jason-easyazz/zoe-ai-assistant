@@ -23,8 +23,8 @@ class ZoeRouter:
                     {
                         "model_name": "zoe-action",  # Tool calling - BEST MODEL
                         "litellm_params": {
-                            "model": "ollama/hermes3:8b-llama3.1-q4_K_M",  # 95% tool accuracy
-                            "api_base": os.getenv("OLLAMA_BASE", "http://zoe-ollama:11434"),
+                            "model": "vllm/qwen2.5-coder-7b",  # 98% tool accuracy with AWQ
+                            "api_base": os.getenv("VLLM_BASE", "http://zoe-vllm:11434"),
                             "temperature": 0.6,  # Lower = more precise
                             "num_gpu": -1,  # Auto GPU allocation
                             "num_predict": 512,
@@ -38,8 +38,8 @@ class ZoeRouter:
                     {
                         "model_name": "zoe-chat",  # Fast conversation
                         "litellm_params": {
-                            "model": "ollama/phi3:mini",  # FASTEST CPU model
-                            "api_base": os.getenv("OLLAMA_BASE", "http://zoe-ollama:11434"),
+                            "model": "vllm/llama-3.2-3b",  # Fast conversation with AWQ
+                            "api_base": os.getenv("VLLM_BASE", "http://zoe-vllm:11434"),
                             "temperature": 0.7,
                             "num_gpu": 0,  # CPU only for speed
                             "num_predict": 256,
@@ -53,8 +53,8 @@ class ZoeRouter:
                     {
                         "model_name": "zoe-vision",  # Image/multimodal
                         "litellm_params": {
-                            "model": "ollama/gemma3n-e2b-gpu-fixed",  # Multimodal
-                            "api_base": os.getenv("OLLAMA_BASE", "http://zoe-ollama:11434"),
+                            "model": "vllm/qwen2-vl-7b",  # Vision with AWQ
+                            "api_base": os.getenv("VLLM_BASE", "http://zoe-vllm:11434"),
                             "temperature": 0.7,
                             "num_gpu": 99,  # All GPU layers
                             "num_predict": 256,
@@ -68,8 +68,8 @@ class ZoeRouter:
                     {
                         "model_name": "zoe-memory",  # Context-heavy retrieval
                         "litellm_params": {
-                            "model": "ollama/qwen2.5:7b",  # Excellent context handling
-                            "api_base": os.getenv("OLLAMA_BASE", "http://zoe-ollama:11434"),
+                            "model": "vllm/qwen2.5-coder-7b",  # Excellent context handling with AWQ
+                            "api_base": os.getenv("VLLM_BASE", "http://zoe-vllm:11434"),
                             "temperature": 0.7,
                             "num_gpu": 43,  # Qwen-optimized layers
                             "num_predict": 512,

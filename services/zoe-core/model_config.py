@@ -328,6 +328,55 @@ MODEL_CONFIGS = {
         stop_tokens=["\n\n", "User:", "Human:"],
         timeout=120,
         description="General heavy tasks - Claude's recommended heavy reasoning model"
+    ),
+    
+    # ========== vLLM AWQ Models (Jetson Optimized) ==========
+    "llama-3.2-3b": ModelConfig(
+        name="llama-3.2-3b",
+        category=ModelCategory.FAST_LANE,
+        temperature=0.7,
+        top_p=0.95,
+        num_predict=512,
+        num_ctx=4096,
+        repeat_penalty=1.1,
+        stop_tokens=["\n\n", "User:", "Human:"],
+        timeout=30,
+        description="Llama-3.2-3B-Instruct-AWQ - Fast conversation, voice responses (2GB)",
+        benchmark_score=90.0,
+        tool_calling_score=70.0,
+        response_time_avg=0.5
+    ),
+    
+    "qwen2.5-coder-7b": ModelConfig(
+        name="qwen2.5-coder-7b",
+        category=ModelCategory.BALANCED,
+        temperature=0.5,
+        top_p=0.95,
+        num_predict=512,
+        num_ctx=8192,
+        repeat_penalty=1.1,
+        stop_tokens=["\n\n", "User:", "Human:"],
+        timeout=60,
+        description="Qwen2.5-Coder-7B-Instruct-AWQ - Tool calling, Home Assistant automation (4.5GB)",
+        benchmark_score=95.0,
+        tool_calling_score=98.0,
+        response_time_avg=1.2
+    ),
+    
+    "qwen2-vl-7b": ModelConfig(
+        name="qwen2-vl-7b",
+        category=ModelCategory.HEAVY_REASONING,
+        temperature=0.6,
+        top_p=0.95,
+        num_predict=512,
+        num_ctx=4096,
+        repeat_penalty=1.1,
+        stop_tokens=["\n\n", "User:", "Human:"],
+        timeout=90,
+        description="Qwen2-VL-7B-Instruct-AWQ - Vision analysis, photo understanding (5GB)",
+        benchmark_score=92.0,
+        tool_calling_score=75.0,
+        response_time_avg=3.0
     )
 }
 

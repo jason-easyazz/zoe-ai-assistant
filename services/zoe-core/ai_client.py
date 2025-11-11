@@ -15,10 +15,11 @@ from typing import Dict, Optional
 sys.path.append('/app')
 logger = logging.getLogger(__name__)
 
-# Import the intelligent RouteLLM
+# Import the intelligent RouteLLM and LLM Provider
 from route_llm import router as route_llm_router
 from llm_models import LLMModelManager
 from context_optimizer import get_fresh_project_context, should_include_project_context
+from llm_provider import get_llm_provider
 
 manager = LLMModelManager()
 
@@ -182,7 +183,7 @@ async def call_litellm_proxy(message: str, routing_decision: Dict, context: Dict
         return await call_ollama_direct(message, "llama3.2:3b", context)
 
 async def call_ollama_direct(message: str, model: str, context: Dict) -> str:
-    """Direct Ollama call for local models"""
+    """Direct LLM call using provider abstraction (vLLM or Ollama)"""
     mode = context.get("mode", "user")
     system = "You are Zack, a technical AI developer." if mode == "developer" else "You are Zoe, a friendly assistant."
     
@@ -217,7 +218,7 @@ async def call_ollama_direct(message: str, model: str, context: Dict) -> str:
         
         system += "\nUse this data to provide specific, helpful responses about the user's schedule, tasks, and information."
     
-    # Build conversation context for Ollama
+    # Build conversation context
     conversation_history = context.get("conversation_history", [])
     prompt_parts = [system]
     
@@ -235,19 +236,17 @@ async def call_ollama_direct(message: str, model: str, context: Dict) -> str:
     
     full_prompt = "\n\n".join(prompt_parts)
     
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(
-            "http://172.23.0.1:11434/api/generate",
-            json={
-                "model": model,
-                "prompt": full_prompt,
-                "temperature": 0.3 if mode == "developer" else 0.7,
-                "stream": False
-            }
+    # Use provider abstraction
+    try:
+        provider = get_llm_provider()
+        return await provider.generate(
+            full_prompt,
+            model=model,
+            context=context,
+            temperature=0.3 if mode == "developer" else 0.7
         )
-        
-        if response.status_code == 200:
-            return response.json().get("response", "Processing...")
+    except Exception as e:
+        logger.error(f"LLM provider error: {e}")
         return "AI service temporarily unavailable"
 
 # Provider implementations
