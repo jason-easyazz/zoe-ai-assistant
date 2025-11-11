@@ -1140,6 +1140,56 @@
             margin-top: 2px;
         }
         
+        /* Attendee Autocomplete Styles */
+        .attendee-suggestions {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1000;
+            margin-top: 4px;
+        }
+        
+        .attendee-suggestion-item {
+            padding: 10px 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .attendee-suggestion-item:last-child {
+            border-bottom: none;
+        }
+        
+        .attendee-suggestion-item:hover,
+        .attendee-suggestion-item.selected {
+            background: rgba(123, 97, 255, 0.1);
+        }
+        
+        .attendee-suggestion-name {
+            font-weight: 500;
+            color: #333;
+            flex: 1;
+        }
+        
+        .attendee-suggestion-details {
+            font-size: 11px;
+            color: #666;
+        }
+        
+        .attendee-suggestion-item.highlight {
+            background: rgba(123, 97, 255, 0.15);
+        }
+        
         .btn-remove {
             padding: 4px 8px;
             background: rgba(239, 68, 68, 0.1);
@@ -1189,30 +1239,31 @@
             right: 4px;
             border-radius: 6px;
             cursor: pointer;
-            font-size: 10px;
+            font-size: 11px;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: rgba(0, 0, 0, 0.5);
-            font-weight: 500;
+            font-weight: 600;
             overflow: hidden;
             transition: all 0.2s ease;
+            opacity: 0.85;
         }
         
         .time-block:hover {
             transform: translateX(2px);
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
             z-index: 50;
+            opacity: 1;
         }
         
         .time-block.get-ready {
-            opacity: 0.3;
-            border: 1px solid currentColor;
+            border-left-width: 3px;
+            border-left-style: solid;
         }
         
         .time-block.travel {
-            opacity: 0.2;
-            border: 2px dashed currentColor;
+            border-left-width: 3px;
+            border-left-style: solid;
         }
         
         .completion-summary {
@@ -1913,6 +1964,13 @@
                 <textarea class="form-input" id="editDescription" rows="3" placeholder="Event description (optional)"></textarea>
             </div>
             
+            <!-- Linked Tasks Section (Main Section) -->
+            <div class="form-group" id="linkedTasksGroup" style="display: none;">
+                <label class="form-label">Linked Tasks</label>
+                <div id="completionSummary" class="completion-summary" style="display: none;"></div>
+                <div class="linked-tasks-list" id="linkedTasksList"></div>
+            </div>
+            
             <!-- Advanced Section Toggle -->
             <button type="button" class="btn-toggle-advanced" onclick="toggleAdvancedSection()" style="width: 100%; margin: 15px 0; padding: 10px; background: rgba(123, 97, 255, 0.1); border: 1px solid rgba(123, 97, 255, 0.3); border-radius: 8px; color: #7B61FF; font-weight: 500; cursor: pointer;">
                 <span id="advancedToggleText">▼ Show Advanced Options</span>
@@ -1939,11 +1997,15 @@
                 <div class="form-group">
                     <label class="form-label">Attendees</label>
                     <div id="attendeesList" class="attendees-list" style="margin-bottom: 10px;"></div>
-                    <div style="display: flex; gap: 10px;">
-                        <select class="form-select" id="addAttendeeSelect" style="flex: 1;">
-                            <option value="">-- Select person --</option>
-                        </select>
-                        <button type="button" class="btn btn-secondary" onclick="addAttendee()">Add</button>
+                    <div style="position: relative;">
+                        <input type="text" class="form-input" id="addAttendeeInput" 
+                               placeholder="Type a name to add attendees..." 
+                               autocomplete="off"
+                               oninput="handleAttendeeInput(event)"
+                               onkeydown="handleAttendeeKeydown(event)"
+                               onfocus="showAttendeeSuggestions()"
+                               onblur="hideAttendeeSuggestions()">
+                        <div id="attendeeSuggestions" class="attendee-suggestions" style="display: none;"></div>
                     </div>
                 </div>
                 
@@ -1957,12 +2019,6 @@
                     <label class="form-label">Preparation Items</label>
                     <div id="prepItemsList" class="prep-items-list" style="margin-bottom: 10px;"></div>
                     <button type="button" class="btn btn-secondary" onclick="addPrepItemRow()">+ Add Prep Item</button>
-                </div>
-                
-                <div class="form-group" id="linkedTasksGroup" style="display: none;">
-                    <label class="form-label">Linked Tasks</label>
-                    <div id="completionSummary" class="completion-summary" style="display: none;"></div>
-                    <div class="linked-tasks-list" id="linkedTasksList"></div>
                 </div>
             </div>
         </div>
@@ -2146,20 +2202,34 @@
                 const response = await authedApiRequest(`/calendar/events?start_date=${formatDateISO(startDate)}&end_date=${formatDateISO(endDate)}`);
                 const apiEvents = Array.isArray(response) ? response : (response.events || []);
                 
-                events = apiEvents.map(event => ({
-                    id: event.id,
-                    title: event.title,
-                    date: parseEventDate(event),
-                    time: event.start_time || event.time || '09:00',
-                    duration: calculateEventDuration(event),
-                    category: event.category || 'personal',
-                    type: 'event',
-                    linkedTasks: (event.metadata && event.metadata.linked_tasks) 
-                        ? (typeof event.metadata.linked_tasks === 'string' 
-                            ? JSON.parse(event.metadata.linked_tasks) 
-                            : event.metadata.linked_tasks)
-                        : []
-                }));
+                events = apiEvents.map(event => {
+                    // Parse linked tasks from metadata
+                    let linkedTasks = [];
+                    if (event.metadata && event.metadata.linked_tasks) {
+                        try {
+                            linkedTasks = typeof event.metadata.linked_tasks === 'string' 
+                                ? JSON.parse(event.metadata.linked_tasks) 
+                                : event.metadata.linked_tasks;
+                        } catch (e) {
+                            console.warn('Failed to parse linked_tasks:', e);
+                            linkedTasks = [];
+                        }
+                    }
+                    
+                    return {
+                        id: event.id,
+                        title: event.title,
+                        date: parseEventDate(event),
+                        time: event.start_time || event.time || '09:00',
+                        duration: calculateEventDuration(event),
+                        category: event.category || 'personal',
+                        type: 'event',
+                        description: event.description || '',
+                        location: event.location || '',
+                        metadata: event.metadata || {},
+                        linkedTasks: linkedTasks
+                    };
+                });
                 
                 updateView();
                 
@@ -3022,12 +3092,35 @@
         }
         
         function getCategoryColor(category) {
+            // Returns the border color for the category (matches CSS border-left-color)
             const colors = {
+                'work': '#2563eb',
+                'personal': '#9333ea',
+                'bucket': '#059669',
+                'shopping': '#ea580c',
+                'health': '#be185d',
+                'routine': '#374151',
+                'social': '#16a34a',
+                'family': '#9333ea',
                 'medical': '#EF4444',
-                'personal': '#7B61FF',
-                'work': '#10B981',
-                'family': '#F59E0B',
                 'household': '#6B7280'
+            };
+            return colors[category] || colors['personal'];
+        }
+        
+        function getCategoryLightColor(category) {
+            // Returns a lighter version of the category color for time blocks
+            const colors = {
+                'work': 'rgba(37, 99, 235, 0.2)',
+                'personal': 'rgba(147, 51, 234, 0.2)',
+                'bucket': 'rgba(5, 150, 105, 0.2)',
+                'shopping': 'rgba(234, 88, 12, 0.2)',
+                'health': 'rgba(190, 24, 93, 0.2)',
+                'routine': 'rgba(55, 65, 81, 0.2)',
+                'social': 'rgba(22, 163, 74, 0.2)',
+                'family': 'rgba(147, 51, 234, 0.2)',
+                'medical': 'rgba(239, 68, 68, 0.2)',
+                'household': 'rgba(107, 114, 128, 0.2)'
             };
             return colors[category] || colors['personal'];
         }
@@ -3218,37 +3311,19 @@
             
             if (getReadyTime > 0 || travelTime > 0) {
                 const categoryColor = getCategoryColor(event.category);
+                const categoryLightColor = getCategoryLightColor(event.category);
                 
-                // Calculate positions
-                let currentTop = top;
-                
-                // Travel time block (furthest back)
-                if (travelTime > 0) {
-                    currentTop -= travelTime;
-                    const travelBlock = document.createElement('div');
-                    travelBlock.className = 'time-block travel';
-                    travelBlock.style.top = currentTop + 'px';
-                    travelBlock.style.height = travelTime + 'px';
-                    travelBlock.style.color = categoryColor;
-                    travelBlock.style.borderColor = categoryColor;
-                    travelBlock.innerHTML = `🚗 ${travelTime}m`;
-                    travelBlock.title = `Travel time: ${travelTime} minutes`;
-                    travelBlock.onclick = () => {
-                        const eventData = events.find(e => e.id === event.id);
-                        openEventPanel(eventData);
-                    };
-                    container.appendChild(travelBlock);
-                }
-                
-                // Get ready time block
+                // Calculate positions - get ready comes first (furthest back), then travel
+                // Get ready time block (furthest back)
                 if (getReadyTime > 0) {
-                    currentTop = top - getReadyTime;
+                    const readyTop = top - getReadyTime - travelTime; // Subtract both times
                     const readyBlock = document.createElement('div');
                     readyBlock.className = 'time-block get-ready';
-                    readyBlock.style.top = currentTop + 'px';
+                    readyBlock.style.top = readyTop + 'px';
                     readyBlock.style.height = getReadyTime + 'px';
+                    readyBlock.style.background = categoryLightColor;
+                    readyBlock.style.borderLeft = `3px solid ${categoryColor}`;
                     readyBlock.style.color = categoryColor;
-                    readyBlock.style.borderColor = categoryColor;
                     readyBlock.innerHTML = `⏰ ${getReadyTime}m`;
                     readyBlock.title = `Get ready: ${getReadyTime} minutes`;
                     readyBlock.onclick = () => {
@@ -3256,6 +3331,25 @@
                         openEventPanel(eventData);
                     };
                     container.appendChild(readyBlock);
+                }
+                
+                // Travel time block (after get ready, before event)
+                if (travelTime > 0) {
+                    const travelTop = top - travelTime; // Just before the event
+                    const travelBlock = document.createElement('div');
+                    travelBlock.className = 'time-block travel';
+                    travelBlock.style.top = travelTop + 'px';
+                    travelBlock.style.height = travelTime + 'px';
+                    travelBlock.style.background = categoryLightColor;
+                    travelBlock.style.borderLeft = `3px solid ${categoryColor}`;
+                    travelBlock.style.color = categoryColor;
+                    travelBlock.innerHTML = `🚗 ${travelTime}m`;
+                    travelBlock.title = `Travel time: ${travelTime} minutes`;
+                    travelBlock.onclick = () => {
+                        const eventData = events.find(e => e.id === event.id);
+                        openEventPanel(eventData);
+                    };
+                    container.appendChild(travelBlock);
                 }
             }
         }
@@ -3748,8 +3842,8 @@
             document.getElementById('advancedSection').style.display = 'none';
             document.getElementById('advancedToggleText').textContent = '▼ Show Advanced Options';
             
+            // Show linked tasks in main section if they exist
             const linkedTasksGroup = document.getElementById('linkedTasksGroup');
-            
             if (event.linkedTasks && event.linkedTasks.length > 0) {
                 linkedTasksGroup.style.display = 'block';
                 renderLinkedTasks(event);
@@ -3860,15 +3954,6 @@
             try {
                 const data = await authedApiRequest('/people');
                 peopleList = data.people || [];
-                
-                const select = document.getElementById('addAttendeeSelect');
-                select.innerHTML = '<option value="">-- Select person --</option>';
-                peopleList.forEach(person => {
-                    const option = document.createElement('option');
-                    option.value = person.id;
-                    option.textContent = person.name;
-                    select.appendChild(option);
-                });
             } catch (error) {
                 console.error('Error loading people:', error);
             }
@@ -3876,12 +3961,148 @@
         
         // Attendees Management
         let currentAttendees = [];
+        let selectedSuggestionIndex = -1;
+        let filteredSuggestions = [];
         
-        async function addAttendee() {
-            const select = document.getElementById('addAttendeeSelect');
-            const personId = parseInt(select.value);
+        function filterPeople(query) {
+            if (!query || query.trim() === '') {
+                return peopleList.filter(person => 
+                    !currentAttendees.some(a => a.person_id === person.id)
+                );
+            }
             
-            if (!personId) return;
+            const lowerQuery = query.toLowerCase();
+            return peopleList.filter(person => {
+                // Skip if already added
+                if (currentAttendees.some(a => a.person_id === person.id)) {
+                    return false;
+                }
+                // Match name
+                if (person.name && person.name.toLowerCase().includes(lowerQuery)) {
+                    return true;
+                }
+                // Match email
+                if (person.email && person.email.toLowerCase().includes(lowerQuery)) {
+                    return true;
+                }
+                return false;
+            });
+        }
+        
+        function showAttendeeSuggestions() {
+            const input = document.getElementById('addAttendeeInput');
+            const suggestions = document.getElementById('attendeeSuggestions');
+            const query = input.value.trim();
+            
+            filteredSuggestions = filterPeople(query);
+            selectedSuggestionIndex = -1;
+            
+            if (filteredSuggestions.length === 0) {
+                suggestions.style.display = 'none';
+                return;
+            }
+            
+            // Limit to 10 suggestions for better UX
+            const limitedSuggestions = filteredSuggestions.slice(0, 10);
+            
+            suggestions.innerHTML = limitedSuggestions.map((person, index) => `
+                <div class="attendee-suggestion-item ${index === selectedSuggestionIndex ? 'selected' : ''}" 
+                     data-index="${index}"
+                     onclick="selectAttendeeFromSuggestion(${person.id})"
+                     onmouseenter="highlightSuggestion(${index})">
+                    <div class="attendee-suggestion-name">${person.name}</div>
+                    <div class="attendee-suggestion-details">${person.email || person.phone || ''}</div>
+                </div>
+            `).join('');
+            
+            // Update filteredSuggestions to limited list for keyboard navigation
+            filteredSuggestions = limitedSuggestions;
+            
+            suggestions.style.display = 'block';
+        }
+        
+        function hideAttendeeSuggestions() {
+            // Delay to allow click events to fire
+            setTimeout(() => {
+                const suggestions = document.getElementById('attendeeSuggestions');
+                suggestions.style.display = 'none';
+            }, 200);
+        }
+        
+        function highlightSuggestion(index) {
+            selectedSuggestionIndex = index;
+            const items = document.querySelectorAll('.attendee-suggestion-item');
+            items.forEach((item, i) => {
+                if (i === index) {
+                    item.classList.add('selected');
+                } else {
+                    item.classList.remove('selected');
+                }
+            });
+        }
+        
+        function handleAttendeeInput(event) {
+            showAttendeeSuggestions();
+        }
+        
+        function handleAttendeeKeydown(event) {
+            const suggestions = document.getElementById('attendeeSuggestions');
+            const isVisible = suggestions.style.display !== 'none';
+            
+            if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                if (isVisible && filteredSuggestions.length > 0) {
+                    selectedSuggestionIndex = Math.min(selectedSuggestionIndex + 1, filteredSuggestions.length - 1);
+                    highlightSuggestion(selectedSuggestionIndex);
+                    scrollSuggestionIntoView(selectedSuggestionIndex);
+                }
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                if (isVisible && filteredSuggestions.length > 0) {
+                    selectedSuggestionIndex = Math.max(selectedSuggestionIndex - 1, -1);
+                    if (selectedSuggestionIndex >= 0) {
+                        highlightSuggestion(selectedSuggestionIndex);
+                        scrollSuggestionIntoView(selectedSuggestionIndex);
+                    } else {
+                        const items = document.querySelectorAll('.attendee-suggestion-item');
+                        items.forEach(item => item.classList.remove('selected'));
+                    }
+                }
+            } else if (event.key === 'Enter') {
+                event.preventDefault();
+                if (isVisible && selectedSuggestionIndex >= 0 && selectedSuggestionIndex < filteredSuggestions.length) {
+                    const person = filteredSuggestions[selectedSuggestionIndex];
+                    selectAttendeeFromSuggestion(person.id);
+                } else {
+                    // Try to add by exact name match if no suggestion selected
+                    const input = document.getElementById('addAttendeeInput');
+                    const query = input.value.trim();
+                    if (query) {
+                        const exactMatch = peopleList.find(p => 
+                            p.name.toLowerCase() === query.toLowerCase() &&
+                            !currentAttendees.some(a => a.person_id === p.id)
+                        );
+                        if (exactMatch) {
+                            selectAttendeeFromSuggestion(exactMatch.id);
+                        }
+                    }
+                }
+            } else if (event.key === 'Escape') {
+                suggestions.style.display = 'none';
+                selectedSuggestionIndex = -1;
+            }
+        }
+        
+        function scrollSuggestionIntoView(index) {
+            const items = document.querySelectorAll('.attendee-suggestion-item');
+            if (items[index]) {
+                items[index].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        }
+        
+        function selectAttendeeFromSuggestion(personId) {
+            const person = peopleList.find(p => p.id === personId);
+            if (!person) return;
             
             // Check if already added
             if (currentAttendees.some(a => a.person_id === personId)) {
@@ -3889,18 +4110,22 @@
                 return;
             }
             
-            const person = peopleList.find(p => p.id === personId);
-            if (person) {
-                currentAttendees.push({
-                    person_id: person.id,
-                    name: person.name,
-                    email: person.email,
-                    phone: person.phone,
-                    role: 'participant'
-                });
-                renderAttendeesList();
-                select.value = '';
-            }
+            currentAttendees.push({
+                person_id: person.id,
+                name: person.name,
+                email: person.email,
+                phone: person.phone,
+                role: 'participant'
+            });
+            
+            renderAttendeesList();
+            
+            // Clear input and hide suggestions
+            const input = document.getElementById('addAttendeeInput');
+            input.value = '';
+            input.focus();
+            document.getElementById('attendeeSuggestions').style.display = 'none';
+            selectedSuggestionIndex = -1;
         }
         
         function removeAttendee(personId) {

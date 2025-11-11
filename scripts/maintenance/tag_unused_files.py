@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 class FileTagger:
-    def __init__(self, project_root="/home/pi/zoe"):
+    def __init__(self, project_root="/home/zoe/assistant"):
         self.project_root = Path(project_root)
         self.tags_file = self.project_root / "scripts/maintenance/file_tags.json"
         self.week_ago = time.time() - (7 * 24 * 60 * 60)  # 7 days ago

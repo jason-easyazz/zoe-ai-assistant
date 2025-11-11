@@ -130,7 +130,7 @@ The WebSocket connection to `/ws/intelligence` fails because:
 
 ## Files Modified
 
-1. **Database:** `/home/pi/zoe/data/zoe.db`
+1. **Database:** `/home/zoe/assistant/data/zoe.db`
    - Added `updated_at` column to `reminders` table
 
 2. **Code:** No code changes needed (was already correct)

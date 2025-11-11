@@ -244,7 +244,7 @@ The system is designed to work great on Pi 5 alone, with GPU training as an opti
 
 Run anytime:
 ```bash
-/home/pi/zoe/tools/verify-intelligence.sh
+/home/zoe/assistant/tools/verify-intelligence.sh
 ```
 
 Shows:
@@ -255,7 +255,7 @@ Shows:
 
 ---
 
-**Questions?** See `/home/pi/zoe/docs/SYSTEM_READY.md`
+**Questions?** See `/home/zoe/assistant/docs/SYSTEM_READY.md`
 
 **Already happy with Zoe?** Perfect! No further action needed. System is optimized.
 

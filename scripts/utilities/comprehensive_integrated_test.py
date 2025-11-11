@@ -411,14 +411,14 @@ async def main():
     # Generate and save report
     report = tester.generate_test_report(results)
     
-    with open("/home/pi/zoe/COMPREHENSIVE_INTEGRATED_TEST_REPORT.md", "w") as f:
+    with open(str(PROJECT_ROOT / "COMPREHENSIVE_INTEGRATED_TEST_REPORT.md"), "w") as f:
         f.write(report)
     
     print("\n" + "="*80)
     print("🎉 COMPREHENSIVE INTEGRATED SYSTEM TEST COMPLETE!")
     print("="*80)
     print(report)
-    print("\n📄 Full report saved to: /home/pi/zoe/COMPREHENSIVE_INTEGRATED_TEST_REPORT.md")
+    print("\n📄 Full report saved to: /home/zoe/assistant/COMPREHENSIVE_INTEGRATED_TEST_REPORT.md")
 
 if __name__ == "__main__":
     asyncio.run(main())

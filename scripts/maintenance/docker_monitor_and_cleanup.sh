@@ -6,8 +6,8 @@
 
 set -e
 
-LOG_FILE="/home/pi/zoe/data/docker_monitor.log"
-ALERT_FILE="/home/pi/zoe/data/disk_alerts.log"
+LOG_FILE="/home/zoe/assistant/data/docker_monitor.log"
+ALERT_FILE="/home/zoe/assistant/data/disk_alerts.log"
 
 # Thresholds
 DOCKER_CRITICAL_GB=50  # If Docker uses more than 50GB, trigger aggressive cleanup

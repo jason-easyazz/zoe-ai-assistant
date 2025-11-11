@@ -18,6 +18,7 @@ services:
     - DOCKER_HOST=unix:///var/run/docker.sock
     - PROJECT_ROOT=/home/zoe/assistant
     - FULL_ACCESS=true
+    - ZOE_DEV_MODE=true
     - DATABASE_PATH=/app/data/zoe.db
     networks:
     - zoe-network
@@ -241,6 +242,51 @@ services:
       retries: 3
     env_file:
     - .env
+  zoe-tensorrt:
+    build: ./services/zoe-tensorrt
+    container_name: zoe-tensorrt
+    restart: unless-stopped
+    ports:
+    - 8011:8011
+    volumes:
+    - ./services/zoe-tensorrt:/app
+    - /home/zoe/tensorrt_workspace:/workspace
+    environment:
+    - PYTHONUNBUFFERED=1
+    - TENSORRT_ENGINE_DIR=/workspace/models/hermes3-8b-trt-engine
+    networks:
+    - zoe-network
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8011/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    env_file:
+    - .env
+  
+  matrix-mcp-server:
+    image: ghcr.io/mjknowles/matrix-mcp-server:latest
+    container_name: matrix-mcp-server
+    restart: unless-stopped
+    ports:
+    - "3001:3000"
+    environment:
+    - MATRIX_HOMESERVER_URL=${MATRIX_HOMESERVER:-https://matrix.org}
+    - MATRIX_USER_ID=${MATRIX_USER:-}
+    - MATRIX_ACCESS_TOKEN=${MATRIX_ACCESS_TOKEN:-}
+    networks:
+    - zoe-network
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - wget --spider -q http://localhost:3000/health || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
   zoe-ui:
     image: nginx:alpine
     container_name: zoe-ui
@@ -255,15 +301,29 @@ services:
     - zoe-network
     restart: unless-stopped
   zoe-ollama:
-    image: ollama/ollama:latest
+    image: dustynv/ollama:r36.2.0  # ✅ JETSON-OPTIMIZED: Better GPU detection
     container_name: zoe-ollama
     ports:
     - 11434:11434
     volumes:
     - zoe_ollama_data:/root/.ollama
+    devices:  # ✅ JETSON: Explicitly mount GPU devices
+    - /dev/nvidia0:/dev/nvidia0
+    - /dev/nvidiactl:/dev/nvidiactl
+    - /dev/nvidia-modeset:/dev/nvidia-modeset
+    environment:
+    - OLLAMA_GPU_LAYERS=-1
     networks:
     - zoe-network
     restart: unless-stopped
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
   zoe-redis:
     image: redis:alpine
     container_name: zoe-redis
@@ -325,6 +385,7 @@ services:
     - N8N_SECURE_COOKIE=true
     - N8N_PROTOCOL=https
     - N8N_HOST=zoe.local
+    - N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true
     - N8N_PORT=5678
     - WEBHOOK_URL=https://zoe.local:5678/
     - N8N_SSL_CERT=/ssl/zoe.crt
@@ -442,6 +503,7 @@ services:
       start_period: 30s
 networks:
   zoe-network:
+    name: zoe-network  # ✅ FIXED: Explicit name prevents "assistant_" prefix
     driver: bridge
 volumes:
   zoe_ollama_data: null

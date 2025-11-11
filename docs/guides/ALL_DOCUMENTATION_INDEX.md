@@ -19,7 +19,7 @@
 - Question 3: Need PersonExpert? → ❌ NO
 - Summary table and next steps
 
-**Location:** `/home/pi/zoe/FINAL_STATUS_REPORT.md`
+**Location:** `/home/zoe/assistant/FINAL_STATUS_REPORT.md`
 
 ---
 
@@ -32,7 +32,7 @@
 - Better solution: MCP tool
 - Final recommendation: DON'T create it
 
-**Location:** `/home/pi/zoe/PERSON_EXPERT_RECOMMENDATION.md`
+**Location:** `/home/zoe/assistant/PERSON_EXPERT_RECOMMENDATION.md`
 
 ---
 
@@ -44,7 +44,7 @@
 - Files that needed attention
 - Context for external review
 
-**Location:** `/home/pi/zoe/CODEX_HELP_REQUEST.md`
+**Location:** `/home/zoe/assistant/CODEX_HELP_REQUEST.md`
 
 ---
 
@@ -60,7 +60,7 @@
 - Protection mechanisms
 - Recommended next steps
 
-**Location:** `/home/pi/zoe/tests/e2e/CHANGES_DOCUMENTATION.md`
+**Location:** `/home/zoe/assistant/tests/e2e/CHANGES_DOCUMENTATION.md`
 
 ---
 
@@ -73,7 +73,7 @@
 - Immediate action required
 - Summary of protection status
 
-**Location:** `/home/pi/zoe/tests/e2e/PROTECTION_CHECKLIST.md`
+**Location:** `/home/zoe/assistant/tests/e2e/PROTECTION_CHECKLIST.md`
 
 ---
 
@@ -90,7 +90,7 @@
 - Future enhancements
 - Verification checklist
 
-**Location:** `/home/pi/zoe/tests/e2e/README.md`
+**Location:** `/home/zoe/assistant/tests/e2e/README.md`
 
 ---
 
@@ -103,7 +103,7 @@
 - Actions executed count
 - Response relevance
 
-**Location:** `/home/pi/zoe/tests/e2e/ALL_43_TESTS_QA.txt`
+**Location:** `/home/zoe/assistant/tests/e2e/ALL_43_TESTS_QA.txt`
 
 ---
 
@@ -116,7 +116,7 @@
 - Response relevance analysis
 - Recommendations
 
-**Location:** `/home/pi/zoe/tests/e2e/COMPREHENSIVE_FINAL_SUMMARY.md`
+**Location:** `/home/zoe/assistant/tests/e2e/COMPREHENSIVE_FINAL_SUMMARY.md`
 
 ---
 
@@ -128,7 +128,7 @@
 - What was fixed
 - Test coverage
 
-**Location:** `/home/pi/zoe/tests/e2e/FINAL_TEST_REPORT.md`
+**Location:** `/home/zoe/assistant/tests/e2e/FINAL_TEST_REPORT.md`
 
 ---
 
@@ -139,7 +139,7 @@
 - Timestamp, success rate, metadata
 - Programmatically parseable
 
-**Location:** `/home/pi/zoe/tests/e2e/detailed_test_report.json`
+**Location:** `/home/zoe/assistant/tests/e2e/detailed_test_report.json`
 
 ---
 
@@ -193,7 +193,7 @@
 
 **Check all files exist:**
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 ls -lh FINAL_STATUS_REPORT.md \
        PERSON_EXPERT_RECOMMENDATION.md \
        CODEX_HELP_REQUEST.md \
@@ -213,7 +213,7 @@ ls -lh FINAL_STATUS_REPORT.md \
 ## 📦 Commit These Files
 
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 git add FINAL_STATUS_REPORT.md \
         PERSON_EXPERT_RECOMMENDATION.md \
         CODEX_HELP_REQUEST.md \

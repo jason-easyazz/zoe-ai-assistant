@@ -11,6 +11,10 @@ import aiosqlite
 from pywebpush import webpush, WebPushException
 from py_vapid import Vapid
 import os
+from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 
 from models.push_subscription import NotificationPayload
 
@@ -22,7 +26,7 @@ class PushNotificationService:
     
     def __init__(self, db_path: str = None):
         if db_path is None:
-            db_path = os.getenv("DATABASE_PATH", "/home/pi/zoe/data/zoe.db")
+            db_path = os.getenv("DATABASE_PATH", os.getenv("DATABASE_PATH", str(Path(__file__).parent.parent.parent.resolve() / "data" / "zoe.db")))
         self.db_path = db_path
         self.vapid_private_key_path = None
         self.vapid_public_key = None
@@ -31,8 +35,8 @@ class PushNotificationService:
     
     def _load_vapid_keys(self):
         """Load or generate VAPID keys for authentication"""
-        private_key_path = "/home/pi/zoe/config/vapid_private.pem"
-        public_key_path = "/home/pi/zoe/config/vapid_public.pem"
+        private_key_path = str(PROJECT_ROOT / "config/vapid_private.pem")
+        public_key_path = str(PROJECT_ROOT / "config/vapid_public.pem")
         
         try:
             # Try to load existing keys
@@ -50,7 +54,7 @@ class PushNotificationService:
                 # Keys don't exist - user needs to generate them
                 error_msg = (
                     "VAPID keys not found! Please generate them:\n"
-                    "  python3 /home/pi/zoe/scripts/utilities/generate-vapid-keys.py"
+                    f"  python3 {PROJECT_ROOT}/scripts/utilities/generate-vapid-keys.py"
                 )
                 logger.error(f"❌ {error_msg}")
                 raise FileNotFoundError(error_msg)

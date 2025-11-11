@@ -136,7 +136,7 @@ When you open http://localhost:8080/developer/:
 ## 🔧 To Make Everything Work Perfectly
 
 ### Critical Fix (Docker Socket):
-**File**: `/home/pi/zoe/docker-compose.yml`
+**File**: `/home/zoe/assistant/docker-compose.yml`
 
 Add to `zoe-core` service:
 ```yaml
@@ -149,7 +149,7 @@ zoe-core:
 
 Then restart:
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 docker-compose restart zoe-core
 ```
 

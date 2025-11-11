@@ -76,7 +76,7 @@ The enhanced enforcement system provides **9 automated checks** to prevent commo
 **Purpose**: Prevents hardcoded database paths  
 **Checks**:
 - All code uses `os.getenv("DATABASE_PATH")`
-- No hardcoded paths like `/home/pi/zoe/data/zoe.db`
+- No hardcoded paths like `/home/zoe/assistant/data/zoe.db`
 - Docker/local environment portability
 
 **Why**: Docker containers use different paths than host

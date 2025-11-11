@@ -220,11 +220,11 @@ curl https://zoe.yourname.com/sw.js
 **Solutions:**
 ```bash
 # Regenerate icons
-cd /home/pi/zoe
+cd /home/zoe/assistant
 ./scripts/utilities/generate-pwa-icons.sh
 
 # Check icons exist
-ls -lh /home/pi/zoe/services/zoe-ui/dist/icons/
+ls -lh /home/zoe/assistant/services/zoe-ui/dist/icons/
 
 # Should see: icon-192.png, icon-512.png, etc.
 ```
@@ -311,10 +311,10 @@ curl https://zoe.yourname.com/sw.js | head -5
 curl https://zoe.yourname.com/manifest.json | jq .name
 
 # Check icons exist
-ls -lh /home/pi/zoe/services/zoe-ui/dist/icons/
+ls -lh /home/zoe/assistant/services/zoe-ui/dist/icons/
 
 # Verify HTML has PWA tags
-grep -l 'rel="manifest"' /home/pi/zoe/services/zoe-ui/dist/*.html | wc -l
+grep -l 'rel="manifest"' /home/zoe/assistant/services/zoe-ui/dist/*.html | wc -l
 # Should show: 15 (all HTML files)
 ```
 

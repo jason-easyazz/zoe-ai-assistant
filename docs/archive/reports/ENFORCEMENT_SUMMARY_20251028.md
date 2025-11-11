@@ -225,14 +225,14 @@ python3 tools/audit/validate_commit_message.py /tmp/msg
 
 ## Files Modified
 
-1. `/home/pi/zoe/PROJECT_STATUS.md` - Updated to v0.0.1, honest claims
-2. `/home/pi/zoe/.git/hooks/pre-commit` - Added 3 new checks
-3. `/home/pi/zoe/.git/hooks/commit-msg` - NEW file (validates commits)
-4. `/home/pi/zoe/tools/audit/validate_changelog.py` - NEW tool
-5. `/home/pi/zoe/tools/audit/validate_commit_message.py` - NEW tool
-6. `/home/pi/zoe/tools/audit/best_practices_check.py` - NEW tool
-7. `/home/pi/zoe/docs/governance/ENHANCED_ENFORCEMENT.md` - NEW docs
-8. `/home/pi/zoe/ENFORCEMENT_SUMMARY.md` - NEW (this file)
+1. `/home/zoe/assistant/PROJECT_STATUS.md` - Updated to v0.0.1, honest claims
+2. `/home/zoe/assistant/.git/hooks/pre-commit` - Added 3 new checks
+3. `/home/zoe/assistant/.git/hooks/commit-msg` - NEW file (validates commits)
+4. `/home/zoe/assistant/tools/audit/validate_changelog.py` - NEW tool
+5. `/home/zoe/assistant/tools/audit/validate_commit_message.py` - NEW tool
+6. `/home/zoe/assistant/tools/audit/best_practices_check.py` - NEW tool
+7. `/home/zoe/assistant/docs/governance/ENHANCED_ENFORCEMENT.md` - NEW docs
+8. `/home/zoe/assistant/ENFORCEMENT_SUMMARY.md` - NEW (this file)
 
 ---
 

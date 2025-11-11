@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-PROJECT_ROOT = Path("/home/pi/zoe")
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 CHANGELOG = PROJECT_ROOT / "CHANGELOG.md"
 
 def validate_changelog():

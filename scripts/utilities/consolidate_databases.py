@@ -11,11 +11,14 @@ import os
 from datetime import datetime
 from pathlib import Path
 
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
 class DatabaseConsolidator:
     def __init__(self):
-        self.data_dir = Path("/home/pi/zoe/data")
+        self.data_dir = PROJECT_ROOT / "data"
         self.primary_db = self.data_dir / "zoe.db"
-        self.log_file = Path("/home/pi/zoe/database_consolidation.log")
+        self.log_file = PROJECT_ROOT / "database_consolidation.log"
         
     def log(self, message: str):
         """Log message to file and console"""

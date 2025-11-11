@@ -32,7 +32,7 @@ Zoe can now understand relationships:
 ### 4. **Model Management** (Active Now!)
 CLI tool to manage models and training:
 ```bash
-/home/pi/zoe/tools/model-manager.py list
+/home/zoe/assistant/tools/model-manager.py list
 ```
 
 ### 5. **Training Dashboard** (Active Now!)
@@ -108,10 +108,10 @@ pip install unsloth
 
 # Set up nightly training (one-time)
 sudo crontab -e
-# Add line: 0 2 * * * /home/pi/zoe/scripts/train/nightly_training.sh
+# Add line: 0 2 * * * /home/zoe/assistant/scripts/train/nightly_training.sh
 
 # Verify setup
-python3 /home/pi/zoe/scripts/train/test_training_setup.py
+python3 /home/zoe/assistant/scripts/train/test_training_setup.py
 ```
 
 **Without Unsloth:**
@@ -235,9 +235,9 @@ sqlite3 /app/data/training.db "SELECT user_input, zoe_output, corrected_output F
 
 ## 📞 Need Help?
 
-- **Documentation:** `/home/pi/zoe/docs/INTELLIGENCE_ENHANCEMENT_STATUS.md`
-- **Full Plan:** `/home/pi/zoe/llm-intelligence-enhancement.plan.md`
-- **Installation Guide:** `/home/pi/zoe/docs/guides/UNSLOTH_INSTALLATION.md`
+- **Documentation:** `/home/zoe/assistant/docs/INTELLIGENCE_ENHANCEMENT_STATUS.md`
+- **Full Plan:** `/home/zoe/assistant/llm-intelligence-enhancement.plan.md`
+- **Installation Guide:** `/home/zoe/assistant/docs/guides/UNSLOTH_INSTALLATION.md`
 - **Test Setup:** `python3 scripts/train/test_training_setup.py`
 
 ---
@@ -256,7 +256,7 @@ sqlite3 /app/data/training.db "SELECT COUNT(*) FROM training_examples WHERE date
 
 ### List Models
 ```bash
-/home/pi/zoe/tools/model-manager.py list
+/home/zoe/assistant/tools/model-manager.py list
 ```
 
 ### Check Graph Stats

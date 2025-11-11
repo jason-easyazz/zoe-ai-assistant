@@ -5,7 +5,7 @@
 If this is your first time installing Zoe, initialize the databases:
 
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 
 # Initialize databases from schemas
 ./scripts/setup/init_databases.sh
@@ -19,7 +19,7 @@ cd /home/pi/zoe
 ## 🚀 How to Start Zoe
 
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 ./start-zoe.sh
 ```
 
@@ -79,10 +79,10 @@ cd /home/pi/zoe
 
 ## 📁 File Structure
 
-- `/home/pi/zoe/start-zoe.sh` - Start everything
-- `/home/pi/zoe/stop-zoe.sh` - Stop everything  
-- `/home/pi/zoe/services/zoe-auth/` - Authentication service
-- `/home/pi/zoe/services/zoe-ui/dist/` - Web interface
+- `/home/zoe/assistant/start-zoe.sh` - Start everything
+- `/home/zoe/assistant/stop-zoe.sh` - Stop everything  
+- `/home/zoe/assistant/services/zoe-auth/` - Authentication service
+- `/home/zoe/assistant/services/zoe-ui/dist/` - Web interface
 - `/tmp/zoe-*.log` - Log files
 
 ## 🔄 For Developers

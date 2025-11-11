@@ -37,7 +37,7 @@ def main():
     print("=" * 50)
     
     # Change to project directory
-    os.chdir('/home/pi/zoe')
+    os.chdir('/home/zoe/assistant')
     
     initial_size = get_git_size()
     print(f"📊 Initial git size: {initial_size}")

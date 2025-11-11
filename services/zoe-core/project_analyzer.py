@@ -78,7 +78,7 @@ class ProjectAnalyzer:
             pass
         
         # Analyze scripts
-        scripts_path = Path("/home/pi/zoe/scripts")
+        scripts_path = Path(__file__).parent.parent.parent.resolve() / "scripts"
         if scripts_path.exists():
             for category in scripts_path.iterdir():
                 if category.is_dir():

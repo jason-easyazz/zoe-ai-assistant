@@ -97,8 +97,8 @@ await zoePushNotifications.sendTest()
 ## 🔑 Technical Details
 
 ### VAPID Keys Generated:
-- **Private Key:** `/home/pi/zoe/config/vapid_private.pem` (600 permissions)
-- **Public Key:** `/home/pi/zoe/config/vapid_public.pem` (644 permissions)
+- **Private Key:** `/home/zoe/assistant/config/vapid_private.pem` (600 permissions)
+- **Public Key:** `/home/zoe/assistant/config/vapid_public.pem` (644 permissions)
 - **Public Key Value:** `BJ4JKRfD0Drwjef...` (shown in API response)
 
 ### Database Tables Created:
@@ -129,7 +129,7 @@ App icon is now a **beautiful gradient orb** (per your request):
 - 14 sizes (72px to 512px)
 - Maskable variants for Android
 
-Located: `/home/pi/zoe/services/zoe-ui/dist/icons/`
+Located: `/home/zoe/assistant/services/zoe-ui/dist/icons/`
 
 ---
 
@@ -319,10 +319,10 @@ All documentation has been created:
 ### Commands:
 ```bash
 # View active subscriptions
-sqlite3 /home/pi/zoe/data/zoe.db "SELECT COUNT(*) FROM push_subscriptions WHERE active=1;"
+sqlite3 /home/zoe/assistant/data/zoe.db "SELECT COUNT(*) FROM push_subscriptions WHERE active=1;"
 
 # View notification log
-sqlite3 /home/pi/zoe/data/zoe.db "SELECT * FROM notification_log ORDER BY sent_at DESC LIMIT 10;"
+sqlite3 /home/zoe/assistant/data/zoe.db "SELECT * FROM notification_log ORDER BY sent_at DESC LIMIT 10;"
 
 # Check services
 docker logs zoe-core 2>&1 | grep "reminder service"

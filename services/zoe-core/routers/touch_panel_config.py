@@ -17,7 +17,10 @@ import time
 import uuid
 from datetime import datetime
 import asyncio
-import os
+from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 
 router = APIRouter(prefix="/api/touch-panels", tags=["touch-panels"])
 
@@ -457,8 +460,8 @@ sudo apt update
 sudo apt install -y chromium-browser unclutter
 
 # Create Zoe touch interface
-mkdir -p /home/pi/zoe-touch
-cd /home/pi/zoe-touch
+mkdir -p {PROJECT_ROOT}-touch
+cd {PROJECT_ROOT}-touch
 
 # Create simple touch interface
 cat > index.html << 'EOF'
@@ -510,7 +513,7 @@ cat > /home/pi/.config/autostart/zoe-touch.desktop << 'EOF'
 [Desktop Entry]
 Type=Application
 Name=Zoe Touch Panel
-Exec=chromium-browser --kiosk --disable-infobars file:///home/pi/zoe-touch/index.html
+Exec=chromium-browser --kiosk --disable-infobars file://{PROJECT_ROOT}-touch/index.html
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
@@ -575,7 +578,7 @@ EOF
 # Install all discovery components
 cd /tmp
 git clone https://github.com/your-zoe-repo/touch-panel-discovery.git || echo "Using local files"
-cd touch-panel-discovery 2>/dev/null || cd /home/pi/zoe/services/touch-panel-discovery
+cd touch-panel-discovery 2>/dev/null || cd {PROJECT_ROOT}/services/touch-panel-discovery
 
 # Install dependencies
 pip3 install --user -r requirements.txt
@@ -724,7 +727,7 @@ async def get_discovery_client():
     Return the discovery client Python script
     """
     from fastapi.responses import PlainTextResponse
-    with open('/home/pi/zoe/services/touch-panel-discovery/simple_discovery_client.py', 'r') as f:
+    with open(f'{PROJECT_ROOT}/services/touch-panel-discovery/simple_discovery_client.py', 'r') as f:
         return PlainTextResponse(f.read(), media_type='text/plain')
 
 @router.get("/agent-script") 
@@ -732,5 +735,5 @@ async def get_agent_script():
     """
     Return the touch panel agent Python script
     """
-    with open('/home/pi/zoe/services/touch-panel-discovery/touch_panel_agent.py', 'r') as f:
+    with open(f'{PROJECT_ROOT}/services/touch-panel-discovery/touch_panel_agent.py', 'r') as f:
         return f.read()

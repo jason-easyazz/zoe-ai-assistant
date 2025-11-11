@@ -296,14 +296,14 @@ async def main():
     # Generate and save report
     report = tester.generate_test_report(results)
     
-    with open("/home/pi/zoe/INTELLIGENT_SYSTEM_TEST_REPORT.md", "w") as f:
+    with open(str(PROJECT_ROOT / "INTELLIGENT_SYSTEM_TEST_REPORT.md"), "w") as f:
         f.write(report)
     
     print("\n" + "="*80)
     print("🎉 INTELLIGENT MODEL MANAGEMENT SYSTEM TEST COMPLETE!")
     print("="*80)
     print(report)
-    print("\n📄 Full report saved to: /home/pi/zoe/INTELLIGENT_SYSTEM_TEST_REPORT.md")
+    print("\n📄 Full report saved to: /home/zoe/assistant/INTELLIGENT_SYSTEM_TEST_REPORT.md")
 
 if __name__ == "__main__":
     asyncio.run(main())

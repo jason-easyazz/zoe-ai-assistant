@@ -6,7 +6,8 @@ Automatically fix all references to old documentation files
 from pathlib import Path
 import re
 
-PROJECT_ROOT = Path("/home/pi/zoe")
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 
 # Mapping of old files to new files
 REPLACEMENTS = {

@@ -407,7 +407,7 @@ Example multi-expert task:
 ### Testing
 ```bash
 # Run integration tests
-cd /home/pi/zoe
+cd /home/zoe/assistant
 python3 tests/integration/test_people_system.py
 
 # Expected output: ✅ ALL TESTS PASSED

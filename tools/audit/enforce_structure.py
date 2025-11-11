@@ -7,7 +7,8 @@ Exit code 0 = pass, 1 = fail
 from pathlib import Path
 import sys
 
-PROJECT_ROOT = Path("/home/pi/zoe")
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 MAX_ROOT_DOCS = 10
 ALLOWED_ROOT_SCRIPTS = ["verify_updates.sh", "start-zoe.sh", "stop-zoe.sh"]
 ALLOWED_ROOT_TESTS = ["test_architecture.py"]

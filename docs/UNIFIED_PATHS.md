@@ -30,7 +30,7 @@ cd /home/zoe/assistant
 git clone https://github.com/jason-easyazz/zoe-ai-assistant.git .
 
 # Or if already cloned elsewhere
-sudo mv /home/pi/zoe /home/zoe/assistant
+sudo mv /home/zoe/assistant /home/zoe/assistant
 sudo chown -R zoe:zoe /home/zoe/assistant
 ```
 
@@ -62,17 +62,17 @@ pwd                  # Should show: /home/zoe/assistant
 
 ## Migration Notes
 
-If Pi already has code in `/home/pi/zoe`:
+If Pi already has code in `/home/zoe/assistant`:
 
 1. **Stop services:**
    ```bash
-   cd /home/pi/zoe
+   cd /home/zoe/assistant
    docker-compose down
    ```
 
 2. **Move directory:**
    ```bash
-   sudo mv /home/pi/zoe /home/zoe/assistant
+   sudo mv /home/zoe/assistant /home/zoe/assistant
    sudo chown -R zoe:zoe /home/zoe/assistant
    ```
 

@@ -7,7 +7,9 @@ since these functions are not implemented properly
 import re
 from pathlib import Path
 
-ui_dir = Path("/home/pi/zoe/services/zoe-ui/dist")
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+ui_dir = PROJECT_ROOT / "services/zoe-ui/dist"
 
 # Pages that reference reminders
 pages_to_fix = [

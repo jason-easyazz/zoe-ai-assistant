@@ -8,6 +8,9 @@ import sqlite3
 import json
 import os
 from pathlib import Path
+
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 from collections import defaultdict
 
 def analyze_database(db_path):
@@ -61,7 +64,7 @@ def main():
     print("=" * 50)
     
     # Find all databases
-    data_dir = Path("/home/pi/zoe/data")
+    data_dir = PROJECT_ROOT / "data"
     databases = list(data_dir.glob("*.db"))
     
     print(f"Found {len(databases)} databases:")
@@ -94,7 +97,7 @@ def main():
     print(f"   Total tables: {total_tables}")
     
     # Save detailed analysis
-    analysis_file = "/home/pi/zoe/database_analysis.json"
+    analysis_file = str(PROJECT_ROOT / "database_analysis.json")
     with open(analysis_file, 'w') as f:
         json.dump(all_schemas, f, indent=2, default=str)
     

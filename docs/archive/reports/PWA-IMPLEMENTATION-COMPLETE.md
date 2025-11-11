@@ -98,7 +98,7 @@
 ### One-Command Deployment:
 
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 ./scripts/deployment/deploy-phase2-push-notifications.sh
 ```
 
@@ -185,7 +185,7 @@ Per your request, the app icons are now:
 - ✅ Professional and clean
 - ✅ All sizes: 72px to 512px
 
-Located: `/home/pi/zoe/services/zoe-ui/dist/icons/`
+Located: `/home/zoe/assistant/services/zoe-ui/dist/icons/`
 
 ---
 

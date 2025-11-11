@@ -19,7 +19,7 @@ This document defines the **mandatory** structure and rules for the Zoe project.
 ### ⚠️ MANDATORY: Use Environment Variables for Database Paths
 
 **PROBLEM**: Docker containers map paths differently:
-- Host: `/home/pi/zoe/data/zoe.db`
+- Host: `/home/zoe/assistant/data/zoe.db`
 - Container: `/app/data/zoe.db`
 
 **SOLUTION**: Always use `os.getenv("DATABASE_PATH")`
@@ -30,13 +30,13 @@ import os
 
 def __init__(self, db_path: str = None):
     if db_path is None:
-        db_path = os.getenv("DATABASE_PATH", "/home/pi/zoe/data/zoe.db")
+        db_path = os.getenv("DATABASE_PATH", "/home/zoe/assistant/data/zoe.db")
     self.db_path = db_path
 ```
 
 ### ❌ WRONG Pattern (Will Break in Docker):
 ```python
-def __init__(self, db_path: str = "/home/pi/zoe/data/zoe.db"):  # HARDCODED!
+def __init__(self, db_path: str = "/home/zoe/assistant/data/zoe.db"):  # HARDCODED!
 ```
 
 ### 🔒 Enforcement:
@@ -120,7 +120,7 @@ async def get_user_data(
 ## 📁 Mandatory Folder Structure
 
 ```
-/home/pi/zoe/
+/home/zoe/assistant/
 │
 ├── 📚 DOCUMENTATION (Root - Max 10 files)
 │   ├── README.md                    [REQUIRED] Project overview
@@ -374,7 +374,7 @@ Enforce project structure rules before commit
 from pathlib import Path
 import sys
 
-PROJECT_ROOT = Path("/home/pi/zoe")
+PROJECT_ROOT = Path("/home/zoe/assistant")
 MAX_ROOT_DOCS = 10
 
 def check_root_md_files():
@@ -655,7 +655,7 @@ jobs:
 ### 3. Monthly Audit
 ```bash
 # Cron job: Run 1st of each month
-0 0 1 * * cd /home/pi/zoe && python3 tools/audit/monthly_audit.sh
+0 0 1 * * cd /home/zoe/assistant && python3 tools/audit/monthly_audit.sh
 ```
 
 ---

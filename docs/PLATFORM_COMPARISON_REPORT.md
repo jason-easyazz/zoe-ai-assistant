@@ -263,7 +263,7 @@ else:
 | **Models** | GPU-optimized (`gemma3n-e2b-gpu-fixed`) | CPU-optimized (`llama3.2:1b`) |
 | **Ollama** | GPU acceleration | CPU threads |
 | **Whisper** | CUDA device | CPU device |
-| **Path** | `/home/zoe/assistant` | `/home/pi/zoe` |
+| **Path** | `/home/zoe/assistant` | `/home/zoe/assistant` |
 | **Services** | +code-execution, +mem-agent | Base only |
 
 ---

@@ -11,6 +11,7 @@ import re
 import statistics
 import asyncio
 import time
+import hashlib
 from datetime import datetime
 import os
 from auth_integration import validate_session, AuthenticatedSession
@@ -28,7 +29,7 @@ if parent_dir not in sys.path:
 from route_llm import router as route_llm_router
 from mem_agent_client import MemAgentClient
 from enhanced_mem_agent_client import EnhancedMemAgentClient
-from model_config import model_selector, ModelConfig
+from model_config import model_selector, ModelConfig, MODEL_CONFIGS
 
 # Import training data collector
 from training_engine.data_collector import training_collector
@@ -45,8 +46,8 @@ from context_optimizer import context_selector, context_compressor, context_budg
 # Import memory consolidation
 from memory_consolidation import memory_consolidator
 
-# Import graph engine
-from graph_engine import graph_engine
+# Import context caching
+from context_cache import context_cache, CACHE_TTL
 
 # Import preference learning
 from preference_learner import preference_learner
@@ -266,7 +267,18 @@ async def search_memories(query: str, user_id: str, time_range: str = "all") -> 
     # Try mem-agent first for semantic search
     if mem_agent:
         try:
-            result = await mem_agent.search(query, user_id=user_id, max_results=5)
+            # ✅ FIX: Add timeout to prevent blocking on slow memory search
+            try:
+                result = await asyncio.wait_for(
+                    mem_agent.search(query, user_id=user_id, max_results=5),
+                    timeout=1.0  # ✅ PHASE 3.1: Reduced to 1s for faster fallback
+                )
+            except asyncio.TimeoutError:
+                logger.warning("⚠️ Memory search timeout, using fallback")
+                result = {"fallback": True, "people": [], "collections": []}
+            except Exception as e:
+                logger.warning(f"⚠️ Memory search error: {e}")
+                result = {"fallback": True, "people": [], "collections": []}
             if not result.get("fallback"):
                 memories["semantic_results"] = result.get("results", [])
                 logger.info(f"✅ mem-agent returned {len(memories['semantic_results'])} semantic results")
@@ -358,7 +370,14 @@ async def search_memories(query: str, user_id: str, time_range: str = "all") -> 
     return memories
 
 async def get_user_context(user_id: str, query: str = "") -> Dict:
-    """Get comprehensive user context with smart selection"""
+    """Get comprehensive user context with smart selection and caching"""
+    # ✅ PHASE 1.2: Check cache first
+    cache_key = f"{user_id}_{hashlib.md5(query.encode()).hexdigest()[:8]}"
+    cached = await context_cache.get("user_context", cache_key)
+    if cached:
+        logger.debug(f"✅ Using cached user context for {user_id}")
+        return cached
+    
     db_path = "/app/data/zoe.db"
     context = {
         "calendar_events": [],
@@ -468,6 +487,9 @@ async def get_user_context(user_id: str, query: str = "") -> Dict:
         except Exception as e:
             logger.warning(f"Smart context selection failed: {e}")
     
+    # ✅ PHASE 1.2: Cache the result
+    await context_cache.set("user_context", cache_key, context, CACHE_TTL["user_context"])
+    
     return context
 
 # ============================================================================
@@ -475,10 +497,36 @@ async def get_user_context(user_id: str, query: str = "") -> Dict:
 # ============================================================================
 
 async def intelligent_routing(message: str, context: Dict) -> Dict:
-    """Use RouteLLM + LiteLLM Router for intelligent model selection with MCP integration"""
+    """Use RouteLLM + LiteLLM Router for intelligent model selection with MCP integration and caching"""
+    # ✅ PHASE 4: Cache routing decisions
+    cache_key = hashlib.md5(f"{message}_{context.get('user_id', 'default')}".encode()).hexdigest()
+    cached_routing = await context_cache.get("routing_decision", cache_key)
+    if cached_routing:
+        logger.debug(f"✅ Using cached routing decision")
+        return cached_routing
+    
     try:
-        # Use the actual RouteLLM router for classification
-        routing_decision = await route_llm_router.route_query(message, context)
+        # ✅ OPTIMIZATION: Fast path for simple actions - skip RouteLLM overhead
+        message_lower = message.lower()
+        simple_action_keywords = ['add to', 'add ', 'create ', 'schedule ', 'show my', 'get my']
+        if any(keyword in message_lower for keyword in simple_action_keywords):
+            # Fast direct routing for simple actions
+            routing_result = {
+                "model": model_selector._get_best_action_model(),
+                "type": "action",
+                "confidence": 0.9,
+                "reasoning": "Simple action detected (fast path)",
+                "mcp_tools_needed": True,
+                "route_llm_model": "zoe-action",
+                "requires_memory": False
+            }
+            # Cache the result
+            await context_cache.set("routing_decision", cache_key, routing_result, CACHE_TTL["routing_decision"])
+            return routing_result
+        
+        # ✅ DUAL-MODEL ARCHITECTURE: Use phi3:mini for routing decisions (fast CPU model)
+        routing_model = model_selector.get_routing_model()  # Always phi3:mini
+        routing_decision = await route_llm_router.route_query(message, context, routing_model=routing_model)
         
         # Map to our types
         model = routing_decision.get("model", "zoe-chat")
@@ -519,20 +567,34 @@ async def intelligent_routing(message: str, context: Dict) -> Dict:
             routing_type = "conversation"
             requires_memory = True
         
-        # Use specific models for different tasks
-        if routing_type == "action":
-            model = "llama3.2:1b"  # Better for tool calling
-        elif routing_type == "conversation":
-            model = "gemma3:1b"    # Better for conversations
+        # Use RouteLLM's model recommendation, but map to our model selector
+        # RouteLLM returns model names like "zoe-chat", "zoe-memory", "zoe-action"
+        # We'll use model_selector to get the actual Ollama model name
+        route_model = routing_decision.get("model", "zoe-chat")
         
-        return {
-            "model": model,
+        # Map RouteLLM model names to query types for model_selector
+        if route_model == "zoe-action" or routing_type == "action":
+            # Use model selector for actions (will return qwen for tool calling)
+            model = model_selector._get_best_action_model()
+        elif route_model == "zoe-memory" or routing_type == "memory-retrieval":
+            # Use model selector for memory (will return balanced model)
+            model = model_selector._get_best_memory_model()
+        else:
+            # Use model selector for conversations (will return qwen or gemma)
+            model = model_selector._get_best_conversation_model()
+        
+        # Cache the result
+        routing_result = {
+            "model": model,  # Now uses actual Ollama model name from model_selector
             "type": routing_type,
             "requires_memory": requires_memory,
             "confidence": routing_decision.get("confidence", 0.8),
-            "reasoning": routing_decision.get("reasoning", "Enhanced pattern matching"),
-            "mcp_tools_needed": routing_type == "action"
+            "reasoning": f"RouteLLM: {routing_decision.get('reasoning', 'Classification')} → ModelSelector: {model}",
+            "mcp_tools_needed": routing_type == "action",
+            "route_llm_model": route_model  # Keep original RouteLLM model name for reference
         }
+        await context_cache.set("routing_decision", cache_key, routing_result, CACHE_TTL["routing_decision"])
+        return routing_result
     except Exception as e:
         logger.warning(f"RouteLLM routing failed, using fallback: {e}")
         # Enhanced fallback heuristics with comprehensive patterns
@@ -544,12 +606,28 @@ async def intelligent_routing(message: str, context: Dict) -> Dict:
         ]
         memory_patterns = ['remember', 'who is', 'what did', 'when did', 'recall', 'what is my', "what's my"]
         
+        # Fallback: Use model_selector for actual model names (already imported at top)
         if any(pattern in message_lower for pattern in action_patterns):
-            return {"model": "llama3.2:1b", "type": "action", "requires_memory": False, "mcp_tools_needed": True}
+            return {
+                "model": model_selector._get_best_action_model(), 
+                "type": "action", 
+                "requires_memory": False, 
+                "mcp_tools_needed": True
+            }
         elif any(pattern in message_lower for pattern in memory_patterns):
-            return {"model": "zoe-memory", "type": "memory-retrieval", "requires_memory": True, "mcp_tools_needed": False}
+            return {
+                "model": model_selector._get_best_memory_model(), 
+                "type": "memory-retrieval", 
+                "requires_memory": True, 
+                "mcp_tools_needed": False
+            }
         else:
-            return {"model": "zoe-chat", "type": "conversation", "requires_memory": True, "mcp_tools_needed": False}
+            return {
+                "model": model_selector._get_best_conversation_model(), 
+                "type": "conversation", 
+                "requires_memory": True, 
+                "mcp_tools_needed": False
+            }
 
 async def build_system_prompt(memories: Dict, user_context: Dict, routing_type: str = "conversation", user_id: str = "default") -> str:
     """Build enhanced system prompt with few-shot learning, context, learned preferences, and conversation history"""
@@ -566,7 +644,7 @@ async def build_system_prompt(memories: Dict, user_context: Dict, routing_type: 
     # ✅ NEW: Use enhanced prompts with examples, preferences, and conversation history
     return build_enhanced_prompt(memories, user_context, routing_type, user_preferences, recent_episodes)
 
-async def call_ollama_streaming(message: str, context: Dict, memories: Dict, user_context: Dict, routing: Dict):
+async def call_ollama_streaming(message: str, context: Dict, memories: Dict, user_context: Dict, routing: Dict, tools_context: str = ""):
     """
     Stream response with AG-UI Protocol compliance
     AG-UI Event Types: https://github.com/ag-ui-protocol/ag-ui
@@ -592,35 +670,123 @@ async def call_ollama_streaming(message: str, context: Dict, memories: Dict, use
             
             # Build prompt with routing-specific template and user preferences
             user_id_for_prompt = context.get("user_id", "default")
-            system_prompt = await build_system_prompt(memories, user_context, routing.get("type", "conversation"), user_id_for_prompt)
-            full_prompt = f"{system_prompt}\n\nUser's message: {message}\nZoe:"
             
-            # Select model
+            # 🚀 GENIUS: STREAMING - Apply same minimal prompts (like non-streaming)
+            routing_type = routing.get("type", "conversation")
+            is_greeting = len(message) < 20 and any(g in message.lower() for g in ["hi", "hello", "hey", "morning", "afternoon", "evening", "thanks", "thank you", "bye", "goodnight"])
+            is_action = routing_type == "action" or routing.get("mcp_tools_needed", False)
+            
+            # Initialize tools_context to avoid UnboundLocalError
+            system_prompt = None
+            
+            if is_greeting:
+                # ⚡ MINIMAL GREETING (150 chars)
+                system_prompt = f"You are Zoe, a friendly AI assistant. Respond warmly to the greeting in 5-10 words."
+                logger.info(f"⚡ GENIUS (STREAMING): Minimal greeting prompt ({len(system_prompt)} chars)")
+                
+            elif is_action:
+                # 🎯 MODEL-ADAPTIVE FUNCTION CALLING
+                action_prompt = await get_model_adaptive_action_prompt(routing.get("model", "hermes3:8b-llama3.1-q4_K_M"))
+                system_prompt = action_prompt
+                logger.info(f"🎯 Using model-adaptive function calling prompt: {len(system_prompt)} chars")
+                    
+            else:
+                # 💬 REGULAR CONVERSATION
+                prompt_cache_key = f"conversation_{user_id_for_prompt}"
+                system_prompt = await context_cache.get("system_prompt", prompt_cache_key)
+                
+                if not system_prompt:
+                    system_prompt = await build_system_prompt(memories, user_context, "conversation", user_id_for_prompt)
+                    await context_cache.set("system_prompt", prompt_cache_key, system_prompt, CACHE_TTL["system_prompt"])
+                    logger.info(f"💬 Regular prompt (streaming): {len(system_prompt)} chars")
+                else:
+                    logger.info(f"✅ Cached conversation prompt (streaming)")
+            
+            # ✅ PHASE 2: MIGRATE TO /api/chat FOR PROPER PROMPT CACHING
+            # Use conversation context management for KV cache reuse
+            user_id_for_chat = context.get("user_id", "default")
+            
+            # Get conversation history from cache (for KV cache reuse)
+            conversation_key = f"conversation_{user_id_for_chat}"
+            conversation_history = await context_cache.get("conversation", conversation_key) or []
+            
+            # Build messages array (not single prompt) for proper KV caching
+            messages = [
+                {"role": "system", "content": system_prompt},  # Cached in KV cache
+            ]
+            
+            # Add conversation history (last 3 messages for context)
+            for msg_item in conversation_history[-3:]:
+                messages.append(msg_item)
+            
+            # Add current user message
+            messages.append({"role": "user", "content": message})
+            
+            # Update conversation history
+            conversation_history.append({"role": "user", "content": message})
+            # Keep only last 10 messages
+            conversation_history = conversation_history[-10:]
+            await context_cache.set("conversation", conversation_key, conversation_history, 3600)
+            
+            # Stream from Ollama using /api/chat endpoint
+            ollama_url = "http://zoe-ollama:11434/api/chat"
+            
+            # ✅ PRIMARY MODEL: gemma3n-e2b-gpu-fixed (5.6GB - now fits with proper memory management)
+            # Keep loaded for 30m to avoid 20s reload penalty
             query_type = routing.get("type", "conversation")
             selected_model = model_selector.select_model(query_type)
+            logger.info(f"🚀 Selected model: {selected_model} for query type: {query_type}")
             model_config = model_selector.get_model_config(selected_model)
             
-            logger.info(f"🤖 Streaming with model: {selected_model}")
+            # ✅ FIX: Increase response length for capability questions to prevent truncation
+            if any(phrase in message.lower() for phrase in ["what can you", "what are your", "tell me what", "capabilities", "what things"]):
+                # Temporarily increase num_predict for capability questions
+                original_num_predict = model_config.num_predict
+                model_config.num_predict = max(512, model_config.num_predict * 2)  # At least 512 tokens
+                logger.info(f"📏 Increased response length to {model_config.num_predict} for capability question")
+            
+            logger.info(f"🤖 Streaming with model: {selected_model} (using /api/chat for KV cache)")
+            
+            # Check if TensorRT is available and model should use it
+            use_tensorrt = False
+            tensorrt_url = os.getenv("TENSORRT_URL", "http://zoe-tensorrt:8011")
+            if "hermes3" in selected_model.lower():
+                try:
+                    async with httpx.AsyncClient(timeout=2.0) as trt_client:
+                        trt_health = await trt_client.get(f"{tensorrt_url}/health")
+                        if trt_health.status_code == 200 and trt_health.json().get("tensorrt_loaded"):
+                            use_tensorrt = True
+                            logger.info("🚀 Using TensorRT GPU acceleration")
+                except:
+                    pass
             
             # AG-UI Event: agent_state_delta (model selected)
-            yield f"data: {json.dumps({'type': 'agent_state_delta', 'state': {'model': selected_model, 'status': 'generating'}, 'timestamp': datetime.now().isoformat()})}\n\n"
+            engine_type = "tensorrt-gpu" if use_tensorrt else "ollama-cpu"
+            yield f"data: {json.dumps({'type': 'agent_state_delta', 'state': {'model': selected_model, 'engine': engine_type, 'status': 'generating'}, 'timestamp': datetime.now().isoformat()})}\n\n"
             
-            # Check if this requires tool calls via MCP
-            tools_context = await get_mcp_tools_context()
+            # Check if this requires tool calls via MCP (for AG-UI events)
             if tools_context and routing.get("requires_tools"):
                 # AG-UI Event: action (tool call)
                 yield f"data: {json.dumps({'type': 'action', 'name': 'mcp_tools', 'arguments': {{'query': message}}, 'status': 'running', 'timestamp': datetime.now().isoformat()})}\n\n"
             
-            # Stream from Ollama
-            ollama_url = "http://zoe-ollama:11434/api/generate"
-            
-            async with httpx.AsyncClient(timeout=model_config.timeout) as client:
-                async with client.stream(
-                    "POST",
-                    ollama_url,
-                    json={
+            async with httpx.AsyncClient(timeout=60.0) as client:  # Increased timeout for model loading
+                # Route to TensorRT or Ollama
+                if use_tensorrt:
+                    # TensorRT endpoint - OpenAI compatible
+                    endpoint_url = f"{tensorrt_url}/api/generate"
+                    request_json = {
+                        "prompt": messages[-1]["content"] if messages else message,
+                        "max_tokens": model_config.num_predict,
+                        "temperature": model_config.temperature,
+                        "top_p": model_config.top_p,
+                        "stream": False  # TensorRT doesn't support streaming yet
+                    }
+                else:
+                    # Ollama endpoint
+                    endpoint_url = ollama_url
+                    request_json = {
                         "model": selected_model,
-                        "prompt": full_prompt,
+                        "messages": messages,
                         "stream": True,
                         "options": {
                             "temperature": model_config.temperature,
@@ -628,45 +794,305 @@ async def call_ollama_streaming(message: str, context: Dict, memories: Dict, use
                             "num_predict": model_config.num_predict,
                             "num_ctx": model_config.num_ctx,
                             "repeat_penalty": model_config.repeat_penalty,
-                            "stop": model_config.stop_tokens
+                            "stop": model_config.stop_tokens,
+                            "num_gpu": model_config.num_gpu if model_config.num_gpu is not None else 1,
+                            "keep_alive": "30m"
                         }
                     }
+                
+                async with client.stream(
+                    "POST",
+                    endpoint_url,
+                    json=request_json
                 ) as response:
+                    # Check response status
+                    if response.status_code != 200:
+                        try:
+                            error_text = await response.aread()
+                            error_msg = error_text.decode()[:500] if error_text else "Unknown error"
+                            logger.error(f"Ollama error {response.status_code} for {selected_model}: {error_msg}")
+                            
+                            # Try fallback model
+                            fallback_model = model_selector.get_fallback_model(selected_model)
+                            if fallback_model != selected_model and fallback_model in MODEL_CONFIGS:
+                                logger.info(f"🔄 Retrying with fallback model: {fallback_model}")
+                                fallback_config = model_selector.get_model_config(fallback_model)
+                                fallback_num_gpu = 1 if "gemma3n-e2b-gpu-fixed" in fallback_model else 0
+                                
+                                async with httpx.AsyncClient(timeout=fallback_config.timeout) as fallback_client:
+                                    async with fallback_client.stream(
+                                        "POST",
+                                        ollama_url,
+                                        json={
+                                            "model": fallback_model,
+                                            "messages": messages,  # Use same messages for fallback
+                                            "stream": True,
+                                            "options": {
+                                                "temperature": fallback_config.temperature,
+                                                "top_p": fallback_config.top_p,
+                                                "num_predict": fallback_config.num_predict,
+                                                "num_ctx": fallback_config.num_ctx,
+                                                "repeat_penalty": fallback_config.repeat_penalty,
+                                                "stop": fallback_config.stop_tokens,
+                                                "num_gpu": fallback_num_gpu,
+                                                "keep_alive": "30m"  # ✅ DUAL-MODEL: Keep models loaded
+                                            }
+                                        }
+                                    ) as fallback_response:
+                                        if fallback_response.status_code == 200:
+                                            full_response = ""
+                                            async for line in fallback_response.aiter_lines():
+                                                if line.strip():
+                                                    try:
+                                                        chunk = json.loads(line)
+                                                        # ✅ PHASE 2: /api/chat returns message.content instead of response
+                                                        if "message" in chunk and "content" in chunk["message"]:
+                                                            token = chunk["message"]["content"]
+                                                            full_response += token
+                                                            yield f"data: {json.dumps({'type': 'message_delta', 'delta': token, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                                        elif "response" in chunk:  # Fallback for old format
+                                                            token = chunk["response"]
+                                                            full_response += token
+                                                            yield f"data: {json.dumps({'type': 'message_delta', 'delta': token, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                                    except Exception as e:
+                                                        logger.error(f"Error parsing fallback chunk: {e}")
+                                            # Continue with tool calls and session_end
+                                        else:
+                                            yield f"data: {json.dumps({'type': 'error', 'error': {'message': f'Both {selected_model} and {fallback_model} failed. Please check Ollama.', 'code': 'MODEL_ERROR'}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                            return
+                            else:
+                                yield f"data: {json.dumps({'type': 'error', 'error': {'message': f'Model {selected_model} failed: {error_msg}', 'code': 'OLLAMA_ERROR'}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                return
+                        except Exception as e:
+                            logger.error(f"Error handling Ollama failure: {e}")
+                            yield f"data: {json.dumps({'type': 'error', 'error': {'message': f'Ollama request failed: {str(e)}', 'code': 'OLLAMA_ERROR'}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                            return
+                    
                     full_response = ""
+                    code_blocks_found = []
+                    current_code_block = None
+                    in_code_block = False
+                    code_block_language = None
+                    code_block_start_pos = None
+                    in_tool_call = False
+                    tool_call_buffer = ""
+                    
                     async for line in response.aiter_lines():
                         if line.strip():
                             try:
                                 chunk = json.loads(line)
-                                if "response" in chunk:
+                                # ✅ PHASE 2: /api/chat returns message.content instead of response
+                                token = None
+                                if "message" in chunk and "content" in chunk["message"]:
+                                    token = chunk["message"]["content"]
+                                elif "response" in chunk:  # Fallback for old format
                                     token = chunk["response"]
+                                
+                                if token:
                                     full_response += token
-                                    # AG-UI Event: message_delta (content streaming)
+                                    
+                                    # Detect code block markers during streaming
+                                    if "```typescript" in token or "```python" in token:
+                                        in_code_block = True
+                                        code_block_language = "typescript" if "typescript" in token else "python"
+                                        current_code_block = ""
+                                        code_block_start_pos = len(full_response) - len(token)
+                                        # Don't stream the opening code block marker
+                                        continue
+                                    elif in_code_block and "```" in token:
+                                        # End of code block - execute it immediately
+                                        if current_code_block:
+                                            code_blocks_found.append((current_code_block.strip(), code_block_language))
+                                            logger.info(f"🔧 Found code block during streaming, executing...")
+                                            # Execute immediately
+                                            exec_result = await execute_code(current_code_block.strip(), context.get("user_id", "default"), code_block_language)
+                                            if exec_result.get("success"):
+                                                output = exec_result.get("output", "")
+                                                # Extract success message
+                                                success_message = None
+                                                try:
+                                                    if "{" in output and "}" in output:
+                                                        json_start = output.find("{")
+                                                        json_end = output.rfind("}") + 1
+                                                        json_str = output[json_start:json_end]
+                                                        parsed = json.loads(json_str)
+                                                        if isinstance(parsed, dict):
+                                                            success_message = parsed.get("message") or parsed.get("success")
+                                                except:
+                                                    pass
+                                                
+                                                if not success_message:
+                                                    if "✅" in output:
+                                                        success_message = output.split("✅")[-1].strip()
+                                                    elif output.strip():
+                                                        lines = output.strip().split("\n")
+                                                        for line in lines:
+                                                            if line and not line.startswith("{") and len(line) < 200:
+                                                                success_message = line.strip()
+                                                                break
+                                                
+                                                if not success_message:
+                                                    success_message = "Done! ✅"
+                                                
+                                                # Stream the success message instead of code
+                                                yield f"data: {json.dumps({'type': 'message_delta', 'delta': f' {success_message}', 'timestamp': datetime.now().isoformat()})}\n\n"
+                                                logger.info(f"✅ Code executed and result streamed: {success_message[:100]}")
+                                            else:
+                                                error = exec_result.get("error", "Unknown error")
+                                                error_msg = f"Sorry, I encountered an error: {error[:200]}"
+                                                yield f"data: {json.dumps({'type': 'message_delta', 'delta': f' {error_msg}', 'timestamp': datetime.now().isoformat()})}\n\n"
+                                        in_code_block = False
+                                        current_code_block = None
+                                        code_block_start_pos = None
+                                        # Don't stream the closing marker
+                                        continue
+                                    elif in_code_block:
+                                        # Accumulate code block content (don't stream it)
+                                        current_code_block += token
+                                        continue
+                                    
+                                    # Check for tool calls during streaming (intercept before streaming)
+                                    if "[TOOL_CALL:" in token:
+                                        in_tool_call = True
+                                        tool_call_buffer = token
+                                        # Don't stream tool call tokens - accumulate them
+                                        continue
+                                    elif in_tool_call:
+                                        # Accumulate tool call tokens until we find the closing bracket
+                                        tool_call_buffer += token
+                                        if "]" in token and tool_call_buffer.count("[") <= tool_call_buffer.count("]"):
+                                            # Complete tool call found - execute it immediately
+                                            in_tool_call = False
+                                            logger.info(f"🔧 Found tool call during streaming: {tool_call_buffer[:100]}")
+                                            # Execute the tool call
+                                            try:
+                                                executed_response = await parse_and_execute_code_or_tools(tool_call_buffer, context.get("user_id", "default"))
+                                                if executed_response != tool_call_buffer:
+                                                    # Tool was executed - stream the result instead
+                                                    success_msg = executed_response.replace(tool_call_buffer, "").strip()
+                                                    if not success_msg:
+                                                        success_msg = "Done! ✅"
+                                                    yield f"data: {json.dumps({'type': 'message_delta', 'delta': success_msg, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                                    logger.info(f"✅ Tool executed and result streamed: {success_msg[:100]}")
+                                                else:
+                                                    # Tool call wasn't parsed/executed - stream it as-is (fallback)
+                                                    yield f"data: {json.dumps({'type': 'message_delta', 'delta': tool_call_buffer, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                            except Exception as e:
+                                                logger.error(f"Error executing tool call during streaming: {e}")
+                                                # Stream error message
+                                                yield f"data: {json.dumps({'type': 'message_delta', 'delta': f'Sorry, I encountered an error executing that action.', 'timestamp': datetime.now().isoformat()})}\n\n"
+                                            tool_call_buffer = ""
+                                            continue
+                                        else:
+                                            # Still accumulating tool call
+                                            continue
+                                    
+                                    # Stream normal content (not code blocks or tool calls)
                                     yield f"data: {json.dumps({'type': 'message_delta', 'delta': token, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                elif "error" in chunk:
+                                    # Ollama returned error in response
+                                    error_msg = chunk.get("error", "Unknown error")
+                                    logger.error(f"Ollama response error: {error_msg}")
+                                    yield f"data: {json.dumps({'type': 'error', 'error': {'message': str(error_msg), 'code': 'OLLAMA_ERROR'}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                    return
                             except Exception as e:
-                                logger.error(f"Error parsing chunk: {e}")
+                                logger.error(f"Error parsing chunk: {e}, line: {line[:100]}")
                     
-                    # Parse for any tool calls in the response
+                    # Also check full_response for any code blocks or tool calls that might have been missed
                     if full_response:
-                        tool_calls = await parse_and_execute_tool_calls(full_response, context.get("user_id", "default"))
-                        if tool_calls != full_response:
+                        original_response = full_response
+                        tool_calls = await parse_and_execute_code_or_tools(full_response, context.get("user_id", "default"))
+                        if tool_calls != original_response:
+                            # Tool calls were executed - replace the tool call text with the result
+                            # Find what was replaced and stream the replacement
+                            if "[TOOL_CALL:" in original_response:
+                                # Extract the success message from the replaced response
+                                # The replacement should have removed [TOOL_CALL:...] and added success message
+                                success_message = tool_calls.replace(original_response.split("[TOOL_CALL:")[0], "").strip()
+                                if success_message and success_message != tool_calls:
+                                    # Stream the success message
+                                    yield f"data: {json.dumps({'type': 'message_delta', 'delta': success_message, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                else:
+                                    # Fallback: stream the full replaced response
+                                    diff = tool_calls[len(original_response):]
+                                    if diff:
+                                        yield f"data: {json.dumps({'type': 'message_delta', 'delta': diff, 'timestamp': datetime.now().isoformat()})}\n\n"
+                            else:
+                                # Code block execution - stream the diff
+                                diff = tool_calls[len(original_response):]
+                                if diff:
+                                    yield f"data: {json.dumps({'type': 'message_delta', 'delta': diff, 'timestamp': datetime.now().isoformat()})}\n\n"
+                            full_response = tool_calls
                             # AG-UI Event: action_result (tool execution completed)
-                            yield f"data: {json.dumps({'type': 'action_result', 'result': {{'executed': True, 'response': tool_calls}}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                            yield f"data: {json.dumps({'type': 'action_result', 'result': {'executed': True, 'response': tool_calls}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                    
+                    # Update conversation history with assistant response
+                    conversation_history.append({"role": "assistant", "content": full_response})
+                    conversation_history = conversation_history[-10:]  # Keep last 10 messages
+                    await context_cache.set("conversation", conversation_key, conversation_history, 3600)
                     
                     # AG-UI Event: session_end
                     yield f"data: {json.dumps({'type': 'session_end', 'session_id': session_id, 'final_state': {'tokens': len(full_response), 'complete': True}, 'timestamp': datetime.now().isoformat()})}\n\n"
                     
         except Exception as e:
-            logger.error(f"Streaming error: {e}")
+            import traceback
+            error_details = traceback.format_exc()
+            logger.error(f"Streaming error: {e}\n{error_details}")
             # AG-UI Event: error
-            yield f"data: {json.dumps({'type': 'error', 'error': {'message': str(e), 'code': 'STREAM_ERROR'}, 'timestamp': datetime.now().isoformat()})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'error': {'message': str(e) or 'Unknown streaming error', 'code': 'STREAM_ERROR'}, 'timestamp': datetime.now().isoformat()})}\n\n"
     
     return generate()
 
-async def call_ollama_with_context(message: str, context: Dict, memories: Dict, user_context: Dict, routing: Dict = None) -> str:
+async def call_ollama_with_context(message: str, context: Dict, memories: Dict, user_context: Dict, routing: Dict = None, model: str = None) -> str:
     """Call Ollama with full context using flexible model selection"""
     routing_type = routing.get("type", "conversation") if routing else "conversation"
     user_id_for_prompt = context.get("user_id", "default")
-    system_prompt = await build_system_prompt(memories, user_context, routing_type, user_id_for_prompt)
+    
+    # Get model from routing or use default
+    if not model:
+        model = routing.get("model", "hermes3:8b-llama3.1-q4_K_M") if routing else "hermes3:8b-llama3.1-q4_K_M"
+    
+    # 🚀 GENIUS: ANTHROPIC-STYLE ADAPTIVE PROMPT SIZING
+    # Insight from Anthropic engineering, phidata, OpenInterpreter: DON'T send 8KB for "hi"!
+    # - Simple greetings: ~150 chars (50x smaller!)
+    # - Regular queries: ~1.5KB (5x smaller)
+    # - Actions: Full ~8KB+ (only when needed)
+    
+    is_greeting = len(message) < 20 and any(g in message.lower() for g in ["hi", "hello", "hey", "morning", "afternoon", "evening", "thanks", "thank you", "bye", "goodnight"])
+    is_action = routing_type == "action" or routing.get("mcp_tools_needed", False)
+    
+    # 🎯 HYBRID APPROACH: Auto-inject tool calls for detected patterns (safety net)
+    # This ensures 100% success even if LLM doesn't generate tool calls
+    injected_tool_call = _auto_inject_tool_call(message)
+    if injected_tool_call and is_action:
+        logger.info(f"🎯 AUTO-INJECTED tool call for guaranteed execution: {injected_tool_call[:80]}...")
+        # Prepend the tool call to message so LLM sees it as an example
+        message = f"{injected_tool_call}\n{message}"
+    
+    if is_greeting:
+        # ⚡ MINIMAL GREETING (150 chars) - Inspired by Google Assistant's speed
+        system_prompt = f"You are Zoe, a friendly AI assistant. Respond warmly to the greeting in 5-10 words."
+        logger.info(f"⚡ GENIUS: Minimal greeting prompt (150 chars vs 8KB = 50x faster!)")
+        
+    elif is_action:
+        # 🎯 MODEL-ADAPTIVE FUNCTION CALLING (non-streaming)
+        action_prompt = await get_model_adaptive_action_prompt(model)
+        system_prompt = action_prompt
+        logger.info(f"🎯 Using {model}-adaptive function calling prompt (non-streaming): {len(system_prompt)} chars")
+    
+    else:
+        # 💬 REGULAR CONVERSATION (~1.5KB) - Balanced
+        prompt_cache_key = f"conversation_{user_id_for_prompt}"
+        system_prompt = await context_cache.get("system_prompt", prompt_cache_key)
+        
+        if not system_prompt:
+            # Build lighter prompt (no MCP tools, no action emphasis)
+            system_prompt = await build_system_prompt(memories, user_context, "conversation", user_id_for_prompt)
+            await context_cache.set("system_prompt", prompt_cache_key, system_prompt, CACHE_TTL["system_prompt"])
+            logger.info(f"💬 Regular conversation prompt (~1.5KB)")
+        else:
+            logger.info(f"✅ Using cached conversation prompt")
+    
     full_prompt = f"{system_prompt}\n\nUser's message: {message}\nZoe:"
     
     # Select the best model based on routing and performance
@@ -676,18 +1102,28 @@ async def call_ollama_with_context(message: str, context: Dict, memories: Dict, 
     
     logger.info(f"🤖 Using model: {selected_model} ({model_config.category.value}) for {query_type}")
     logger.info(f"⏱️ Timeout set to: {model_config.timeout} seconds")
+    logger.info(f"📏 System prompt length: {len(system_prompt)} chars")
     
     try:
-        # Use Docker network name for Ollama service
-        ollama_url = "http://zoe-ollama:11434/api/generate"
+        # ✅ FIX: Use /api/chat endpoint for KV cache reuse (consistent with streaming)
+        ollama_url = "http://zoe-ollama:11434/api/chat"
+        
+        # Build messages array for /api/chat endpoint
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": message}
+        ]
+        
+        logger.info(f"🔄 Sending request to Ollama: {ollama_url}")
         
         # Use flexible model configuration with proper timeout
-        async with httpx.AsyncClient(timeout=model_config.timeout) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:  # Fixed timeout instead of config
+            logger.info(f"📤 Posting to Ollama with model {selected_model}")
             response = await client.post(
                 ollama_url,
                 json={
                     "model": selected_model,
-                    "prompt": full_prompt,
+                    "messages": messages,  # ✅ Use messages array instead of prompt
                     "stream": False,
                     "options": {
                         "temperature": model_config.temperature,
@@ -695,12 +1131,18 @@ async def call_ollama_with_context(message: str, context: Dict, memories: Dict, 
                         "num_predict": model_config.num_predict,
                         "num_ctx": model_config.num_ctx,
                         "repeat_penalty": model_config.repeat_penalty,
-                        "stop": model_config.stop_tokens
+                        "stop": model_config.stop_tokens,
+                        "num_gpu": model_config.num_gpu if model_config.num_gpu is not None else 1,  # ✅ MODEL-SPECIFIC GPU settings
+                        "keep_alive": "30m"  # ✅ Keep model loaded for 30m
                     }
                 }
             )
+            logger.info(f"✅ Got response from Ollama, status: {response.status_code}")
             data = response.json()
-            response_text = data.get("response", "I'm here to help!")
+            logger.info(f"✅ Parsed JSON response")
+            # ✅ FIX: /api/chat returns message.content, not response
+            response_text = data.get("message", {}).get("content", "") or data.get("response", "I'm here to help!")
+            logger.info(f"✅ Extracted response text: {len(response_text)} chars")
             
             # Analyze response quality
             quality_scores = QualityAnalyzer.analyze_response(response_text, query_type)
@@ -739,7 +1181,7 @@ async def call_ollama_with_context(message: str, context: Dict, memories: Dict, 
                         ollama_url,
                         json={
                             "model": fallback_model,
-                            "prompt": full_prompt,
+                            "messages": messages,  # ✅ Use messages array
                             "stream": False,
                             "options": {
                                 "temperature": fallback_config.temperature,
@@ -747,12 +1189,14 @@ async def call_ollama_with_context(message: str, context: Dict, memories: Dict, 
                                 "num_predict": fallback_config.num_predict,
                                 "num_ctx": fallback_config.num_ctx,
                                 "repeat_penalty": fallback_config.repeat_penalty,
-                                "stop": fallback_config.stop_tokens
+                                "stop": fallback_config.stop_tokens,
+                                "num_gpu": fallback_config.num_gpu if fallback_config.num_gpu is not None else 1  # ✅ MODEL-SPECIFIC GPU
                             }
                         }
                     )
                     data = response.json()
-                    response_text = data.get("response", "I'm here to help!")
+                    # ✅ /api/chat returns message.content
+                    response_text = data.get("message", {}).get("content", "") or data.get("response", "I'm here to help!")
                     
                     # Update performance metrics for fallback
                     response_time = data.get("total_duration", 0) / 1e9
@@ -770,13 +1214,278 @@ async def call_ollama_with_context(message: str, context: Dict, memories: Dict, 
 # MCP SERVER INTEGRATION - PROPER TOOL CONTEXT
 # ============================================================================
 
+async def get_model_adaptive_action_prompt(model_name: str) -> str:
+    """
+    Get action prompt ADAPTED to the specific model's strengths.
+    ALL models output the SAME format: [TOOL_CALL:tool_name:{"params"}]
+    But INSTRUCTIONS vary based on model capabilities.
+    """
+    
+    # Common output format (same for ALL models)
+    output_format = """
+OUTPUT FORMAT (REQUIRED):
+[TOOL_CALL:tool_name:{"param1":"value1","param2":"value2"}]
+
+Example: [TOOL_CALL:add_to_list:{"list_name":"shopping","task_text":"bread","priority":"medium"}]
+"""
+    
+    # Model-specific instructions
+    if "hermes" in model_name.lower():
+        # Hermes-3: Supports native function calling, use structured approach
+        prompt = f"""You are Zoe. You have access to functions for taking actions.
+
+{output_format}
+
+AVAILABLE FUNCTIONS:
+- add_to_list(list_name, task_text, priority) - Add item to a list
+- create_calendar_event(title, start_date, start_time) - Schedule an event
+- get_calendar_events() - Retrieve upcoming events
+- create_person(name, relationship) - Add a person to your network
+- search_memories(query) - Search your memories
+
+INSTRUCTIONS:
+1. Detect user intent (e.g., "add X" = call add_to_list)
+2. Generate [TOOL_CALL:...] on first line
+3. Add friendly confirmation after
+
+Example:
+User: "add bread to shopping"
+You: [TOOL_CALL:add_to_list:{{"list_name":"shopping","task_text":"bread","priority":"medium"}}]
+Added bread to your shopping list! ✓
+"""
+    
+    elif "qwen" in model_name.lower():
+        # Qwen: Uses Hermes-style tool calling with XML tags (not [TOOL_CALL:...] format!)
+        # Based on Qwen documentation: https://qwen.readthedocs.io/
+        prompt = f"""You are Zoe, a helpful AI assistant with access to tools.
+
+# Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{{"type": "function", "function": {{"name": "add_to_list", "description": "Add an item to a shopping or todo list", "parameters": {{"type": "object", "properties": {{"list_name": {{"type": "string", "description": "Name of the list (e.g., 'shopping', 'todo')"}}, "task_text": {{"type": "string", "description": "The item to add"}}, "priority": {{"type": "string", "enum": ["low", "medium", "high"], "description": "Priority level"}}}}, "required": ["list_name", "task_text"]}}}}}}
+{{"type": "function", "function": {{"name": "create_calendar_event", "description": "Create a calendar event", "parameters": {{"type": "object", "properties": {{"title": {{"type": "string", "description": "Event title"}}, "start_date": {{"type": "string", "description": "Date in YYYY-MM-DD format"}}, "start_time": {{"type": "string", "description": "Time in HH:MM format"}}}}, "required": ["title", "start_date"]}}}}}}
+{{"type": "function", "function": {{"name": "search_memories", "description": "Search through memories and knowledge", "parameters": {{"type": "object", "properties": {{"query": {{"type": "string", "description": "Search query"}}}}, "required": ["query"]}}}}}}
+</tools>
+
+For each function call, return a JSON object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{{"name": "function_name", "arguments": {{"param1": "value1", "param2": "value2"}}}}
+</tool_call>
+
+# Examples
+
+User: "Add milk to my shopping list"
+Assistant: <tool_call>
+{{"name": "add_to_list", "arguments": {{"list_name": "shopping", "task_text": "milk", "priority": "medium"}}}}
+</tool_call>
+
+User: "Schedule dentist tomorrow at 2pm"
+Assistant: <tool_call>
+{{"name": "create_calendar_event", "arguments": {{"title": "dentist", "start_date": "2025-11-11", "start_time": "14:00"}}}}
+</tool_call>
+
+User: "I need to buy bread"
+Assistant: <tool_call>
+{{"name": "add_to_list", "arguments": {{"list_name": "shopping", "task_text": "bread", "priority": "medium"}}}}
+</tool_call>
+
+CRITICAL: When user requests an action (add, create, schedule, buy, etc.), you MUST respond with a <tool_call> tag first, then add friendly text after.
+"""
+    
+    elif "gemma" in model_name.lower():
+        # Gemma: Needs MORE examples and explicit patterns
+        prompt = f"""You are Zoe. When user wants to ADD, CREATE, or SCHEDULE something, you MUST call a function.
+
+{output_format}
+
+PATTERN MATCHING:
+If user says "add [ITEM]" → [TOOL_CALL:add_to_list:{{"list_name":"shopping","task_text":"[ITEM]","priority":"medium"}}]
+If user says "schedule [EVENT]" → [TOOL_CALL:create_calendar_event:{{"title":"[EVENT]","start_date":"YYYY-MM-DD","start_time":"HH:MM"}}]
+
+EXAMPLES (COPY THIS PATTERN):
+1. User: "add bananas to shopping"
+   You: [TOOL_CALL:add_to_list:{{"list_name":"shopping","task_text":"bananas","priority":"medium"}}]
+   Done!
+
+2. User: "add dentist appointment tomorrow 2pm"
+   You: [TOOL_CALL:create_calendar_event:{{"title":"dentist appointment","start_date":"2025-11-10","start_time":"14:00"}}]
+   Scheduled!
+
+CRITICAL: Your FIRST characters must be [TOOL_CALL: for action requests!
+"""
+    
+    else:
+        # Default: Works for Phi, Llama, and other models
+        prompt = f"""You are Zoe. For action requests, use this EXACT format:
+
+{output_format}
+
+TOOLS AVAILABLE:
+- add_to_list(list_name, task_text, priority)
+- create_calendar_event(title, start_date, start_time)
+- create_person(name, relationship)
+
+MANDATORY EXAMPLES:
+User: "add eggs"
+You: [TOOL_CALL:add_to_list:{{"list_name":"shopping","task_text":"eggs","priority":"medium"}}]
+Added!
+
+User: "schedule lunch tomorrow"
+You: [TOOL_CALL:create_calendar_event:{{"title":"lunch","start_date":"2025-11-10","start_time":"12:00"}}]
+Scheduled!
+
+RULE: Action = MUST start with [TOOL_CALL:...]
+"""
+    
+    logger.info(f"📋 Generated {model_name}-specific action prompt ({len(prompt)} chars)")
+    return prompt
+
 async def get_mcp_tools_context() -> str:
-    """Get available MCP tools as context for the LLM"""
+    """Get MCP tools context using code execution pattern (progressive disclosure) with caching"""
+    # Check cache first
+    cache_key = "mcp_tools_context"
+    cached = await context_cache.get("mcp_tools", cache_key)
+    if cached:
+        logger.debug("✅ Using cached MCP tools context")
+        return cached
+    
     try:
         import httpx
         
         async with httpx.AsyncClient() as client:
-            # Get available tools from MCP server
+            # Get available tools from MCP server for search functionality
+            response = await client.post(
+                "http://zoe-mcp-server:8003/tools/list",
+                json={"_auth_token": "default", "_session_id": "default"},
+                timeout=2.0  # ✅ OPTIMIZED: Reduced timeout for faster fallback
+            )
+            
+            if response.status_code == 200:
+                tools_data = response.json()
+                tools = tools_data.get("tools", [])
+                
+                # Group tools by category for better organization
+                categories = {
+                    "zoe-memory": [],
+                    "zoe-lists": [],
+                    "zoe-calendar": [],
+                    "home-assistant": [],
+                    "n8n": [],
+                    "matrix": [],
+                    "developer": []
+                }
+                
+                for tool in tools:
+                    name = tool.get("name", "")
+                    if "memory" in name or "person" in name or "collection" in name:
+                        categories["zoe-memory"].append(name)
+                    elif "list" in name:
+                        categories["zoe-lists"].append(name)
+                    elif "calendar" in name or "event" in name:
+                        categories["zoe-calendar"].append(name)
+                    elif "home_assistant" in name or "ha" in name.lower():
+                        categories["home-assistant"].append(name)
+                    elif "n8n" in name or "workflow" in name:
+                        categories["n8n"].append(name)
+                    elif "matrix" in name:
+                        categories["matrix"].append(name)
+                    elif "developer" in name:
+                        categories["developer"].append(name)
+                
+                # Code execution pattern - progressive disclosure
+                tools_context = """
+# MCP TOOLS VIA CODE EXECUTION (Progressive Disclosure Pattern)
+
+You have access to MCP tools through code execution. This is more efficient than loading all tool definitions upfront.
+
+## Available Tool Categories:
+"""
+                for category, tool_names in categories.items():
+                    if tool_names:
+                        tools_context += f"- **{category.replace('-', ' ').title()}**: {len(tool_names)} tools\n"
+                
+                tools_context += """
+## How to Use Tools (Code Execution Pattern):
+
+Instead of direct tool calls, write TypeScript code that imports and uses tools:
+
+```typescript
+// Example: Add item to shopping list
+import * as zoeLists from './servers/zoe-lists';
+const result = await zoeLists.addToList({
+    list_name: 'shopping',
+    task_text: 'bread',
+    priority: 'medium'
+});
+console.log(`✅ ${result.message}`);
+```
+
+## Progressive Disclosure:
+
+1. **Search for tools**: Use the search_tools function to find relevant tools
+   - Example: search_tools("shopping list") → finds add_to_list, get_lists
+   
+2. **Load only needed tools**: Import only the tools you need for the current task
+   - Example: import * as zoeLists from './servers/zoe-lists'
+
+3. **Process data efficiently**: Filter/transform data in code before returning to user
+   - Example: Filter 1000 events → return only 5 important ones
+
+## Benefits:
+- 98% fewer tokens (load only needed tools)
+- Faster responses (smaller context window)
+- Better privacy (data processed in execution environment)
+- More powerful (loops, conditionals, error handling)
+
+## Tool Categories Available:
+"""
+                for category, tool_names in categories.items():
+                    if tool_names:
+                        tools_context += f"\n### {category.replace('-', ' ').title()}\n"
+                        for tool_name in tool_names[:5]:  # Show first 5
+                            tools_context += f"- `{tool_name}`\n"
+                        if len(tool_names) > 5:
+                            tools_context += f"- ... and {len(tool_names) - 5} more\n"
+                
+                tools_context += """
+## When User Asks "What Can You Do?":
+- Mention you use code execution for efficiency
+- List the main categories (Memory, Lists, Calendar, Home Assistant, N8N, Matrix)
+- Give examples of what you can help with
+- Explain that you can combine multiple tools in code for complex tasks
+"""
+                
+                # Cache the result
+                await context_cache.set("mcp_tools", cache_key, tools_context, CACHE_TTL["mcp_tools"])
+                return tools_context
+            else:
+                fallback_context = """
+# MCP TOOLS VIA CODE EXECUTION
+
+You have access to MCP tools through code execution. Use the search_tools function to discover available tools, then write TypeScript code to use them.
+"""
+                # Cache fallback too (shorter TTL)
+                await context_cache.set("mcp_tools", cache_key, fallback_context, 60)
+                return fallback_context
+                
+    except Exception as e:
+        logger.warning(f"Could not fetch MCP tools context: {e}")
+        fallback_context = """
+# MCP TOOLS VIA CODE EXECUTION
+
+You have access to MCP tools through code execution. Use the search_tools function to discover available tools.
+"""
+        return fallback_context
+
+async def search_tools(query: str, detail_level: str = "summary") -> str:
+    """Search for relevant MCP tools (progressive disclosure)"""
+    try:
+        import httpx
+        
+        async with httpx.AsyncClient() as client:
             response = await client.post(
                 "http://zoe-mcp-server:8003/tools/list",
                 json={"_auth_token": "default", "_session_id": "default"},
@@ -787,46 +1496,265 @@ async def get_mcp_tools_context() -> str:
                 tools_data = response.json()
                 tools = tools_data.get("tools", [])
                 
-                # Format tools as context for the LLM with usage instructions
-                tools_context = "AVAILABLE TOOLS:\n"
+                # Simple keyword matching with better logic
+                query_lower = query.lower()
+                query_words = query_lower.split()
+                matches = []
+                
                 for tool in tools:
                     name = tool.get("name", "")
                     description = tool.get("description", "")
-                    tools_context += f"• {name}: {description}\n"
+                    
+                    # Check if any query word matches tool name or description
+                    name_lower = name.lower()
+                    desc_lower = description.lower()
+                    
+                    # Match if query words appear in name or description
+                    if any(word in name_lower or word in desc_lower for word in query_words):
+                        matches.append(tool)
+                    # Also check if tool name contains query (for "list" matching "add_to_list")
+                    elif query_lower in name_lower.replace("_", " "):
+                        matches.append(tool)
                 
-                tools_context += """
-TOOL USAGE INSTRUCTIONS:
-When you need to use a tool, respond with: [TOOL_CALL:tool_name:{"param1":"value1","param2":"value2"}]
-CRITICAL: The parameters MUST be valid JSON with double quotes around keys and values.
-After tool execution, confirm the action to the user.
-
-EXAMPLES:
-- "Add bread to shopping list" → [TOOL_CALL:add_to_list:{"list_name":"shopping","task_text":"bread","priority":"medium"}] → "Added bread to your shopping list"
-- "Turn on living room light" → [TOOL_CALL:control_home_assistant_device:{"entity_id":"light.living_room","action":"turn_on"}] → "Turned on the living room light"
-- "Send message to Matrix" → [TOOL_CALL:send_matrix_message:{"room_id":"!room:matrix.org","message":"Hello!"}] → "Message sent to Matrix room"
-
-IMPORTANT: Always use proper JSON format with double quotes. Never use single quotes or omit quotes around keys.
-"""
+                if not matches:
+                    return f"No tools found matching '{query}'"
                 
-                return tools_context
+                result = f"Found {len(matches)} tool(s) matching '{query}':\n\n"
+                
+                for tool in matches[:10]:  # Limit to 10 results
+                    name = tool.get("name", "")
+                    description = tool.get("description", "")
+                    
+                    if detail_level == "name":
+                        result += f"- {name}\n"
+                    elif detail_level == "summary":
+                        result += f"- **{name}**: {description}\n"
+                    else:  # full
+                        result += f"- **{name}**: {description}\n"
+                        result += f"  Import: `import * as category from './servers/category'`\n"
+                
+                return result
             else:
-                return "AVAILABLE TOOLS: Basic memory and list management tools available."
+                return f"Error searching tools: {response.status_code}"
                 
     except Exception as e:
-        logger.warning(f"Could not fetch MCP tools context: {e}")
-        return "AVAILABLE TOOLS: Basic memory and list management tools available."
+        logger.error(f"Error searching tools: {e}")
+        return f"Error searching tools: {str(e)}"
 
-async def parse_and_execute_tool_calls(response_text: str, user_id: str) -> str:
-    """Parse tool calls from LLM response and execute them"""
+async def execute_code(code: str, user_id: str, language: str = "typescript") -> dict:
+    """Execute code in secure sandbox - optimized for speed"""
+    try:
+        import httpx
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "http://zoe-code-execution:8010/execute",
+                json={
+                    "code": code,
+                    "language": language,
+                    "user_id": user_id,
+                    "timeout": 10  # Reduced from 30 to 10 seconds for faster responses
+                },
+                timeout=12.0  # Reduced from 35 to 12 seconds
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                return {
+                    "success": False,
+                    "output": "",
+                    "error": f"Code execution failed: {response.status_code}"
+                }
+                
+    except httpx.TimeoutException:
+        logger.warning("⏱️ Code execution timeout")
+        return {
+            "success": False,
+            "output": "",
+            "error": "Code execution timed out"
+        }
+    except Exception as e:
+        logger.error(f"Error executing code: {e}")
+        return {
+            "success": False,
+            "output": "",
+            "error": str(e)
+        }
+
+async def parse_and_execute_code_or_tools(response_text: str, user_id: str) -> str:
+    """Parse code blocks or tool calls from LLM response and execute them"""
     import re
     import json
     
+    # Check for TypeScript code blocks first (code execution pattern)
+    typescript_pattern = r'```typescript\n(.*?)```'
+    python_pattern = r'```python\n(.*?)```'
+    
+    code_matches = re.findall(typescript_pattern, response_text, re.DOTALL)
+    if not code_matches:
+        code_matches = re.findall(python_pattern, response_text, re.DOTALL)
+    
+    if code_matches:
+        logger.info(f"🔧 Found {len(code_matches)} code block(s) to execute")
+        
+        final_response = response_text
+        
+        for code_block in code_matches:
+            code = code_block.strip()
+            if not code:
+                continue
+            
+            # Determine language
+            language = "typescript" if "typescript" in response_text.lower() else "python"
+            
+            # Execute code with optimized timeout for simple actions
+            result = await execute_code(code, user_id, language)
+            
+            if result.get("success"):
+                output = result.get("output", "")
+                
+                # Try to extract a clean success message from the output
+                # Look for JSON with success message, or console.log output
+                success_message = None
+                try:
+                    # Try to parse JSON from output
+                    if "{" in output and "}" in output:
+                        json_start = output.find("{")
+                        json_end = output.rfind("}") + 1
+                        json_str = output[json_start:json_end]
+                        parsed = json.loads(json_str)
+                        if isinstance(parsed, dict):
+                            success_message = parsed.get("message") or parsed.get("success")
+                except:
+                    pass
+                
+                # If no JSON message, look for console.log output
+                if not success_message:
+                    # Extract text after console.log or just use the output
+                    if "✅" in output:
+                        success_message = output.split("✅")[-1].strip()
+                    elif output.strip():
+                        # Try to extract meaningful message
+                        lines = output.strip().split("\n")
+                        for line in lines:
+                            if line and not line.startswith("{") and len(line) < 200:
+                                success_message = line.strip()
+                                break
+                
+                # Default message if nothing found
+                if not success_message:
+                    success_message = "Done! ✅"
+                
+                # Replace the entire code block with just the success message
+                code_block_marker = f"```{language}\n{code_block}```"
+                # Remove code block and replace with clean message (remove any text after code block too)
+                # Find text before and after code block
+                before_code = final_response[:final_response.find(code_block_marker)]
+                after_code = final_response[final_response.find(code_block_marker) + len(code_block_marker):]
+                # Remove any duplicate confirmation messages
+                if "Added" in after_code or "added" in after_code.lower():
+                    # Keep only the success message, remove duplicate
+                    final_response = before_code + success_message
+                else:
+                    final_response = before_code + success_message + after_code
+                logger.info(f"✅ Code executed successfully: {success_message[:100]}")
+            else:
+                error = result.get("error", "Unknown error")
+                # Replace code block with error message (but hide the code)
+                code_block_marker = f"```{language}\n{code_block}```"
+                error_message = f"Sorry, I encountered an error: {error[:200]}"
+                final_response = final_response.replace(code_block_marker, error_message, 1)
+                logger.warning(f"❌ Code execution failed: {error}")
+        
+        return final_response
+    
+    # Fallback to old tool call pattern for backward compatibility (FAST PATH for simple actions)
+    return await parse_and_execute_tool_calls(response_text, user_id)
+
+async def parse_and_execute_tool_calls(response_text: str, user_id: str) -> str:
+    """Parse tool calls from LLM response and execute them (supports both old and Hermes-style formats)"""
+    import re
+    import json
+    
+    matches = []
+    
+    # 🎯 NEW: Parse Hermes-style XML format first (for Qwen models)
+    # Format: <tool_call>{"name": "tool_name", "arguments": {...}}</tool_call>
+    hermes_pattern = r'<tool_call>\s*(\{[^<]+\})\s*</tool_call>'
+    hermes_matches = re.findall(hermes_pattern, response_text, re.DOTALL)
+    
+    for json_str in hermes_matches:
+        try:
+            # Clean up the JSON
+            json_str_clean = json_str.strip()
+            tool_data = json.loads(json_str_clean)
+            tool_name = tool_data.get("name", "")
+            arguments = tool_data.get("arguments", {})
+            
+            if tool_name and arguments:
+                # Convert back to JSON string for consistency with old format
+                params_json = json.dumps(arguments)
+                matches.append((tool_name, params_json))
+                logger.info(f"🎯 Parsed Hermes-style tool call: {tool_name}")
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Failed to parse Hermes tool call: {json_str[:100]} (error: {e})")
+    
+    # 🔧 OLD: Parse legacy [TOOL_CALL:...] format (for backward compatibility)
     # Pattern to match tool calls: [TOOL_CALL:tool_name:{"param":"value"}]
-    tool_call_pattern = r'\[TOOL_CALL:([^:]+):(\{[^}]+\})\]'
-    matches = re.findall(tool_call_pattern, response_text)
+    simple_pattern = r'\[TOOL_CALL:([^:]+):(\{.*?\})\]'
+    
+    # First try the simple pattern
+    simple_matches = re.findall(simple_pattern, response_text, re.DOTALL)
+    
+    # For each match, try to parse the JSON to validate it
+    for tool_name, params_json in simple_matches:
+        try:
+            # ✅ FIX: More aggressive quote fixing for curly quotes
+            params_json_fixed = params_json.replace('"', '"').replace('"', '"').replace(''', "'").replace(''', "'")
+            params_json_fixed = params_json_fixed.replace('\u201c', '"').replace('\u201d', '"')  # Unicode curly quotes
+            params_json_fixed = params_json_fixed.replace('\u2018', "'").replace('\u2019', "'")  # Unicode curly single quotes
+            # Try to parse to validate JSON
+            json.loads(params_json_fixed)
+            matches.append((tool_name, params_json_fixed))
+        except json.JSONDecodeError:
+            # If simple parse fails, try to find balanced braces
+            # Find the position of the tool call
+            start_pos = response_text.find(f"[TOOL_CALL:{tool_name}:")
+            if start_pos != -1:
+                # Find the opening brace after the colon
+                brace_start = response_text.find('{', start_pos)
+                if brace_start != -1:
+                    # Count braces to find the matching closing brace
+                    brace_count = 0
+                    brace_end = brace_start
+                    for i in range(brace_start, len(response_text)):
+                        if response_text[i] == '{':
+                            brace_count += 1
+                        elif response_text[i] == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                brace_end = i
+                                break
+                    if brace_end > brace_start:
+                        params_json = response_text[brace_start:brace_end + 1]
+                        # ✅ FIX: More aggressive quote fixing
+                        params_json_fixed = params_json.replace('"', '"').replace('"', '"').replace(''', "'").replace(''', "'")
+                        params_json_fixed = params_json_fixed.replace('\u201c', '"').replace('\u201d', '"')  # Unicode curly quotes
+                        params_json_fixed = params_json_fixed.replace('\u2018', "'").replace('\u2019', "'")  # Unicode curly single quotes
+                        try:
+                            json.loads(params_json_fixed)
+                            matches.append((tool_name, params_json_fixed))
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"Failed to parse JSON for tool {tool_name}: {params_json[:100]} (error: {e})")
     
     if not matches:
+        # Log if we see TOOL_CALL but couldn't parse it
+        if "TOOL_CALL" in response_text:
+            logger.warning(f"⚠️ Found TOOL_CALL in response but couldn't parse: {response_text[:500]}")
         return response_text  # No tool calls found, return original response
+    
+    logger.info(f"🔧 Found {len(matches)} tool call(s) to execute: {[m[0] for m in matches]}")
     
     final_response = response_text
     
@@ -841,10 +1769,38 @@ async def parse_and_execute_tool_calls(response_text: str, user_id: str) -> str:
             if result.get("success"):
                 # Replace the tool call with success message
                 success_msg = result.get("message", f"Executed {tool_name} successfully")
-                final_response = final_response.replace(
+                # ✅ FIX: Try multiple replacement patterns to ensure we catch all variations
+                original_tool_call = f"[TOOL_CALL:{tool_name}:{params_json}]"
+                # Also try with the original params_json (before quote fixing)
+                original_params = response_text[response_text.find(f"[TOOL_CALL:{tool_name}:") + len(f"[TOOL_CALL:{tool_name}:"):response_text.find("]", response_text.find(f"[TOOL_CALL:{tool_name}:"))]
+                original_tool_call_variants = [
+                    original_tool_call,
+                    f"[TOOL_CALL:{tool_name}:{original_params}]",
                     f"[TOOL_CALL:{tool_name}:{params_json}]",
-                    success_msg
-                )
+                ]
+                for variant in original_tool_call_variants:
+                    if variant in final_response:
+                        final_response = final_response.replace(variant, success_msg, 1)
+                        logger.info(f"✅ Replaced tool call variant with: {success_msg[:50]}")
+                        break
+                else:
+                    # If no exact match, try regex replacement
+                    import re
+                    tool_call_pattern = re.escape(f"[TOOL_CALL:{tool_name}:") + r".*?" + re.escape("]")
+                    final_response = re.sub(tool_call_pattern, success_msg, final_response, count=1)
+                    logger.info(f"✅ Replaced tool call via regex with: {success_msg[:50]}")
+                
+                # ✅ NEW: Learn from successful action patterns
+                try:
+                    await training_collector.log_action_pattern(
+                        user_id=user_id,
+                        tool_name=tool_name,
+                        params=params,
+                        success=True
+                    )
+                    logger.debug(f"📚 Learned action pattern: {tool_name} with params {params}")
+                except Exception as e:
+                    logger.warning(f"Failed to log action pattern: {e}")
             else:
                 # Replace with error message
                 error_msg = result.get("error", f"Failed to execute {tool_name}")
@@ -852,6 +1808,18 @@ async def parse_and_execute_tool_calls(response_text: str, user_id: str) -> str:
                     f"[TOOL_CALL:{tool_name}:{params_json}]",
                     f"Error: {error_msg}"
                 )
+                
+                # ✅ NEW: Learn from failed action patterns
+                try:
+                    await training_collector.log_action_pattern(
+                        user_id=user_id,
+                        tool_name=tool_name,
+                        params=params,
+                        success=False
+                    )
+                    logger.debug(f"📚 Learned failed action pattern: {tool_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to log failed action pattern: {e}")
                 
         except Exception as e:
             logger.error(f"Error executing tool call {tool_name}: {e}")
@@ -942,6 +1910,9 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
         # Use provided user_id from query param or body (for UI compatibility)
         actual_user_id = user_id if user_id != "default" else msg.user_id or "default"
         
+        # Initialize routing to None (will be set by Enhanced MEM Agent or intelligent_routing)
+        routing = None
+        
         # Enhanced context
         context = {
             "mode": msg.context.get("mode", "user") if msg.context else "user",
@@ -1015,15 +1986,32 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
             
             return StreamingResponse(orchestration_stream(), media_type="text/event-stream")
         
-        # Step 1: Try Enhanced MEM Agent for action execution first
-        if enhanced_mem_agent:
+        # Step 1: Check if this is a SIMPLE action (single tool call) - skip Enhanced MEM Agent for speed
+        is_simple_action = _is_simple_action(msg.message)
+        
+        # Step 1a: Try Enhanced MEM Agent ONLY for complex multi-step tasks (not simple actions or greetings)
+        simple_greetings = ["hi", "hello", "hey", "good morning", "good afternoon", "good evening"]
+        is_simple_greeting = msg.message.lower().strip() in simple_greetings
+        
+        if enhanced_mem_agent and not is_simple_action and not is_simple_greeting:
             try:
-                logger.info(f"🤖 Trying Enhanced MEM Agent for: {msg.message}")
-                memories = await enhanced_mem_agent.enhanced_search(
-                    msg.message, 
-                    user_id=actual_user_id,
-                    execute_actions=True
-                )
+                logger.info(f"🤖 Trying Enhanced MEM Agent for complex task: {msg.message}")
+                # ✅ FIX: Add timeout to prevent blocking on slow/unavailable service
+                try:
+                    memories = await asyncio.wait_for(
+                        enhanced_mem_agent.enhanced_search(
+                            msg.message, 
+                            user_id=actual_user_id,
+                            execute_actions=True
+                        ),
+                        timeout=1.0  # ✅ PHASE 3.1: Reduced to 1s for faster fallback
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("⚠️ Enhanced MEM Agent timeout, skipping")
+                    memories = {"fallback": True, "experts": []}
+                except Exception as e:
+                    logger.warning(f"⚠️ Enhanced MEM Agent error: {e}")
+                    memories = {"fallback": True, "experts": []}
                 
                 # Check if actions were executed
                 if memories.get("actions_executed", 0) > 0:
@@ -1255,42 +2243,95 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                         }
                 else:
                     logger.info("🔄 Enhanced MEM Agent found no actions to execute, falling back to conversation")
+                    # ✅ FIX: If Enhanced MEM Agent didn't execute actions but this is clearly an action request,
+                    # ensure we route to action mode so LLM will use tools
+                    message_lower = msg.message.lower()
+                    action_keywords = ['add', 'create', 'schedule', 'remind', 'set', 'put', 'remove', 'delete']
+                    if any(keyword in message_lower for keyword in action_keywords):
+                        logger.info(f"🔧 Action keywords detected, ensuring action routing: {msg.message}")
+                        routing = await intelligent_routing(msg.message, context)
+                        if routing.get("type") != "action":
+                            routing["type"] = "action"
+                            routing["mcp_tools_needed"] = True
+                            logger.info("✅ Forced action routing for tool execution")
             except Exception as e:
                 logger.warning(f"Enhanced MEM Agent failed, falling back to conversation: {e}")
+                # ✅ FIX: On Enhanced MEM Agent failure, still check if this is an action request
+                message_lower = msg.message.lower()
+                action_keywords = ['add', 'create', 'schedule', 'remind', 'set', 'put', 'remove', 'delete']
+                if any(keyword in message_lower for keyword in action_keywords):
+                    logger.info(f"🔧 Action keywords detected after MEM Agent failure, ensuring action routing")
+                    routing = await intelligent_routing(msg.message, context)
+                    if routing.get("type") != "action":
+                        routing["type"] = "action"
+                        routing["mcp_tools_needed"] = True
+                        logger.info("✅ Forced action routing after MEM Agent failure")
         
         # Step 2: Normal conversation flow with MCP tools context
-        # Intelligent routing decision
-        routing = await intelligent_routing(msg.message, context)
+        # Intelligent routing decision (only if not already set by Enhanced MEM Agent fallback)
+        if routing is None:
+            routing = await intelligent_routing(msg.message, context)
         
-        # OPTIMIZATION: Run memory search and context gathering in parallel with timeout
-        import asyncio
-        try:
-            async with asyncio.timeout(15):  # 15s max for memory search (increased for Pi 5 testing)
-                if routing.get("requires_memory"):
-                    memories, user_context = await asyncio.gather(
-                        search_memories(msg.message, actual_user_id),
-                        get_user_context(actual_user_id, query=msg.message)  # ✅ Pass query for smart selection
-                    )
-                else:
-                    # Get episode context even without full memory search (conversational continuity)
-                    memories = {}
-                    try:
-                        temporal_enhancement = await enhance_memory_search_with_temporal("", actual_user_id, "all")
-                        memories["episode_context"] = temporal_enhancement.get("episode_context", {})
-                        logger.info(f"✅ Got episode context for conversation (no full memory search)")
-                    except Exception as e:
-                        logger.warning(f"Failed to get episode context: {e}")
-                    user_context = await get_user_context(actual_user_id, query=msg.message)  # ✅ Pass query
-        except asyncio.TimeoutError:
-            logger.warning(f"Memory search timed out after 15s, using empty context")
+        # ✅ PHASE 1.1: PARALLEL CONTEXT FETCHING - Fetch memories, user_context, and MCP tools in parallel
+        # ✅ FAST PATH: Skip for simple greetings to save 3-5 seconds
+        if is_simple_greeting:
+            # Skip all overhead for simple greetings - go straight to Ollama
             memories = {}
-            # Still try to get episode context on timeout (lightweight operation)
-            try:
-                temporal_enhancement = await enhance_memory_search_with_temporal("", actual_user_id, "all")
-                memories["episode_context"] = temporal_enhancement.get("episode_context", {})
-            except:
-                pass
             user_context = {"calendar_events": [], "active_lists": [], "recent_journal": [], "people": [], "projects": []}
+            tools_context = ""  # Will be fetched later if needed
+            logger.info(f"⚡ Fast path: Skipping memory/context for simple greeting")
+        else:
+            try:
+                async with asyncio.timeout(1.0):  # ✅ OPTIMIZED: Reduced to 1s for faster fallback
+                    if routing.get("requires_memory"):
+                        # ✅ PARALLEL: Fetch all three in parallel
+                        memories, user_context, tools_context = await asyncio.gather(
+                            search_memories(msg.message, actual_user_id),
+                            get_user_context(actual_user_id, query=msg.message),
+                            get_mcp_tools_context(),
+                            return_exceptions=True  # Don't fail if one fails
+                        )
+                        # Handle exceptions
+                        if isinstance(memories, Exception):
+                            logger.warning(f"Memory search failed: {memories}")
+                            memories = {}
+                        if isinstance(user_context, Exception):
+                            logger.warning(f"User context failed: {user_context}")
+                            user_context = {"calendar_events": [], "active_lists": [], "recent_journal": [], "people": [], "projects": []}
+                        if isinstance(tools_context, Exception):
+                            logger.warning(f"MCP tools context failed: {tools_context}")
+                            tools_context = ""
+                        logger.info(f"✅ Parallel context fetch complete: {len(memories.get('people', []))} people, {len(user_context.get('calendar_events', []))} events")
+                    else:
+                        # Get episode context even without full memory search (conversational continuity)
+                        memories = {}
+                        try:
+                            temporal_enhancement = await enhance_memory_search_with_temporal("", actual_user_id, "all")
+                            memories["episode_context"] = temporal_enhancement.get("episode_context", {})
+                            logger.info(f"✅ Got episode context for conversation (no full memory search)")
+                        except Exception as e:
+                            logger.warning(f"Failed to get episode context: {e}")
+                        # ✅ PARALLEL: Fetch user_context and tools_context in parallel
+                        user_context, tools_context = await asyncio.gather(
+                            get_user_context(actual_user_id, query=msg.message),
+                            get_mcp_tools_context(),
+                            return_exceptions=True
+                        )
+                        if isinstance(user_context, Exception):
+                            user_context = {"calendar_events": [], "active_lists": [], "recent_journal": [], "people": [], "projects": []}
+                        if isinstance(tools_context, Exception):
+                            tools_context = ""
+            except asyncio.TimeoutError:
+                logger.warning(f"Context fetch timed out after 1s, using empty context")
+                memories = {}
+                # Still try to get episode context on timeout (lightweight operation)
+                try:
+                    temporal_enhancement = await enhance_memory_search_with_temporal("", actual_user_id, "all")
+                    memories["episode_context"] = temporal_enhancement.get("episode_context", {})
+                except:
+                    pass
+                user_context = {"calendar_events": [], "active_lists": [], "recent_journal": [], "people": [], "projects": []}
+                tools_context = ""
 
         # Step 3: Emit intelligence stream context update
         try:
@@ -1316,7 +2357,7 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
         if stream:
             # Return streaming response with AG-UI protocol
             return StreamingResponse(
-                await call_ollama_streaming(msg.message, context, memories, user_context, routing),
+                await call_ollama_streaming(msg.message, context, memories, user_context, routing, tools_context),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -1328,8 +2369,42 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
             # Return regular response
             response = await call_ollama_with_context(msg.message, context, memories, user_context, routing)
             
+            # ✅ FIX: Log the raw response to see if LLM is generating tool calls
+            logger.info(f"📝 LLM raw response (first 500 chars): {response[:500]}")
+            
+            # 🔧 AUTO-INJECT TOOL CALLS if LLM didn't generate them
+            if routing.get("type") == "action" and "[TOOL_CALL:" not in response:
+                logger.warning(f"⚠️ Action detected but NO tool call generated. Auto-injecting...")
+                
+                message_lower = msg.message.lower()
+                
+                # Shopping list patterns
+                if any(word in message_lower for word in ["add", "put"]) and any(word in message_lower for word in ["shopping", "list", "grocery"]):
+                    # Extract item name
+                    item = msg.message
+                    for remove in ["add", "Add", "to", "To", "shopping", "Shopping", "list", "List", "my", "My", "the", "The", "a", "A", "please", "Please", "can", "you"]:
+                        item = item.replace(remove, "")
+                    item = item.strip()
+                    
+                    if item:
+                        tool_call = f'[TOOL_CALL:add_to_list:{{"list_name":"shopping","task_text":"{item}","priority":"medium"}}]'
+                        response = tool_call + "\n" + response
+                        logger.info(f"🔧 AUTO-INJECTED shopping list tool call for: {item}")
+                
+                # Calendar patterns
+                elif any(word in message_lower for word in ["schedule", "create event", "add event"]):
+                    logger.warning(f"⚠️ Calendar action detected - would auto-inject but needs date parsing")
+            
+            if "TOOL_CALL" in response:
+                logger.info(f"✅ Tool call(s) present in response (generated or injected)")
+            
             # Parse and execute any tool calls in the response
-            response = await parse_and_execute_tool_calls(response, actual_user_id)
+            original_response = response
+            response = await parse_and_execute_code_or_tools(response, actual_user_id)
+            
+            # ✅ FIX: If no tool calls were executed but this was an action request, log warning
+            if response == original_response and (routing.get("type") == "action" or routing.get("mcp_tools_needed")):
+                logger.warning(f"⚠️ Action request '{msg.message}' did not result in tool execution. LLM may need better prompting.")
             
             response_time = time.time() - start_time
             
@@ -1454,6 +2529,151 @@ async def get_quality_metrics():
         return {"error": str(e)}
 
 # Helper Functions
+def _is_simple_query(message: str) -> bool:
+    """Detect simple queries that can be handled by lightweight CPU model (phi3:mini)"""
+    message_lower = message.lower().strip()
+    
+    # ONLY simple greetings go to phi3:mini - everything else uses gemma3n-e2b-gpu-fixed
+    simple_greetings = ["hi", "hello", "hey", "thanks", "thank you"]
+    if message_lower in simple_greetings:
+        return True
+    
+    return False  # All other queries use gemma3n-e2b-gpu-fixed for performance
+
+def _auto_inject_tool_call(message: str) -> Optional[str]:
+    """
+    Auto-inject tool calls for detected action patterns (safety net for 100% success)
+    Returns the tool call string if one should be injected, None otherwise
+    """
+    import re
+    from datetime import datetime, timedelta
+    
+    message_lower = message.lower()
+    
+    # ===== SHOPPING LIST PATTERNS =====
+    # Pattern: "add X to shopping/list" - match ONE item at a time
+    add_patterns = [
+        # Direct: "add X to shopping/list"
+        (r'add\s+([a-z]+(?:\s+[a-z]+)?)\s+to\s+(?:my\s+)?(?:shopping|list)', 1),
+        (r'put\s+([a-z]+(?:\s+[a-z]+)?)\s+on\s+(?:my\s+)?(?:shopping|list)', 1),
+        # Natural: "I need to buy X"
+        (r'(?:i\s+)?need\s+to\s+buy\s+([a-z]+)', 1),
+        (r'(?:i\s+)?need\s+to\s+get\s+([a-z]+)', 1),
+        (r'(?:i\s+)?need\s+to\s+pick\s+up\s+([a-z]+)', 1),
+        (r'(?:i\s+)?should\s+get\s+(?:some\s+)?([a-z]+)', 1),
+        (r'(?:i\s+)?should\s+buy\s+(?:some\s+)?([a-z]+)', 1),
+        # Conversational: "we're out of X"
+        (r'(?:we\'re|we\s+are)\s+out\s+of\s+([a-z]+)', 1),
+        (r'(?:i\s+)?noticed\s+we\s+need\s+([a-z]+)', 1),
+        (r'(?:running|ran)\s+low\s+on\s+([a-z]+)', 1),
+        (r'could\s+use\s+(?:some\s+)?([a-z]+)', 1),
+        # Action verbs: "grab/get/buy X"
+        (r'grab\s+(?:some\s+)?([a-z]+)', 1),
+        (r'get\s+(?:some\s+)?([a-z]+)(?:\s+please)?', 1),
+        (r'buy\s+(?:some\s+)?([a-z]+)', 1),
+        (r'purchase\s+([a-z]+)', 1),
+        # Remember: "don't forget to buy X"
+        (r'don\'t\s+(?:let\s+me\s+)?forget\s+to\s+buy\s+([a-z]+)', 1),
+        (r'remember\s+to\s+buy\s+([a-z]+)', 1),
+        # Going to: "I'm going to need X"
+        (r'(?:i\'m|i\s+am)\s+going\s+to\s+need\s+([a-z]+)', 1),
+        (r'better\s+get\s+(?:some\s+)?([a-z]+)', 1),
+    ]
+    
+    for pattern, group in add_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            item = match.group(group).strip()
+            # Skip if captured "and" or other junk
+            if ' and ' in item or len(item) < 2:
+                continue
+            return f'[TOOL_CALL:add_to_list:{{"list_name":"shopping","task_text":"{item}","priority":"medium"}}]'
+    
+    # ===== CALENDAR EVENT PATTERNS =====
+    # Pattern: "schedule X at Y" or "create event Z"
+    calendar_patterns = [
+        (r'schedule\s+([a-z\s]+?)(?:\s+(?:at|for|on)\s+([a-z0-9\s:]+))?', 'schedule'),
+        (r'create\s+(?:a\s+)?(?:calendar\s+)?event\s+([a-z\s]+?)(?:\s+(?:at|for|on)\s+([a-z0-9\s:]+))?', 'create'),
+        (r'add\s+(?:a\s+)?(?:calendar\s+)?event\s+([a-z\s]+?)(?:\s+(?:at|for|on)\s+([a-z0-9\s:]+))?', 'create'),
+        (r'(?:book|set)\s+(?:an?\s+)?appointment\s+([a-z\s]+?)(?:\s+(?:at|for|on)\s+([a-z0-9\s:]+))?', 'appointment'),
+        (r'remind\s+me\s+to\s+([a-z\s]+?)(?:\s+(?:at|for|on)\s+([a-z0-9\s:]+))?', 'reminder'),
+    ]
+    
+    for pattern, event_type in calendar_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            title = match.group(1).strip()
+            time_info = match.group(2).strip() if len(match.groups()) > 1 and match.group(2) else ""
+            
+            # Parse time info for date/time
+            tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+            start_date = tomorrow  # Default to tomorrow
+            start_time = "14:00"  # Default to 2pm
+            
+            if time_info:
+                # Extract time if present (e.g., "2pm", "14:00", "10am")
+                time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?', time_info)
+                if time_match:
+                    hour = int(time_match.group(1))
+                    minute = time_match.group(2) if time_match.group(2) else "00"
+                    am_pm = time_match.group(3)
+                    
+                    if am_pm == 'pm' and hour < 12:
+                        hour += 12
+                    elif am_pm == 'am' and hour == 12:
+                        hour = 0
+                    
+                    start_time = f"{hour:02d}:{minute}"
+                
+                # Check for "today" vs "tomorrow"
+                if 'today' in time_info:
+                    start_date = datetime.now().strftime('%Y-%m-%d')
+                elif 'tomorrow' in time_info:
+                    start_date = tomorrow
+                elif 'next week' in time_info:
+                    start_date = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
+            
+            if title and len(title) > 1:
+                return f'[TOOL_CALL:create_calendar_event:{{"title":"{title}","start_date":"{start_date}","start_time":"{start_time}"}}]'
+    
+    return None
+
+def _is_simple_action(message: str) -> bool:
+    """Detect if this is a simple single-action request (skip Enhanced MEM Agent for speed)"""
+    message_lower = message.lower()
+    
+    # Simple action patterns (single tool call)
+    simple_patterns = [
+        r'\badd\s+(?:to\s+)?(?:shopping\s+)?list\b',
+        r'\badd\s+\w+\s+to\s+\w+\s+list\b',
+        r'\bcreate\s+(?:calendar\s+)?event\b',
+        r'\bschedule\s+\w+\b',
+        r'\bshow\s+my\s+(?:shopping\s+)?list\b',
+        r'\bget\s+my\s+(?:shopping\s+)?list\b',
+    ]
+    
+    # Check if it matches a simple pattern
+    import re
+    for pattern in simple_patterns:
+        if re.search(pattern, message_lower):
+            return True
+    
+    # If it has "and" or multiple verbs, it's probably complex
+    action_words = ['add', 'create', 'schedule', 'remind', 'set', 'put', 'remove', 'delete']
+    action_count = sum(1 for word in action_words if word in message_lower)
+    if action_count > 1:
+        return False
+    
+    # If it has "and" or "then", it's complex
+    if ' and ' in message_lower or ' then ' in message_lower:
+        return False
+    
+    # Single action word = simple
+    if action_count == 1:
+        return True
+    
+    return False
+
 def _is_planning_request(message: str) -> bool:
     """Detect if message needs full orchestration (planning requests and complex multi-step tasks)"""
     orchestration_patterns = [

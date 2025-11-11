@@ -7,7 +7,7 @@
 echo "🌙 Setting up overnight training for 10pm start..."
 
 # Remove old 2am cron jobs if they exist
-(crontab -l 2>/dev/null | grep -v "zoe/scripts/train/nightly_training.sh"; echo "# Zoe Intelligence - Overnight Training (10pm)"; echo "0 22 * * * /home/pi/zoe/scripts/train/nightly_training.sh >> /var/log/zoe-training.log 2>&1"; echo "# Zoe Intelligence - Daily Memory Consolidation (9:30pm)"; echo "30 21 * * * /home/pi/zoe/scripts/maintenance/daily_consolidation.py >> /var/log/zoe-consolidation.log 2>&1"; echo "# Zoe Intelligence - Weekly Preference Updates (9pm Sundays)"; echo "0 21 * * 0 /home/pi/zoe/scripts/maintenance/weekly_preference_update.py >> /var/log/zoe-preferences.log 2>&1") | crontab -
+(crontab -l 2>/dev/null | grep -v "zoe/scripts/train/nightly_training.sh"; echo "# Zoe Intelligence - Overnight Training (10pm)"; echo "0 22 * * * /home/zoe/assistant/scripts/train/nightly_training.sh >> /var/log/zoe-training.log 2>&1"; echo "# Zoe Intelligence - Daily Memory Consolidation (9:30pm)"; echo "30 21 * * * /home/zoe/assistant/scripts/maintenance/daily_consolidation.py >> /var/log/zoe-consolidation.log 2>&1"; echo "# Zoe Intelligence - Weekly Preference Updates (9pm Sundays)"; echo "0 21 * * 0 /home/zoe/assistant/scripts/maintenance/weekly_preference_update.py >> /var/log/zoe-preferences.log 2>&1") | crontab -
 
 echo "✅ Cron jobs updated for 10pm training:"
 echo "   - 10:00 PM daily: Nightly CPU training (8-12 hours)"

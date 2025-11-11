@@ -14,6 +14,9 @@ This prevents:
 import re
 from pathlib import Path
 
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
 class Colors:
     GREEN = '\033[92m'
     RED = '\033[91m'
@@ -23,7 +26,7 @@ class Colors:
 
 def check_chat_router_intelligence():
     """Validate chat router uses intelligent systems"""
-    chat_path = Path("/home/pi/zoe/services/zoe-core/routers/chat.py")
+    chat_path = PROJECT_ROOT / "services/zoe-core/routers/chat.py"
     
     if not chat_path.exists():
         return False, "chat.py not found"

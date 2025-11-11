@@ -3,18 +3,22 @@
 Comprehensive Tests for Enhanced Features
 """
 import os
+from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 
 
 def test_ui_files_exist():
     """Test that all UI files were created"""
     
     files_to_check = [
-        "/home/pi/zoe/services/zoe-ui/dist/js/memory-graph.js",
-        "/home/pi/zoe/services/zoe-ui/dist/js/wikilink-parser.js",
-        "/home/pi/zoe/services/zoe-ui/dist/js/memory-timeline.js",
-        "/home/pi/zoe/services/zoe-ui/dist/js/memory-search.js",
-        "/home/pi/zoe/services/zoe-ui/dist/memories-enhanced.html",
-        "/home/pi/zoe/services/zoe-ui/dist/css/memories-enhanced.css"
+        str(PROJECT_ROOT / "services/zoe-ui/dist/js/memory-graph.js"),
+        str(PROJECT_ROOT / "services/zoe-ui/dist/js/wikilink-parser.js"),
+        str(PROJECT_ROOT / "services/zoe-ui/dist/js/memory-timeline.js"),
+        str(PROJECT_ROOT / "services/zoe-ui/dist/js/memory-search.js"),
+        str(PROJECT_ROOT / "services/zoe-ui/dist/memories-enhanced.html"),
+        str(PROJECT_ROOT / "services/zoe-ui/dist/css/memories-enhanced.css")
     ]
     
     print("\n" + "="*80)

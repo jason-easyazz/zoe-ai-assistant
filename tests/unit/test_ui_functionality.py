@@ -207,10 +207,10 @@ def main():
     tester.print_results()
     
     # Save results to file
-    with open('/home/pi/zoe/test_results.json', 'w') as f:
+    with open(str(PROJECT_ROOT / "test_results.json"), 'w') as f:
         json.dump(results, f, indent=2)
     
-    print(f"\n💾 Results saved to: /home/pi/zoe/test_results.json")
+    print(f"\n💾 Results saved to: /home/zoe/assistant/test_results.json")
     
     return results
 

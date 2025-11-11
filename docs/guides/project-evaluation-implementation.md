@@ -96,10 +96,10 @@ This document tracks the implementation of 5 high-value features selected from a
 3. Update CHANGELOG.md for v2.4.0
 
 **Files Created**:
-- `/home/pi/zoe/docs/guides/project-evaluation-implementation.md` (this file)
+- `/home/zoe/assistant/docs/guides/project-evaluation-implementation.md` (this file)
 
 **Files Modified**:
-- `/home/pi/zoe/CHANGELOG.md`
+- `/home/zoe/assistant/CHANGELOG.md`
 
 **Status**: ✅ COMPLETE
 
@@ -158,7 +158,7 @@ CREATE TABLE developer_sessions (
 
 **Implementation**:
 1. Install/verify gitingest availability
-2. Create `/home/pi/zoe/tools/generators/fresh_context.sh`
+2. Create `/home/zoe/assistant/tools/generators/fresh_context.sh`
 3. Add cron job (2am daily)
 4. Integrate digest into context_optimizer.py
 
@@ -217,8 +217,8 @@ ON agent_memory(agent_type, user_id, success);
 - `get_agent_stats()`: Success rate and patterns
 
 **Integration Points**:
-- `/home/pi/zoe/services/zoe-core/persistent_agent_memory.py` (new)
-- `/home/pi/zoe/services/zoe-core/cross_agent_collaboration.py` (modified)
+- `/home/zoe/assistant/services/zoe-core/persistent_agent_memory.py` (new)
+- `/home/zoe/assistant/services/zoe-core/cross_agent_collaboration.py` (modified)
 
 **Testing**:
 - Run orchestration, verify memory stored
@@ -295,7 +295,7 @@ class StorageManager:
 
 **Implementation**:
 ```bash
-# /home/pi/zoe/scripts/utilities/zoe-superpowers.sh
+# /home/zoe/assistant/scripts/utilities/zoe-superpowers.sh
 source in ~/.bashrc for auto-loading
 ```
 
@@ -405,8 +405,8 @@ Each phase can be disabled independently:
 
 ### Related Documentation
 - Plan file: `/project-evaluation.plan.md`
-- CHANGELOG: `/home/pi/zoe/CHANGELOG.md`
-- Architecture docs: `/home/pi/zoe/docs/architecture/`
+- CHANGELOG: `/home/zoe/assistant/CHANGELOG.md`
+- Architecture docs: `/home/zoe/assistant/docs/architecture/`
 
 ### Decision Log
 

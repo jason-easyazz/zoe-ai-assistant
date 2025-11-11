@@ -30,14 +30,14 @@ Voice Agent Service (STT → LLM → TTS pipeline)
 ### 1. Download Sample Voice Files
 
 ```bash
-cd /home/pi/zoe/services/zoe-tts/samples
+cd /home/zoe/assistant/services/zoe-tts/samples
 wget https://raw.githubusercontent.com/neuphonic/neutts-air/main/samples/dave.wav
 wget https://raw.githubusercontent.com/neuphonic/neutts-air/main/samples/jo.wav
 ```
 
 ### 2. Set Environment Variables
 
-Add to `/home/pi/zoe/.env`:
+Add to `/home/zoe/assistant/.env`:
 
 ```env
 # LiveKit Configuration
@@ -53,7 +53,7 @@ LIVEKIT_API_SECRET=secret
 ### 3. Build and Start Services
 
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 
 # Build new services
 docker-compose build zoe-tts livekit zoe-voice-agent

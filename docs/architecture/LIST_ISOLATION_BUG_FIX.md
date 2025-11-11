@@ -228,14 +228,14 @@ GROUP BY l.id;
 ## Files Modified
 
 1. **Backend:**
-   - `/home/pi/zoe/services/zoe-core/routers/lists.py`
+   - `/home/zoe/assistant/services/zoe-core/routers/lists.py`
      - Line 768: Added `list_type` filter to category query
      - Line 775: Added `list_type` filter to main query
      - Line 768/775: Added `list_type` to SELECT columns
      - Lines 808-816: Updated response indices
 
 2. **Database:**
-   - `/home/pi/zoe/data/zoe.db`
+   - `/home/zoe/assistant/data/zoe.db`
      - Created default lists (IDs 1-4)
      - Moved misplaced items to correct lists
      - Deleted bogus lists (60, 123, and others)

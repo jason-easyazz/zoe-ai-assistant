@@ -8,6 +8,9 @@ Part of database consolidation protection system
 import os
 import sys
 from pathlib import Path
+
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 from typing import List, Tuple
 
 # ALLOWED DATABASES - The ONLY databases that should exist
@@ -44,7 +47,10 @@ FORBIDDEN_DATABASES = {
 BACKUP_PATTERNS = ['backup/', 'archive/']
 
 class DatabaseValidator:
-    def __init__(self, project_root: str = "/home/pi/zoe"):
+    def __init__(self, project_root: str = None):
+        # Auto-detect project root if not provided (works for both Pi and Nano)
+        if project_root is None:
+            project_root = str(PROJECT_ROOT)
         self.project_root = Path(project_root)
         self.data_dir = self.project_root / "data"
         self.violations = []
@@ -164,7 +170,8 @@ def main():
     # Save violations to file for CI/CD
     if violations:
         import json
-        with open('/home/pi/zoe/database_violations.json', 'w') as f:
+        violations_file = PROJECT_ROOT / "database_violations.json"
+        with open(violations_file, 'w') as f:
             json.dump(violations, f, indent=2)
         print(f"\n💾 Violations saved to: database_violations.json")
     

@@ -133,40 +133,44 @@ async def guest_login(request: dict, http_request: Request):
         Guest session details
     """
     try:
-        import secrets
-        from datetime import timedelta
+        device_info = request.get("device_info", {})
+        ip_address = http_request.client.host if http_request.client else None
         
-        # Create a temporary guest session (4 hour expiry)
-        session_id = f"guest_{secrets.token_urlsafe(32)}"
-        expires_at = datetime.now() + timedelta(hours=4)
+        # Create guest session using session manager
+        result = session_manager.create_guest_session(
+            device_info=device_info
+        )
         
-        guest_user_info = {
-            "user_id": "guest",
-            "username": "Guest",
-            "email": "",
-            "role": "guest",
-            "is_active": True,
-            "is_verified": False,
-            "created_at": datetime.now().isoformat(),
-            "last_login": datetime.now().isoformat(),
-            "failed_login_attempts": 0,
-            "locked_until": None,
-            "is_locked": False,
-            "settings": "{}"
-        }
-        
-        return {
-            "success": True,
-            "user_id": "guest",
-            "username": "Guest",
-            "role": "guest",
-            "session_id": session_id,
-            "session_type": "guest",
-            "expires_at": expires_at.isoformat(),
-            "user_info": guest_user_info,
-            "requires_escalation": False,
-            "error_message": None
-        }
+        if result:
+            guest_user_info = {
+                "user_id": "guest",
+                "username": "Guest",
+                "email": "",
+                "role": "guest",
+                "is_active": True,
+                "is_verified": False,
+                "created_at": datetime.now().isoformat(),
+                "last_login": datetime.now().isoformat(),
+                "failed_login_attempts": 0,
+                "locked_until": None,
+                "is_locked": False,
+                "settings": "{}"
+            }
+            
+            return {
+                "success": True,
+                "user_id": "guest",
+                "username": "Guest",
+                "role": "guest",
+                "session_id": result.session_id,
+                "session_type": "guest",
+                "expires_at": result.expires_at.isoformat() if result.expires_at else None,
+                "user_info": guest_user_info,
+                "requires_escalation": False,
+                "error_message": None
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Guest login failed")
     except Exception as e:
         logger.error(f"Guest login error: {e}")
         raise HTTPException(status_code=500, detail="Guest login failed")

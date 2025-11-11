@@ -7,13 +7,16 @@ import re
 import sys
 from pathlib import Path
 
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
 # Routers to fix (in priority order)
 CRITICAL_ROUTERS = [
-    '/home/pi/zoe/services/zoe-core/routers/calendar.py',
-    '/home/pi/zoe/services/zoe-core/routers/lists.py',
-    '/home/pi/zoe/services/zoe-core/routers/journal.py',
-    '/home/pi/zoe/services/zoe-core/routers/memories.py',
-    '/home/pi/zoe/services/zoe-core/routers/reminders.py',
+    str(PROJECT_ROOT / "services/zoe-core/routers/calendar.py"),
+    str(PROJECT_ROOT / "services/zoe-core/routers/lists.py"),
+    str(PROJECT_ROOT / "services/zoe-core/routers/journal.py"),
+    str(PROJECT_ROOT / "services/zoe-core/routers/memories.py"),
+    str(PROJECT_ROOT / "services/zoe-core/routers/reminders.py"),
 ]
 
 def fix_router(filepath):

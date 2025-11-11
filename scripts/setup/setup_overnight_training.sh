@@ -7,7 +7,7 @@
 echo "🌙 Setting up overnight training automation..."
 
 # Create temporary cron file with existing crontab + new jobs
-(crontab -l 2>/dev/null; echo "# Zoe Intelligence - Overnight Training"; echo "0 2 * * * /home/pi/zoe/scripts/train/nightly_training.sh >> /var/log/zoe-training.log 2>&1"; echo "# Zoe Intelligence - Daily Memory Consolidation"; echo "30 1 * * * /home/pi/zoe/scripts/maintenance/daily_consolidation.py >> /var/log/zoe-consolidation.log 2>&1"; echo "# Zoe Intelligence - Weekly Preference Updates"; echo "0 1 * * 0 /home/pi/zoe/scripts/maintenance/weekly_preference_update.py >> /var/log/zoe-preferences.log 2>&1") | crontab -
+(crontab -l 2>/dev/null; echo "# Zoe Intelligence - Overnight Training"; echo "0 2 * * * /home/zoe/assistant/scripts/train/nightly_training.sh >> /var/log/zoe-training.log 2>&1"; echo "# Zoe Intelligence - Daily Memory Consolidation"; echo "30 1 * * * /home/zoe/assistant/scripts/maintenance/daily_consolidation.py >> /var/log/zoe-consolidation.log 2>&1"; echo "# Zoe Intelligence - Weekly Preference Updates"; echo "0 1 * * 0 /home/zoe/assistant/scripts/maintenance/weekly_preference_update.py >> /var/log/zoe-preferences.log 2>&1") | crontab -
 
 echo "✅ Cron jobs added:"
 echo "   - 2:00 AM daily: Nightly training"

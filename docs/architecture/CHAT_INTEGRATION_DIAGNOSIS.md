@@ -182,7 +182,7 @@ INFO:__main__:Processed by 0 experts, 0 actions executed
 ### Fix 1: API Endpoints (COMPLETED ✅)
 
 **Files Modified**:
-- `/home/pi/zoe/services/mem-agent/enhanced_mem_agent_service.py`
+- `/home/zoe/assistant/services/mem-agent/enhanced_mem_agent_service.py`
 
 **Changes**:
 - Updated `_add_to_list_with_retry()` to use correct API endpoints
@@ -195,7 +195,7 @@ INFO:__main__:Processed by 0 experts, 0 actions executed
 ### Fix 2: Integrate Temporal Memory (TO DO)
 
 **Files to Modify**:
-- `/home/pi/zoe/services/zoe-core/routers/chat.py`
+- `/home/zoe/assistant/services/zoe-core/routers/chat.py`
 
 **Changes Needed**:
 ```python

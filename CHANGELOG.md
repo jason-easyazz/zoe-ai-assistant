@@ -49,7 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Consolidated from dual directory structure to single source of truth
 - Cleaned up unnecessary files and directories
 - Optimized for Claude AI integration
-- Single `/home/pi/zoe` directory contains everything
+- Single `/home/zoe/assistant` directory contains everything
 - Removed duplicate `zoe-clean` directory
 
 ### Working Systems

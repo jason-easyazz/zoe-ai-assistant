@@ -13,15 +13,18 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
 # Add the zoe-core directory to the path
-sys.path.append('/home/pi/zoe/services/zoe-core')
+sys.path.append(str(PROJECT_ROOT / "services/zoe-core"))
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/home/pi/zoe/logs/time_sync.log'),
+        logging.FileHandler(str(PROJECT_ROOT / "logs/time_sync.log")),
         logging.StreamHandler()
     ]
 )
@@ -29,8 +32,8 @@ logger = logging.getLogger(__name__)
 
 class TimeSyncService:
     def __init__(self):
-        self.settings_file = Path("/home/pi/zoe/data/time_settings.json")
-        self.log_file = Path("/home/pi/zoe/logs/time_sync.log")
+        self.settings_file = PROJECT_ROOT / "data/time_settings.json"
+        self.log_file = PROJECT_ROOT / "logs/time_sync.log"
         self.running = False
         
         # Ensure directories exist

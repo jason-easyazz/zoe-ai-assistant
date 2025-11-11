@@ -14,6 +14,9 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 from pathlib import Path
 
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
 # ============================================
 # CORE INTELLIGENCE FUNCTIONS
 # ============================================
@@ -118,7 +121,7 @@ def analyze_for_optimization() -> dict:
     if not analysis["issues"]:
         analysis["recommendations"] = [
             "System healthy! Consider these optimizations:",
-            "• Set up daily backups: crontab -e → 0 2 * * * /home/pi/zoe/scripts/backup.sh",
+            f"• Set up daily backups: crontab -e → 0 2 * * * {PROJECT_ROOT}/scripts/backup.sh",
             "• Enable log rotation: sudo logrotate /etc/logrotate.conf",
             "• Monitor trends: docker stats --no-stream > /tmp/stats.log"
         ]

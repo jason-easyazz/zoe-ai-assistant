@@ -5,6 +5,10 @@ Uses cryptography library directly to avoid py-vapid compatibility issues
 """
 
 import os
+from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 import base64
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
@@ -40,7 +44,7 @@ def generate_vapid_keys():
     return private_pem, public_key_b64
 
 
-def save_keys(private_pem, public_key_b64, output_dir="/home/pi/zoe/config"):
+def save_keys(private_pem, public_key_b64, output_dir=str(PROJECT_ROOT / "config")):
     """Save keys to files"""
     os.makedirs(output_dir, exist_ok=True)
     
@@ -71,8 +75,8 @@ if __name__ == "__main__":
     print()
     
     # Check if keys already exist
-    private_path = "/home/pi/zoe/config/vapid_private.pem"
-    public_path = "/home/pi/zoe/config/vapid_public.pem"
+    private_path = str(PROJECT_ROOT / "config/vapid_private.pem")
+    public_path = str(PROJECT_ROOT / "config/vapid_public.pem")
     
     if os.path.exists(private_path) and os.path.exists(public_path):
         print("⚠️  VAPID keys already exist!")

@@ -42,7 +42,7 @@ For best voice cloning results, reference audio should be:
 
 1. **Download sample audio files** from NeuTTS Air repository:
    ```bash
-   cd /home/pi/zoe/services/zoe-tts/samples
+   cd /home/zoe/assistant/services/zoe-tts/samples
    wget https://raw.githubusercontent.com/neuphonic/neutts-air/main/samples/dave.wav
    wget https://raw.githubusercontent.com/neuphonic/neutts-air/main/samples/jo.wav
    ```

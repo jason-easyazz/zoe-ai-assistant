@@ -55,16 +55,16 @@ If you already have Zoe running with data:
 
 ```bash
 # Backup entire data directory
-cp -r /home/pi/zoe/data /home/pi/zoe/data.backup.$(date +%Y%m%d)
+cp -r /home/zoe/assistant/data /home/zoe/assistant/data.backup.$(date +%Y%m%d)
 
 # Verify backup
-ls -lh /home/pi/zoe/data.backup.*
+ls -lh /home/zoe/assistant/data.backup.*
 ```
 
 ### Step 2: Pull Latest Changes
 
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 git pull origin main
 ```
 
@@ -140,7 +140,7 @@ If everything works, you can remove the backup:
 
 ```bash
 # After 1 week of successful operation
-rm -rf /home/pi/zoe/data.backup.*
+rm -rf /home/zoe/assistant/data.backup.*
 ```
 
 ---
@@ -199,13 +199,13 @@ When you modify the database schema:
 **Solution**: They weren't deleted, just removed from git tracking. Check:
 
 ```bash
-ls -lh /home/pi/zoe/data/*.db
+ls -lh /home/zoe/assistant/data/*.db
 ```
 
 If truly missing, restore from backup:
 
 ```bash
-cp /home/pi/zoe/data.backup.*/zoe.db /home/pi/zoe/data/
+cp /home/zoe/assistant/data.backup.*/zoe.db /home/zoe/assistant/data/
 ```
 
 ### Problem: "Git pull wants to delete my databases"
@@ -233,7 +233,7 @@ git status  # Should not show databases
 
 3. **Import backup** (if migrating from another instance):
    ```bash
-   cp /path/to/backup/zoe.db /home/pi/zoe/data/
+   cp /path/to/backup/zoe.db /home/zoe/assistant/data/
    ```
 
 ---

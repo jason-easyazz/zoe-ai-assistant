@@ -7,7 +7,8 @@ import os
 import re
 from pathlib import Path
 
-PROJECT_ROOT = Path("/home/pi/zoe")
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 
 # Old files that were moved or removed
 OLD_FILES = [

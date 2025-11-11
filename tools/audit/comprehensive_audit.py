@@ -14,6 +14,9 @@ import json
 import os
 from pathlib import Path
 
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
 # Colors
 RED = '\033[91m'
 GREEN = '\033[92m'
@@ -27,7 +30,7 @@ def check_ui_pages():
     print(f"{BLUE}UI PAGES AUDIT{RESET}")
     print(f"{BLUE}{'='*60}{RESET}\n")
     
-    ui_dir = Path("/home/pi/zoe/services/zoe-ui/dist")
+    ui_dir = PROJECT_ROOT / "services/zoe-ui/dist"
     html_files = list(ui_dir.glob("*.html"))
     
     results = {"working": [], "broken": [], "missing_js": []}
@@ -124,7 +127,7 @@ def check_database_schemas():
     print(f"{BLUE}DATABASE SCHEMA AUDIT{RESET}")
     print(f"{BLUE}{'='*60}{RESET}\n")
     
-    db_path = "/home/pi/zoe/data/zoe.db"
+    db_path = str(PROJECT_ROOT / "data/zoe.db")
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
@@ -163,12 +166,12 @@ def check_router_expectations():
     issues = []
     
     # Check reminders router
-    reminders_py = Path("/home/pi/zoe/services/zoe-core/routers/reminders.py")
+    reminders_py = PROJECT_ROOT / "services/zoe-core/routers/reminders.py"
     if reminders_py.exists():
         content = reminders_py.read_text()
         
         # Check for column references
-        db_path = "/home/pi/zoe/data/zoe.db"
+        db_path = str(PROJECT_ROOT / "data/zoe.db")
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
@@ -251,7 +254,7 @@ def generate_report(ui_results, api_results, schema_results, mismatch_results):
         }
     }
     
-    with open("/home/pi/zoe/audit_report.json", "w") as f:
+    with open(str(PROJECT_ROOT / "audit_report.json"), "w") as f:
         json.dump(report, f, indent=2)
     
     print(f"\n📄 Full report saved to: audit_report.json")

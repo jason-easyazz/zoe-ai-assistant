@@ -1,6 +1,6 @@
 # Desktop Dashboard Fixes - COMPLETE ✅
 **Date:** October 13, 2025  
-**Dashboard:** `/home/pi/zoe/services/zoe-ui/dist/dashboard.html`  
+**Dashboard:** `/home/zoe/assistant/services/zoe-ui/dist/dashboard.html`  
 **Status:** All Issues Resolved
 
 ---
@@ -166,7 +166,7 @@ grid.addEventListener('drop', handleDrop);
 ## 🔧 Technical Changes
 
 ### Files Modified
-1. `/home/pi/zoe/services/zoe-ui/dist/dashboard.html`
+1. `/home/zoe/assistant/services/zoe-ui/dist/dashboard.html`
    - Removed edit-mode-btn from nav-bar
    - Added fab-edit-btn styles
    - Added fab-edit-btn HTML
@@ -177,7 +177,7 @@ grid.addEventListener('drop', handleDrop);
    - Added setupDragAndDrop() calls
 
 ### Backup Created
-- `/home/pi/zoe/services/zoe-ui/dist/dashboard.html.backup`
+- `/home/zoe/assistant/services/zoe-ui/dist/dashboard.html.backup`
 
 ### Lines of Code
 - **Removed:** ~30 lines (old edit button)
@@ -317,7 +317,7 @@ grid.addEventListener('drop', handleDrop);
 ## 📝 Upgrade Plan Reference
 
 This work completes the plan outlined in:
-- `/home/pi/zoe/docs/architecture/TOUCH_DASHBOARD_UPGRADE_PLAN.md`
+- `/home/zoe/assistant/docs/architecture/TOUCH_DASHBOARD_UPGRADE_PLAN.md`
 
 **Note:** That document was created for the touch dashboard, but the same principles were applied here to the desktop dashboard.
 

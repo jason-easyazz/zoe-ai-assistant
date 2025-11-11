@@ -513,14 +513,14 @@ async def main():
     # Generate and save report
     report = optimizer.generate_optimization_report(results)
     
-    with open("/home/pi/zoe/SYSTEM_OPTIMIZATION_REPORT.md", "w") as f:
+    with open(str(PROJECT_ROOT / "SYSTEM_OPTIMIZATION_REPORT.md"), "w") as f:
         f.write(report)
     
     print("\n" + "="*80)
     print("🎉 COMPREHENSIVE SYSTEM OPTIMIZATION COMPLETE!")
     print("="*80)
     print(report)
-    print("\n📄 Full report saved to: /home/pi/zoe/SYSTEM_OPTIMIZATION_REPORT.md")
+    print("\n📄 Full report saved to: /home/zoe/assistant/SYSTEM_OPTIMIZATION_REPORT.md")
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -10,10 +10,13 @@ import json
 import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 import sys
 
 # Add the services directory to the path
-sys.path.append('/home/pi/zoe/services/zoe-core')
+sys.path.append(str(PROJECT_ROOT / "services/zoe-core"))
 
 from light_rag_memory import LightRAGMemorySystem, MemoryResult, EntityType
 

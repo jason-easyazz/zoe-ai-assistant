@@ -12,6 +12,9 @@ Exit Codes:
 """
 
 from pathlib import Path
+
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 import sys
 
 class Colors:
@@ -92,10 +95,10 @@ def check_home_directory():
         
         for name, item_type, category in violations:
             print(f"{Colors.RED}  • {name} ({item_type}){Colors.RESET}")
-            print(f"    → Should be in: /home/pi/zoe/{category}")
+            print(f"    → Should be in: PROJECT_ROOT / {category}")
         
         print(f"\n{Colors.YELLOW}Fix with:{Colors.RESET}")
-        print(f"  cd /home/pi/zoe")
+        print(f"  cd {PROJECT_ROOT}")
         print(f"  python3 tools/cleanup/clean_home_directory.py")
         
         return False

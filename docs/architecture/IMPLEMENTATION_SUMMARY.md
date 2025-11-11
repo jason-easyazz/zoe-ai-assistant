@@ -17,7 +17,7 @@ Comprehensive review and improvement plan for Zoe's database, API, and folder st
 
 ### 1. Architecture Review (COMPLETED)
 
-**Document**: `/home/pi/zoe/docs/architecture/ARCHITECTURE_REVIEW.md` (778 lines)
+**Document**: `/home/zoe/assistant/docs/architecture/ARCHITECTURE_REVIEW.md` (778 lines)
 
 **Score**: 8.55/10 🟢 Excellent
 
@@ -225,7 +225,7 @@ Legacy:   /api/calendar/events (still works, deprecated)
 
 ## 📚 Documentation Created
 
-All documents saved in `/home/pi/zoe/docs/architecture/`:
+All documents saved in `/home/zoe/assistant/docs/architecture/`:
 
 1. **ARCHITECTURE_REVIEW.md** (778 lines)
    - Complete analysis of database, API, and structure

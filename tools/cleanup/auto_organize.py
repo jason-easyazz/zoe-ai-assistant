@@ -8,7 +8,8 @@ from pathlib import Path
 import re
 import shutil
 
-PROJECT_ROOT = Path("/home/pi/zoe")
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 
 # Essential docs that must stay in root
 ESSENTIAL_DOCS = [

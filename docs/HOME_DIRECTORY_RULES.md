@@ -32,31 +32,31 @@
 ### Test Scripts
 ```
 /home/pi/test_something.py  ❌ WRONG
-/home/pi/zoe/tests/         ✅ RIGHT
+/home/zoe/assistant/tests/         ✅ RIGHT
 ```
 
 ### Status Reports & Summaries
 ```
 /home/pi/STATUS_REPORT.md           ❌ WRONG
-/home/pi/zoe/docs/archive/reports/  ✅ RIGHT
+/home/zoe/assistant/docs/archive/reports/  ✅ RIGHT
 ```
 
 ### Config Files
 ```
 /home/pi/nginx.conf        ❌ WRONG
-/home/pi/zoe/config/       ✅ RIGHT
+/home/zoe/assistant/config/       ✅ RIGHT
 ```
 
 ### Scripts
 ```
 /home/pi/fix_something.sh             ❌ WRONG
-/home/pi/zoe/scripts/utilities/       ✅ RIGHT
+/home/zoe/assistant/scripts/utilities/       ✅ RIGHT
 ```
 
 ### Documentation
 ```
 /home/pi/FEATURE_GUIDE.md          ❌ WRONG
-/home/pi/zoe/docs/guides/          ✅ RIGHT
+/home/zoe/assistant/docs/guides/          ✅ RIGHT
 ```
 
 ---
@@ -64,8 +64,8 @@
 ## 🔒 ENFORCEMENT
 
 ### Pre-Commit Hook
-The project pre-commit hook at `/home/pi/zoe/.git/hooks/pre-commit` will:
-- Check project structure (`/home/pi/zoe`)
+The project pre-commit hook at `/home/zoe/assistant/.git/hooks/pre-commit` will:
+- Check project structure (`/home/zoe/assistant`)
 - **Does NOT check `/home/pi` directly**
 
 ### Manual Check
@@ -78,7 +78,7 @@ ls -1 *.md *.py *.sh *.json *.conf *.yml 2>/dev/null | wc -l
 
 ### Auto-Cleanup Tool
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 python3 tools/cleanup/clean_home_directory.py
 ```
 
@@ -93,7 +93,7 @@ This will:
 
 ## 🎯 THE GOLDEN RULE
 
-**If it's related to Zoe, it belongs IN `/home/pi/zoe`, not `/home/pi`!**
+**If it's related to Zoe, it belongs IN `/home/zoe/assistant`, not `/home/pi`!**
 
 ### Quick Decision Tree
 
@@ -107,7 +107,7 @@ Created a file in /home/pi?
 │  └─ YES → Leave it in /home/pi
 │
 └─ ANYTHING ELSE?
-   └─ Move it into /home/pi/zoe using the cleanup tool
+   └─ Move it into /home/zoe/assistant using the cleanup tool
 ```
 
 ---
@@ -131,7 +131,7 @@ ls -la | grep -v "^d" | grep -v "^l" | grep -v "^\."
 
 ### Auto-Fix
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 python3 tools/cleanup/clean_home_directory.py
 ```
 
@@ -141,7 +141,7 @@ python3 tools/cleanup/clean_home_directory.py
 
 1. **Clarity**: `/home/pi` is for system config, not project work
 2. **Organization**: Everything Zoe-related in one place
-3. **Backups**: Easy to backup just `/home/pi/zoe`
+3. **Backups**: Easy to backup just `/home/zoe/assistant`
 4. **Git**: Clean git status, not cluttered with temp files
 5. **Professionalism**: Clean home directory = clean project
 
@@ -152,7 +152,7 @@ python3 tools/cleanup/clean_home_directory.py
 After cleanup on 2025-10-08:
 - **Before**: 131 files in /home/pi
 - **After**: 13 files in /home/pi (mostly zoe/ subdirectories)
-- **Archived**: 118 files moved to `/home/pi/zoe/` with timestamps
+- **Archived**: 118 files moved to `/home/zoe/assistant/` with timestamps
 
 ---
 

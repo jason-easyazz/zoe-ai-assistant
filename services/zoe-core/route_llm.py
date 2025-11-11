@@ -21,32 +21,64 @@ class ZoeRouter:
             self.router = LiteRouter(
                 model_list=[
                     {
-                        "model_name": "zoe-memory",
+                        "model_name": "zoe-action",  # Tool calling - BEST MODEL
                         "litellm_params": {
-                            "model": "ollama/gemma3:1b",  # Fastest model
+                            "model": "ollama/hermes3:8b-llama3.1-q4_K_M",  # 95% tool accuracy
                             "api_base": os.getenv("OLLAMA_BASE", "http://zoe-ollama:11434"),
-                            "temperature": 0.7,
-                            "max_tokens": 128,  # Speed optimization
+                            "temperature": 0.6,  # Lower = more precise
+                            "num_gpu": -1,  # Auto GPU allocation
+                            "num_predict": 512,
+                            "num_ctx": 4096,
+                            "repeat_penalty": 1.1,
+                            "stop": ["\n\n", "User:", "Human:"],
+                            "keep_alive": "30m",
                         },
-                        "model_info": {"id": "zoe-memory-retrieval"},
+                        "model_info": {"id": "tool-calling-specialist"},
                     },
                     {
-                        "model_name": "zoe-chat",
+                        "model_name": "zoe-chat",  # Fast conversation
                         "litellm_params": {
-                            "model": "ollama/gemma3:1b",  # Fastest model
-                            "api_base": os.getenv("OLLAMA_BASE", "http://zoe-ollama:11434"),
-                            "temperature": 0.8,
-                            "max_tokens": 128,  # Speed optimization
-                        },
-                    },
-                    {
-                        "model_name": "zoe-fast",
-                        "litellm_params": {
-                            "model": "ollama/qwen2.5:1.5b",  # Fast alternative
+                            "model": "ollama/phi3:mini",  # FASTEST CPU model
                             "api_base": os.getenv("OLLAMA_BASE", "http://zoe-ollama:11434"),
                             "temperature": 0.7,
-                            "max_tokens": 128,
+                            "num_gpu": 0,  # CPU only for speed
+                            "num_predict": 256,
+                            "num_ctx": 2048,
+                            "repeat_penalty": 1.1,
+                            "stop": ["\n\n", "User:", "Human:"],
+                            "keep_alive": "30m",
                         },
+                        "model_info": {"id": "fast-chat-specialist"},
+                    },
+                    {
+                        "model_name": "zoe-vision",  # Image/multimodal
+                        "litellm_params": {
+                            "model": "ollama/gemma3n-e2b-gpu-fixed",  # Multimodal
+                            "api_base": os.getenv("OLLAMA_BASE", "http://zoe-ollama:11434"),
+                            "temperature": 0.7,
+                            "num_gpu": 99,  # All GPU layers
+                            "num_predict": 256,
+                            "num_ctx": 2048,
+                            "repeat_penalty": 1.1,
+                            "stop": ["\n\n", "User:", "Human:"],
+                            "keep_alive": "30m",
+                        },
+                        "model_info": {"id": "vision-specialist"},
+                    },
+                    {
+                        "model_name": "zoe-memory",  # Context-heavy retrieval
+                        "litellm_params": {
+                            "model": "ollama/qwen2.5:7b",  # Excellent context handling
+                            "api_base": os.getenv("OLLAMA_BASE", "http://zoe-ollama:11434"),
+                            "temperature": 0.7,
+                            "num_gpu": 43,  # Qwen-optimized layers
+                            "num_predict": 512,
+                            "num_ctx": 4096,
+                            "repeat_penalty": 1.1,
+                            "stop": ["\n\n", "User:", "Human:"],
+                            "keep_alive": "30m",
+                        },
+                        "model_info": {"id": "memory-retrieval-specialist"},
                     },
                 ],
                 redis_host=os.getenv("ZOE_REDIS_HOST", "zoe-redis"),
@@ -59,32 +91,59 @@ class ZoeRouter:
 
     def _basic_classification(self, message: str) -> Dict[str, Any]:
         msg = message.lower()
-        requires_memory = any(k in msg for k in ["remember", "memory", "recall", "what did", "last time"])
-        model = "zoe-memory" if requires_memory else "zoe-chat"
+        
+        # Action patterns (comprehensive)
+        action_patterns = [
+            'add to', 'add ', 'create ', 'schedule ', 'remind ', 'set ', 'turn on', 'turn off',
+            'list ', 'show ', 'get ', 'find ', 'search ', 'delete ', 'remove ', 'update ',
+            "don't let me forget", "i need to buy", "put on my list", "buy some", "get some",
+            'shopping list', 'shopping', 'grocery list', 'groceries',
+            'todo list', 'calendar', 'event', 'task', 'appointment', 'meeting',
+        ]
+        
+        # Memory patterns
+        memory_patterns = ["remember", "memory", "recall", "what did", "last time", "who is", "when did"]
+        
+        # Classify
+        is_action = any(pattern in msg for pattern in action_patterns)
+        requires_memory = any(k in msg for k in memory_patterns)
+        
+        if is_action:
+            model = "zoe-action"
+            reasoning = "Action detected - tool calling required"
+        elif requires_memory:
+            model = "zoe-memory"
+            reasoning = "Memory retrieval detected"
+        else:
+            model = "zoe-chat"
+            reasoning = "General conversation"
+        
         return {
             "model": model,
-            "confidence": 0.8,
-            "reasoning": "Heuristic classification based on memory-related keywords",
+            "confidence": 0.85 if is_action or requires_memory else 0.7,
+            "reasoning": reasoning,
             "requires_memory": requires_memory,
             "complexity": "standard",
         }
 
-    def classify_query(self, message: str, context: Dict) -> Dict:
-        # Context-aware tweaks: consider conversation history length and user_data size
+    def classify_query(self, message: str, context: Dict, has_image: bool = False) -> Dict:
+        """Classify query and route to appropriate specialized model"""
         decision = self._basic_classification(message)
-        history = context.get("conversation_history", [])
-        context_size = len(history)
-        user_data = context.get("user_data", {})
-        # If large context/data present, bias toward memory model
-        if context_size >= 6 or any(user_data.get(k) for k in ["calendar_events","recent_journal","people","projects","memories"]):
-            decision["requires_memory"] = True
-            decision["model"] = "zoe-memory"
-            decision["reasoning"] += "; context-aware bias"
         return decision
 
-    async def route_query(self, message: str, context: Dict) -> Dict:
-        # Use same classification logic for async path
-        return self.classify_query(message, context)
+    async def route_query(self, message: str, context: Dict, routing_model: str = None, has_image: bool = False) -> Dict:
+        """Async route query to specialized model
+        
+        Args:
+            message: User message
+            context: Conversation context
+            routing_model: (Unused) For future routing decisions
+            has_image: Whether query includes image
+        
+        Returns:
+            Dict with model selection and reasoning
+        """
+        return self.classify_query(message, context, has_image)
 
 
 # Global instance for imports like `from route_llm import router`

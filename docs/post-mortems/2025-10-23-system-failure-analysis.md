@@ -30,9 +30,9 @@ Between 9:00 AM - 11:30 AM, Zoe experienced cascading failures affecting routers
 
 ### 9:45 AM - Database Path Issues
 **Found:**
-- `calendar_reminder_service.py` - Hardcoded `/home/pi/zoe/data/zoe.db`
-- `task_reminder_service.py` - Hardcoded `/home/pi/zoe/data/zoe.db`
-- `push_notification_service.py` - Hardcoded `/home/pi/zoe/data/zoe.db`
+- `calendar_reminder_service.py` - Hardcoded `/home/zoe/assistant/data/zoe.db`
+- `task_reminder_service.py` - Hardcoded `/home/zoe/assistant/data/zoe.db`
+- `push_notification_service.py` - Hardcoded `/home/zoe/assistant/data/zoe.db`
 
 **Root Cause (Part 2):**
 - These services were **newly added today**
@@ -73,12 +73,12 @@ All services operational, all endpoints responding 200 OK.
 **Problem:**
 ```python
 # ❌ WRONG - Breaks in Docker
-def __init__(self, db_path: str = "/home/pi/zoe/data/zoe.db"):
+def __init__(self, db_path: str = "/home/zoe/assistant/data/zoe.db"):
 ```
 
 **Why it's wrong:**
-- Host system: `/home/pi/zoe/data/zoe.db` ✓ (accessible)
-- Docker container: `/home/pi/zoe/data/zoe.db` ✗ (not mounted)
+- Host system: `/home/zoe/assistant/data/zoe.db` ✓ (accessible)
+- Docker container: `/home/zoe/assistant/data/zoe.db` ✗ (not mounted)
 - Docker container: `/app/data/zoe.db` ✓ (correct mount point)
 
 **Solution:**
@@ -86,7 +86,7 @@ def __init__(self, db_path: str = "/home/pi/zoe/data/zoe.db"):
 # ✅ CORRECT - Works everywhere
 def __init__(self, db_path: str = None):
     if db_path is None:
-        db_path = os.getenv("DATABASE_PATH", "/home/pi/zoe/data/zoe.db")
+        db_path = os.getenv("DATABASE_PATH", "/home/zoe/assistant/data/zoe.db")
 ```
 
 **Files affected:**
@@ -98,7 +98,7 @@ def __init__(self, db_path: str = None):
 **Problem:**
 ```python
 # ❌ WRONG - Runs before env vars loaded
-DB_PATH = os.getenv("DATABASE_PATH", "/home/pi/zoe/data/zoe.db")
+DB_PATH = os.getenv("DATABASE_PATH", "/home/zoe/assistant/data/zoe.db")
 init_lists_db()  # Called immediately!
 ```
 

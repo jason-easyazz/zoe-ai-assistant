@@ -227,11 +227,15 @@ RESPONSE FORMATTING RULES:
 - FOLLOW THE USER'S SPECIFIC INSTRUCTIONS EXACTLY
 """
 
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
 def execute_command(cmd: str, timeout: int = 30, cwd: str = None) -> dict:
     """Execute system command and return results"""
     try:
         if cwd is None:
-            cwd = "/home/pi/zoe" if os.path.exists("/home/pi/zoe") else "/app"
+            # Try unified path first, then fallback
+            cwd = str(PROJECT_ROOT) if PROJECT_ROOT.exists() else "/app"
         
         # Command execution disabled by security policy
         # result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, cwd=cwd)
@@ -904,7 +908,7 @@ async def restart_all_containers():
         # Run the restart command asynchronously
         process = await asyncio.create_subprocess_exec(
             "docker", "compose", "restart",
-            cwd="/home/pi/zoe",
+            cwd=str(PROJECT_ROOT),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )

@@ -204,7 +204,7 @@ def main():
     print("=" * 50)
     
     # Change to project directory
-    os.chdir('/home/pi/zoe')
+    os.chdir('/home/zoe/assistant')
     
     # Get initial size
     initial_size = get_directory_size('.')

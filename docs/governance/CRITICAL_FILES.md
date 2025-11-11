@@ -146,7 +146,7 @@ services/zoe-auth/
 
 ### Configuration (NEVER DELETE)
 ```
-/home/pi/zoe/
+/home/zoe/assistant/
 ├── docker-compose.yml           # Service orchestration - CRITICAL
 ├── .env                         # Environment variables - CRITICAL
 └── nginx.conf                   # Web server config - CRITICAL

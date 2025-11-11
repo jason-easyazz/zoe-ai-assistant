@@ -286,7 +286,7 @@ After a simple restart of the zoe-core service:
 
 **Single command needed**:
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 docker-compose restart zoe-core
 ```
 

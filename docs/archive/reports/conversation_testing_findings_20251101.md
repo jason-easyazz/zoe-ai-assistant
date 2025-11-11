@@ -301,7 +301,7 @@ Once the service is restarted with the fixed chat router:
 
 1. **Restart Service** (REQUIRED for fix to take effect):
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 docker-compose restart zoe-core
 ```
 

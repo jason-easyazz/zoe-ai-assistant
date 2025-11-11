@@ -17,6 +17,12 @@ import httpx
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
+try:
+    from nio import AsyncClient as MatrixClient, LoginResponse
+    MATRIX_AVAILABLE = True
+except ImportError:
+    MATRIX_AVAILABLE = False
+    MatrixClient = None
 from mcp.types import (
     CallToolRequest,
     CallToolResult,
@@ -46,6 +52,12 @@ class ZoeMCPServer:
         self.collections_service_url = os.getenv("COLLECTIONS_SERVICE_URL", "http://collections-service:8005")
         self.homeassistant_bridge_url = os.getenv("HOMEASSISTANT_BRIDGE_URL", "http://homeassistant-mcp-bridge:8007")
         self.n8n_bridge_url = os.getenv("N8N_BRIDGE_URL", "http://n8n-mcp-bridge:8009")
+        
+        # Matrix configuration
+        self.matrix_homeserver = os.getenv("MATRIX_HOMESERVER", "https://matrix.org")
+        self.matrix_user = os.getenv("MATRIX_USER", "")
+        self.matrix_password = os.getenv("MATRIX_PASSWORD", "")
+        self.matrix_client: Optional[MatrixClient] = None
         self.auth_token = os.getenv("ZOE_AUTH_TOKEN", "")
         self.session_id = os.getenv("ZOE_SESSION_ID", "")
         
@@ -149,6 +161,54 @@ class ZoeMCPServer:
                     }
                 ),
                 Tool(
+                    name="update_calendar_event",
+                    description="Update an existing calendar event",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "event_id": {
+                                "type": "integer",
+                                "description": "Event ID to update"
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "New event title"
+                            },
+                            "start_date": {
+                                "type": "string",
+                                "description": "New start date (YYYY-MM-DD)"
+                            },
+                            "start_time": {
+                                "type": "string",
+                                "description": "New start time (HH:MM)"
+                            },
+                            "description": {
+                                "type": "string",
+                                "description": "New event description"
+                            },
+                            "location": {
+                                "type": "string",
+                                "description": "New event location"
+                            }
+                        },
+                        "required": ["event_id"]
+                    }
+                ),
+                Tool(
+                    name="delete_calendar_event",
+                    description="Delete a calendar event",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "event_id": {
+                                "type": "integer",
+                                "description": "Event ID to delete"
+                            }
+                        },
+                        "required": ["event_id"]
+                    }
+                ),
+                Tool(
                     name="add_to_list",
                     description="Add an item to a user's todo list",
                     inputSchema={
@@ -195,6 +255,108 @@ class ZoeMCPServer:
                     inputSchema={
                         "type": "object",
                         "properties": {}
+                    }
+                ),
+                Tool(
+                    name="create_list",
+                    description="Create a new todo list",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "list_name": {
+                                "type": "string",
+                                "description": "Name of the new list"
+                            },
+                            "description": {
+                                "type": "string",
+                                "description": "Optional list description"
+                            }
+                        },
+                        "required": ["list_name"]
+                    }
+                ),
+                Tool(
+                    name="delete_list",
+                    description="Delete an entire todo list",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "list_name": {
+                                "type": "string",
+                                "description": "Name of the list to delete"
+                            }
+                        },
+                        "required": ["list_name"]
+                    }
+                ),
+                Tool(
+                    name="update_list_item",
+                    description="Update an existing list item",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "item_id": {
+                                "type": "integer",
+                                "description": "ID of the item to update"
+                            },
+                            "task_text": {
+                                "type": "string",
+                                "description": "New task text"
+                            },
+                            "priority": {
+                                "type": "string",
+                                "enum": ["low", "medium", "high", "critical"],
+                                "description": "New priority"
+                            }
+                        },
+                        "required": ["item_id"]
+                    }
+                ),
+                Tool(
+                    name="delete_list_item",
+                    description="Delete a specific item from a list",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "item_id": {
+                                "type": "integer",
+                                "description": "ID of the item to delete"
+                            }
+                        },
+                        "required": ["item_id"]
+                    }
+                ),
+                Tool(
+                    name="mark_item_complete",
+                    description="Mark a list item as complete",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "item_id": {
+                                "type": "integer",
+                                "description": "ID of the item to mark complete"
+                            },
+                            "completed": {
+                                "type": "boolean",
+                                "description": "Completion status",
+                                "default": true
+                            }
+                        },
+                        "required": ["item_id"]
+                    }
+                ),
+                Tool(
+                    name="get_list_items",
+                    description="Get all items in a specific list",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "list_name": {
+                                "type": "string",
+                                "description": "Name of the list"
+                            }
+                        },
+                        "required": ["list_name"]
                     }
                 ),
                 Tool(
@@ -250,6 +412,156 @@ class ZoeMCPServer:
                             }
                         },
                         "required": ["person_id"]
+                    }
+                ),
+                Tool(
+                    name="update_person",
+                    description="Update an existing person's information",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "person_id": {
+                                "type": "integer",
+                                "description": "Person ID to update"
+                            },
+                            "name": {
+                                "type": "string",
+                                "description": "New name"
+                            },
+                            "relationship": {
+                                "type": "string",
+                                "description": "New relationship"
+                            },
+                            "notes": {
+                                "type": "string",
+                                "description": "New notes"
+                            },
+                            "email": {
+                                "type": "string",
+                                "description": "Email address"
+                            },
+                            "phone": {
+                                "type": "string",
+                                "description": "Phone number"
+                            },
+                            "birthday": {
+                                "type": "string",
+                                "description": "Birthday (YYYY-MM-DD)"
+                            }
+                        },
+                        "required": ["person_id"]
+                    }
+                ),
+                Tool(
+                    name="delete_person",
+                    description="Delete a person from the system",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "person_id": {
+                                "type": "integer",
+                                "description": "Person ID to delete"
+                            }
+                        },
+                        "required": ["person_id"]
+                    }
+                ),
+                Tool(
+                    name="search_people",
+                    description="Search for people by name or attributes",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Search query"
+                            },
+                            "relationship": {
+                                "type": "string",
+                                "description": "Filter by relationship type"
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                ),
+                Tool(
+                    name="add_person_attribute",
+                    description="Add or update a custom attribute for a person",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "person_id": {
+                                "type": "integer",
+                                "description": "Person ID"
+                            },
+                            "attribute_name": {
+                                "type": "string",
+                                "description": "Attribute name (e.g., 'favorite_color', 'occupation')"
+                            },
+                            "attribute_value": {
+                                "type": "string",
+                                "description": "Attribute value"
+                            }
+                        },
+                        "required": ["person_id", "attribute_name", "attribute_value"]
+                    }
+                ),
+                Tool(
+                    name="update_relationship",
+                    description="Update the relationship type for a person",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "person_id": {
+                                "type": "integer",
+                                "description": "Person ID"
+                            },
+                            "relationship": {
+                                "type": "string",
+                                "description": "New relationship type"
+                            }
+                        },
+                        "required": ["person_id", "relationship"]
+                    }
+                ),
+                Tool(
+                    name="add_interaction",
+                    description="Log an interaction with a person",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "person_id": {
+                                "type": "integer",
+                                "description": "Person ID"
+                            },
+                            "interaction_type": {
+                                "type": "string",
+                                "description": "Type of interaction (call, meeting, message, etc.)"
+                            },
+                            "notes": {
+                                "type": "string",
+                                "description": "Interaction notes"
+                            },
+                            "date": {
+                                "type": "string",
+                                "description": "Interaction date (YYYY-MM-DD)"
+                            }
+                        },
+                        "required": ["person_id", "interaction_type"]
+                    }
+                ),
+                Tool(
+                    name="get_person_by_name",
+                    description="Find a person by their name",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "Person's name to search for"
+                            }
+                        },
+                        "required": ["name"]
                     }
                 ),
                 Tool(
@@ -459,6 +771,215 @@ class ZoeMCPServer:
                             }
                         }
                     }
+                ),
+                # Planning Tools
+                Tool(
+                    name="decompose_task",
+                    description="Break down a complex task into smaller actionable steps",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "task": {
+                                "type": "string",
+                                "description": "The complex task to decompose"
+                            },
+                            "context": {
+                                "type": "string",
+                                "description": "Additional context about the task"
+                            }
+                        },
+                        "required": ["task"]
+                    }
+                ),
+                Tool(
+                    name="track_progress",
+                    description="Track progress on a multi-step task",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "task_id": {
+                                "type": "string",
+                                "description": "ID of the task to track"
+                            },
+                            "step_completed": {
+                                "type": "string",
+                                "description": "Step that was completed"
+                            }
+                        },
+                        "required": ["task_id"]
+                    }
+                ),
+                Tool(
+                    name="get_task_plan",
+                    description="Get the current plan and progress for a task",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "task_id": {
+                                "type": "string",
+                                "description": "ID of the task"
+                            }
+                        },
+                        "required": ["task_id"]
+                    }
+                ),
+                # List Advanced Tools
+                Tool(
+                    name="archive_list",
+                    description="Archive a completed list",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "list_name": {
+                                "type": "string",
+                                "description": "Name of the list to archive"
+                            }
+                        },
+                        "required": ["list_name"]
+                    }
+                ),
+                Tool(
+                    name="search_list_items",
+                    description="Search for items across all lists",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Search query"
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                ),
+                Tool(
+                    name="bulk_add_items",
+                    description="Add multiple items to a list at once",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "list_name": {
+                                "type": "string",
+                                "description": "Name of the list"
+                            },
+                            "items": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Array of items to add"
+                            }
+                        },
+                        "required": ["list_name", "items"]
+                    }
+                ),
+                # Matrix Tools
+                Tool(
+                    name="send_matrix_message",
+                    description="Send a message to a Matrix room",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "room_id": {
+                                "type": "string",
+                                "description": "Matrix room ID"
+                            },
+                            "message": {
+                                "type": "string",
+                                "description": "Message to send"
+                            }
+                        },
+                        "required": ["room_id", "message"]
+                    }
+                ),
+                Tool(
+                    name="get_matrix_rooms",
+                    description="Get list of Matrix rooms",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {}
+                    }
+                ),
+                Tool(
+                    name="create_matrix_room",
+                    description="Create a new Matrix room",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "Room name"
+                            },
+                            "topic": {
+                                "type": "string",
+                                "description": "Room topic"
+                            }
+                        },
+                        "required": ["name"]
+                    }
+                ),
+                Tool(
+                    name="get_matrix_messages",
+                    description="Get recent messages from a Matrix room",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "room_id": {
+                                "type": "string",
+                                "description": "Matrix room ID"
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Number of messages to retrieve",
+                                "default": 20
+                            }
+                        },
+                        "required": ["room_id"]
+                    }
+                ),
+                # HomeAssistant Climate Tools
+                Tool(
+                    name="get_climate_devices",
+                    description="Get all climate control devices (thermostats, AC units)",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {}
+                    }
+                ),
+                Tool(
+                    name="set_temperature",
+                    description="Set target temperature for a climate device",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "entity_id": {
+                                "type": "string",
+                                "description": "Climate device entity ID"
+                            },
+                            "temperature": {
+                                "type": "number",
+                                "description": "Target temperature"
+                            },
+                            "unit": {
+                                "type": "string",
+                                "enum": ["celsius", "fahrenheit"],
+                                "description": "Temperature unit",
+                                "default": "celsius"
+                            }
+                        },
+                        "required": ["entity_id", "temperature"]
+                    }
+                ),
+                Tool(
+                    name="get_temperature",
+                    description="Get current temperature from sensors",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "Location/room name"
+                            }
+                        }
+                    }
                 )
             ]
             return ListToolsResult(tools=tools)
@@ -497,10 +1018,56 @@ class ZoeMCPServer:
                     return await self._get_calendar_events(arguments, user_context)
                 elif name == "get_lists":
                     return await self._get_lists(arguments, user_context)
+                # NEW: Lists Expert Tools
+                elif name == "create_list":
+                    return await self._create_list(arguments, user_context)
+                elif name == "delete_list":
+                    return await self._delete_list(arguments, user_context)
+                elif name == "update_list_item":
+                    return await self._update_list_item(arguments, user_context)
+                elif name == "delete_list_item":
+                    return await self._delete_list_item(arguments, user_context)
+                elif name == "mark_item_complete":
+                    return await self._mark_item_complete(arguments, user_context)
+                elif name == "get_list_items":
+                    return await self._get_list_items(arguments, user_context)
                 elif name == "get_people":
                     return await self._get_people(arguments, user_context)
                 elif name == "get_person_analysis":
                     return await self._get_person_analysis(arguments, user_context)
+                # NEW: Person Expert Tools
+                elif name == "update_person":
+                    return await self._update_person(arguments, user_context)
+                elif name == "delete_person":
+                    return await self._delete_person(arguments, user_context)
+                elif name == "search_people":
+                    return await self._search_people(arguments, user_context)
+                elif name == "add_person_attribute":
+                    return await self._add_person_attribute(arguments, user_context)
+                elif name == "update_relationship":
+                    return await self._update_relationship(arguments, user_context)
+                elif name == "add_interaction":
+                    return await self._add_interaction(arguments, user_context)
+                elif name == "get_person_by_name":
+                    return await self._get_person_by_name(arguments, user_context)
+                # NEW: Calendar Expert Tools
+                elif name == "search_calendar_events":
+                    return await self._search_calendar_events(arguments, user_context)
+                elif name == "get_event_by_id":
+                    return await self._get_event_by_id(arguments, user_context)
+                # NEW: Memory Expert Tools
+                elif name == "create_memory":
+                    return await self._create_memory(arguments, user_context)
+                elif name == "update_memory":
+                    return await self._update_memory(arguments, user_context)
+                elif name == "delete_memory":
+                    return await self._delete_memory(arguments, user_context)
+                elif name == "update_collection":
+                    return await self._update_collection(arguments, user_context)
+                elif name == "delete_collection":
+                    return await self._delete_collection(arguments, user_context)
+                elif name == "add_to_collection":
+                    return await self._add_to_collection(arguments, user_context)
                 elif name == "get_collections":
                     return await self._get_collections(arguments, user_context)
                 elif name == "get_collection_analysis":
@@ -529,6 +1096,32 @@ class ZoeMCPServer:
                     return await self._get_n8n_nodes(arguments, user_context)
                 elif name == "get_developer_tasks":
                     return await self._get_developer_tasks(arguments, user_context)
+                elif name == "decompose_task":
+                    return await self._decompose_task(arguments, user_context)
+                elif name == "track_progress":
+                    return await self._track_progress(arguments, user_context)
+                elif name == "get_task_plan":
+                    return await self._get_task_plan(arguments, user_context)
+                elif name == "archive_list":
+                    return await self._archive_list(arguments, user_context)
+                elif name == "search_list_items":
+                    return await self._search_list_items(arguments, user_context)
+                elif name == "bulk_add_items":
+                    return await self._bulk_add_items(arguments, user_context)
+                elif name == "send_matrix_message":
+                    return await self._send_matrix_message(arguments, user_context)
+                elif name == "get_matrix_rooms":
+                    return await self._get_matrix_rooms(arguments, user_context)
+                elif name == "create_matrix_room":
+                    return await self._create_matrix_room(arguments, user_context)
+                elif name == "get_matrix_messages":
+                    return await self._get_matrix_messages(arguments, user_context)
+                elif name == "get_climate_devices":
+                    return await self._get_climate_devices(arguments, user_context)
+                elif name == "set_temperature":
+                    return await self._set_temperature(arguments, user_context)
+                elif name == "get_temperature":
+                    return await self._get_temperature(arguments, user_context)
                 else:
                     return CallToolResult(
                         content=[TextContent(type="text", text=f"Unknown tool: {name}")]
@@ -774,9 +1367,9 @@ class ZoeMCPServer:
         if not list_row:
             # Create new list
             cursor.execute("""
-                INSERT INTO lists (user_id, name, category, description)
-                VALUES (?, ?, ?, ?)
-            """, (user_context.user_id, list_name, "personal", f"List created by MCP server for {user_context.username}"))
+                INSERT INTO lists (user_id, name, list_category, list_type, description)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_context.user_id, list_name, "personal", "todo", f"List created by MCP server for {user_context.username}"))
             list_id = cursor.lastrowid
         else:
             list_id = list_row[0]
@@ -843,11 +1436,11 @@ class ZoeMCPServer:
         cursor = conn.cursor()
         
         cursor.execute("""
-            SELECT l.name, l.category, COUNT(li.id) as item_count
+            SELECT l.name, l.list_category, COUNT(li.id) as item_count
             FROM lists l
             LEFT JOIN list_items li ON l.id = li.list_id
             WHERE l.user_id = ?
-            GROUP BY l.id, l.name, l.category
+            GROUP BY l.id, l.name, l.list_category
         """, (user_context.user_id,))
         
         lists = cursor.fetchall()
@@ -1568,6 +2161,614 @@ class ZoeMCPServer:
             return CallToolResult(
                 content=[TextContent(type="text", text=f"Error connecting to N8N bridge: {str(e)}")]
             )
+    
+    
+    async def _create_list(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Create a new todo list"""
+        list_name = args.get("list_name", "")
+        description = args.get("description", "")
+        user_id = user_context.get("user_id", "default")
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                INSERT INTO lists (user_id, name, description, created_at)
+                VALUES (?, ?, ?, datetime('now'))
+            """, (user_id, list_name, description))
+            conn.commit()
+            return CallToolResult(
+                content=[TextContent(type="text", text=f"✅ List '{list_name}' created")]
+            )
+        except Exception as e:
+            return CallToolResult(
+                content=[TextContent(type="text", text=f"❌ Error: {str(e)}")]
+            )
+        finally:
+            conn.close()
+    
+    async def _delete_list(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Delete a list"""
+        list_name = args.get("list_name", "")
+        user_id = user_context.get("user_id", "default")
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("DELETE FROM list_items WHERE list_id IN (SELECT id FROM lists WHERE user_id = ? AND name = ?)", (user_id, list_name))
+            cursor.execute("DELETE FROM lists WHERE user_id = ? AND name = ?", (user_id, list_name))
+            conn.commit()
+            return CallToolResult(content=[TextContent(type="text", text=f"✅ Deleted list '{list_name}'")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+        finally:
+            conn.close()
+    
+    async def _update_list_item(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Update list item"""
+        item_id = args.get("item_id")
+        task_text = args.get("task_text")
+        priority = args.get("priority")
+        user_id = user_context.get("user_id", "default")
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            updates = []
+            params = []
+            if task_text:
+                updates.append("task = ?")
+                params.append(task_text)
+            if priority:
+                updates.append("priority = ?")
+                params.append(priority)
+            if updates:
+                params.extend([item_id, user_id])
+                cursor.execute(f"UPDATE list_items SET {', '.join(updates)} WHERE id = ? AND user_id = ?", params)
+                conn.commit()
+                return CallToolResult(content=[TextContent(type="text", text="✅ Updated")])
+            return CallToolResult(content=[TextContent(type="text", text="❌ No updates")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+        finally:
+            conn.close()
+    
+    async def _delete_list_item(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Delete list item"""
+        item_id = args.get("item_id")
+        user_id = user_context.get("user_id", "default")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("DELETE FROM list_items WHERE id = ? AND user_id = ?", (item_id, user_id))
+            conn.commit()
+            return CallToolResult(content=[TextContent(type="text", text="✅ Deleted")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+        finally:
+            conn.close()
+    
+    async def _mark_item_complete(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Mark item complete"""
+        item_id = args.get("item_id")
+        completed = args.get("completed", True)
+        user_id = user_context.get("user_id", "default")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("UPDATE list_items SET completed = ?, completed_at = datetime('now') WHERE id = ? AND user_id = ?", (1 if completed else 0, item_id, user_id))
+            conn.commit()
+            return CallToolResult(content=[TextContent(type="text", text="✅ Marked complete")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+        finally:
+            conn.close()
+    
+    async def _get_list_items(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Get list items"""
+        list_name = args.get("list_name", "")
+        user_id = user_context.get("user_id", "default")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT li.id, li.task, li.priority, li.completed FROM list_items li JOIN lists l ON li.list_id = l.id WHERE l.user_id = ? AND l.name = ? ORDER BY li.completed ASC, li.priority DESC", (user_id, list_name))
+            items = cursor.fetchall()
+            if items:
+                result = f"📋 {list_name}:\n" + "\n".join([f"{'✅' if i[3] else '⬜'} [{i[2]}] {i[1]}" for i in items])
+                return CallToolResult(content=[TextContent(type="text", text=result)])
+            return CallToolResult(content=[TextContent(type="text", text=f"📋 {list_name} is empty")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+        finally:
+            conn.close()
+    
+    async def _update_person(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Update person"""
+        person_id = args.get("person_id")
+        user_id = user_context.get("user_id", "default")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.put(f"{self.people_service_url}/people/{person_id}", json=args, headers={"X-User-ID": user_id})
+                if response.status_code == 200:
+                    return CallToolResult(content=[TextContent(type="text", text="✅ Person updated")])
+                return CallToolResult(content=[TextContent(type="text", text="❌ Update failed")])
+            except Exception as e:
+                return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+    
+    async def _delete_person(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Delete person"""
+        person_id = args.get("person_id")
+        user_id = user_context.get("user_id", "default")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.delete(f"{self.people_service_url}/people/{person_id}", headers={"X-User-ID": user_id})
+                if response.status_code == 200:
+                    return CallToolResult(content=[TextContent(type="text", text="✅ Deleted")])
+                return CallToolResult(content=[TextContent(type="text", text="❌ Failed")])
+            except Exception as e:
+                return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+    
+    async def _search_people(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Search people"""
+        query = args.get("query", "")
+        user_id = user_context.get("user_id", "default")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.get(f"{self.people_service_url}/people/search", params={"q": query}, headers={"X-User-ID": user_id})
+                if response.status_code == 200:
+                    people = response.json()
+                    if people:
+                        result = "🔍 Found:\n" + "\n".join([f"👤 {p.get('name')} ({p.get('relationship')})" for p in people])
+                        return CallToolResult(content=[TextContent(type="text", text=result)])
+                return CallToolResult(content=[TextContent(type="text", text="No results")])
+            except Exception as e:
+                return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+    
+    async def _add_person_attribute(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Add person attribute"""
+        person_id = args.get("person_id")
+        attr_name = args.get("attribute_name")
+        attr_value = args.get("attribute_value")
+        user_id = user_context.get("user_id", "default")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("INSERT OR REPLACE INTO person_attributes (person_id, user_id, attribute_name, attribute_value, updated_at) VALUES (?, ?, ?, ?, datetime('now'))", (person_id, user_id, attr_name, attr_value))
+            conn.commit()
+            return CallToolResult(content=[TextContent(type="text", text=f"✅ Added {attr_name}")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+        finally:
+            conn.close()
+    
+    async def _update_relationship(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Update relationship"""
+        person_id = args.get("person_id")
+        relationship = args.get("relationship")
+        user_id = user_context.get("user_id", "default")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.put(f"{self.people_service_url}/people/{person_id}", json={"relationship": relationship}, headers={"X-User-ID": user_id})
+                if response.status_code == 200:
+                    return CallToolResult(content=[TextContent(type="text", text=f"✅ Updated to '{relationship}'")])
+                return CallToolResult(content=[TextContent(type="text", text="❌ Failed")])
+            except Exception as e:
+                return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+    
+    async def _add_interaction(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Add interaction"""
+        person_id = args.get("person_id")
+        interaction_type = args.get("interaction_type")
+        notes = args.get("notes", "")
+        date = args.get("date", datetime.now().strftime("%Y-%m-%d"))
+        user_id = user_context.get("user_id", "default")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("INSERT INTO person_interactions (person_id, user_id, interaction_type, notes, interaction_date, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))", (person_id, user_id, interaction_type, notes, date))
+            conn.commit()
+            return CallToolResult(content=[TextContent(type="text", text=f"✅ Logged {interaction_type}")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+        finally:
+            conn.close()
+    
+    async def _get_person_by_name(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Get person by name"""
+        name = args.get("name", "")
+        user_id = user_context.get("user_id", "default")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.get(f"{self.people_service_url}/people/search", params={"q": name, "exact": True}, headers={"X-User-ID": user_id})
+                if response.status_code == 200:
+                    people = response.json()
+                    if people:
+                        p = people[0]
+                        return CallToolResult(content=[TextContent(type="text", text=f"👤 {p.get('name')}\nRelationship: {p.get('relationship')}")])
+                return CallToolResult(content=[TextContent(type="text", text=f"❌ '{name}' not found")])
+            except Exception as e:
+                return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+    
+    async def _search_calendar_events(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Search calendar"""
+        query = args.get("query", "")
+        user_id = user_context.get("user_id", "default")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT id, title, start_date, start_time FROM calendar_events WHERE user_id = ? AND (title LIKE ? OR description LIKE ?) ORDER BY start_date", (user_id, f"%{query}%", f"%{query}%"))
+            events = cursor.fetchall()
+            if events:
+                result = "🔍 Found:\n" + "\n".join([f"📅 {e[1]} - {e[2]} {e[3] or ''}" for e in events])
+                return CallToolResult(content=[TextContent(type="text", text=result)])
+            return CallToolResult(content=[TextContent(type="text", text="No events found")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+        finally:
+            conn.close()
+    
+    async def _get_event_by_id(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Get event by ID"""
+        event_id = args.get("event_id")
+        user_id = user_context.get("user_id", "default")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT title, start_date, start_time, description, location FROM calendar_events WHERE id = ? AND user_id = ?", (event_id, user_id))
+            event = cursor.fetchone()
+            if event:
+                return CallToolResult(content=[TextContent(type="text", text=f"📅 {event[0]}\nWhen: {event[1]} {event[2] or ''}\nDesc: {event[3] or 'None'}\nLocation: {event[4] or 'None'}")])
+            return CallToolResult(content=[TextContent(type="text", text="❌ Event not found")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+        finally:
+            conn.close()
+    
+    async def _create_memory(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Create memory"""
+        content = args.get("content", "")
+        category = args.get("category", "general")
+        user_id = user_context.get("user_id", "default")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("INSERT INTO memories (user_id, content, category, created_at) VALUES (?, ?, ?, datetime('now'))", (user_id, content, category))
+            conn.commit()
+            return CallToolResult(content=[TextContent(type="text", text="✅ Memory created")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+        finally:
+            conn.close()
+    
+    async def _update_memory(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Update memory"""
+        memory_id = args.get("memory_id")
+        content = args.get("content")
+        user_id = user_context.get("user_id", "default")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("UPDATE memories SET content = ? WHERE id = ? AND user_id = ?", (content, memory_id, user_id))
+            conn.commit()
+            return CallToolResult(content=[TextContent(type="text", text="✅ Updated")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+        finally:
+            conn.close()
+    
+    async def _delete_memory(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Delete memory"""
+        memory_id = args.get("memory_id")
+        user_id = user_context.get("user_id", "default")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("DELETE FROM memories WHERE id = ? AND user_id = ?", (memory_id, user_id))
+            conn.commit()
+            return CallToolResult(content=[TextContent(type="text", text="✅ Deleted")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+        finally:
+            conn.close()
+    
+    async def _update_collection(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Update collection"""
+        collection_id = args.get("collection_id")
+        name = args.get("name")
+        description = args.get("description")
+        user_id = user_context.get("user_id", "default")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.put(f"{self.collections_service_url}/collections/{collection_id}", json={"name": name, "description": description}, headers={"X-User-ID": user_id})
+                if response.status_code == 200:
+                    return CallToolResult(content=[TextContent(type="text", text="✅ Updated")])
+                return CallToolResult(content=[TextContent(type="text", text="❌ Failed")])
+            except Exception as e:
+                return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+    
+    async def _delete_collection(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Delete collection"""
+        collection_id = args.get("collection_id")
+        user_id = user_context.get("user_id", "default")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.delete(f"{self.collections_service_url}/collections/{collection_id}", headers={"X-User-ID": user_id})
+                if response.status_code == 200:
+                    return CallToolResult(content=[TextContent(type="text", text="✅ Deleted")])
+                return CallToolResult(content=[TextContent(type="text", text="❌ Failed")])
+            except Exception as e:
+                return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+    
+    async def _add_to_collection(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Add to collection"""
+        collection_id = args.get("collection_id")
+        item_type = args.get("item_type")
+        item_id = args.get("item_id")
+        user_id = user_context.get("user_id", "default")
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.post(f"{self.collections_service_url}/collections/{collection_id}/items", json={"item_type": item_type, "item_id": item_id}, headers={"X-User-ID": user_id})
+                if response.status_code == 200:
+                    return CallToolResult(content=[TextContent(type="text", text="✅ Added")])
+                return CallToolResult(content=[TextContent(type="text", text="❌ Failed")])
+            except Exception as e:
+                return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+    
+    async def _create_list(self, args, user_context):
+        list_name = args.get("list_name", "")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("INSERT INTO lists (user_id, name, created_at) VALUES (?, ?, datetime('now'))", (user_context.get("user_id", "default"), list_name))
+            conn.commit()
+            return CallToolResult(content=[TextContent(type="text", text=f"✅ List '{list_name}' created")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+        finally:
+            conn.close()
+    
+    async def _delete_list(self, args, user_context):
+        list_name = args.get("list_name", "")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute("DELETE FROM list_items WHERE list_id IN (SELECT id FROM lists WHERE user_id = ? AND name = ?)", (user_context.get("user_id", "default"), list_name))
+            cursor.execute("DELETE FROM lists WHERE user_id = ? AND name = ?", (user_context.get("user_id", "default"), list_name))
+            conn.commit()
+            return CallToolResult(content=[TextContent(type="text", text=f"✅ List deleted")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+        finally:
+            conn.close()
+    
+    # Planning Tools
+    async def _decompose_task(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Decompose complex task"""
+        task = args.get("task", "")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("""CREATE TABLE IF NOT EXISTS task_plans (
+            id TEXT PRIMARY KEY, user_id TEXT, task TEXT, steps TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        task_id = f"task_{int(datetime.now().timestamp())}"
+        steps = ["Research", "Plan", "Execute", "Review", "Complete"]
+        cursor.execute("INSERT INTO task_plans (id, user_id, task, steps) VALUES (?, ?, ?, ?)",
+                      (task_id, user_context.user_id, task, json.dumps(steps)))
+        conn.commit()
+        conn.close()
+        return CallToolResult(content=[TextContent(type="text", text=f"✅ Task decomposed (ID: {task_id})")])
+    
+    async def _track_progress(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Track task progress"""
+        task_id = args.get("task_id")
+        step = args.get("step_completed")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("""CREATE TABLE IF NOT EXISTS task_progress (
+            task_id TEXT, user_id TEXT, step_completed TEXT, completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        cursor.execute("INSERT INTO task_progress (task_id, user_id, step_completed) VALUES (?, ?, ?)",
+                      (task_id, user_context.user_id, step))
+        conn.commit()
+        conn.close()
+        return CallToolResult(content=[TextContent(type="text", text=f"✅ Progress tracked: {step}")])
+    
+    async def _get_task_plan(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Get task plan"""
+        task_id = args.get("task_id")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT task, steps FROM task_plans WHERE id = ? AND user_id = ?", (task_id, user_context.user_id))
+        result = cursor.fetchone()
+        conn.close()
+        if not result:
+            return CallToolResult(content=[TextContent(type="text", text=f"Task {task_id} not found")])
+        return CallToolResult(content=[TextContent(type="text", text=f"Task: {result[0]}")])
+    
+    async def _archive_list(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Archive list"""
+        list_name = args.get("list_name")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE lists SET archived = 1 WHERE name = ? AND user_id = ?", (list_name, user_context.user_id))
+        conn.commit()
+        conn.close()
+        return CallToolResult(content=[TextContent(type="text", text=f"✅ List '{list_name}' archived")])
+    
+    async def _search_list_items(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Search list items"""
+        query = args.get("query", "")
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("""SELECT li.item, l.name FROM list_items li JOIN lists l ON li.list_id = l.id
+                         WHERE l.user_id = ? AND li.item LIKE ?""", (user_context.user_id, f"%{query}%"))
+        results = cursor.fetchall()
+        conn.close()
+        if not results:
+            return CallToolResult(content=[TextContent(type="text", text=f"No items found matching '{query}'")])
+        results_text = "\n".join([f"- {item} (from {list_name})" for item, list_name in results])
+        return CallToolResult(content=[TextContent(type="text", text=f"Found {len(results)} items:\n{results_text}")])
+    
+    async def _bulk_add_items(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Bulk add items"""
+        list_name = args.get("list_name")
+        items = args.get("items", [])
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM lists WHERE name = ? AND user_id = ?", (list_name, user_context.user_id))
+        result = cursor.fetchone()
+        if not result:
+            conn.close()
+            return CallToolResult(content=[TextContent(type="text", text=f"List '{list_name}' not found")])
+        list_id = result[0]
+        for item in items:
+            cursor.execute("""INSERT INTO list_items (list_id, item, completed, user_id, created_at)
+                            VALUES (?, ?, 0, ?, datetime('now'))""", (list_id, item, user_context.user_id))
+        conn.commit()
+        conn.close()
+        return CallToolResult(content=[TextContent(type="text", text=f"✅ Added {len(items)} items to '{list_name}'")])
+    
+    async def _ensure_matrix_connection(self):
+        """Ensure Matrix client is connected"""
+        if not MATRIX_AVAILABLE:
+            return False
+        
+        if self.matrix_client and self.matrix_client.logged_in:
+            return True
+        
+        if not self.matrix_user or not self.matrix_password:
+            return False
+        
+        try:
+            self.matrix_client = MatrixClient(self.matrix_homeserver, self.matrix_user)
+            response = await self.matrix_client.login(self.matrix_password)
+            if isinstance(response, LoginResponse):
+                logger.info("✅ Matrix client connected")
+                return True
+            else:
+                logger.error(f"Matrix login failed: {response}")
+                return False
+        except Exception as e:
+            logger.error(f"Matrix connection error: {e}")
+            return False
+    
+    async def _send_matrix_message(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Send Matrix message"""
+        room_id = args.get("room_id")
+        message = args.get("message")
+        
+        if not await self._ensure_matrix_connection():
+            return CallToolResult(content=[TextContent(type="text", text="⚠️ Matrix not configured. Set MATRIX_HOMESERVER, MATRIX_USER, MATRIX_PASSWORD")])
+        
+        try:
+            await self.matrix_client.room_send(
+                room_id=room_id,
+                message_type="m.room.message",
+                content={"msgtype": "m.text", "body": message}
+            )
+            return CallToolResult(content=[TextContent(type="text", text=f"✅ Message sent to Matrix room {room_id}")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+    
+    async def _get_matrix_rooms(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Get Matrix rooms"""
+        if not await self._ensure_matrix_connection():
+            return CallToolResult(content=[TextContent(type="text", text="⚠️ Matrix not configured")])
+        
+        try:
+            rooms = self.matrix_client.rooms
+            rooms_text = "\n".join([f"- {room.display_name or room.room_id} ({room.room_id})" for room in rooms.values()])
+            return CallToolResult(content=[TextContent(type="text", text=f"Matrix Rooms:\n{rooms_text or '(no rooms)'}")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+    
+    async def _create_matrix_room(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Create Matrix room"""
+        name = args.get("name")
+        topic = args.get("topic", "")
+        
+        if not await self._ensure_matrix_connection():
+            return CallToolResult(content=[TextContent(type="text", text="⚠️ Matrix not configured")])
+        
+        try:
+            response = await self.matrix_client.room_create(
+                name=name,
+                topic=topic
+            )
+            room_id = response.room_id
+            return CallToolResult(content=[TextContent(type="text", text=f"✅ Matrix room '{name}' created: {room_id}")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+    
+    async def _get_matrix_messages(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Get Matrix messages"""
+        room_id = args.get("room_id")
+        limit = args.get("limit", 20)
+        
+        if not await self._ensure_matrix_connection():
+            return CallToolResult(content=[TextContent(type="text", text="⚠️ Matrix not configured")])
+        
+        try:
+            # Sync to get latest messages
+            await self.matrix_client.sync(timeout=30000)
+            
+            room = self.matrix_client.rooms.get(room_id)
+            if not room:
+                return CallToolResult(content=[TextContent(type="text", text=f"❌ Room {room_id} not found")])
+            
+            # Get room timeline
+            messages = []
+            for event in list(room.timeline.events)[-limit:]:
+                if hasattr(event, 'body'):
+                    messages.append(f"[{event.sender}] {event.body}")
+            
+            messages_text = "\n".join(messages) if messages else "(no messages)"
+            return CallToolResult(content=[TextContent(type="text", text=f"Messages from {room_id}:\n{messages_text}")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+    
+    async def _get_climate_devices(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Get climate devices"""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"{self.homeassistant_bridge_url}/climate/devices", timeout=10.0)
+                if response.status_code == 200:
+                    data = response.json()
+                    devices = data.get("devices", [])
+                    devices_text = "\n".join([f"- {d['name']} ({d['entity_id']})" for d in devices])
+                    return CallToolResult(content=[TextContent(type="text", text=f"Climate Devices:\n{devices_text}")])
+                return CallToolResult(content=[TextContent(type="text", text=f"Error: {response.status_code}")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"Error: {str(e)}")])
+    
+    async def _set_temperature(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Set temperature"""
+        entity_id = args.get("entity_id")
+        temperature = args.get("temperature")
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(f"{self.homeassistant_bridge_url}/climate/set_temperature",
+                                            json={"entity_id": entity_id, "temperature": temperature}, timeout=10.0)
+                if response.status_code == 200:
+                    return CallToolResult(content=[TextContent(type="text", text=f"✅ Temperature set to {temperature}°")])
+                return CallToolResult(content=[TextContent(type="text", text=f"Error: {response.status_code}")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"Error: {str(e)}")])
+    
+    async def _get_temperature(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Get temperature"""
+        location = args.get("location", "")
+        try:
+            async with httpx.AsyncClient() as client:
+                params = {"location": location} if location else {}
+                response = await client.get(f"{self.homeassistant_bridge_url}/climate/temperature", params=params, timeout=10.0)
+                if response.status_code == 200:
+                    data = response.json()
+                    temp = data.get("temperature", "Unknown")
+                    return CallToolResult(content=[TextContent(type="text", text=f"Temperature: {temp}°")])
+                return CallToolResult(content=[TextContent(type="text", text=f"Error: {response.status_code}")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"Error: {str(e)}")])
     
     async def run(self):
         """Run the MCP server"""

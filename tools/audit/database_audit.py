@@ -12,7 +12,8 @@ import json
 
 class DatabaseAuditor:
     def __init__(self):
-        self.project_root = Path("/home/pi/zoe")
+        # Auto-detect project root (works for both Pi and Nano)
+        self.project_root = Path(__file__).parent.parent.parent.resolve()
         self.database_refs = defaultdict(list)
         self.db_patterns = [
             r'sqlite3\.connect\(["\']([^"\']+)["\']',
@@ -105,7 +106,7 @@ class DatabaseAuditor:
             print(f"\n   {db_name}: {info['reference_count']} references in {len(info['files'])} files")
             print(f"   Files:")
             for file_path in sorted(set(info['files']))[:10]:  # Show first 10
-                short_path = file_path.replace('/home/pi/zoe/', '')
+                short_path = str(file_path).replace(str(self.project_root) + '/', '')
                 print(f"      - {short_path}")
             if len(info['files']) > 10:
                 print(f"      ... and {len(info['files']) - 10} more")
@@ -120,21 +121,22 @@ class DatabaseAuditor:
 
 def main():
     auditor = DatabaseAuditor()
+    project_root = auditor.project_root
     
     print("🔍 Scanning project for database references...")
-    auditor.scan_directory(Path("/home/pi/zoe/services"))
-    auditor.scan_directory(Path("/home/pi/zoe/scripts"))
-    auditor.scan_directory(Path("/home/pi/zoe/tools"))
+    auditor.scan_directory(project_root / "services")
+    auditor.scan_directory(project_root / "scripts")
+    auditor.scan_directory(project_root / "tools")
     
     # Scan root level files
-    for file_path in Path("/home/pi/zoe").glob("*.py"):
+    for file_path in project_root.glob("*.py"):
         auditor.scan_file(file_path)
-    for file_path in Path("/home/pi/zoe").glob("*.yml"):
+    for file_path in project_root.glob("*.yml"):
         auditor.scan_file(file_path)
     
     report = auditor.generate_report()
     auditor.print_report(report)
-    auditor.save_report(report, Path("/home/pi/zoe/database_audit_report.json"))
+    auditor.save_report(report, project_root / "database_audit_report.json")
     
     # Return exit code based on duplicates
     if report['total_databases'] > 1:

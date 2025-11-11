@@ -130,9 +130,9 @@ fetch('/components/zoe-orb-complete.html')
 ## Files Created/Modified
 
 ### Created
-- `/home/pi/zoe/services/zoe-ui/dist/js/zoe-orb.js` (new)
-- `/home/pi/zoe/services/zoe-ui/dist/components/zoe-orb-complete.html` (new)
-- `/home/pi/zoe/tools/utilities/update_orb_component.py` (helper script)
+- `/home/zoe/assistant/services/zoe-ui/dist/js/zoe-orb.js` (new)
+- `/home/zoe/assistant/services/zoe-ui/dist/components/zoe-orb-complete.html` (new)
+- `/home/zoe/assistant/tools/utilities/update_orb_component.py` (helper script)
 
 ### Modified
 - 8 HTML pages updated to use shared component

@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Database path
-DB_PATH = "/home/pi/zoe/data/developer_tasks.db"
+DB_PATH = "/home/zoe/assistant/data/developer_tasks.db"
 
 def init_database():
     """Initialize the database if it doesn't exist"""

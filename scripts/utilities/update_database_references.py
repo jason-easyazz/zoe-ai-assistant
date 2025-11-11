@@ -7,6 +7,9 @@ Updates all code to use zoe.db instead of forbidden databases
 import os
 import re
 from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 from typing import List, Tuple
 
 # Database mapping: old_path -> new_path
@@ -32,12 +35,15 @@ DATABASE_REPLACEMENTS = {
 # Keep memory.db as is (Light RAG only)
 ALLOWED_DATABASES = ['zoe.db', 'memory.db']
 
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
 class DatabaseReferenceUpdater:
     def __init__(self):
-        self.project_root = Path("/home/pi/zoe")
+        self.project_root = PROJECT_ROOT
         self.files_updated = []
         self.total_replacements = 0
-        self.log_file = Path("/home/pi/zoe/database_consolidation.log")
+        self.log_file = PROJECT_ROOT / "database_consolidation.log"
         
     def log(self, message: str):
         """Log to file and console"""

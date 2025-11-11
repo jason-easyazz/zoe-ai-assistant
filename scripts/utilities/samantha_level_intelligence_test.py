@@ -499,14 +499,14 @@ async def main():
     # Generate and save report
     report = tester.generate_intelligence_report(results)
     
-    with open("/home/pi/zoe/SAMANTHA_INTELLIGENCE_REPORT.md", "w") as f:
+    with open(str(PROJECT_ROOT / "SAMANTHA_INTELLIGENCE_REPORT.md"), "w") as f:
         f.write(report)
     
     print("\n" + "="*80)
     print("🎉 SAMANTHA-LEVEL INTELLIGENCE TEST COMPLETE!")
     print("="*80)
     print(report)
-    print("\n📄 Full report saved to: /home/pi/zoe/SAMANTHA_INTELLIGENCE_REPORT.md")
+    print("\n📄 Full report saved to: /home/zoe/assistant/SAMANTHA_INTELLIGENCE_REPORT.md")
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -31,8 +31,8 @@
 ### Step 1: Deploy Database Schema
 
 ```bash
-cd /home/pi/zoe
-sqlite3 /home/pi/zoe/data/zoe.db < /home/pi/zoe/services/zoe-core/db/schema/push_subscriptions.sql
+cd /home/zoe/assistant
+sqlite3 /home/zoe/assistant/data/zoe.db < /home/zoe/assistant/services/zoe-core/db/schema/push_subscriptions.sql
 ```
 
 **What this does:**
@@ -43,7 +43,7 @@ sqlite3 /home/pi/zoe/data/zoe.db < /home/pi/zoe/services/zoe-core/db/schema/push
 
 **Verify:**
 ```bash
-sqlite3 /home/pi/zoe/data/zoe.db "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%push%';"
+sqlite3 /home/zoe/assistant/data/zoe.db "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%push%';"
 # Should show: push_subscriptions
 ```
 
@@ -58,7 +58,7 @@ docker exec zoe-core pip install py-vapid==1.9.1 pywebpush==2.0.0
 
 If running locally:
 ```bash
-cd /home/pi/zoe/services/zoe-core
+cd /home/zoe/assistant/services/zoe-core
 pip install -r requirements.txt
 ```
 
@@ -263,7 +263,7 @@ docker logs zoe-core --tail 50
 curl http://localhost:8000/api/push/vapid-public-key
 
 # 4. Check database tables exist
-sqlite3 /home/pi/zoe/data/zoe.db "SELECT COUNT(*) FROM push_subscriptions;"
+sqlite3 /home/zoe/assistant/data/zoe.db "SELECT COUNT(*) FROM push_subscriptions;"
 ```
 
 **Solutions:**
@@ -295,7 +295,7 @@ print('Public Key:', service.get_public_key())
 
 The router loader should auto-discover it, but verify:
 ```bash
-grep -r "from routers import push" /home/pi/zoe/services/zoe-core/main.py
+grep -r "from routers import push" /home/zoe/assistant/services/zoe-core/main.py
 ```
 
 If not found, the router loader will still discover it automatically.
@@ -357,7 +357,7 @@ After deployment, you should have:
 Use the automated script:
 
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 ./scripts/deployment/deploy-phase2-push-notifications.sh
 ```
 
@@ -389,7 +389,7 @@ docker logs zoe-core --tail 20 | grep "reminder service"
 
 ### View Active Subscriptions:
 ```bash
-sqlite3 /home/pi/zoe/data/zoe.db "SELECT user_id, device_type, active FROM push_subscriptions;"
+sqlite3 /home/zoe/assistant/data/zoe.db "SELECT user_id, device_type, active FROM push_subscriptions;"
 ```
 
 ---

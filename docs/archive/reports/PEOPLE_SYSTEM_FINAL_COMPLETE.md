@@ -132,7 +132,7 @@ folder_path, created_at, updated_at
 ### Integration Tests - 100% PASSING ✅
 
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 python3 tests/integration/test_people_full_integration.py
 ```
 
@@ -354,10 +354,10 @@ Via Chat:
 ## 📚 Documentation
 
 **Complete guides**:
-- `/home/pi/zoe/QUICK_START_PEOPLE.md` - Quick start
-- `/home/pi/zoe/docs/guides/PEOPLE_SYSTEM_GUIDE.md` - Full guide
-- `/home/pi/zoe/UI_BACKEND_INTEGRATION_MAP.md` - Integration details
-- `/home/pi/zoe/DATABASE_FIX_APPLIED.md` - Database fixes
+- `/home/zoe/assistant/QUICK_START_PEOPLE.md` - Quick start
+- `/home/zoe/assistant/docs/guides/PEOPLE_SYSTEM_GUIDE.md` - Full guide
+- `/home/zoe/assistant/UI_BACKEND_INTEGRATION_MAP.md` - Integration details
+- `/home/zoe/assistant/DATABASE_FIX_APPLIED.md` - Database fixes
 - **THIS FILE** - Final completion status
 
 ---

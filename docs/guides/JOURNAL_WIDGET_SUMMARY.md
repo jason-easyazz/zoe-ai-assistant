@@ -7,28 +7,28 @@ A super simple, elegant journal widget that makes journaling effortless - just a
 ## 📁 Files Created/Modified
 
 ### New Files
-1. **`/home/pi/zoe/services/zoe-ui/dist/js/widgets/core/journal.js`**
+1. **`/home/zoe/assistant/services/zoe-ui/dist/js/widgets/core/journal.js`**
    - Main widget implementation
    - Handles photo upload, form management, and entry saving
    - Auto-enables save button when content is present
    - Clean, simple UI with gradient styling
 
-2. **`/home/pi/zoe/docs/guides/journal-widget-guide.md`**
+2. **`/home/zoe/assistant/docs/guides/journal-widget-guide.md`**
    - Complete user guide
    - Usage instructions
    - Integration details
    - Tips and privacy info
 
 ### Modified Files
-1. **`/home/pi/zoe/services/zoe-ui/dist/js/widgets/widget-manifest.json`**
+1. **`/home/zoe/assistant/services/zoe-ui/dist/js/widgets/widget-manifest.json`**
    - Added journal widget configuration
    - Set as productivity category
    - Enabled for dashboard and lists pages
 
-2. **`/home/pi/zoe/services/zoe-ui/dist/dashboard.html`**
+2. **`/home/zoe/assistant/services/zoe-ui/dist/dashboard.html`**
    - Added journal.js script import
 
-3. **`/home/pi/zoe/services/zoe-ui/dist/lists.html`**
+3. **`/home/zoe/assistant/services/zoe-ui/dist/lists.html`**
    - Added journal.js script import
 
 ## 🎨 Widget Features

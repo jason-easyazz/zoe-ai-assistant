@@ -8,6 +8,7 @@ that includes Multi-Expert Model with action execution capabilities.
 
 import aiohttp
 import asyncio
+import os
 from typing import Dict, List, Optional
 import logging
 
@@ -19,13 +20,15 @@ class EnhancedMemAgentClient:
     Provides both memory search AND action execution capabilities
     """
     
-    def __init__(self, base_url: str = "http://mem-agent:11435"):
-        self.base_url = base_url
+    def __init__(self, base_url: str = None):
+        # ✅ FIX: Check if mem-agent service exists, use fallback if not
+        self.base_url = base_url or os.getenv("MEM_AGENT_URL", "http://mem-agent:11435")
         self.session: Optional[aiohttp.ClientSession] = None
         self.connector = None
         self.enabled = True
         self.failure_count = 0
         self.max_failures = 3
+        self._service_available = None  # Cache service availability check
     
     async def initialize(self):
         """Initialize persistent session with connection pooling"""
@@ -40,7 +43,7 @@ class EnhancedMemAgentClient:
             
             self.session = aiohttp.ClientSession(
                 connector=self.connector,
-                timeout=aiohttp.ClientTimeout(total=5.0),  # Longer timeout for actions
+                timeout=aiohttp.ClientTimeout(total=6.0),  # Increased timeout for actions (6s total, 5s for request)
                 headers={"User-Agent": "Zoe-Core-Enhanced/2.0"}
             )
             logger.info("✅ Enhanced MEM Agent client initialized")
@@ -50,6 +53,22 @@ class EnhancedMemAgentClient:
         if self.session and not self.session.closed:
             await self.session.close()
             logger.info("Enhanced MEM Agent client closed")
+    
+    async def _check_service_available(self) -> bool:
+        """Check if mem-agent service is available"""
+        if self._service_available is not None:
+            return self._service_available
+        
+        try:
+            if not self.session:
+                await self.initialize()
+            
+            async with self.session.get(f"{self.base_url}/health", timeout=aiohttp.ClientTimeout(total=2.0)) as response:
+                self._service_available = response.status == 200
+                return self._service_available
+        except Exception:
+            self._service_available = False
+            return False
     
     async def enhanced_search(
         self, 
@@ -73,6 +92,16 @@ class EnhancedMemAgentClient:
         
         if not self.enabled:
             return {"error": "Enhanced MEM Agent disabled", "fallback": True}
+        
+        # ✅ FIX: Check if service is available before trying to connect
+        if not await self._check_service_available():
+            logger.warning(f"⚠️ Enhanced MemAgent service not available at {self.base_url}, using fallback")
+            return {
+                "error": "Enhanced MEM Agent service not available",
+                "fallback": True,
+                "experts": [],
+                "primary_expert": None
+            }
         
         if not self.session:
             await self.initialize()

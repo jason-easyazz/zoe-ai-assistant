@@ -147,7 +147,7 @@ Each user's data is now properly isolated at both frontend and backend levels.
 
 ### Verification Command
 ```bash
-cd /home/pi/zoe/services/zoe-ui/dist
+cd /home/zoe/assistant/services/zoe-ui/dist
 grep -n "user_info?.user_id.*user_id.*default" *.html | wc -l
 # Should return: 32+ (all correct implementations)
 

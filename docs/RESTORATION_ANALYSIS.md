@@ -29,7 +29,7 @@ The blind restoration attempt failed due to dependency errors.
 - ✅ No SyntaxErrors
 
 ### 🗄️ Database Status
-- ✅ Single zoe.db at /home/pi/zoe/data/zoe.db
+- ✅ Single zoe.db at /home/zoe/assistant/data/zoe.db
 - ✅ Mounted at /app/data in container
 - ✅ No duplicate databases
 - ✅ DATABASE_PATH env var set correctly
@@ -72,9 +72,9 @@ The blind restoration attempt failed due to dependency errors.
 
 ## Database Path Clarification
 The database is NOT moved - it exists at one location on disk:
-- **Host**: `/home/pi/zoe/data/zoe.db`
+- **Host**: `/home/zoe/assistant/data/zoe.db`
 - **Container path 1**: `/app/data/zoe.db` (via ./data:/app/data mount)
-- **Container path 2**: `/home/pi/zoe/data/zoe.db` (via /home/pi/zoe:/home/pi/zoe mount)
+- **Container path 2**: `/home/zoe/assistant/data/zoe.db` (via /home/zoe/assistant:/home/zoe/assistant mount)
 
 Both container paths point to the SAME file. Changed lists.py to use /app/data 
 for consistency with other routers. No data was moved or lost.

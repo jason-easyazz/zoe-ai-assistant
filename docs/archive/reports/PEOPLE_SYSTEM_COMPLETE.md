@@ -29,7 +29,7 @@
 
 **Test Results**: ✅ **100% PASSING**
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 python3 tests/integration/test_people_system.py
 # ✅ ALL TESTS PASSED
 ```
@@ -152,7 +152,7 @@ Zoe: **Sarah** (friend)
 
 ### Integration Tests
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 python3 tests/integration/test_people_system.py
 ```
 
@@ -254,7 +254,7 @@ User Chat → Person Expert → People API → Database
 ## 📁 File Structure
 
 ```
-/home/pi/zoe/
+/home/zoe/assistant/
 ├── services/
 │   ├── zoe-core/
 │   │   ├── routers/

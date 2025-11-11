@@ -8,6 +8,9 @@ import json
 import tempfile
 from typing import Dict, List, Any, Optional
 from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 import logging
 
 logger = logging.getLogger(__name__)
@@ -21,12 +24,12 @@ class AiderIntegration:
             # Running in container
             self.aider_path = "python3"  # Use system Python
             self.aider_module = "aider"  # Use installed Aider module
-            self.workspace_root = "/home/pi/zoe"
+            self.workspace_root = str(PROJECT_ROOT)
         else:
             # Running on host
-            self.aider_path = "/home/pi/zoe/aider_env/bin/aider"
+            self.aider_path = str(PROJECT_ROOT / "aider_env/bin/aider")
             self.aider_module = None
-            self.workspace_root = "/home/pi/zoe"
+            self.workspace_root = str(PROJECT_ROOT)
         self.max_memory_mb = 400  # Memory limit for Aider
         
     def generate_code(self, request: str, context_files: List[str] = None, 

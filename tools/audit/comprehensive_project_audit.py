@@ -5,11 +5,11 @@ Comprehensive Project Audit
 
 Checks EVERY folder for mess:
 - /home/pi (home directory)
-- /home/pi/zoe (project root)
-- /home/pi/zoe/services/ (all service subdirectories)
-- /home/pi/zoe/tests/ (all test subdirectories)
-- /home/pi/zoe/scripts/ (all script subdirectories)
-- /home/pi/zoe/docs/ (all doc subdirectories)
+- PROJECT_ROOT (project root)
+- PROJECT_ROOT/services/ (all service subdirectories)
+- PROJECT_ROOT/tests/ (all test subdirectories)
+- PROJECT_ROOT/scripts/ (all script subdirectories)
+- PROJECT_ROOT/docs/ (all doc subdirectories)
 
 Reports:
 - Misplaced files
@@ -21,6 +21,9 @@ Reports:
 
 import os
 from pathlib import Path
+
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 from collections import defaultdict
 import sys
 
@@ -102,12 +105,12 @@ class ComprehensiveAuditor:
             self.stats['home_violations'] = 0
     
     def audit_zoe_root(self):
-        """Audit /home/pi/zoe root"""
+        """Audit PROJECT_ROOT root"""
         print(f"\n{Colors.BLUE}{'='*70}{Colors.RESET}")
-        print(f"{Colors.BLUE}📁 AUDITING: /home/pi/zoe (root){Colors.RESET}")
+        print(f"{Colors.BLUE}📁 AUDITING: PROJECT_ROOT (root){Colors.RESET}")
         print(f"{Colors.BLUE}{'='*70}{Colors.RESET}\n")
         
-        root = Path('/home/pi/zoe')
+        root = Path('PROJECT_ROOT')
         
         # Check for temp files
         temp_files = []
@@ -141,7 +144,7 @@ class ComprehensiveAuditor:
         print(f"{Colors.BLUE}🔧 AUDITING: services/{Colors.RESET}")
         print(f"{Colors.BLUE}{'='*70}{Colors.RESET}\n")
         
-        services_path = Path('/home/pi/zoe/services')
+        services_path = Path('PROJECT_ROOT/services')
         if not services_path.exists():
             print(f"{Colors.RED}❌ Services directory not found{Colors.RESET}")
             return
@@ -172,7 +175,7 @@ class ComprehensiveAuditor:
         print(f"{Colors.BLUE}🧪 AUDITING: tests/{Colors.RESET}")
         print(f"{Colors.BLUE}{'='*70}{Colors.RESET}\n")
         
-        tests_path = Path('/home/pi/zoe/tests')
+        tests_path = Path('PROJECT_ROOT/tests')
         if not tests_path.exists():
             print(f"{Colors.RED}❌ Tests directory not found{Colors.RESET}")
             return
@@ -195,7 +198,7 @@ class ComprehensiveAuditor:
         print(f"{Colors.BLUE}📜 AUDITING: scripts/{Colors.RESET}")
         print(f"{Colors.BLUE}{'='*70}{Colors.RESET}\n")
         
-        scripts_path = Path('/home/pi/zoe/scripts')
+        scripts_path = Path('PROJECT_ROOT/scripts')
         if not scripts_path.exists():
             print(f"{Colors.RED}❌ Scripts directory not found{Colors.RESET}")
             return
@@ -222,7 +225,7 @@ class ComprehensiveAuditor:
         print(f"{Colors.BLUE}📚 AUDITING: docs/{Colors.RESET}")
         print(f"{Colors.BLUE}{'='*70}{Colors.RESET}\n")
         
-        docs_path = Path('/home/pi/zoe/docs')
+        docs_path = Path('PROJECT_ROOT/docs')
         if not docs_path.exists():
             print(f"{Colors.RED}❌ Docs directory not found{Colors.RESET}")
             return

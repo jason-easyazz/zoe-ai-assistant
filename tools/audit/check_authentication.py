@@ -23,7 +23,9 @@ GREEN = '\033[92m'
 BLUE = '\033[94m'
 RESET = '\033[0m'
 
-ROUTERS_DIR = Path('/home/pi/zoe/services/zoe-core/routers')
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+ROUTERS_DIR = PROJECT_ROOT / "services/zoe-core/routers"
 
 # Patterns that indicate insecure authentication
 INSECURE_PATTERNS = [
@@ -113,7 +115,7 @@ def main():
         print(f"   1. Replace Query(\"default\") with: session: AuthenticatedSession = Depends(validate_session)")
         print(f"   2. Add 'user_id = session.user_id' at the start of the function")
         print(f"   3. Remove any user_id Query parameters when session exists")
-        print(f"   4. Run: python3 /home/pi/zoe/scripts/utilities/fix_user_isolation.py")
+        print(f"   4. Run: python3 {PROJECT_ROOT}/scripts/utilities/fix_user_isolation.py")
         print(f"{BLUE}{'=' * 80}{RESET}\n")
         
         return 1

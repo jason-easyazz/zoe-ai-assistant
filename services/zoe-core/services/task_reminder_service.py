@@ -21,7 +21,7 @@ class TaskReminderService:
     
     def __init__(self, db_path: str = None):
         if db_path is None:
-            db_path = os.getenv("DATABASE_PATH", "/home/pi/zoe/data/zoe.db")
+            db_path = os.getenv("DATABASE_PATH", os.getenv("DATABASE_PATH", str(Path(__file__).parent.parent.parent.resolve() / "data" / "zoe.db")))
         self.db_path = db_path
         self.push_service = get_push_service()
         self.check_interval = 300  # Check every 5 minutes (less frequent than calendar)

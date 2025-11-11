@@ -10,11 +10,14 @@ import re
 import sys
 from pathlib import Path
 
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
 # Hardcoded path patterns to detect
 # Note: /app/data/ is the standard Docker path and is allowed as a default
 FORBIDDEN_PATTERNS = [
-    r'"/home/pi/zoe/data/.*\.db"',  # Hardcoded host paths (should use /app/data/)
-    r"'/home/pi/zoe/data/.*\.db'",
+    r'PROJECT_ROOT / "data/.*\.db"',  # Hardcoded host paths (should use /app/data/)
+    r"PROJECT_ROOT / 'data/.*\.db'",
 ]
 
 # Allowed patterns (using environment variables)
@@ -62,7 +65,7 @@ def main():
     print("=" * 70)
     print()
     
-    root = Path("/home/pi/zoe")
+    root = PROJECT_ROOT
     print(f"Checking for hardcoded database paths...")
     print(f"Root: {root}")
     print()

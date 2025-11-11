@@ -12,7 +12,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Add the services directory to the path
-sys.path.append('/home/pi/zoe/services/zoe-core')
+sys.path.append('/home/zoe/assistant/services/zoe-core')
 
 from light_rag_memory import LightRAGMemorySystem
 
@@ -21,7 +21,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/home/pi/zoe/logs/light_rag_migration.log'),
+        logging.FileHandler('/home/zoe/assistant/logs/light_rag_migration.log'),
         logging.StreamHandler()
     ]
 )
@@ -202,7 +202,7 @@ def main():
     logger.info("=" * 60)
     
     # Configuration
-    db_path = "/home/pi/zoe/data/memory.db"
+    db_path = "/home/zoe/assistant/data/memory.db"
     
     # Check if database exists
     if not os.path.exists(db_path):

@@ -10,13 +10,13 @@
 
 ### STEP 1: Run Critical Files Validator
 ```bash
-python3 /home/pi/zoe/tools/audit/validate_critical_files.py
+python3 /home/zoe/assistant/tools/audit/validate_critical_files.py
 ```
 **If this fails, STOP. Do not delete anything.**
 
 ### STEP 2: Check File References
 ```bash
-bash /home/pi/zoe/tools/audit/find_file_references.sh <filename>
+bash /home/zoe/assistant/tools/audit/find_file_references.sh <filename>
 ```
 **If references found, STOP. File is in use.**
 
@@ -131,7 +131,7 @@ git checkout <commit-hash>^ -- services/zoe-ui/dist/js/
 
 ### 4. Verify Restoration
 ```bash
-python3 /home/pi/zoe/tools/audit/validate_critical_files.py
+python3 /home/zoe/assistant/tools/audit/validate_critical_files.py
 docker restart zoe-ui
 # Test in browser
 ```
@@ -234,10 +234,10 @@ If cleanup broke something:
 
 ## 🔗 RELATED DOCUMENTATION
 
-- `/home/pi/zoe/docs/CRITICAL_FILES_DO_NOT_DELETE.md` - Comprehensive list
-- `/home/pi/zoe/tools/audit/validate_critical_files.py` - Validation tool
-- `/home/pi/zoe/tools/audit/find_file_references.sh` - Reference checker
-- `/home/pi/zoe/PROJECT_STRUCTURE_RULES.md` - File organization rules
+- `/home/zoe/assistant/docs/CRITICAL_FILES_DO_NOT_DELETE.md` - Comprehensive list
+- `/home/zoe/assistant/tools/audit/validate_critical_files.py` - Validation tool
+- `/home/zoe/assistant/tools/audit/find_file_references.sh` - Reference checker
+- `/home/zoe/assistant/PROJECT_STRUCTURE_RULES.md` - File organization rules
 
 ---
 

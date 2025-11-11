@@ -5,6 +5,10 @@ Runs comprehensive test suite and generates report
 """
 import subprocess
 import sys
+from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 from datetime import datetime
 
 
@@ -16,7 +20,7 @@ def run_test_suite(test_path, markers=None):
         cmd.extend(["-m", markers])
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd="/home/pi/zoe")
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd="/home/zoe/assistant")
         return {
             "returncode": result.returncode,
             "stdout": result.stdout,

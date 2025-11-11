@@ -18,7 +18,7 @@ def main():
     print("🔍 FINAL VERIFICATION: GitHub Repository Cleanup Status")
     print("=" * 60)
     
-    os.chdir('/home/pi/zoe')
+    os.chdir('/home/zoe/assistant')
     
     # Check git status
     stdout, stderr, code = run_command("git status --porcelain")

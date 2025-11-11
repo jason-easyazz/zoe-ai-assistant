@@ -7,7 +7,10 @@ import sys
 import os
 from pathlib import Path
 
-sys.path.append('/home/pi/zoe/services/zoe-core')
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
+sys.path.append(str(PROJECT_ROOT / "services/zoe-core"))
 sys.path.append('/app')
 
 def test_imports():
@@ -103,9 +106,9 @@ def test_directories():
     print("\n📁 Testing Directories...")
     
     dirs = [
-        "/home/pi/zoe/models/adapters",
-        "/home/pi/zoe/scripts/train",
-        "/home/pi/zoe/services/zoe-core/training_engine"
+        str(PROJECT_ROOT / "models/adapters"),
+        str(PROJECT_ROOT / "scripts/train"),
+        str(PROJECT_ROOT / "services/zoe-core/training_engine")
     ]
     
     all_exist = True
@@ -126,7 +129,7 @@ def test_model_manager():
     
     try:
         result = subprocess.run(
-            ["/home/pi/zoe/tools/model-manager.py", "info"],
+            [str(PROJECT_ROOT / "tools/model-manager.py"), "info"],
             capture_output=True,
             text=True,
             timeout=5

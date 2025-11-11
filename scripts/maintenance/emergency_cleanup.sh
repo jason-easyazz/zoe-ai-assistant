@@ -5,9 +5,9 @@
 
 set -e
 
-BACKUP_DIR="/home/pi/zoe/data/backups"
-DATA_DIR="/home/pi/zoe/data"
-LOG_FILE="/home/pi/zoe/data/cleanup.log"
+BACKUP_DIR="/home/zoe/assistant/data/backups"
+DATA_DIR="/home/zoe/assistant/data"
+LOG_FILE="/home/zoe/assistant/data/cleanup.log"
 
 # Minimum backups to keep per database (safety)
 MIN_BACKUPS=7  # Keep at least 7 most recent backups (42 hours)

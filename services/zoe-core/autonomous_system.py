@@ -6,6 +6,9 @@ import json
 import sqlite3
 import psutil
 from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import logging
@@ -16,7 +19,7 @@ class AutonomousSystem:
     """Complete autonomous development system"""
     
     def __init__(self):
-        self.root = Path("/home/pi/zoe")
+        self.root = PROJECT_ROOT
         self.app_root = Path("/app")
         # Don't initialize Docker here - it's not accessible from container
         self.knowledge = self.load_full_knowledge()
@@ -44,7 +47,7 @@ class AutonomousSystem:
     def load_all_docs(self) -> Dict:
         """Load all documentation"""
         docs = {}
-        # These docs are in /home/pi/zoe but we're in container at /app
+        # These docs are in PROJECT_ROOT but we're in container at /app
         # Skip for now or mount them
         return docs
     

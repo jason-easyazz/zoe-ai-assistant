@@ -4,11 +4,15 @@ HTML Syntax Validation Test
 Checks for common JavaScript syntax errors in HTML files
 """
 import os
+from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 import re
 from typing import List, Dict, Any
 
 class HTMLSyntaxValidator:
-    def __init__(self, html_dir: str = "/home/pi/zoe/services/zoe-ui/dist"):
+    def __init__(self, html_dir: str = str(PROJECT_ROOT / "services/zoe-ui/dist")):
         self.html_dir = html_dir
         self.errors = []
     

@@ -11,10 +11,13 @@ import jwt
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
 # Mock security test
 class SecurityTester:
     def __init__(self):
-        self.db_path = "/home/pi/zoe/data/zoe.db"
+        self.db_path = str(PROJECT_ROOT / "data" / "zoe.db")
         self.secret_key = "zoe-mcp-secret-key-change-in-production"
         self.algorithm = "HS256"
     

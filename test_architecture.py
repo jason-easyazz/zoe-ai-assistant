@@ -10,6 +10,10 @@ Run before every commit: python3 test_architecture.py
 import os
 import glob
 import sys
+from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 import re
 
 class Colors:
@@ -23,7 +27,7 @@ def test_single_chat_router_only():
     """Enforce that only ONE chat router exists"""
     print("🔍 Testing: Single chat router enforcement...")
     
-    routers_path = "/home/pi/zoe/services/zoe-core/routers"
+    routers_path = str(PROJECT_ROOT / "services/zoe-core/routers")
     
     if not os.path.exists(routers_path):
         print(f"❌ FAIL: Routers directory not found: {routers_path}")
@@ -184,7 +188,7 @@ def test_chat_uses_intelligent_systems():
     """Verify chat router uses intelligent systems, not hardcoded logic"""
     print("Checking: Chat router uses intelligent systems (MEM Agent, Orchestrator, etc.)...")
     
-    chat_path = "/home/pi/zoe/services/zoe-core/routers/chat.py"
+    chat_path = str(PROJECT_ROOT / "services/zoe-core/routers/chat.py")
     
     if not os.path.exists(chat_path):
         print(f"{Colors.RED}  ❌ FAIL: chat.py not found{Colors.RESET}")

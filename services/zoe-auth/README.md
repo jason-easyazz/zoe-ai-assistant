@@ -67,7 +67,7 @@ A comprehensive authentication and authorization service for the Zoe AI Assistan
 
 1. **Clone and Navigate**
    ```bash
-   cd /home/pi/zoe/services/zoe-auth
+   cd /home/zoe/assistant/services/zoe-auth
    ```
 
 2. **Install Dependencies**
@@ -83,7 +83,7 @@ A comprehensive authentication and authorization service for the Zoe AI Assistan
 
 4. **Run with Docker Compose**
    ```bash
-   cd /home/pi/zoe
+   cd /home/zoe/assistant
    docker-compose up zoe-auth
    ```
 

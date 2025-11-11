@@ -2,10 +2,15 @@
 # Use with: docker-compose -f docker-compose.yml -f docker-compose.jetson.yml up
 
 services:
+  zoe-core:
+    environment:
+      - HARDWARE_PLATFORM=jetson
+  
   zoe-ollama:
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
+      - HARDWARE_PLATFORM=jetson
     deploy:
       resources:
         reservations:
@@ -23,4 +28,14 @@ services:
 
   zoe-litellm:
     runtime: nvidia
+
+  zoe-tensorrt:
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - HARDWARE_PLATFORM=jetson
+  
+  zoe-mcp-server:
+    environment:
+      - HARDWARE_PLATFORM=jetson
 

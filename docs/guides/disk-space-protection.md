@@ -16,7 +16,7 @@
 
 ### 1. Automated Docker Monitoring & Cleanup
 
-**Script:** `/home/pi/zoe/scripts/maintenance/docker_monitor_and_cleanup.sh`
+**Script:** `/home/zoe/assistant/scripts/maintenance/docker_monitor_and_cleanup.sh`
 
 **Runs:** Daily at 2:00 AM (systemd timer: `docker-prune-daily.timer`)
 
@@ -37,7 +37,7 @@ journalctl -u docker-prune-daily.service -f
 
 ### 2. Disk Space Monitoring
 
-**Script:** `/home/pi/zoe/scripts/maintenance/disk_space_monitor.sh`
+**Script:** `/home/zoe/assistant/scripts/maintenance/disk_space_monitor.sh`
 
 **Runs:** Every 6 hours via cron
 
@@ -48,13 +48,13 @@ journalctl -u docker-prune-daily.service -f
 - Temp files in /tmp (threshold: 1GB)
 - Systemd journal size
 
-**Alerts:** Writes to `/home/pi/zoe/data/disk_alerts.log`
+**Alerts:** Writes to `/home/zoe/assistant/data/disk_alerts.log`
 
 **Automatic Action:** Triggers emergency cleanup if disk hits 85%
 
 ### 3. Emergency Cleanup Script
 
-**Script:** `/home/pi/zoe/scripts/maintenance/emergency_cleanup.sh`
+**Script:** `/home/zoe/assistant/scripts/maintenance/emergency_cleanup.sh`
 
 **Triggered:** Automatically by disk monitor when critical, or run manually
 
@@ -68,12 +68,12 @@ journalctl -u docker-prune-daily.service -f
 
 **Manual Usage:**
 ```bash
-/home/pi/zoe/scripts/maintenance/emergency_cleanup.sh
+/home/zoe/assistant/scripts/maintenance/emergency_cleanup.sh
 ```
 
 ### 4. Backup Retention Policy
 
-**Updated:** `/home/pi/zoe/scripts/maintenance/auto_backup.sh`
+**Updated:** `/home/zoe/assistant/scripts/maintenance/auto_backup.sh`
 
 **Previous:** Keep 48 backups per database (12 days @ 6-hourly = ~3.6GB accumulated)  
 **Current:** Keep 14 backups per database (3.5 days @ 6-hourly = ~1GB max)
@@ -109,26 +109,26 @@ sudo du -sh /var/lib/docker
 docker system df
 
 # Backup usage
-du -sh /home/pi/zoe/data/backups
+du -sh /home/zoe/assistant/data/backups
 
 # View alerts
-cat /home/pi/zoe/data/disk_alerts.log
+cat /home/zoe/assistant/data/disk_alerts.log
 
 # View monitoring log
-tail -f /home/pi/zoe/data/disk_monitor.log
+tail -f /home/zoe/assistant/data/disk_monitor.log
 ```
 
 ### Manual Cleanup (if needed)
 
 ```bash
 # Emergency cleanup
-/home/pi/zoe/scripts/maintenance/emergency_cleanup.sh
+/home/zoe/assistant/scripts/maintenance/emergency_cleanup.sh
 
 # Docker-specific cleanup
-/home/pi/zoe/scripts/maintenance/docker_monitor_and_cleanup.sh
+/home/zoe/assistant/scripts/maintenance/docker_monitor_and_cleanup.sh
 
 # Backup cleanup
-cd /home/pi/zoe/data/backups && \
+cd /home/zoe/assistant/data/backups && \
 ls -t zoe_*.db | tail -n +15 | xargs rm
 ```
 
@@ -150,7 +150,7 @@ ls -t zoe_*.db | tail -n +15 | xargs rm
 ### General System Health
 
 1. **Check disk daily** - `df -h` should stay under 70%
-2. **Review alerts weekly** - Check `/home/pi/zoe/data/disk_alerts.log`
+2. **Review alerts weekly** - Check `/home/zoe/assistant/data/disk_alerts.log`
 3. **Test emergency cleanup** - Run quarterly to ensure it works
 4. **Update thresholds** - Adjust if usage patterns change
 
@@ -170,7 +170,7 @@ ls -t zoe_*.db | tail -n +15 | xargs rm
 ### Disk Still Filling Up?
 
 1. Check Docker: `sudo du -sh /var/lib/docker/*`
-2. Check backups: `du -sh /home/pi/zoe/data/backups`
+2. Check backups: `du -sh /home/zoe/assistant/data/backups`
 3. Check logs: `sudo journalctl --disk-usage`
 4. Check temp: `du -sh /tmp`
 5. Find large files: `find /home/pi -type f -size +100M 2>/dev/null`
@@ -195,13 +195,13 @@ sudo systemctl start docker-prune-daily.service
 
 ```bash
 # Check auto_backup logs
-tail -f /home/pi/zoe/data/backup.log
+tail -f /home/zoe/assistant/data/backup.log
 
 # Verify cron job
 crontab -l | grep auto_backup
 
 # Manual cleanup
-cd /home/pi/zoe/data/backups
+cd /home/zoe/assistant/data/backups
 for db in zoe memory training; do
   ls -t ${db}_*.db | tail -n +15 | xargs rm
 done
@@ -219,7 +219,7 @@ done
 ## Contact & Support
 
 If disk fills up again despite these safeguards:
-1. Check `/home/pi/zoe/data/disk_alerts.log` for patterns
+1. Check `/home/zoe/assistant/data/disk_alerts.log` for patterns
 2. Review Docker usage with `docker system df -v`
 3. Verify all timers are running: `systemctl list-timers`
 4. Run emergency cleanup manually

@@ -4,9 +4,41 @@ from typing import Dict, Optional
 import sqlite3
 import json
 import logging
+import os
+import platform
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# Hardware Detection
+def detect_hardware():
+    """Detect hardware platform (Jetson or Pi5)"""
+    # Check for Jetson
+    if os.path.exists('/etc/nv_tegra_release'):
+        return 'jetson'
+    
+    # Check for Raspberry Pi
+    if os.path.exists('/proc/device-tree/model'):
+        try:
+            with open('/proc/device-tree/model', 'r') as f:
+                model = f.read()
+                if 'Raspberry Pi 5' in model:
+                    return 'pi5'
+                elif 'Raspberry Pi' in model:
+                    return 'pi5'  # Assume Pi5 for other Pi models
+        except:
+            pass
+    
+    # Check architecture as fallback
+    arch = platform.machine()
+    if 'aarch64' in arch or 'arm' in arch:
+        return 'pi5'  # Default ARM to Pi
+    
+    return 'jetson'  # Default to Jetson for development
+
+# Get hardware platform
+HARDWARE_PLATFORM = os.getenv('HARDWARE_PLATFORM', detect_hardware())
+logger.info(f"🖥️  Hardware platform: {HARDWARE_PLATFORM}")
 
 class ModelCategory(Enum):
     FAST_LANE = "fast_lane"
@@ -25,6 +57,7 @@ class ModelConfig:
     stop_tokens: list
     timeout: int
     description: str
+    num_gpu: Optional[int] = None  # GPU layers: -1=auto, 0=CPU only, 1+=GPU layers, 99=all layers
     benchmark_score: Optional[float] = None
     tool_calling_score: Optional[float] = None
     response_time_avg: Optional[float] = None
@@ -37,6 +70,112 @@ class ModelConfig:
 
 # Model configurations optimized for Samantha-level intelligence
 MODEL_CONFIGS = {
+    "phi3:mini": ModelConfig(
+        name="phi3:mini",
+        category=ModelCategory.FAST_LANE,
+        temperature=0.7,
+        top_p=0.9,
+        num_predict=256,
+        num_ctx=2048,
+        repeat_penalty=1.1,
+        stop_tokens=["\n\n", "User:", "Human:"],
+        timeout=30,
+        description="Smallest, fastest CPU model - 3.8B parameters, excellent for chat",
+        benchmark_score=85.0,
+        tool_calling_score=40.0
+    ),
+    
+    "llama3.2:3b": ModelConfig(
+        name="llama3.2:3b",
+        category=ModelCategory.FAST_LANE,
+        temperature=0.7,
+        top_p=0.9,
+        num_predict=256,
+        num_ctx=2048,
+        repeat_penalty=1.1,
+        stop_tokens=["\n\n", "User:", "Human:"],
+        timeout=30,
+        description="Fast CPU model - 3.2B parameters, good balance",
+        benchmark_score=80.0,
+        tool_calling_score=35.0
+    ),
+    
+    "gemma3n-e2b-gpu:latest": ModelConfig(
+        name="gemma3n-e2b-gpu:latest",
+        category=ModelCategory.FAST_LANE,
+        temperature=0.7,
+        top_p=0.9,
+        num_predict=256,
+        num_ctx=2048,
+        repeat_penalty=1.1,
+        stop_tokens=["\n\n", "User:", "Human:"],
+        timeout=45,
+        description="GPU-optimized fast model - 4.5B parameters (has GPU allocation issues - use gemma3n-e2b-gpu-fixed instead)",
+        benchmark_score=90.0,
+        tool_calling_score=45.0
+    ),
+    
+    "gemma3n-e2b-gpu-fixed": ModelConfig(
+        name="gemma3n-e2b-gpu-fixed",
+        category=ModelCategory.FAST_LANE,
+        temperature=0.7,
+        top_p=0.9,
+        num_predict=64,
+        num_ctx=1024,
+        repeat_penalty=1.1,
+        stop_tokens=["\n\n", "User:", "Human:"],
+        timeout=30,
+        num_gpu=99,  # All GPU layers - works fast with proper configuration
+        description="GPU-optimized ultra-fast model - 4.5B parameters, multimodal (vision)",
+        benchmark_score=90.0,
+        tool_calling_score=45.0
+    ),
+    
+    "gemma3n:e4b": ModelConfig(
+        name="gemma3n:e4b",
+        category=ModelCategory.BALANCED,
+        temperature=0.7,
+        top_p=0.9,
+        num_predict=512,
+        num_ctx=4096,
+        repeat_penalty=1.1,
+        stop_tokens=["\n\n", "User:", "Human:"],
+        timeout=60,
+        description="Multimodal model - image, audio, video understanding (from Gemma DevDay article)",
+        benchmark_score=85.0,
+        tool_calling_score=40.0
+    ),
+    
+    "gemma3:27b": ModelConfig(
+        name="gemma3:27b",
+        category=ModelCategory.HEAVY_REASONING,
+        temperature=0.8,
+        top_p=0.9,
+        num_predict=1024,
+        num_ctx=8192,
+        repeat_penalty=1.1,
+        stop_tokens=["\n\n", "User:", "Human:"],
+        timeout=120,
+        description="Large, very accurate model - 27B parameters (from Gemma DevDay article) - NOTE: Requires 11.3 GiB memory, use qwen3:8b or deepseek-r1:14b as alternative",
+        benchmark_score=95.0,
+        tool_calling_score=50.0
+    ),
+    
+    "gemma2:2b": ModelConfig(
+        name="gemma2:2b",
+        category=ModelCategory.FAST_LANE,
+        temperature=0.6,
+        top_p=0.9,
+        num_predict=256,
+        num_ctx=2048,
+        repeat_penalty=1.1,
+        stop_tokens=["\n\n", "User:", "Human:"],
+        timeout=30,
+        description="Small, fast model - 2B parameters (from Gemma DevDay article)",
+        benchmark_score=75.0,
+        tool_calling_score=30.0
+    ),
+    
     "gemma3:1b": ModelConfig(
         name="gemma3:1b",
         category=ModelCategory.FAST_LANE,
@@ -89,12 +228,46 @@ MODEL_CONFIGS = {
         repeat_penalty=1.1,
         stop_tokens=["\n\n", "User:", "Human:"],
         timeout=60,
-        description="Balanced performance - Claude's recommended balanced model"
+        num_gpu=35,  # ✅ QWEN OPTIMIZED: ~35 layers for 3B model
+        description="Balanced performance - Good function calling",
+        tool_calling_score=75.0
     ),
     
     "qwen2.5:7b": ModelConfig(
         name="qwen2.5:7b",
         category=ModelCategory.BALANCED,
+        temperature=0.7,
+        top_p=0.9,
+        num_predict=512,
+        num_ctx=4096,
+        repeat_penalty=1.1,
+        stop_tokens=["\n\n", "User:", "Human:"],
+        timeout=60,
+        num_gpu=43,  # ✅ QWEN OPTIMIZED: ~43 layers for 7B model
+        description="Excellent function calling - 7B parameters",
+        benchmark_score=92.0,
+        tool_calling_score=90.0
+    ),
+    
+    "hermes3:8b-llama3.1-q4_K_M": ModelConfig(
+        name="hermes3:8b-llama3.1-q4_K_M",
+        category=ModelCategory.BALANCED,
+        temperature=0.7,
+        top_p=0.9,
+        num_predict=512,
+        num_ctx=4096,
+        repeat_penalty=1.1,
+        stop_tokens=["\n\n", "User:", "Human:"],
+        timeout=60,
+        num_gpu=-1,  # ✅ HERMES OPTIMIZED: Auto-detect (uses all available efficiently)
+        description="BEST function calling model - Hermes-3 Llama 3.1 8B Q4 quantization",
+        benchmark_score=95.0,
+        tool_calling_score=95.0
+    ),
+    
+    "qwen2.5:14b": ModelConfig(
+        name="qwen2.5:14b",
+        category=ModelCategory.HEAVY_REASONING,
         temperature=0.7,
         top_p=0.9,
         num_predict=512,
@@ -162,16 +335,31 @@ class ModelSelector:
     """Enhanced intelligent model selection with quality monitoring and learning integration"""
     
     def __init__(self, db_path: str = "/app/data/zoe.db"):
-        self.current_model = "gemma3:1b"  # Default to fastest model
         self.performance_history = {}
         self.db_path = db_path
-        self.fallback_chain = [
-            "gemma3:1b",      # Fastest model
-            "llama3.2:1b",    # Fast alternative
-            "qwen2.5:1.5b",   # Fast alternative
-            "qwen2.5:3b",     # Balanced fallback
-            "gemma3:4b"       # Balanced fallback
-        ]
+        self.hardware = HARDWARE_PLATFORM
+        
+        # Platform-specific model selection
+        if self.hardware == 'jetson':
+            # Jetson Orin NX: GPU-accelerated models
+            self.current_model = "hermes3:8b-llama3.1-q4_K_M"  # PRIMARY - BEST function calling (GPU)
+            self.fallback_chain = [
+                "hermes3:8b-llama3.1-q4_K_M",  # PRIMARY (4.9 GB, GPU)
+                "qwen2.5:7b",                   # Excellent alternative (4.7 GB, GPU)
+                "phi3:mini",                    # Fast fallback (2.2 GB, CPU)
+                "llama3.2:3b",                 # Reliable fallback (2.0 GB, CPU)
+            ]
+            logger.info(f"🚀 Jetson mode: GPU-accelerated models enabled")
+        else:
+            # Raspberry Pi 5: CPU-optimized models
+            self.current_model = "phi3:mini"  # PRIMARY for Pi - fast on CPU
+            self.fallback_chain = [
+                "phi3:mini",                    # PRIMARY (2.2 GB, CPU-optimized)
+                "llama3.2:3b",                 # Alternative (2.0 GB)
+                "qwen2.5:3b",                   # Balanced (2.0 GB)
+                "gemma2:2b",                    # Lightweight (1.6 GB)
+            ]
+            logger.info(f"🥧 Raspberry Pi mode: CPU-optimized models enabled")
         
         # Initialize database for quality tracking
         self._init_quality_database()
@@ -272,32 +460,59 @@ class ModelSelector:
         return scored_models[0][0] if scored_models else "qwen2.5:7b"
     
     def _get_best_conversation_model(self) -> str:
-        """Get the best model for general conversation"""
-        # For conversation, prefer fast models with good response times
-        fast_models = [name for name, config in MODEL_CONFIGS.items() 
-                      if config.category == ModelCategory.FAST_LANE]
+        """Get the best model for general conversation - use gemma3n-e2b-gpu-fixed for quality"""
+        # PRIMARY: gemma3n-e2b-gpu-fixed (5.6GB) - Best quality, keep ALONE
+        if "gemma3n-e2b-gpu-fixed" in MODEL_CONFIGS:
+            return "gemma3n-e2b-gpu-fixed"
         
-        if fast_models:
-            # Prefer gemma3:1b as it's the fastest
-            if "gemma3:1b" in fast_models:
-                return "gemma3:1b"
-            return fast_models[0]
+        # FALLBACK: Multimodal model
+        if "gemma3n:e2b" in MODEL_CONFIGS:
+            return "gemma3n:e2b"
         
-        return "gemma3:1b"  # Default to fastest
+        # EMERGENCY: Smaller models if gemma unavailable
+        for model in ["phi3:mini", "llama3.2:3b", "gemma2:2b"]:
+            if model in MODEL_CONFIGS:
+                return model
+        
+        return "phi3:mini"  # Ultimate fallback
+    
+    def get_routing_model(self) -> str:
+        """Get lightweight CPU model for routing decisions (always phi3:mini)"""
+        return "phi3:mini"
     
     def _get_best_action_model(self) -> str:
-        """Get the best model for action execution"""
-        # For actions, prefer models with good tool calling scores
+        """Get the best model for action execution (prioritizes tool calling ability)"""
+        # 🎯 CRITICAL: Use Qwen models for tool calling - they have 90-95 score vs gemma's 45!
+        # Priority order based on tool_calling_score AND availability:
+        # 1. qwen2.5:7b (score: 90, AVAILABLE in Ollama)
+        # 2. qwen2.5:14b (score: 95, but requires 11GB+ memory) 
+        # 3. qwen2.5:3b (score: 75)
+        # 4. hermes3 (score: 50, good fallback)
+        
+        qwen_preference = ["qwen2.5:7b", "qwen2.5:14b", "qwen2.5:3b", "hermes3:8b-llama3.1-q4_K_M"]
+        for model in qwen_preference:
+            if model in MODEL_CONFIGS:
+                logger.info(f"✅ Selected {model} for action execution (tool_calling_score: {MODEL_CONFIGS[model].tool_calling_score})")
+                return model
+        
+        # Fallback: Sort all models by tool calling score
         action_models = [name for name, config in MODEL_CONFIGS.items() 
-                        if config.tool_calling_score and config.tool_calling_score > 0]
+                        if config.tool_calling_score and config.tool_calling_score > 70]  # Only high-scoring models
         
         if action_models:
-            # Sort by tool calling score
             scored_models = [(name, MODEL_CONFIGS[name].tool_calling_score) for name in action_models]
             scored_models.sort(key=lambda x: x[1], reverse=True)
+            logger.info(f"✅ Fallback to {scored_models[0][0]} for actions (tool_calling_score: {scored_models[0][1]})")
             return scored_models[0][0]
         
-        return "llama3.2:1b"  # Default to benchmark winner
+        # Last resort: Try qwen even if not in configs
+        working_models = ["qwen2.5:7b", "qwen2.5:3b", "phi3:mini"]
+        for model in working_models:
+            if model in MODEL_CONFIGS:
+                return model
+        
+        logger.warning("⚠️ No good action model found, using phi3:mini")
+        return "phi3:mini"
     
     def _get_best_memory_model(self) -> str:
         """Get the best model for memory retrieval"""

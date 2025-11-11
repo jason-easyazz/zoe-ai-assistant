@@ -305,8 +305,8 @@ Upgrade the touch dashboard to match desktop functionality and fix critical UX i
 
 ### Step 1: Create Backup
 ```bash
-cp /home/pi/zoe/services/zoe-ui/dist/touch/dashboard.html \
-   /home/pi/zoe/services/zoe-ui/dist/touch/dashboard.html.backup
+cp /home/zoe/assistant/services/zoe-ui/dist/touch/dashboard.html \
+   /home/zoe/assistant/services/zoe-ui/dist/touch/dashboard.html.backup
 ```
 
 ### Step 2: Implement Changes
@@ -339,8 +339,8 @@ If critical issues found:
 
 1. **Immediate Rollback**
    ```bash
-   cp /home/pi/zoe/services/zoe-ui/dist/touch/dashboard.html.backup \
-      /home/pi/zoe/services/zoe-ui/dist/touch/dashboard.html
+   cp /home/zoe/assistant/services/zoe-ui/dist/touch/dashboard.html.backup \
+      /home/zoe/assistant/services/zoe-ui/dist/touch/dashboard.html
    ```
 
 2. **Clear browser cache**

@@ -1889,14 +1889,30 @@
                                 if (data.type === 'session_start') {
                                     console.log('🎯 Session started:', data.session_id);
                                     currentSessionId = data.session_id;
-                                    // Reload sessions list to show new session
-                                    loadSessions();
+                                    // Reload sessions list to show new session (non-blocking)
+                                    loadSessions().catch(err => {
+                                        console.warn('⚠️ Failed to reload sessions (non-critical):', err);
+                                    });
                                 } else if (data.type === 'agent_state_delta') {
                                     console.log('🔄 Agent state:', data.state);
                                     // Update thinking indicator based on state
                                     if (data.state?.status === 'generating') {
                                         thinkingIndicator.querySelector('span:last-child').textContent = 
                                             `Generating response with ${data.state.model || 'AI'}...`;
+                                    }
+                                    // Show context information if available
+                                    if (data.state?.context) {
+                                        const ctx = data.state.context;
+                                        const ctxInfo = [];
+                                        if (ctx.events) ctxInfo.push(`${ctx.events} events`);
+                                        if (ctx.memories_found) ctxInfo.push(`${ctx.memories_found} memories`);
+                                        if (ctxInfo.length > 0) {
+                                            console.log('📊 Context:', ctxInfo.join(', '));
+                                        }
+                                    }
+                                    // Show routing information
+                                    if (data.state?.routing) {
+                                        console.log('🎯 Routing type:', data.state.routing);
                                     }
                                 } else if (data.type === 'action') {
                                     console.log('🔧 Tool executing:', data.name);
@@ -1931,11 +1947,21 @@
                                     scrollToBottom();
                                 } else if (data.type === 'session_end') {
                                     console.log('✅ Session ended:', data.session_id);
+                                    if (data.final_state) {
+                                        console.log('📊 Final state:', {
+                                            tokens: data.final_state.tokens,
+                                            complete: data.final_state.complete
+                                        });
+                                    }
                                     contentEl.innerHTML = streamingText.replace(/\n/g, '<br>');
                                     // Backend already saved messages, no need to save here
                                     // Re-enable send button
                                     isStreaming = false;
                                     document.getElementById('sendBtn').disabled = false;
+                                    // Remove thinking indicator
+                                    if (thinkingIndicator && thinkingIndicator.parentNode) {
+                                        thinkingIndicator.remove();
+                                    }
                                 } else if (data.type === 'error') {
                                     console.error('❌ AG-UI Error:', data.error);
                                     contentEl.innerHTML = `<span style="color: #ef4444;">Error: ${data.error.message}</span>`;

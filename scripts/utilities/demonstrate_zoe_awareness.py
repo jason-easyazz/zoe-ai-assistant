@@ -13,10 +13,14 @@ import asyncio
 import httpx
 import json
 import sys
+from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 import os
 
 # Add the zoe-core path to import the AI client
-sys.path.append('/home/pi/zoe/services/zoe-core')
+sys.path.append(str(PROJECT_ROOT / "services/zoe-core"))
 
 async def demonstrate_zoe_awareness():
     """Demonstrate that Zoe is truly self-aware"""

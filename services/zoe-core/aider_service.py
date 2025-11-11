@@ -12,11 +12,14 @@ import tempfile
 from datetime import datetime
 from typing import Dict, List, Optional
 from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 import threading
 import queue
 
 # Add Aider to path
-sys.path.append('/home/pi/zoe/tools/aider-env/lib/python3.11/site-packages')
+sys.path.append(str(PROJECT_ROOT / "tools/aider-env/lib/python3.11/site-packages"))
 
 class AiderWebService:
     def __init__(self):
@@ -123,7 +126,7 @@ class AiderWebService:
     def _build_aider_command(self, session: Dict, message: str, auto_execute: bool) -> List[str]:
         """Build Aider command with appropriate flags"""
         cmd = [
-            "/home/pi/zoe/tools/aider-env/bin/aider",
+            str(PROJECT_ROOT / "tools/aider-env/bin/aider"),
             "--model", session["model"],
             "--yes-always" if auto_execute else "--no-auto-commits",
         ]
@@ -143,7 +146,7 @@ class AiderWebService:
             # Run in Zoe directory for git context
             result = subprocess.run(
                 cmd,
-                cwd="/home/pi/zoe",
+                cwd="/home/zoe/assistant",
                 capture_output=True,
                 text=True,
                 timeout=60

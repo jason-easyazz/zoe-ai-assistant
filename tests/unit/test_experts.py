@@ -23,13 +23,17 @@ import pytest
 # Skip all tests in this module until experts are available
 pytestmark = pytest.mark.skip(reason="Expert classes not available - need to be exported from mem-agent service")
 import sys
+from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 
 # Add service paths for imports
-sys.path.insert(0, '/home/pi/zoe/services/mem-agent')
-sys.path.insert(0, '/home/pi/zoe/services/zoe-core')
+sys.path.insert(0, str(PROJECT_ROOT / "services/mem-agent"))
+sys.path.insert(0, str(PROJECT_ROOT / "services/zoe-core"))
 
 # Note: Enhanced MEM Agent experts are in the mem-agent service, not zoe-core
 # These tests are currently disabled until the mem-agent service experts are available

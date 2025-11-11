@@ -9,10 +9,13 @@ import json
 import sqlite3
 from datetime import datetime, date
 from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 import logging
 
 # Setup paths
-sys.path.append('/home/pi/zoe/services/zoe-core')
+sys.path.append(str(PROJECT_ROOT / "services/zoe-core"))
 sys.path.append('/app')
 
 # Setup logging
@@ -32,7 +35,7 @@ class NightlyTrainer:
     
     def __init__(self):
         self.base_model = "llama3.2-1b"
-        self.adapter_dir = Path("/home/pi/zoe/models/adapters")
+        self.adapter_dir = PROJECT_ROOT / "models/adapters"
         self.adapter_dir.mkdir(parents=True, exist_ok=True)
         self.training_db = "/app/data/training.db"
         self.min_examples = 20

@@ -8,11 +8,11 @@ echo "🏷️  Setting up File Tagging System"
 echo "=================================="
 
 # Make scripts executable
-chmod +x /home/pi/zoe/scripts/maintenance/tag_unused_files.py
-chmod +x /home/pi/zoe/scripts/maintenance/archive_tagged_files.py
+chmod +x /home/zoe/assistant/scripts/maintenance/tag_unused_files.py
+chmod +x /home/zoe/assistant/scripts/maintenance/archive_tagged_files.py
 
 # Create cron job to run weekly (every Sunday at 2 AM)
-CRON_JOB="0 2 * * 0 cd /home/pi/zoe && python3 scripts/maintenance/tag_unused_files.py >> scripts/maintenance/tagging.log 2>&1"
+CRON_JOB="0 2 * * 0 cd /home/zoe/assistant && python3 scripts/maintenance/tag_unused_files.py >> scripts/maintenance/tagging.log 2>&1"
 
 # Add to crontab if not already present
 (crontab -l 2>/dev/null | grep -v "tag_unused_files.py"; echo "$CRON_JOB") | crontab -

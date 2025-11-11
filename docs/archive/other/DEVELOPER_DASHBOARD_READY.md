@@ -82,7 +82,7 @@ All backend APIs are connected and functional:
 ## 🧪 Test Results
 
 ```bash
-✅ Dashboard file: /home/pi/zoe/services/zoe-ui/dist/developer/index.html (712 lines)
+✅ Dashboard file: /home/zoe/assistant/services/zoe-ui/dist/developer/index.html (712 lines)
 ✅ Health API: Status degraded (7/12 containers checked)
 ✅ Metrics API: CPU 3.8%, Memory 47.7%
 ✅ Activity API: 3 recent activities tracked
@@ -149,13 +149,13 @@ The dashboard is **fully functional** and ready for use! You can now:
 ## 🔧 Technical Details
 
 ### Frontend
-- **File**: `/home/pi/zoe/services/zoe-ui/dist/developer/index.html`
+- **File**: `/home/zoe/assistant/services/zoe-ui/dist/developer/index.html`
 - **Size**: 712 lines
 - **Style**: Modern iOS-inspired design
 - **Dependencies**: None (vanilla JS)
 
 ### Backend
-- **Router**: `/home/pi/zoe/services/zoe-core/routers/developer.py`
+- **Router**: `/home/zoe/assistant/services/zoe-core/routers/developer.py`
 - **Base URL**: `http://localhost:8000/api/developer/`
 - **Authentication**: Development mode bypasses auth for localhost
 - **Response Time**: < 100ms average

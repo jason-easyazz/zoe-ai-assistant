@@ -7,12 +7,12 @@
 ### What Happened (Oct 23, 2025)
 - System was working perfectly this morning
 - New reminder services were added at 7:15 PM
-- Services had hardcoded database paths: `/home/pi/zoe/data/zoe.db`
+- Services had hardcoded database paths: `/home/zoe/assistant/data/zoe.db`
 - This broke the system immediately with `unable to open database file` errors
 
 ### Root Cause
 Docker container path mapping:
-- **Host filesystem**: `/home/pi/zoe/data/zoe.db`
+- **Host filesystem**: `/home/zoe/assistant/data/zoe.db`
 - **Container filesystem**: `/app/data/zoe.db`
 - **Environment variable**: `DATABASE_PATH=/app/data/zoe.db`
 
@@ -49,14 +49,14 @@ import os
 class SomeService:
     def __init__(self, db_path: str = None):
         if db_path is None:
-            db_path = os.getenv("DATABASE_PATH", "/home/pi/zoe/data/zoe.db")
+            db_path = os.getenv("DATABASE_PATH", "/home/zoe/assistant/data/zoe.db")
         self.db_path = db_path
 ```
 
 ### ❌ WRONG (Will Break):
 ```python
 class SomeService:
-    def __init__(self, db_path: str = "/home/pi/zoe/data/zoe.db"):  # HARDCODED!
+    def __init__(self, db_path: str = "/home/zoe/assistant/data/zoe.db"):  # HARDCODED!
         self.db_path = db_path
 ```
 

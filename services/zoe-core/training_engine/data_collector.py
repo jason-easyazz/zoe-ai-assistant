@@ -287,6 +287,48 @@ class TrainingDataCollector:
         finally:
             conn.close()
     
+    async def log_action_pattern(self, user_id: str, tool_name: str, params: Dict, success: bool = True):
+        """Log successful action patterns for learning"""
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            # Update tool call performance
+            if success:
+                cursor.execute("""
+                    INSERT INTO tool_call_performance (tool_name, success_count, last_updated)
+                    VALUES (?, 1, datetime('now'))
+                    ON CONFLICT(tool_name) DO UPDATE SET
+                        success_count = success_count + 1,
+                        last_updated = datetime('now')
+                """, (tool_name,))
+            else:
+                cursor.execute("""
+                    INSERT INTO tool_call_performance (tool_name, failure_count, last_updated)
+                    VALUES (?, 1, datetime('now'))
+                    ON CONFLICT(tool_name) DO UPDATE SET
+                        failure_count = failure_count + 1,
+                        last_updated = datetime('now')
+                """, (tool_name,))
+            
+            # Store action pattern for future reference
+            pattern_key = f"{tool_name}:{json.dumps(params, sort_keys=True)}"
+            cursor.execute("""
+                INSERT INTO response_patterns (pattern_type, pattern_description, success_count, last_updated)
+                VALUES (?, ?, 1, datetime('now'))
+                ON CONFLICT(pattern_type, pattern_description) DO UPDATE SET
+                    success_count = success_count + 1,
+                    last_updated = datetime('now')
+            """, (f"action_pattern_{user_id}", pattern_key))
+            
+            conn.commit()
+            logger.debug(f"📚 Logged action pattern: {tool_name} (success={success})")
+        except Exception as e:
+            logger.error(f"Failed to log action pattern: {e}")
+        finally:
+            conn.close()
+    
     def get_todays_training_data(self) -> List[Dict]:
         """Get all training examples from today"""
         

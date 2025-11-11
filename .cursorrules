@@ -1,6 +1,6 @@
 # Zoe AI Assistant Development Rules
 # These rules ensure safe, maintainable, and efficient code
-# Updated: October 19, 2025 - Enhanced with File Organization & Protection
+# Updated: November 10, 2025 - Added Multi-Platform Hardware Support
 
 ## 🛡️ FILE ORGANIZATION & CLEANUP SAFETY - MANDATORY
 
@@ -43,11 +43,12 @@
 6. Validate: python3 tools/audit/validate_structure.py
 
 ### FILE STRUCTURE RULES:
-- Root has MAX 10 .md files (currently 7/10 - good)
+- Root has MAX 10 .md files (currently 6/10 - compliant)
 - Tests go in tests/{unit|integration|performance|e2e}/
 - Scripts go in scripts/{setup|maintenance|deployment|security|utilities}/
 - Docs go in docs/{guides|api|architecture|governance|archive}/
 - Tools go in tools/{audit|cleanup|validation|generators}/
+- **NEW DOCUMENTATION**: Always place in docs/{category}/, NEVER in root
 
 ## 🏛️ ARCHITECTURE RULES
 
@@ -152,6 +153,114 @@
 5. Use git history - don't duplicate files, use version control
 6. Validate after changes - run structure validator before commit
 7. Prevention > Recovery - use pre-commit hooks
+8. **MULTI-PLATFORM**: Code must work on BOTH Jetson Orin NX AND Raspberry Pi 5
+
+## 🖥️ HARDWARE PLATFORM RULES - MANDATORY
+
+### Dual Platform Support
+Zoe runs on TWO platforms simultaneously:
+- **Jetson Orin NX 16GB**: GPU-accelerated, TensorRT, production
+- **Raspberry Pi 5 16GB**: CPU-only, edge deployment, development
+
+### Hardware-Specific Code Requirements
+
+**ALWAYS check hardware before:**
+- Setting GPU configurations (`num_gpu`)
+- Loading models (different models for each platform)
+- Using CUDA/TensorRT features
+- Setting performance parameters
+
+**Use environment variable**: `HARDWARE_PLATFORM=jetson|pi5|auto`
+
+**Example Pattern**:
+```python
+import os
+HARDWARE = os.getenv('HARDWARE_PLATFORM', 'auto')
+
+if HARDWARE == 'jetson':
+    # GPU-accelerated path
+    model_config = {"num_gpu": 99, "use_tensorrt": True}
+elif HARDWARE == 'pi5':
+    # CPU-optimized path
+    model_config = {"num_gpu": 0, "num_threads": 4}
+```
+
+### Model Selection Rules
+
+**Jetson Models** (GPU-accelerated):
+- Primary: `hermes3:8b-llama3.1-q4_K_M` (4.9GB)
+- Chat: `gemma3n-e2b-gpu-fixed` (5.6GB, num_gpu=99)
+- Vision: `gemma3n-e2b-gpu-fixed` (multimodal)
+- Memory: `qwen2.5:7b` (4.7GB)
+
+**Pi5 Models** (CPU-optimized):
+- Primary: `phi3:mini` (2.2GB, num_gpu=0)
+- Chat: `phi3:mini` (fast on CPU)
+- Vision: `llava:7b-v1.6-q4` (CPU-compatible)
+- Memory: `qwen2.5:3b` (2.0GB)
+
+### Testing Rules
+
+**MUST test on BOTH platforms before merge:**
+1. Jetson: GPU usage, TensorRT compatibility
+2. Pi5: CPU usage, memory constraints
+3. Both: Feature parity (where possible)
+4. Both: Health checks pass
+
+### Docker Rules
+
+**Separate docker-compose files**:
+- `docker-compose.jetson.yml` - GPU configs
+- `docker-compose.pi5.yml` - CPU configs
+- `docker-compose.yml` - Base (auto-detect)
+
+**Image selection**:
+- Jetson: Use `dustynv/ollama:r36.2.0` (Jetson-optimized)
+- Pi5: Use `ollama/ollama:latest` (standard ARM)
+
+### Feature Flags
+
+**Use hardware-aware feature flags**:
+```python
+FEATURES = {
+    'tensorrt': HARDWARE == 'jetson',
+    'gpu_acceleration': HARDWARE == 'jetson',
+    'multi_model_concurrent': HARDWARE == 'jetson',
+    'aggressive_unload': HARDWARE == 'pi5',
+}
+```
+
+### Documentation Rules
+
+**When adding features, document**:
+- ✅ Works on Jetson: [feature details]
+- ✅ Works on Pi5: [feature details]
+- ⚠️ Jetson-only: [reason, Pi5 alternative]
+- ⚠️ Pi5-only: [reason, Jetson alternative]
+
+### Performance Targets (by platform)
+
+**Jetson Orin NX**:
+- First token: <2s (with TensorRT)
+- Tokens/sec: 50+
+- Max model: 8GB
+- Concurrent: 5+ requests
+
+**Raspberry Pi 5**:
+- First token: <5s (CPU)
+- Tokens/sec: 8-12
+- Max model: 4GB
+- Concurrent: 2-3 requests
+
+### Critical Files
+
+**Hardware detection**: Check before modifying
+- `services/zoe-core/model_config.py` (model selection)
+- `services/zoe-core/model_prewarm.py` (pre-warming)
+- `docker-compose.yml` (service configs)
+- `.env` (platform settings)
+
+**See**: `HARDWARE_COMPATIBILITY.md` for full details
 
 ## 📋 BEFORE EVERY COMMIT
 
@@ -178,3 +287,13 @@ NEVER bypass hooks with --no-verify.
 - docs/governance/MANIFEST_SYSTEM.md - How manifest system works
 - PROJECT_STRUCTURE_RULES.md - File organization rules
 - .zoe/manifest.json - Approved files and patterns
+- .zoe/AI_ASSISTANT_CHECKLIST.md - **MANDATORY PRE-ACTION CHECKLIST** (READ FIRST!)
+
+## ✅ MANDATORY PRE-ACTION CHECKLIST
+
+**BEFORE creating/modifying/deleting ANY files:**
+1. Read `.zoe/AI_ASSISTANT_CHECKLIST.md` (mandatory checklist)
+2. Check root .md count: `ls -1 *.md | wc -l` (must be ≤ 10)
+3. Validate structure: `python3 tools/audit/validate_structure.py`
+4. Check manifest: `.zoe/manifest.json` for approved files
+5. For new documentation: Place in `docs/{category}/`, NEVER in root

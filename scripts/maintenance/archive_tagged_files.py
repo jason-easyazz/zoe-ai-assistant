@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 class FileArchiver:
-    def __init__(self, project_root="/home/pi/zoe"):
+    def __init__(self, project_root="/home/zoe/assistant"):
         self.project_root = Path(project_root)
         self.tags_file = self.project_root / "scripts/maintenance/file_tags.json"
         self.archive_root = self.project_root / "docs/archive/tagged_files"

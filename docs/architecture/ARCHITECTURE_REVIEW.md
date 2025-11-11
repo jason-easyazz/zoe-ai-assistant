@@ -414,7 +414,7 @@ async def global_exception_handler(request, exc):
 
 ### Current State
 
-**Project Root**: `/home/pi/zoe/`  
+**Project Root**: `/home/zoe/assistant/`  
 **Structure Compliance**: ✅ 100% (8/8 checks passed)  
 **Root Documentation**: 8/10 files (within limit)  
 **Automated Enforcement**: Active pre-commit hook

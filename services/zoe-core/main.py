@@ -208,6 +208,15 @@ async def startup_event():
     except Exception as e:
         logger.error(f"❌ Failed to start task reminders: {e}")
     
+    # ✅ PHASE 1.3: Pre-warm models for faster response times
+    try:
+        from model_prewarm import prewarm_background
+        logger.info("🔥 Starting model pre-warming in background...")
+        await prewarm_background()
+        logger.info("✅ Model pre-warming task started")
+    except Exception as e:
+        logger.warning(f"⚠️ Model pre-warming failed (non-critical): {e}")
+    
     logger.info("🎉 All services started successfully")
 
 @app.on_event("shutdown")

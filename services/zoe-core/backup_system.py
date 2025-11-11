@@ -10,6 +10,9 @@ import tarfile
 import gzip
 from datetime import datetime
 from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 from typing import Dict, List, Optional
 import logging
 
@@ -19,7 +22,7 @@ class BackupSystem:
     """Comprehensive backup system with 3-2-1 strategy"""
     
     def __init__(self):
-        self.backup_root = Path("/home/pi/zoe/backups")
+        self.backup_root = Path(__file__).parent.parent.parent.resolve() / "backups"
         self.backup_root.mkdir(exist_ok=True)
         
         # 3-2-1 strategy: 3 copies, 2 different media, 1 offsite
@@ -31,11 +34,11 @@ class BackupSystem:
         
         # Critical paths to backup
         self.critical_paths = [
-            "/home/pi/zoe/data",
-            "/home/pi/zoe/services/zoe-core",
-            "/home/pi/zoe/templates",
-            "/home/pi/zoe/scripts",
-            "/home/pi/zoe/documentation"
+            str(PROJECT_ROOT / "data"),
+            str(PROJECT_ROOT / "services/zoe-core"),
+            str(PROJECT_ROOT / "templates"),
+            str(PROJECT_ROOT / "scripts"),
+            str(PROJECT_ROOT / "documentation")
         ]
         
         # Exclude patterns
@@ -139,7 +142,7 @@ class BackupSystem:
             total_size = 0
             
             # Backup entire zoe directory
-            zoe_root = Path("/home/pi/zoe")
+            zoe_root = PROJECT_ROOT
             for item in zoe_root.iterdir():
                 if item.name not in ["backups", "logs", "models"]:  # Exclude large directories
                     dest_path = backup_dir / item.name

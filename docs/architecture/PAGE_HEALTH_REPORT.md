@@ -25,7 +25,7 @@
 
 ### Component Architecture
 
-**Single Source:** `/home/pi/zoe/services/zoe-ui/dist/components/zoe-orb.html`
+**Single Source:** `/home/zoe/assistant/services/zoe-ui/dist/components/zoe-orb.html`
 
 **Implementation Method:** Dynamic loading via fetch
 ```javascript
@@ -117,8 +117,8 @@ UPDATE reminders SET updated_at = created_at;
 ```
 
 **Files Modified:**
-- `/home/pi/zoe/data/zoe.db` - Added column
-- `/home/pi/zoe/services/zoe-core/routers/reminders.py` - Already correct
+- `/home/zoe/assistant/data/zoe.db` - Added column
+- `/home/zoe/assistant/services/zoe-core/routers/reminders.py` - Already correct
 
 **Status:** ✅ Resolved, tested working
 
@@ -142,7 +142,7 @@ UPDATE reminders SET updated_at = created_at;
 ```
 
 **Files Modified:**
-- `/home/pi/zoe/services/zoe-core/routers/journal.py` (line 99)
+- `/home/zoe/assistant/services/zoe-core/routers/journal.py` (line 99)
 
 **Status:** ✅ Resolved, tested working
 
@@ -166,7 +166,7 @@ async def search_memories(query: str = Query(...)):
 ```
 
 **Files Modified:**
-- `/home/pi/zoe/services/zoe-core/routers/memories.py` (line 662)
+- `/home/zoe/assistant/services/zoe-core/routers/memories.py` (line 662)
 
 **Status:** ✅ Resolved, tested working
 

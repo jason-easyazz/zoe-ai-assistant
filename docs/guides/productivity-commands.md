@@ -12,10 +12,10 @@ Shell function library for common Zoe operations. Saves time on debugging, testi
 
 ```bash
 # Auto-load on bash startup (optional)
-echo 'source /home/pi/zoe/scripts/utilities/zoe-superpowers.sh' >> ~/.bashrc
+echo 'source /home/zoe/assistant/scripts/utilities/zoe-superpowers.sh' >> ~/.bashrc
 
 # Or load manually in current session
-source /home/pi/zoe/scripts/utilities/zoe-superpowers.sh
+source /home/zoe/assistant/scripts/utilities/zoe-superpowers.sh
 ```
 
 ## Available Commands
@@ -267,7 +267,7 @@ zoe-storage
 zoe-models
 
 # Full analysis
-python3 /home/pi/zoe/tools/maintenance/storage_manager.py
+python3 /home/zoe/assistant/tools/maintenance/storage_manager.py
 ```
 
 ---

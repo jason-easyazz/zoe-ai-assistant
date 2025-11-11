@@ -90,7 +90,7 @@ The touch version (`/touch/dashboard.html`) uses the same widgets but optimized 
 1. **Create Widget File**
    ```bash
    # Create file in user widgets directory
-   touch /home/pi/zoe/services/zoe-ui/dist/js/widgets/user/my-widget.js
+   touch /home/zoe/assistant/services/zoe-ui/dist/js/widgets/user/my-widget.js
    ```
 
 2. **Write Widget Code**

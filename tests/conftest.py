@@ -6,8 +6,11 @@ from datetime import datetime, timedelta
 import sys
 from pathlib import Path
 
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
 # Add zoe-core to path for all tests to import modules like light_rag_memory, self_awareness
-ZOE_CORE_PATH = "/home/pi/zoe/services/zoe-core"
+ZOE_CORE_PATH = str(PROJECT_ROOT / "services/zoe-core")
 if ZOE_CORE_PATH not in sys.path:
     sys.path.insert(0, ZOE_CORE_PATH)
 

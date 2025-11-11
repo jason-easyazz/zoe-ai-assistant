@@ -211,7 +211,7 @@ Status: ✅ READY FOR COMMITS
 ## Project Structure Overview
 
 ```
-/home/pi/zoe/ (16 files - CLEAN!)
+/home/zoe/assistant/ (16 files - CLEAN!)
 ├── .zoe/                       # NEW: Manifest system
 │   ├── manifest.json
 │   └── file-tags

@@ -9,7 +9,7 @@ import os
 import asyncio
 import logging
 
-sys.path.append('/home/pi/zoe/services/zoe-core')
+sys.path.append('/home/zoe/assistant/services/zoe-core')
 sys.path.append('/app')
 
 # Setup logging

@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 import re
 
-PROJECT_ROOT = Path("/home/pi/zoe")
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 SERVICES_ROOT = PROJECT_ROOT / "services" / "zoe-core"
 
 class BestPracticesChecker:

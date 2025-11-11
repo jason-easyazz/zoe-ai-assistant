@@ -9,10 +9,13 @@ import json
 import sqlite3
 from pathlib import Path
 
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
 # Mock MCP server for testing
 class MockMCPServer:
     def __init__(self):
-        self.db_path = "/home/pi/zoe/data/zoe.db"
+        self.db_path = str(PROJECT_ROOT / "data" / "zoe.db")
     
     async def test_search_memories(self):
         """Test memory search"""

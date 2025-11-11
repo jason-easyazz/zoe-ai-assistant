@@ -11,11 +11,11 @@
 **Date**: October 13, 2025  
 
 **Changes Made**:
-- ✅ Updated `/home/pi/zoe/services/zoe-core/prompt_templates.py`:
+- ✅ Updated `/home/zoe/assistant/services/zoe-core/prompt_templates.py`:
   - Added `recent_episodes` parameter to `build_enhanced_prompt()` function
   - Episode context now included in system prompts
   
-- ✅ Updated `/home/pi/zoe/services/zoe-core/routers/chat.py`:
+- ✅ Updated `/home/zoe/assistant/services/zoe-core/routers/chat.py`:
   - Modified `build_system_prompt()` to extract and use episode context
   - Episode summaries now passed to prompt builder
 
@@ -29,7 +29,7 @@
 **Date**: October 13, 2025
 
 **Changes Made**:
-- ✅ Updated `_is_planning_request()` function in `/home/pi/zoe/services/zoe-core/routers/chat.py`:
+- ✅ Updated `_is_planning_request()` function in `/home/zoe/assistant/services/zoe-core/routers/chat.py`:
   - Added multi-step task detection ("and then", "and also")
   - Added multi-system detection ("calendar and", "list and")
   - Added complex query patterns ("all my", "show me everything")
@@ -44,7 +44,7 @@
 **Date**: October 13, 2025
 
 **Changes Made**:
-- ✅ Added satisfaction system import to `/home/pi/zoe/services/zoe-core/routers/chat.py`
+- ✅ Added satisfaction system import to `/home/zoe/assistant/services/zoe-core/routers/chat.py`
 - ✅ Added fire-and-forget satisfaction recording after chat responses
 - ✅ Added satisfaction recording for action-executed responses
 - ✅ Uses asyncio.create_task() to avoid blocking responses
@@ -87,14 +87,14 @@
 **Date**: October 13, 2025
 
 **Changes Made**:
-- ✅ Created `/home/pi/zoe/scripts/utilities/optimize_database_indexes.py`
+- ✅ Created `/home/zoe/assistant/scripts/utilities/optimize_database_indexes.py`
   - Adds indexes for people, projects, notes, events tables
   - Adds indexes for satisfaction tracking tables
   - Adds indexes for temporal memory tables
   - Includes query performance analysis
 
 **Testing Required**:
-- [ ] Run optimization script: `python3 /home/pi/zoe/scripts/utilities/optimize_database_indexes.py`
+- [ ] Run optimization script: `python3 /home/zoe/assistant/scripts/utilities/optimize_database_indexes.py`
 - [ ] Verify memory searches complete in <1s
 - [ ] Check EXPLAIN QUERY PLAN shows index usage
 
@@ -103,15 +103,15 @@
 **Date**: October 13, 2025
 
 **Completed**:
-- ✅ Created `/home/pi/zoe/tests/integration/test_human_like_conversation.py`
+- ✅ Created `/home/zoe/assistant/tests/integration/test_human_like_conversation.py`
   - 20+ automated conversation tests
   - All scenario types covered
   
-- ✅ Created `/home/pi/zoe/tests/integration/natural_conversation_manual_tests.md`
+- ✅ Created `/home/zoe/assistant/tests/integration/natural_conversation_manual_tests.md`
   - 10 manual test scenarios
   - Voice interaction guidelines
   
-- ✅ Created `/home/pi/zoe/tests/comprehensive_conversation_test.py`
+- ✅ Created `/home/zoe/assistant/tests/comprehensive_conversation_test.py`
   - 50 real-world conversational scenarios
   - All experts and tools tested
   - **EXECUTED: 56% pass rate (28/50)**
@@ -128,26 +128,26 @@
 - Zero timeouts (timeout protection working!)
 - Zero crashes (infrastructure solid!)
 
-**Full Report**: `/home/pi/zoe/docs/test-results-2025-10-13.md`
+**Full Report**: `/home/zoe/assistant/docs/test-results-2025-10-13.md`
 
 ### ✅ Phase 8: Documentation and Monitoring (COMPLETED)
 **Status**: Complete  
 **Date**: October 13, 2025
 
 **Completed**:
-- ✅ Created `/home/pi/zoe/docs/guides/jetson-upgrade-checklist.md`
+- ✅ Created `/home/zoe/assistant/docs/guides/jetson-upgrade-checklist.md`
   - Pre-upgrade testing checklist
   - Hardware installation steps
   - Model migration guide (llama3.2:3b → gemma3:4b)
   - Performance benchmarks
   - Rollback procedure
   
-- ✅ Created `/home/pi/zoe/docs/guides/pre-jetson-implementation-tracking.md`
+- ✅ Created `/home/zoe/assistant/docs/guides/pre-jetson-implementation-tracking.md`
   - Complete implementation status
   - All changes documented
   - Testing results included
   
-- ✅ Created `/home/pi/zoe/docs/test-results-2025-10-13.md`
+- ✅ Created `/home/zoe/assistant/docs/test-results-2025-10-13.md`
   - Comprehensive 50-test results
   - Category-by-category analysis
   - Performance metrics
@@ -158,25 +158,25 @@
 ## Files Modified
 
 ### Core Changes
-1. `/home/pi/zoe/services/zoe-core/routers/chat.py`
+1. `/home/zoe/assistant/services/zoe-core/routers/chat.py`
    - Added temporal memory integration to prompts
    - Expanded orchestration triggers
    - Wired satisfaction tracking
    - Added request timeouts
    - Created internal `_chat_handler()` function
 
-2. `/home/pi/zoe/services/zoe-core/prompt_templates.py`
+2. `/home/zoe/assistant/services/zoe-core/prompt_templates.py`
    - Added `recent_episodes` parameter
    - Episode context in system prompts
 
 ### New Files Created
-3. `/home/pi/zoe/scripts/utilities/optimize_database_indexes.py`
+3. `/home/zoe/assistant/scripts/utilities/optimize_database_indexes.py`
    - Database optimization script
 
 ### Files to Create
-4. `/home/pi/zoe/tests/integration/test_human_like_conversation.py` (pending)
-5. `/home/pi/zoe/tests/integration/natural_conversation_manual_tests.md` (pending)
-6. `/home/pi/zoe/docs/guides/jetson-upgrade-checklist.md` (pending)
+4. `/home/zoe/assistant/tests/integration/test_human_like_conversation.py` (pending)
+5. `/home/zoe/assistant/tests/integration/natural_conversation_manual_tests.md` (pending)
+6. `/home/zoe/assistant/docs/guides/jetson-upgrade-checklist.md` (pending)
 
 ## Immediate Next Steps
 
@@ -184,19 +184,19 @@
 ```bash
 # Create test files (from plan)
 # Run automated tests
-cd /home/pi/zoe
+cd /home/zoe/assistant
 pytest tests/integration/test_human_like_conversation.py -v
 ```
 
 ### 2. Run Database Optimization
 ```bash
-python3 /home/pi/zoe/scripts/utilities/optimize_database_indexes.py
+python3 /home/zoe/assistant/scripts/utilities/optimize_database_indexes.py
 ```
 
 ### 3. Verify All Changes
 ```bash
 # Check for linting errors
-cd /home/pi/zoe/services/zoe-core
+cd /home/zoe/assistant/services/zoe-core
 # Test basic conversation
 curl -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \

@@ -33,6 +33,9 @@
             console.log('✅ Service Worker registered successfully');
             console.log('   Scope:', registration.scope);
             
+            // Check for updates immediately on page load
+            registration.update();
+            
             // Check for updates
             registration.addEventListener('updatefound', () => {
                 const newWorker = registration.installing;
@@ -42,6 +45,10 @@
                     if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
                         // New service worker installed, show update prompt
                         showUpdateNotification();
+                    } else if (newWorker.state === 'activated') {
+                        // New service worker activated, reload to use it
+                        console.log('🔄 New service worker activated, reloading...');
+                        window.location.reload();
                     }
                 });
             });

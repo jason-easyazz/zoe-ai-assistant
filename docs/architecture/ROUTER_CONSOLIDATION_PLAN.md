@@ -311,7 +311,7 @@ if os.getenv("ENVIRONMENT") == "development":
 
 1. **Create Backup**
    ```bash
-   cd /home/pi/zoe
+   cd /home/zoe/assistant
    git checkout -b router-consolidation
    cp -r services/zoe-core/routers services/zoe-core/routers.backup
    ```
@@ -328,7 +328,7 @@ if os.getenv("ENVIRONMENT") == "development":
    # Generate endpoint inventory
    python3 -c "
    import sys
-   sys.path.append('/home/pi/zoe/services/zoe-core')
+   sys.path.append('/home/zoe/assistant/services/zoe-core')
    from main import app
    for route in app.routes:
        print(f'{route.path} - {route.methods}')

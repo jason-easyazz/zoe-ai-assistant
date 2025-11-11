@@ -159,7 +159,7 @@ Updated `.zoe/critical-files.json` v1.1:
 
 ### 3. Database Backups
 - Automated backup before schema changes
-- Location: `/home/pi/zoe/data/zoe.db.backup-YYYYMMDD-HHMM`
+- Location: `/home/zoe/assistant/data/zoe.db.backup-YYYYMMDD-HHMM`
 
 ---
 

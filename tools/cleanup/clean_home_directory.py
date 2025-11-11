@@ -4,12 +4,15 @@ Clean Home Directory - Remove Test/Temp Files from /home/pi
 ===========================================================
 
 Moves all test scripts, status reports, and temp files from /home/pi 
-to appropriate locations in /home/pi/zoe.
+to appropriate locations in PROJECT_ROOT.
 """
 
 import os
 import shutil
 from pathlib import Path
+
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 from datetime import datetime
 
 # Files to keep in /home/pi (system files)
@@ -42,7 +45,8 @@ CATEGORIZATION = {
 def clean_home_directory():
     """Clean /home/pi of all test/temp files"""
     home = Path('/home/pi')
-    zoe_root = Path('/home/pi/zoe')
+    # Auto-detect project root (works for both Pi and Nano)
+    zoe_root = Path(__file__).parent.parent.parent.resolve()
     
     # Create timestamp for archive
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -162,5 +166,5 @@ def clean_home_directory():
 if __name__ == "__main__":
     total = clean_home_directory()
     print(f"\n🎯 /home/pi is now clean!")
-    print(f"💾 All files archived in /home/pi/zoe with timestamp for recovery")
+    print(f"💾 All files archived in PROJECT_ROOT with timestamp for recovery")
 

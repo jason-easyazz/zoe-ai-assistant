@@ -9,7 +9,7 @@ import json
 import os
 from datetime import datetime
 
-DB_PATH = os.getenv("DATABASE_PATH", "/home/pi/zoe/data/zoe.db")
+DB_PATH = os.getenv("DATABASE_PATH", os.getenv("DATABASE_PATH", str(Path(__file__).parent.parent.parent.resolve() / "data" / "zoe.db")))
 
 def migrate_lists_items():
     """Migrate list items from JSON storage to separate table"""

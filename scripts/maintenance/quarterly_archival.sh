@@ -52,8 +52,8 @@ echo "" | tee -a $LOG_FILE
 
 # Step 2: Backup databases before archival
 echo "💾 Creating database backup..." | tee -a $LOG_FILE
-cp /home/pi/zoe/data/zoe.db "/home/pi/zoe/data/zoe.db.before-archive-$PREV_YEAR-Q$PREV_QUARTER"
-cp /home/pi/zoe/data/memory.db "/home/pi/zoe/data/memory.db.before-archive-$PREV_YEAR-Q$PREV_QUARTER"
+cp /home/zoe/assistant/data/zoe.db "/home/zoe/assistant/data/zoe.db.before-archive-$PREV_YEAR-Q$PREV_QUARTER"
+cp /home/zoe/assistant/data/memory.db "/home/zoe/assistant/data/memory.db.before-archive-$PREV_YEAR-Q$PREV_QUARTER"
 echo "✓ Databases backed up" | tee -a $LOG_FILE
 echo "" | tee -a $LOG_FILE
 

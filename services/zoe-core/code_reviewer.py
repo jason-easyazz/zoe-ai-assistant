@@ -48,7 +48,7 @@ class CodeReviewer:
             r'docker.*system\s+prune',
         ]
         
-        self.cursorrules_path = Path("/home/pi/zoe/.cursorrules")
+        self.cursorrules_path = Path(__file__).parent.parent.parent.resolve() / ".cursorrules"
         self.cursorrules = self._load_cursorrules()
     
     def _load_cursorrules(self) -> List[str]:

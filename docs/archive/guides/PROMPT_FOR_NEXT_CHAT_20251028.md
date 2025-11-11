@@ -70,15 +70,15 @@ In our previous session (Oct 27, 2025), we:
 ## Key Files to Review
 
 ### Documentation
-- `/home/pi/zoe/PROJECT_STATUS.md` - Current honest status
-- `/home/pi/zoe/docs/governance/ENHANCED_ENFORCEMENT.md` - Enforcement guide
-- `/home/pi/zoe/ENFORCEMENT_SUMMARY.md` - Recent changes summary
+- `/home/zoe/assistant/PROJECT_STATUS.md` - Current honest status
+- `/home/zoe/assistant/docs/governance/ENHANCED_ENFORCEMENT.md` - Enforcement guide
+- `/home/zoe/assistant/ENFORCEMENT_SUMMARY.md` - Recent changes summary
 
 ### Code to Test
-- `/home/pi/zoe/services/zoe-core/routers/chat.py` - Main chat router (1,524 lines)
-- `/home/pi/zoe/services/zoe-core/routers/temporal_memory.py` - Temporal memory API
-- `/home/pi/zoe/services/zoe-core/routers/cross_agent_collaboration.py` - Orchestration
-- `/home/pi/zoe/services/zoe-core/routers/user_satisfaction.py` - Satisfaction tracking
+- `/home/zoe/assistant/services/zoe-core/routers/chat.py` - Main chat router (1,524 lines)
+- `/home/zoe/assistant/services/zoe-core/routers/temporal_memory.py` - Temporal memory API
+- `/home/zoe/assistant/services/zoe-core/routers/cross_agent_collaboration.py` - Orchestration
+- `/home/zoe/assistant/services/zoe-core/routers/user_satisfaction.py` - Satisfaction tracking
 
 ### Enhancement Systems to Verify
 1. **Temporal Memory Integration** (`temporal_memory_integration.py`)
@@ -160,7 +160,7 @@ I will:
 - **Current State**: Core APIs work, enhancement integration unclear
 - **Version**: v0.0.1 "Fresh Start"
 - **Platform**: Raspberry Pi 5
-- **Working Dir**: `/home/pi/zoe`
+- **Working Dir**: `/home/zoe/assistant`
 
 ## Starting Questions
 

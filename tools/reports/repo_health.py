@@ -20,7 +20,8 @@ class Colors:
     CYAN = '\033[0;36m'
     NC = '\033[0m'
 
-PROJECT_ROOT = Path("/home/pi/zoe")
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 
 def get_repo_size():
     """Get total repository size"""

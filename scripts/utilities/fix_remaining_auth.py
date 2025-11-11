@@ -7,17 +7,17 @@ from pathlib import Path
 
 # Remaining routers to fix
 REMAINING_ROUTERS = [
-    '/home/pi/zoe/services/zoe-core/routers/weather.py',
-    '/home/pi/zoe/services/zoe-core/routers/chat_sessions.py',
-    '/home/pi/zoe/services/zoe-core/routers/push.py',
-    '/home/pi/zoe/services/zoe-core/routers/workflows.py',
-    '/home/pi/zoe/services/zoe-core/routers/journeys.py',
-    '/home/pi/zoe/services/zoe-core/routers/onboarding.py',
-    '/home/pi/zoe/services/zoe-core/routers/self_awareness.py',
-    '/home/pi/zoe/services/zoe-core/routers/proactive_insights.py',
-    '/home/pi/zoe/services/zoe-core/routers/location.py',
-    '/home/pi/zoe/services/zoe-core/routers/media.py',
-    '/home/pi/zoe/services/zoe-core/routers/orchestrator.py',
+    '/home/zoe/assistant/services/zoe-core/routers/weather.py',
+    '/home/zoe/assistant/services/zoe-core/routers/chat_sessions.py',
+    '/home/zoe/assistant/services/zoe-core/routers/push.py',
+    '/home/zoe/assistant/services/zoe-core/routers/workflows.py',
+    '/home/zoe/assistant/services/zoe-core/routers/journeys.py',
+    '/home/zoe/assistant/services/zoe-core/routers/onboarding.py',
+    '/home/zoe/assistant/services/zoe-core/routers/self_awareness.py',
+    '/home/zoe/assistant/services/zoe-core/routers/proactive_insights.py',
+    '/home/zoe/assistant/services/zoe-core/routers/location.py',
+    '/home/zoe/assistant/services/zoe-core/routers/media.py',
+    '/home/zoe/assistant/services/zoe-core/routers/orchestrator.py',
 ]
 
 def fix_router(filepath):

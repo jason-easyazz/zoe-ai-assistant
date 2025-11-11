@@ -4,7 +4,7 @@ Fix memories.py router - replace Query(None) with proper authentication
 """
 import re
 
-filepath = '/home/pi/zoe/services/zoe-core/routers/memories.py'
+filepath = '/home/zoe/assistant/services/zoe-core/routers/memories.py'
 
 with open(filepath, 'r') as f:
     content = f.read()

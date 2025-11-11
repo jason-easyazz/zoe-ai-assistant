@@ -242,7 +242,7 @@ crontab -e  # Remove quarterly_archival.sh line
 # Remove memvid_archives.py from routers/
 
 # Restore from backup
-cp /home/pi/zoe/data/zoe.db.before-archive-YYYY-QX /home/pi/zoe/data/zoe.db
+cp /home/zoe/assistant/data/zoe.db.before-archive-YYYY-QX /home/zoe/assistant/data/zoe.db
 ```
 
 ## Evolution Timeline

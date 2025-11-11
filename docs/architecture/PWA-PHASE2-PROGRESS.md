@@ -112,8 +112,8 @@
 
 ### Step 1: Run Database Migration (5 min)
 ```bash
-cd /home/pi/zoe/services/zoe-core
-sqlite3 /home/pi/zoe/data/zoe.db < db/schema/push_subscriptions.sql
+cd /home/zoe/assistant/services/zoe-core
+sqlite3 /home/zoe/assistant/data/zoe.db < db/schema/push_subscriptions.sql
 ```
 
 ### Step 2: Register Push Router (5 min)
@@ -127,7 +127,7 @@ app.include_router(push.router)
 ```bash
 docker exec zoe-core pip install -r /app/requirements.txt
 # OR
-cd /home/pi/zoe/services/zoe-core
+cd /home/zoe/assistant/services/zoe-core
 pip install -r requirements.txt
 ```
 
@@ -149,7 +149,7 @@ Update `/services/zoe-ui/dist/settings.html`
 
 ```bash
 # 1. Apply database migration
-sqlite3 /home/pi/zoe/data/zoe.db < /home/pi/zoe/services/zoe-core/db/schema/push_subscriptions.sql
+sqlite3 /home/zoe/assistant/data/zoe.db < /home/zoe/assistant/services/zoe-core/db/schema/push_subscriptions.sql
 
 # 2. Install dependencies (if running in Docker)
 docker exec zoe-core pip install py-vapid pywebpush

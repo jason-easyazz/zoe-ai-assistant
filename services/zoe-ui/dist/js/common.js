@@ -152,11 +152,18 @@ function getServiceMap() {
     };
 }
 
-// URL normalization helper - Force HTTPS
+// URL normalization helper - Use same protocol as current page
 function normalizeToHttps(url) {
     try {
+        // If already absolute URL, use as-is
+        if (url.startsWith('http://') || url.startsWith('https://')) {
+            return url;
+        }
+        
+        // For relative URLs, use same protocol as current page
         const normalized = new URL(url, window.location.origin);
-        normalized.protocol = 'https:';
+        // Use current page protocol (don't force HTTPS if on HTTP)
+        normalized.protocol = window.location.protocol;
         return normalized.toString();
     } catch (e) {
         // If URL construction fails, return as-is (likely already relative)

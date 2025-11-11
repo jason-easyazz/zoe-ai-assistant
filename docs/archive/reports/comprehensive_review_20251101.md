@@ -104,7 +104,7 @@ All three enhancement systems have dedicated routers and are properly integrated
 **Status**: Clean
 
 - ✅ Only `.zoe-touch-panel.json` in /home/pi (1 config file)
-- ✅ All Zoe files properly in /home/pi/zoe/
+- ✅ All Zoe files properly in /home/zoe/assistant/
 - ✅ No test scripts or docs polluting home directory
 
 ---
@@ -233,7 +233,7 @@ Current status document has outdated information:
 **Priority**: Medium  
 **Effort**: 30 minutes
 
-Create guide in `/home/pi/zoe/docs/guides/enhancement-systems.md`:
+Create guide in `/home/zoe/assistant/docs/guides/enhancement-systems.md`:
 - How to use temporal memory in custom routers
 - How to trigger orchestration for complex tasks
 - How to record user satisfaction

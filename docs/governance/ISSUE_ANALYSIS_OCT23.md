@@ -33,10 +33,10 @@
 
 ### 8:00 PM - 8:30 PM - Diagnosis & Fix
 🔍 **Root Cause**: 
-New services hardcoded `/home/pi/zoe/data/zoe.db` instead of using `DATABASE_PATH` env var.
+New services hardcoded `/home/zoe/assistant/data/zoe.db` instead of using `DATABASE_PATH` env var.
 
 Docker container path mapping:
-- Host: `/home/pi/zoe/data/zoe.db`
+- Host: `/home/zoe/assistant/data/zoe.db`
 - Container: `/app/data/zoe.db`
 - Env var: `DATABASE_PATH=/app/data/zoe.db`
 

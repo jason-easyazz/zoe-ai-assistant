@@ -14,7 +14,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Project root
-PROJECT_ROOT="/home/pi/zoe"
+PROJECT_ROOT="/home/zoe/assistant"
 DATA_DIR="$PROJECT_ROOT/data"
 SCHEMA_DIR="$DATA_DIR/schema"
 

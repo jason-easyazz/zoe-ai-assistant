@@ -321,9 +321,14 @@ class EnhancedSessionManager:
         )
 
         session = self._create_session(guest_request, SessionType.GUEST)
-        if session and permissions:
-            session.permissions_cache = permissions
+        if session:
+            if permissions:
+                session.permissions_cache = permissions
+            # Always save guest sessions to DB
             self._save_session_to_db(session)
+            # Also add to active_sessions cache
+            with self.session_lock:
+                self.active_sessions[session.session_id] = session
 
         return session
 

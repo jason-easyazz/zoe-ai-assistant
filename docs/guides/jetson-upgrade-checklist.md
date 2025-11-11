@@ -18,7 +18,7 @@
 - [ ] Check satisfaction tracking populates database
 
 ### Database Optimization
-- [ ] Run: `python3 /home/pi/zoe/scripts/utilities/optimize_database_indexes.py`
+- [ ] Run: `python3 /home/zoe/assistant/scripts/utilities/optimize_database_indexes.py`
 - [ ] Verify memory search <1s: Check EXPLAIN QUERY PLAN output
 - [ ] Confirm indexes created on all key tables
 - [ ] Test complex queries don't timeout
@@ -47,7 +47,7 @@
 3. [ ] **Transfer Zoe to Jetson**
    ```bash
    # On Pi 5
-   rsync -avz --progress /home/pi/zoe/ zoe-jetson:/home/nvidia/zoe/
+   rsync -avz --progress /home/zoe/assistant/ zoe-jetson:/home/nvidia/zoe/
    
    # Or use external SSD/USB
    ```

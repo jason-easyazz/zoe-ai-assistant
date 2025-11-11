@@ -4,7 +4,7 @@
 
 ```bash
 # 1. Database
-sqlite3 /home/pi/zoe/data/zoe.db < /home/pi/zoe/services/zoe-core/db/schema/push_subscriptions.sql
+sqlite3 /home/zoe/assistant/data/zoe.db < /home/zoe/assistant/services/zoe-core/db/schema/push_subscriptions.sql
 
 # 2. Dependencies
 docker exec zoe-core pip install py-vapid==1.9.1 pywebpush==2.0.0
@@ -70,7 +70,7 @@ curl http://localhost:8000/api/push/vapid-public-key
 docker logs zoe-core --tail 20 | grep reminder
 
 # View subscriptions
-sqlite3 /home/pi/zoe/data/zoe.db "SELECT * FROM push_subscriptions;"
+sqlite3 /home/zoe/assistant/data/zoe.db "SELECT * FROM push_subscriptions;"
 
 # Restart
 docker restart zoe-core
@@ -81,7 +81,7 @@ docker restart zoe-core
 ## 🔥 One-Line Deploy
 
 ```bash
-cd /home/pi/zoe && ./scripts/deployment/deploy-phase2-push-notifications.sh
+cd /home/zoe/assistant && ./scripts/deployment/deploy-phase2-push-notifications.sh
 ```
 
 **That's it! 🎉**

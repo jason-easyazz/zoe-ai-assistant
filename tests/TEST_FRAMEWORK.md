@@ -380,7 +380,7 @@ def test_chat_api(self):
 1. Check Ollama running: `curl http://localhost:11434/api/tags`
 2. Check zoe-core logs: `docker logs zoe-core-test --tail 50`
 3. Test chat directly: `curl -X POST http://localhost:8000/api/chat -d '{"message":"test"}'`
-4. Check database: `sqlite3 /home/pi/zoe/data/zoe.db ".tables"`
+4. Check database: `sqlite3 /home/zoe/assistant/data/zoe.db ".tables"`
 
 ---
 

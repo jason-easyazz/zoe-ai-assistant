@@ -115,7 +115,7 @@ Zoe: **Tom** (colleague)
 Want to verify everything works?
 
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 python3 tests/integration/test_people_system.py
 ```
 
@@ -125,8 +125,8 @@ Should output: `✅ ALL TESTS PASSED`
 
 ## Full Documentation
 
-**Complete Guide**: `/home/pi/zoe/docs/guides/PEOPLE_SYSTEM_GUIDE.md`  
-**System Details**: `/home/pi/zoe/PEOPLE_SYSTEM_COMPLETE.md`
+**Complete Guide**: `/home/zoe/assistant/docs/guides/PEOPLE_SYSTEM_GUIDE.md`  
+**System Details**: `/home/zoe/assistant/PEOPLE_SYSTEM_COMPLETE.md`
 
 ---
 

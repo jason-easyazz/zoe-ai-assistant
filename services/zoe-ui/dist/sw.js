@@ -7,8 +7,8 @@
 // Import Workbox from CDN (no build step needed)
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
-// Zoe UI Version 4.13.0 - Narrower Widget Grids
-const SW_VERSION = '4.13.0';
+// Zoe UI Version 4.13.1 - Widget System Fix
+const SW_VERSION = '4.13.1';
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -62,11 +62,15 @@ if (workbox) {
         })
     );
     
-    // 2. JavaScript - Network First for widgets, Cache First for other JS
+    // 2. JavaScript - Network First for widgets and widget-system, Cache First for other JS
     workbox.routing.registerRoute(
         ({ request }) => {
-            // Check if it's a widget file - always network first
-            return request.destination === 'script' && request.url.includes('/widgets/');
+            // Check if it's a widget file, widget-system.js, or widget-base.js - always network first
+            return request.destination === 'script' && (
+                request.url.includes('/widgets/') || 
+                request.url.includes('widget-system.js') ||
+                request.url.includes('widget-base.js')
+            );
         },
         new workbox.strategies.NetworkFirst({
             cacheName: 'zoe-widgets',

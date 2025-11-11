@@ -21,7 +21,7 @@ We've implemented a **3-layer context system** to ensure Cursor/AI always knows 
 
 ### **Layer 1: RECENT_CHANGES.md (PRIMARY)**
 
-**Location**: `/home/pi/zoe/RECENT_CHANGES.md`
+**Location**: `/home/zoe/assistant/RECENT_CHANGES.md`
 
 **Purpose**: Quick snapshot of recent work
 
@@ -51,7 +51,7 @@ We've implemented a **3-layer context system** to ensure Cursor/AI always knows 
 
 ### **Layer 2: Context Briefing Script (AUTOMATED)**
 
-**Location**: `/home/pi/zoe/scripts/utilities/context_briefing.sh`
+**Location**: `/home/zoe/assistant/scripts/utilities/context_briefing.sh`
 
 **Purpose**: Automated context gathering
 
@@ -113,7 +113,7 @@ We've implemented a **3-layer context system** to ensure Cursor/AI always knows 
 
 ```bash
 # Step 1: Read recent changes (CRITICAL)
-cat /home/pi/zoe/RECENT_CHANGES.md
+cat /home/zoe/assistant/RECENT_CHANGES.md
 
 # Step 2: Run context briefing
 ./scripts/utilities/context_briefing.sh
@@ -127,7 +127,7 @@ python3 tools/audit/enforce_structure.py
 
 ```bash
 # Check if tool/feature already exists
-grep -r "function_name" /home/pi/zoe/
+grep -r "function_name" /home/zoe/assistant/
 
 # Check recent commits for related work
 git log --all --grep="keyword" --oneline
@@ -158,13 +158,13 @@ git commit -m "feat(component): Description"
 **Check**:
 ```bash
 # Search codebase
-grep -r "feature_name" /home/pi/zoe/
+grep -r "feature_name" /home/zoe/assistant/
 
 # Check tools directory
-ls -la /home/pi/zoe/tools/
+ls -la /home/zoe/assistant/tools/
 
 # Check scripts
-ls -la /home/pi/zoe/scripts/
+ls -la /home/zoe/assistant/scripts/
 
 # Read RECENT_CHANGES.md
 cat RECENT_CHANGES.md | grep -A 20 "New Tools"
@@ -198,10 +198,10 @@ git log --since="1 week ago" -- path/to/file
 **Check**:
 ```bash
 # Search all documentation
-grep -r "topic" /home/pi/zoe/docs/
+grep -r "topic" /home/zoe/assistant/docs/
 
 # Check recent docs
-ls -lt /home/pi/zoe/docs/guides/ | head -10
+ls -lt /home/zoe/assistant/docs/guides/ | head -10
 ```
 
 ---
@@ -298,7 +298,7 @@ python3 tools/audit/enforce_structure.py
 git log --all --grep="keyword"
 
 # Search code
-grep -r "pattern" /home/pi/zoe/
+grep -r "pattern" /home/zoe/assistant/
 
 # Recent changes to file
 git log --since="1 week ago" -- path/file

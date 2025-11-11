@@ -18,7 +18,7 @@ This guide explains how to install Unsloth for efficient LoRA fine-tuning on Ras
 ### Option 1: Standard Installation (Recommended)
 
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 
 # Install Unsloth
 pip install unsloth
@@ -58,7 +58,7 @@ pip install transformers peft accelerate bitsandbytes
 ### 1. Test Training Capability
 
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 python3 scripts/train/test_training_setup.py
 ```
 
@@ -69,7 +69,7 @@ python3 scripts/train/test_training_setup.py
 sudo crontab -e
 
 # Add this line (runs at 2am daily)
-0 2 * * * /home/pi/zoe/scripts/train/nightly_training.sh >> /var/log/zoe-training.log 2>&1
+0 2 * * * /home/zoe/assistant/scripts/train/nightly_training.sh >> /var/log/zoe-training.log 2>&1
 
 # Verify cron job added
 sudo crontab -l
@@ -103,7 +103,7 @@ ls -lh /app/data/training.db
 curl -X GET "http://localhost:8000/api/chat/training-stats?user_id=default"
 
 # 3. Model manager works
-/home/pi/zoe/tools/model-manager.py list
+/home/zoe/assistant/tools/model-manager.py list
 
 # 4. Graph engine loaded
 python3 -c "from graph_engine import graph_engine; print(f'Nodes: {graph_engine.get_stats()}')"
@@ -125,7 +125,7 @@ Before relying on overnight training, test manually:
 ```bash
 # Collect some interactions first (chat with Zoe for 30 minutes)
 # Then run:
-python3 /home/pi/zoe/scripts/train/nightly_training.py
+python3 /home/zoe/assistant/scripts/train/nightly_training.py
 
 # Check output
 tail -50 /var/log/zoe-training.log
@@ -138,7 +138,7 @@ Expected output:
    • 3 corrections
    • 8 positive feedback
 📝 Preparing training data...
-💾 Saved training data to /home/pi/zoe/models/adapters/training_data_2025-10-10.json
+💾 Saved training data to /home/zoe/assistant/models/adapters/training_data_2025-10-10.json
 ✅ Training pipeline completed
 🌅 System ready for morning!
 ```
@@ -186,7 +186,7 @@ sudo grep CRON /var/log/syslog | tail -20
 
 **Test manually:**
 ```bash
-/home/pi/zoe/scripts/train/nightly_training.sh
+/home/zoe/assistant/scripts/train/nightly_training.sh
 ```
 
 ---
@@ -225,7 +225,7 @@ sudo grep CRON /var/log/syslog | tail -20
 
 ---
 
-**Questions?** Check `/home/pi/zoe/docs/INTELLIGENCE_ENHANCEMENT_STATUS.md` for current status.
+**Questions?** Check `/home/zoe/assistant/docs/INTELLIGENCE_ENHANCEMENT_STATUS.md` for current status.
 
 
 

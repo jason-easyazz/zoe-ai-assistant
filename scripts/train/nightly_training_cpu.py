@@ -11,7 +11,10 @@ import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 
-sys.path.append('/home/pi/zoe/services/zoe-core')
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
+sys.path.append(str(PROJECT_ROOT / "services/zoe-core"))
 sys.path.append('/app')
 
 logging.basicConfig(
@@ -25,7 +28,7 @@ class CPUNightlyTrainer:
     """CPU-optimized overnight training for Pi 5"""
     
     def __init__(self):
-        self.adapter_dir = Path("/home/pi/zoe/models/adapters")
+        self.adapter_dir = PROJECT_ROOT / "models/adapters"
         self.adapter_dir.mkdir(parents=True, exist_ok=True)
         self.min_examples = 20
         

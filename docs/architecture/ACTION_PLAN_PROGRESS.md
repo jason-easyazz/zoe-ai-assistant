@@ -44,9 +44,9 @@ Implementing high-impact improvements from the architecture review to fix core f
 4. ✅ Rebuilt and restarted zoe-auth service
 
 **Files Modified**:
-- `/home/pi/zoe/services/zoe-auth/Dockerfile` - Added curl to dependencies
-- `/home/pi/zoe/services/zoe-auth/simple_main.py` - Fixed duplicate health endpoints
-- `/home/pi/zoe/docker-compose.yml` - Added health check configuration for zoe-auth and zoe-litellm
+- `/home/zoe/assistant/services/zoe-auth/Dockerfile` - Added curl to dependencies
+- `/home/zoe/assistant/services/zoe-auth/simple_main.py` - Fixed duplicate health endpoints
+- `/home/zoe/assistant/docker-compose.yml` - Added health check configuration for zoe-auth and zoe-litellm
 
 **Result**: zoe-auth health check now functional
 

@@ -119,7 +119,7 @@ Successfully implemented comprehensive project governance system for Zoe AI Assi
 ### To Commit These Changes:
 
 ```bash
-cd /home/pi/zoe
+cd /home/zoe/assistant
 
 # 1. Stage all new and modified files
 git add .gitignore

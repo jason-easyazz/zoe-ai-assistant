@@ -29,7 +29,7 @@ Phase 1 of Zoe's Progressive Web App transformation is **complete and ready for 
 - Share target API (receive content from other apps)
 - Protocol handler (web+zoe:// URLs)
 
-**Location:** `/home/pi/zoe/services/zoe-ui/dist/manifest.json`
+**Location:** `/home/zoe/assistant/services/zoe-ui/dist/manifest.json`
 
 ---
 
@@ -52,7 +52,7 @@ Phase 1 of Zoe's Progressive Web App transformation is **complete and ready for 
 - Background sync support
 - Automatic cache cleanup on update
 
-**Location:** `/home/pi/zoe/services/zoe-ui/dist/sw.js`
+**Location:** `/home/zoe/assistant/services/zoe-ui/dist/sw.js`
 
 ---
 
@@ -71,7 +71,7 @@ Phase 1 of Zoe's Progressive Web App transformation is **complete and ready for 
 - Push notification permission handling
 - Analytics tracking
 
-**Location:** `/home/pi/zoe/services/zoe-ui/dist/js/sw-registration.js`
+**Location:** `/home/zoe/assistant/services/zoe-ui/dist/js/sw-registration.js`
 
 ---
 
@@ -92,9 +92,9 @@ Phase 1 of Zoe's Progressive Web App transformation is **complete and ready for 
 - Professional glow effect
 - Optimized for all screen densities
 
-**Location:** `/home/pi/zoe/services/zoe-ui/dist/icons/`
+**Location:** `/home/zoe/assistant/services/zoe-ui/dist/icons/`
 
-**Script:** `/home/pi/zoe/scripts/utilities/generate-pwa-icons.sh`
+**Script:** `/home/zoe/assistant/scripts/utilities/generate-pwa-icons.sh`
 
 ---
 
@@ -122,7 +122,7 @@ Phase 1 of Zoe's Progressive Web App transformation is **complete and ready for 
 - Touch interface: 4 HTML files  
 - Developer interface: 2 HTML files
 
-**Script:** `/home/pi/zoe/scripts/utilities/add-pwa-meta-tags-v2.sh`
+**Script:** `/home/zoe/assistant/scripts/utilities/add-pwa-meta-tags-v2.sh`
 
 ---
 
@@ -139,7 +139,7 @@ Phase 1 of Zoe's Progressive Web App transformation is **complete and ready for 
 - Gradient background matching Zoe theme
 - Responsive layout for all devices
 
-**Location:** `/home/pi/zoe/services/zoe-ui/dist/offline.html`
+**Location:** `/home/zoe/assistant/services/zoe-ui/dist/offline.html`
 
 ---
 
@@ -156,7 +156,7 @@ Phase 1 of Zoe's Progressive Web App transformation is **complete and ready for 
 - Custom shortcut examples
 - Advanced automation recipes
 
-**Documentation:** `/home/pi/zoe/docs/guides/iOS-SHORTCUTS-INTEGRATION.md`
+**Documentation:** `/home/zoe/assistant/docs/guides/iOS-SHORTCUTS-INTEGRATION.md`
 
 **URL Schemes:**
 - `?voice=true` - Auto-start voice chat
@@ -182,7 +182,7 @@ Phase 1 of Zoe's Progressive Web App transformation is **complete and ready for 
 - Lighthouse PWA audit
 - Success criteria
 
-**Documentation:** `/home/pi/zoe/docs/guides/PWA-INSTALLATION-TESTING.md`
+**Documentation:** `/home/zoe/assistant/docs/guides/PWA-INSTALLATION-TESTING.md`
 
 ---
 
@@ -272,7 +272,7 @@ Phase 1 of Zoe's Progressive Web App transformation is **complete and ready for 
 
 ### 4. Icon Test
 ```bash
-ls -lh /home/pi/zoe/services/zoe-ui/dist/icons/
+ls -lh /home/zoe/assistant/services/zoe-ui/dist/icons/
 # Should show 14 PNG files
 
 curl https://zoe.yourname.com/manifest.json | jq .icons

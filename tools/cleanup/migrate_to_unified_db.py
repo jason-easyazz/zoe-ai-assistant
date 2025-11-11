@@ -13,8 +13,10 @@ from pathlib import Path
 
 class DatabaseMigrator:
     def __init__(self):
-        self.data_dir = Path("/home/pi/zoe/data")
-        self.backup_dir = Path("/home/pi/zoe/data/backup")
+        # Auto-detect project root (works for both Pi and Nano)
+        project_root = Path(__file__).parent.parent.parent.resolve()
+        self.data_dir = project_root / "data"
+        self.backup_dir = project_root / "data/backup"
         self.new_db_path = self.data_dir / "zoe_unified.db"
         self.old_db_path = self.data_dir / "zoe.db"
         
@@ -39,7 +41,7 @@ class DatabaseMigrator:
         print("🏗️  Creating unified database schema...")
         
         # Read schema from file
-        schema_file = Path("/home/pi/zoe/unified_schema_design.sql")
+        schema_file = project_root / "unified_schema_design.sql"
         with open(schema_file, 'r') as f:
             schema_sql = f.read()
         

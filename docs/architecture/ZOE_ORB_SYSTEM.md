@@ -13,7 +13,7 @@ The **Zoe Orb** is a persistent AI chat interface that appears on all Zoe pages 
 
 ### Component Structure
 
-**Location:** `/home/pi/zoe/services/zoe-ui/dist/components/zoe-orb.html`
+**Location:** `/home/zoe/assistant/services/zoe-ui/dist/components/zoe-orb.html`
 
 The Orb is a self-contained HTML component that includes:
 - **CSS** - All styling and animations
@@ -223,7 +223,7 @@ async def chat(request: ChatRequest):
 
 **Step 1:** Copy the component
 ```bash
-cp /home/pi/zoe/services/zoe-ui/dist/components/zoe-orb.html your-custom-page-directory/
+cp /home/zoe/assistant/services/zoe-ui/dist/components/zoe-orb.html your-custom-page-directory/
 ```
 
 **Step 2:** Add loader script to your page
@@ -246,7 +246,7 @@ fetch("/components/zoe-orb.html").then(r=>r.text()).then(h=>{
 
 ### To Modify Orb Globally
 
-**Edit:** `/home/pi/zoe/services/zoe-ui/dist/components/zoe-orb.html`
+**Edit:** `/home/zoe/assistant/services/zoe-ui/dist/components/zoe-orb.html`
 
 **Changes auto-apply to:**
 - All pages that dynamically load the component

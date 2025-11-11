@@ -8,10 +8,13 @@ Analyzes and organizes ALL files in the root directory according to project rule
 import os
 import json
 from pathlib import Path
+
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 from datetime import datetime
 
 class RootCleaner:
-    def __init__(self, root_path="/home/pi/zoe"):
+    def __init__(self, root_path=None):
         self.root = Path(root_path)
         self.report = {
             "scripts_to_move": [],

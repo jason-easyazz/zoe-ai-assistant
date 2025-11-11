@@ -5,8 +5,8 @@
 
 set -e
 
-LOG_FILE="/home/pi/zoe/data/disk_monitor.log"
-ALERT_FILE="/home/pi/zoe/data/disk_alerts.log"
+LOG_FILE="/home/zoe/assistant/data/disk_monitor.log"
+ALERT_FILE="/home/zoe/assistant/data/disk_alerts.log"
 
 # Thresholds
 DISK_WARNING_PERCENT=70
@@ -49,7 +49,7 @@ check_disk_usage() {
 
 # Check backup directory size
 check_backup_size() {
-    local backup_dir="/home/pi/zoe/data/backups"
+    local backup_dir="/home/zoe/assistant/data/backups"
     if [ -d "$backup_dir" ]; then
         local size_mb=$(du -sm "$backup_dir" | cut -f1)
         local file_count=$(find "$backup_dir" -type f | wc -l)
@@ -134,10 +134,10 @@ main() {
     # If any critical issues found, trigger cleanup
     if [ $disk_status -eq 2 ]; then
         echo -e "${RED}⚠️  CRITICAL: Running emergency cleanup!${NC}"
-        /home/pi/zoe/scripts/maintenance/emergency_cleanup.sh
+        /home/zoe/assistant/scripts/maintenance/emergency_cleanup.sh
     elif [ $disk_status -eq 1 ] || [ $backup_status -eq 1 ]; then
         echo -e "${YELLOW}⚠️  WARNING: Consider running cleanup${NC}"
-        echo "  Run: /home/pi/zoe/scripts/maintenance/emergency_cleanup.sh"
+        echo "  Run: /home/zoe/assistant/scripts/maintenance/emergency_cleanup.sh"
     else
         echo -e "${GREEN}✅ All disk space checks passed${NC}"
     fi

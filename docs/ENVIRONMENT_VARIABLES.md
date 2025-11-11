@@ -66,7 +66,7 @@ Environment="MEMORY_DB_PATH=/app/data/memory.db"
 
 ## Shell/Local Development
 
-Create a `.env` file in `/home/pi/zoe/services/zoe-core/`:
+Create a `.env` file in `/home/zoe/assistant/services/zoe-core/`:
 
 ```bash
 # .env

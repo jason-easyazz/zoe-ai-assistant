@@ -163,12 +163,12 @@ routers/
 **Current Issue:** Two paths to same database
 ```
 /app/data/zoe.db           # Via ./data:/app/data
-/home/pi/zoe/data/zoe.db   # Via /home/pi/zoe:/home/pi/zoe
+/home/zoe/assistant/data/zoe.db   # Via /home/zoe/assistant:/home/zoe/assistant
 ```
 
 **Solution:**
 1. Use ONLY `/app/data/zoe.db` for database access
-2. Keep `/home/pi/zoe` mount for code/config only
+2. Keep `/home/zoe/assistant` mount for code/config only
 3. Ensure `DATABASE_PATH=/app/data/zoe.db` in all routers
 4. Update all routers to use env var, not hardcoded paths
 

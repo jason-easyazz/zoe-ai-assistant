@@ -18,7 +18,7 @@
 
 ### Code Changes
 
-**File**: `/home/pi/zoe/services/mem-agent/enhanced_mem_agent_service.py`
+**File**: `/home/zoe/assistant/services/mem-agent/enhanced_mem_agent_service.py`
 
 **Before** (Lines 198-210):
 ```python
@@ -50,7 +50,7 @@ response = await client.post(
 )
 ```
 
-**File**: `/home/pi/zoe/services/mem-agent/requirements.txt`
+**File**: `/home/zoe/assistant/services/mem-agent/requirements.txt`
 
 Added missing dependency:
 ```python
@@ -148,11 +148,11 @@ INFO:__main__:Processed by 1 experts, 1 actions executed
 
 ## 📋 Files Modified
 
-1. `/home/pi/zoe/services/mem-agent/enhanced_mem_agent_service.py`
+1. `/home/zoe/assistant/services/mem-agent/enhanced_mem_agent_service.py`
    - Updated `_add_to_list_with_retry()` method
    - Fixed API endpoint and payload format
 
-2. `/home/pi/zoe/services/mem-agent/requirements.txt`
+2. `/home/zoe/assistant/services/mem-agent/requirements.txt`
    - Added `tenacity==8.2.3`
 
 3. Docker Container

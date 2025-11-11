@@ -35,11 +35,14 @@ def test_phrase(phrase, user_id):
             data = r.json()
             response = data.get("response", "")
             
-            # Check if action was executed (look for ✅ or action indicators)
-            actions_executed = ("✅ Added" in response or 
+            # Check if action was executed (look for Executed, tool calls, or action indicators)
+            actions_executed = ("Executed" in response or 
+                              "<tool_call>" in response or  # Hermes-style (Qwen)
+                              "[TOOL_CALL:" in response or  # Legacy format
+                              "✅ Added" in response or 
                               "✅ Created" in response or
                               "Created event" in response or
-                              "Added" in response and "list" in response)
+                              "successfully" in response.lower())
             
             return {
                 "success": True,

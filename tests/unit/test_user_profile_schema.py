@@ -6,9 +6,13 @@ Tests for the compatibility profile system
 
 import pytest
 import sys
+from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 from datetime import datetime
 
-sys.path.insert(0, '/home/pi/zoe/services/zoe-core')
+sys.path.insert(0, str(PROJECT_ROOT / "services/zoe-core"))
 
 from user_profile_schema import (
     UserCompatibilityProfile,

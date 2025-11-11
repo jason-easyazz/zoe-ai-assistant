@@ -72,7 +72,7 @@ Successfully completed **Phase 1** of the architecture improvement plan with foc
 | IMPLEMENTATION_SUMMARY.md | 240 | Overall plan |
 | ACTION_PLAN_PROGRESS.md | 310 | Progress tracking |
 
-All saved in `/home/pi/zoe/docs/architecture/`
+All saved in `/home/zoe/assistant/docs/architecture/`
 
 ---
 

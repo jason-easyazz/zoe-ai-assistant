@@ -11,12 +11,15 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 import tempfile
 import random
 import string
 
 # Add the services directory to the path
-sys.path.append('/home/pi/zoe/services/zoe-core')
+sys.path.append(str(PROJECT_ROOT / "services/zoe-core"))
 
 from light_rag_memory import LightRAGMemorySystem
 
@@ -25,7 +28,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/home/pi/zoe/logs/light_rag_benchmarks.log'),
+        logging.FileHandler(str(PROJECT_ROOT / "logs/light_rag_benchmarks.log")),
         logging.StreamHandler()
     ]
 )
@@ -34,7 +37,7 @@ logger = logging.getLogger(__name__)
 class LightRAGBenchmarks:
     """Comprehensive benchmark suite for Light RAG system"""
     
-    def __init__(self, db_path="/home/pi/zoe/data/memory.db"):
+    def __init__(self, db_path=str(PROJECT_ROOT / "data" / "memory.db")):
         self.db_path = db_path
         self.results = {}
         self.light_rag_system = None
@@ -358,7 +361,7 @@ class LightRAGBenchmarks:
     def save_results(self):
         """Save benchmark results to file"""
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        results_file = f"/home/pi/zoe/logs/light_rag_benchmarks_{timestamp}.json"
+        results_file = fstr(PROJECT_ROOT / "logs/light_rag_benchmarks_{timestamp}.json")
         
         with open(results_file, 'w') as f:
             json.dump(self.results, f, indent=2)
@@ -385,7 +388,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='Light RAG Performance Benchmarks')
-    parser.add_argument('--db-path', default='/home/pi/zoe/data/memory.db',
+    parser.add_argument('--db-path', default=str(PROJECT_ROOT / "data" / "memory.db"),
                        help='Path to memory database')
     parser.add_argument('--quick', action='store_true',
                        help='Run quick benchmarks with smaller datasets')

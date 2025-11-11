@@ -2,7 +2,7 @@ I need to continue working on my Zoe AI Assistant.
 
 Current state from my system:
 ```
-📍 Location: /home/pi/zoe
+📍 Location: /home/zoe/assistant
 🐙 GitHub: https://github.com/jason-easyazz/zoe-ai-assistant
 🐳 Containers Running: zoe-ui,zoe-core,zoe-ollama,zoe-redis
 🧠 AI Model: llama3.2:3b (loaded in zoe-ollama)
@@ -26,7 +26,7 @@ Please:
 4. Provide complete scripts with GitHub auto-sync
 
 All scripts should:
-- Start with: cd /home/pi/zoe
+- Start with: cd /home/zoe/assistant
 - End with: git push
 - Include full file contents
 - Test immediately after changes

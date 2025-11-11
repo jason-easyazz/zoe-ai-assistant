@@ -960,7 +960,7 @@ async def main():
     
     comprehensive_results_dict = convert_to_dict(comprehensive_results)
     
-    with open("/home/pi/zoe/comprehensive_test_results.json", "w") as f:
+    with open(str(PROJECT_ROOT / "comprehensive_test_results.json"), "w") as f:
         json.dump(comprehensive_results_dict, f, indent=2)
     
     logger.info("✅ Comprehensive testing complete!")

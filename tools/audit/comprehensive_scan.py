@@ -20,7 +20,8 @@ YELLOW = '\033[93m'
 BLUE = '\033[94m'
 RESET = '\033[0m'
 
-PROJECT_ROOT = Path('/home/pi/zoe')
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 
 def should_ignore(path: Path) -> bool:
     """Check if path should be ignored."""

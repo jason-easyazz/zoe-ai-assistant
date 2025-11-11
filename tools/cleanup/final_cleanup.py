@@ -6,7 +6,8 @@ Final comprehensive cleanup - organize all scattered files
 from pathlib import Path
 import shutil
 
-PROJECT_ROOT = Path("/home/pi/zoe")
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 
 # Essential docs to keep in root
 KEEP_IN_ROOT = [

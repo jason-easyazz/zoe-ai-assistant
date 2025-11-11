@@ -83,8 +83,8 @@ Created `migrate_lists_items.py` to:
 
 ## Files Modified
 
-1. `/home/pi/zoe/services/zoe-core/routers/lists.py` - Updated endpoints and schema
-2. `/home/pi/zoe/services/zoe-core/migrate_lists_items.py` - Migration script (can be deleted after verification)
+1. `/home/zoe/assistant/services/zoe-core/routers/lists.py` - Updated endpoints and schema
+2. `/home/zoe/assistant/services/zoe-core/migrate_lists_items.py` - Migration script (can be deleted after verification)
 
 ## Testing
 
@@ -93,7 +93,7 @@ Created `migrate_lists_items.py` to:
 curl -s 'http://localhost:8000/api/lists/personal_todos?user_id=default' | jq '.lists[0]'
 
 # Verify list_items table has data
-sqlite3 /home/pi/zoe/data/zoe.db "SELECT COUNT(*) FROM list_items"
+sqlite3 /home/zoe/assistant/data/zoe.db "SELECT COUNT(*) FROM list_items"
 ```
 
 ## Impact

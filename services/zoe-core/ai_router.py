@@ -181,7 +181,7 @@ Technical Expertise:
 
 Current System:
 - Platform: Raspberry Pi 5 (ARM64, 8GB RAM)
-- Location: /home/pi/zoe
+- Location: /home/zoe/assistant
 - Services: zoe-core (FastAPI), zoe-ui (Nginx), zoe-ollama, zoe-redis
 - Ports: API=8000, UI=8080, Ollama=11434, Redis=6379
 

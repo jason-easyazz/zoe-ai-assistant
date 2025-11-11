@@ -8,6 +8,9 @@ import os
 import re
 from pathlib import Path
 
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
 def fix_router_file(filepath: Path) -> bool:
     """Fix a single router file's database paths"""
     
@@ -20,8 +23,8 @@ def fix_router_file(filepath: Path) -> bool:
     # Check if os is already imported
     has_os_import = re.search(r'^import os$', content, re.MULTILINE)
     
-    # Pattern 1: DB_PATH = "/app/data/zoe.db" or "/home/pi/zoe/data/zoe.db"
-    pattern1 = r'(DB_PATH|DATABASE_PATH|MEMORY_DB_PATH|LEGACY_DB_PATH)\s*=\s*"(/app/data/|/home/pi/zoe/data/)[^"]*\.db"'
+    # Pattern 1: DB_PATH = "/app/data/zoe.db" or "/home/pi/zoe/data/zoe.db" or any hardcoded path
+    pattern1 = r'(DB_PATH|DATABASE_PATH|MEMORY_DB_PATH|LEGACY_DB_PATH)\s*=\s*"(/app/data/|/home/zoe/assistant/data/|/home/zoe/assistant/data/)[^"]*\.db"'
     matches1 = list(re.finditer(pattern1, content))
     
     if matches1:
@@ -62,7 +65,7 @@ def fix_router_file(filepath: Path) -> bool:
 def main():
     """Fix all routers in the routers directory"""
     
-    routers_dir = Path("/home/pi/zoe/services/zoe-core/routers")
+    routers_dir = PROJECT_ROOT / "services/zoe-core/routers"
     
     print("=" * 70)
     print("🔧 MASS FIX: Router Database Paths")

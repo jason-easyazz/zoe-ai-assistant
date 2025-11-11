@@ -219,11 +219,13 @@
             
             // Remove user_id query parameters (legacy cleanup) and fix malformed URLs
             if (typeof urlString === 'string') {
-                // FORCE HTTPS: Convert any http:// to https:// to prevent mixed content
-                if (urlString.startsWith('http://')) {
+                // Use same protocol as current page (don't force HTTPS if on HTTP/local)
+                // Only convert if we're on HTTPS and URL is HTTP (mixed content prevention)
+                if (window.location.protocol === 'https:' && urlString.startsWith('http://')) {
                     urlString = urlString.replace(/^http:\/\//, 'https://');
-                    console.log('🔒 Forced HTTP → HTTPS:', urlString);
+                    console.log('🔒 Forced HTTP → HTTPS (mixed content prevention):', urlString);
                 }
+                // If on HTTP/local, keep HTTP (allows self-signed certs to work)
                 
                 // NOTE: DO NOT remove user_id parameter - it's required for user isolation!
                 // Legacy code that was stripping user_id has been removed.
@@ -235,7 +237,12 @@
                 if (urlString.startsWith('https://')) {
                     console.log('✅ Final HTTPS URL:', urlString);
                 } else if (urlString.startsWith('http://')) {
-                    console.error('❌ ERROR: URL still HTTP after processing:', urlString);
+                    // HTTP is fine if we're on HTTP (local/self-signed certs)
+                    if (window.location.protocol === 'http:') {
+                        console.log('✅ Final HTTP URL (matches page protocol):', urlString);
+                    } else {
+                        console.warn('⚠️ HTTP URL on HTTPS page (may cause mixed content):', urlString);
+                    }
                 } else {
                     console.log('📍 Final relative URL:', urlString);
                 }

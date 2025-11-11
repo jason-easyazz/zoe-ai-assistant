@@ -6,7 +6,7 @@
 WARN_THRESHOLD=80
 CRIT_THRESHOLD=90
 LOG_FILE="/var/log/disk-monitor.log"
-ALERT_LOG="/home/pi/zoe/logs/disk-alerts.log"
+ALERT_LOG="/home/zoe/assistant/logs/disk-alerts.log"
 
 # Ensure log directory exists
 mkdir -p "$(dirname "$ALERT_LOG")"

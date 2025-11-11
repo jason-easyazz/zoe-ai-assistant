@@ -8,7 +8,8 @@ from pathlib import Path
 from datetime import datetime
 import shutil
 
-PROJECT_ROOT = Path("/home/pi/zoe")
+# Auto-detect project root (works for both Pi and Nano)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 
 # Essential docs to keep as-is
 KEEP_AS_IS = [
@@ -215,7 +216,7 @@ All services running on Docker with health checks:
 
 ### Quick Start
 ```bash
-cd /home/pi/zoe
+cd PROJECT_ROOT
 ./start-zoe.sh
 ```
 
@@ -242,13 +243,13 @@ docker ps
 docker logs zoe-core --tail 50
 
 # Run system audit
-python3 /home/pi/zoe/comprehensive_audit.py
+python3 PROJECT_ROOT/comprehensive_audit.py
 ```
 
 ### Backup
 ```bash
 # Create backup
-tar -czf zoe_backup_$(date +%Y%m%d).tar.gz /home/pi/zoe/data/
+tar -czf zoe_backup_$(date +%Y%m%d).tar.gz PROJECT_ROOT/data/
 
 # Restore from backup
 tar -xzf zoe_backup_YYYYMMDD.tar.gz -C /
@@ -405,7 +406,7 @@ def generate_report():
     print(f"  - Old docs: Safely archived")
     
     print("\n📁 New Documentation Structure:")
-    print("  /home/pi/zoe/")
+    print("  PROJECT_ROOT/")
     print("  ├── README.md (main docs)")
     print("  ├── QUICK-START.md")
     print("  ├── CHANGELOG.md")

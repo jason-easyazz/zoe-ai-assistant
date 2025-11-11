@@ -16,9 +16,11 @@ class ModelManager:
     """Manage Ollama models and LoRA adapters"""
     
     def __init__(self):
-        self.adapters_dir = Path("/home/pi/zoe/models/adapters")
+        # Auto-detect project root (works for both Pi and Nano)
+        project_root = Path(__file__).parent.parent.parent.resolve()
+        self.adapters_dir = project_root / "models/adapters"
         self.adapters_dir.mkdir(parents=True, exist_ok=True)
-        self.config_path = Path("/home/pi/zoe/config/models.json")
+        self.config_path = project_root / "config/models.json"
     
     def list_models(self):
         """List all available Ollama models"""
@@ -97,7 +99,8 @@ class ModelManager:
     
     def set_default(self, model_name: str):
         """Set default model for Zoe"""
-        config_file = Path("/home/pi/zoe/config/default_model.txt")
+        project_root = Path(__file__).parent.parent.parent.resolve()
+        config_file = project_root / "config/default_model.txt"
         config_file.parent.mkdir(parents=True, exist_ok=True)
         
         config_file.write_text(model_name)
@@ -132,7 +135,8 @@ class ModelManager:
         
         # Default model
         default_model = "llama3.2-1b"
-        config_file = Path("/home/pi/zoe/config/default_model.txt")
+        project_root = Path(__file__).parent.parent.parent.resolve()
+        config_file = project_root / "config/default_model.txt"
         if config_file.exists():
             default_model = config_file.read_text().strip()
         

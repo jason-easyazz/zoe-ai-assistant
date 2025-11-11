@@ -72,7 +72,7 @@ result = await orchestrator.orchestrate(request, user_id)
 ---
 
 ### Layer 2: Architecture Tests (Detection)
-**File**: `/home/pi/zoe/test_architecture.py`
+**File**: `/home/zoe/assistant/test_architecture.py`
 
 **What It Tests**:
 1. Single chat router only
@@ -95,7 +95,7 @@ result = await orchestrator.orchestrate(request, user_id)
 ---
 
 ### Layer 3: Intelligent Architecture Validator (Detailed Check)
-**File**: `/home/pi/zoe/tools/audit/validate_intelligent_architecture.py`
+**File**: `/home/zoe/assistant/tools/audit/validate_intelligent_architecture.py`
 
 **What It Does**:
 - Deep analysis of chat.py
@@ -108,7 +108,7 @@ result = await orchestrator.orchestrate(request, user_id)
 ---
 
 ### Layer 4: Pre-Commit Hook (Enforcement)
-**File**: `/home/pi/zoe/.git/hooks/pre-commit`
+**File**: `/home/zoe/assistant/.git/hooks/pre-commit`
 
 **What It Does**:
 1. Runs structure enforcement

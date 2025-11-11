@@ -15,7 +15,11 @@ from datetime import datetime
 class StorageManager:
     """Storage monitoring and safe optimization"""
     
-    def __init__(self, zoe_root: str = "/home/pi/zoe"):
+    def __init__(self, zoe_root: str = None):
+        # Auto-detect project root if not provided (works for both Pi and Nano)
+        if zoe_root is None:
+            from pathlib import Path
+            zoe_root = str(Path(__file__).parent.parent.parent.resolve())
         self.zoe_root = zoe_root
         self.data_dir = f"{zoe_root}/data"
     

@@ -16,7 +16,7 @@ import sys
 import os
 
 # Add the zoe-core path to import the AI client
-sys.path.append('/home/pi/zoe/services/zoe-core')
+sys.path.append('/home/zoe/assistant/services/zoe-core')
 
 async def demonstrate_zoe_awareness():
     """Demonstrate that Zoe is truly self-aware"""

@@ -19,15 +19,15 @@
 
 ### ✅ CORRECT Location (PRODUCTION)
 ```
-/home/pi/zoe/data/zoe.db
-/home/pi/zoe/data/memory.db
-/home/pi/zoe/data/training.db
+/home/zoe/assistant/data/zoe.db
+/home/zoe/assistant/data/memory.db
+/home/zoe/assistant/data/training.db
 ```
 
 ### ❌ NEVER Use These Locations
 ```
-/home/pi/zoe-clean/data/          # DELETED - DO NOT RECREATE
-/home/pi/zoe_backup/data/         # BACKUP ONLY - READ ONLY
+/home/zoe/assistant-clean/data/          # DELETED - DO NOT RECREATE
+/home/zoe/assistant_backup/data/         # BACKUP ONLY - READ ONLY
 /tmp/                              # TEMPORARY - NEVER PRODUCTION
 ```
 
@@ -39,13 +39,13 @@
 **ALL code MUST use environment variable:**
 ```python
 import os
-db_path = os.getenv("DATABASE_PATH", "/home/pi/zoe/data/zoe.db")
+db_path = os.getenv("DATABASE_PATH", "/home/zoe/assistant/data/zoe.db")
 ```
 
 **NEVER hardcode paths:**
 ```python
 # ❌ FORBIDDEN
-db_path = "/home/pi/zoe/data/zoe.db"
+db_path = "/home/zoe/assistant/data/zoe.db"
 db_path = "/app/data/zoe.db"
 ```
 
@@ -53,7 +53,7 @@ db_path = "/app/data/zoe.db"
 **Before ANY database modification:**
 ```bash
 # Automatic backup with timestamp
-cp /home/pi/zoe/data/zoe.db /home/pi/zoe/data/backups/zoe.db.$(date +%Y%m%d-%H%M%S)
+cp /home/zoe/assistant/data/zoe.db /home/zoe/assistant/data/backups/zoe.db.$(date +%Y%m%d-%H%M%S)
 ```
 
 ### Rule 3: User Data Protection
@@ -68,14 +68,14 @@ DROP TABLE users;
 ### Rule 4: Migration Logging
 **ALL schema changes MUST be logged:**
 ```bash
-echo "$(date): Migration XYZ applied" >> /home/pi/zoe/data/migration.log
+echo "$(date): Migration XYZ applied" >> /home/zoe/assistant/data/migration.log
 ```
 
 ### Rule 5: Database File Permissions
 **Production databases are READ-ONLY for non-root:**
 ```bash
-chmod 644 /home/pi/zoe/data/*.db
-chown pi:pi /home/pi/zoe/data/*.db
+chmod 644 /home/zoe/assistant/data/*.db
+chown pi:pi /home/zoe/assistant/data/*.db
 ```
 
 ---
@@ -83,7 +83,7 @@ chown pi:pi /home/pi/zoe/data/*.db
 ## 🔧 AUTOMATED SAFEGUARDS
 
 ### 1. Pre-Commit Hook (ACTIVE)
-Location: `/home/pi/zoe/.git/hooks/pre-commit`
+Location: `/home/zoe/assistant/.git/hooks/pre-commit`
 
 Checks:
 - ✅ No hardcoded database paths
@@ -91,23 +91,23 @@ Checks:
 - ✅ No deletion of critical tables
 
 ### 2. Automatic Backup Script
-Location: `/home/pi/zoe/scripts/maintenance/auto_backup.sh`
+Location: `/home/zoe/assistant/scripts/maintenance/auto_backup.sh`
 
 Schedule: Every 6 hours via cron
 ```bash
-0 */6 * * * /home/pi/zoe/scripts/maintenance/auto_backup.sh
+0 */6 * * * /home/zoe/assistant/scripts/maintenance/auto_backup.sh
 ```
 
 ### 3. Database Integrity Check
-Location: `/home/pi/zoe/scripts/maintenance/check_db_integrity.sh`
+Location: `/home/zoe/assistant/scripts/maintenance/check_db_integrity.sh`
 
 Runs: Daily at 2 AM
 ```bash
-0 2 * * * /home/pi/zoe/scripts/maintenance/check_db_integrity.sh
+0 2 * * * /home/zoe/assistant/scripts/maintenance/check_db_integrity.sh
 ```
 
 ### 4. User Count Monitor
-Location: `/home/pi/zoe/scripts/maintenance/monitor_users.sh`
+Location: `/home/zoe/assistant/scripts/maintenance/monitor_users.sh`
 
 Alerts if user count drops below 5
 
@@ -124,17 +124,17 @@ Alerts if user count drops below 5
 
 2. **Backup Current State**
    ```bash
-   cp /home/pi/zoe/data/zoe.db /home/pi/zoe/data/zoe.db.emergency-$(date +%Y%m%d-%H%M%S)
+   cp /home/zoe/assistant/data/zoe.db /home/zoe/assistant/data/zoe.db.emergency-$(date +%Y%m%d-%H%M%S)
    ```
 
 3. **Restore Users**
    ```bash
-   sqlite3 /home/pi/zoe/data/zoe.db < /home/pi/zoe/scripts/setup/create_users.sql
+   sqlite3 /home/zoe/assistant/data/zoe.db < /home/zoe/assistant/scripts/setup/create_users.sql
    ```
 
 4. **Verify Users**
    ```bash
-   sqlite3 /home/pi/zoe/data/zoe.db "SELECT user_id, username, role FROM users;"
+   sqlite3 /home/zoe/assistant/data/zoe.db "SELECT user_id, username, role FROM users;"
    ```
 
 5. **Restart Services**
@@ -187,19 +187,19 @@ docker exec zoe-core env | grep DATABASE_PATH
 
 ### Check User Count
 ```bash
-sqlite3 /home/pi/zoe/data/zoe.db "SELECT COUNT(*) FROM users WHERE user_id != 'system';"
+sqlite3 /home/zoe/assistant/data/zoe.db "SELECT COUNT(*) FROM users WHERE user_id != 'system';"
 # Should show: 5 or more
 ```
 
 ### Check Database Size
 ```bash
-ls -lh /home/pi/zoe/data/zoe.db
+ls -lh /home/zoe/assistant/data/zoe.db
 # Should be > 1MB
 ```
 
 ### Check Last Backup
 ```bash
-ls -lt /home/pi/zoe/data/backups/ | head -5
+ls -lt /home/zoe/assistant/data/backups/ | head -5
 # Should show recent backups
 ```
 
