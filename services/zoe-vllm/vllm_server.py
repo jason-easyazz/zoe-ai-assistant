@@ -9,7 +9,6 @@ ENHANCEMENTS:
 - Detailed metrics (full observability)
 """
 from vllm import LLM, SamplingParams
-from vllm.model_executor.parallel_utils.parallel_state import destroy_model_parallel
 import torch
 import asyncio
 from fastapi import FastAPI, HTTPException
@@ -41,7 +40,7 @@ class VLLMModelServer:
             "llama-3.2-3b": {
                 "path": "/models/llama-3.2-3b-awq",
                 "quantization": "awq",
-                "gpu_memory_utilization": 0.15,  # 2GB
+                "gpu_memory_utilization": 0.35,  # ~5GB total (model + KV cache)
                 "max_model_len": 4096,
                 "purpose": "fast_conversation",
                 "description": "Fast conversation, voice responses"
@@ -49,7 +48,7 @@ class VLLMModelServer:
             "qwen2.5-coder-7b": {
                 "path": "/models/qwen2.5-coder-7b-awq",
                 "quantization": "awq",
-                "gpu_memory_utilization": 0.30,  # 4.5GB
+                "gpu_memory_utilization": 0.50,  # ~8GB total (model + KV cache)
                 "max_model_len": 8192,
                 "purpose": "tool_calling",
                 "description": "Tool calling, Home Assistant, structured output"
@@ -57,7 +56,7 @@ class VLLMModelServer:
             "qwen2-vl-7b": {
                 "path": "/models/qwen2-vl-7b-awq",
                 "quantization": "awq",
-                "gpu_memory_utilization": 0.35,  # 5GB
+                "gpu_memory_utilization": 0.50,  # ~8GB total (model + KV cache)
                 "max_model_len": 4096,
                 "purpose": "vision",
                 "description": "Vision analysis, photo understanding"
@@ -268,15 +267,16 @@ class VLLMModelServer:
     
     async def co_load_primary_models(self):
         """
-        Load both primary models at startup
-        Total: 6.5GB (safe on 16GB)
+        Load primary model at startup (fast conversation)
+        Other models load on-demand to save memory
         """
-        logger.info("🚀 Co-loading primary models...")
+        logger.info("🚀 Loading primary model...")
         
+        # Only load Llama-3.2-3B at startup (~5GB total)
+        # Qwen models will load on-demand when needed
         await self.load_model("llama-3.2-3b")
-        await self.load_model("qwen2.5-coder-7b")
         
-        logger.info("✅ Primary models ready (6.5GB active, 9.5GB free)")
+        logger.info("✅ Primary model ready (~5GB active, 11GB free for on-demand loading)")
     
     async def swap_to_vision(self):
         """Swap to vision when image uploaded"""

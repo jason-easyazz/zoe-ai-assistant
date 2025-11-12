@@ -226,3 +226,4 @@ async def call_ollama_streaming(prompt: str, **kwargs) -> AsyncGenerator[str, No
     async for token in provider.generate_stream(prompt, **kwargs):
         yield token
 
+
