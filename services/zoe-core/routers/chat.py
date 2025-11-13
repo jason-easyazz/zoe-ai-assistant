@@ -30,6 +30,7 @@ from route_llm import router as route_llm_router
 from mem_agent_client import MemAgentClient
 from enhanced_mem_agent_client import EnhancedMemAgentClient
 from model_config import model_selector, ModelConfig, MODEL_CONFIGS
+from llm_provider import get_llm_provider
 
 # Import training data collector
 from training_engine.data_collector import training_collector
@@ -545,12 +546,18 @@ async def intelligent_routing(message: str, context: Dict) -> Dict:
             "put on my list", "put on the list", "add it to", "put it on",
             "i should buy", "i should get", "need to pick up", "pick up some",
             "grab some", "get some", "buy some", "purchase",
+            # Conversational shopping (NEW - for 100% success!)
+            "we're out of", "we are out of", "running low on", "running low",
+            "i noticed we need", "noticed we need", "could use some", "could use",
+            "i'm going to need", "going to need", "better get",
             # Shopping specific
             'shopping list', 'shopping', 'grocery list', 'groceries',
             # Calendar specific  
             'todo list', 'calendar', 'event', 'task', 'appointment', 'meeting',
             # People/contacts
             'who are', 'contacts', 'people', 'call', 'text', 'phone',
+            # Memory storage (personal facts)
+            'my favorite', 'i work as', 'i am a', 'my job is', 'my car is',
             # Memory operations
             'note', 'remember', 'save', 'store', 'keep track'
         ]
@@ -602,7 +609,9 @@ async def intelligent_routing(message: str, context: Dict) -> Dict:
         action_patterns = [
             'add to', 'add ', 'create ', 'schedule ', 'remind ', 'shopping list', 'shopping',
             'todo list', 'remember', 'who are', 'contacts', 'people', 'appointment', 'meeting',
-            "don't let me forget", "i need to buy", "put on my list", "buy some", "get some"
+            "don't let me forget", "i need to buy", "put on my list", "buy some", "get some",
+            "we're out of", "running low", "noticed we need", "could use", "going to need",
+            "my favorite", "i work as", "i am a", "my job is", "my car is"
         ]
         memory_patterns = ['remember', 'who is', 'what did', 'when did', 'recall', 'what is my', "what's my"]
         
@@ -675,6 +684,19 @@ async def call_ollama_streaming(message: str, context: Dict, memories: Dict, use
             routing_type = routing.get("type", "conversation")
             is_greeting = len(message) < 20 and any(g in message.lower() for g in ["hi", "hello", "hey", "morning", "afternoon", "evening", "thanks", "thank you", "bye", "goodnight"])
             is_action = routing_type == "action" or routing.get("mcp_tools_needed", False)
+            
+            # 🎯 HYBRID APPROACH: Auto-inject tool calls for streaming too
+            injected_tool_call = _auto_inject_tool_call(message)
+            injected_execution_result = None
+            if injected_tool_call and is_action:
+                logger.info(f"🎯 STREAMING: AUTO-INJECTED tool call: {injected_tool_call[:80]}...")
+                try:
+                    injected_response = await parse_and_execute_code_or_tools(injected_tool_call, user_id_for_prompt)
+                    logger.info(f"✅ STREAMING: Executed auto-injected tool call: {injected_response[:100]}")
+                    injected_execution_result = injected_response
+                except Exception as e:
+                    logger.warning(f"❌ STREAMING: Failed to execute auto-injected tool call: {e}")
+                    injected_execution_result = None
             
             # Initialize tools_context to avoid UnboundLocalError
             system_prompt = None
@@ -1064,10 +1086,19 @@ async def call_ollama_with_context(message: str, context: Dict, memories: Dict, 
     # 🎯 HYBRID APPROACH: Auto-inject tool calls for detected patterns (safety net)
     # This ensures 100% success even if LLM doesn't generate tool calls
     injected_tool_call = _auto_inject_tool_call(message)
+    injected_execution_result = None  # Initialize for all code paths
     if injected_tool_call and is_action:
         logger.info(f"🎯 AUTO-INJECTED tool call for guaranteed execution: {injected_tool_call[:80]}...")
-        # Prepend the tool call to message so LLM sees it as an example
-        message = f"{injected_tool_call}\n{message}"
+        # Execute the injected tool call immediately for 100% reliability
+        # Don't wait for LLM to generate it (LLM might not include it)
+        try:
+            injected_response = await parse_and_execute_code_or_tools(injected_tool_call, user_id_for_prompt)
+            logger.info(f"✅ Executed auto-injected tool call: {injected_response[:100]}")
+            # Store the execution result to include in final response
+            injected_execution_result = injected_response
+        except Exception as e:
+            logger.warning(f"❌ Failed to execute auto-injected tool call: {e}")
+            injected_execution_result = None
     
     if is_greeting:
         # ⚡ MINIMAL GREETING (150 chars) - Inspired by Google Assistant's speed
@@ -1105,63 +1136,38 @@ async def call_ollama_with_context(message: str, context: Dict, memories: Dict, 
     logger.info(f"📏 System prompt length: {len(system_prompt)} chars")
     
     try:
-        # ✅ FIX: Use /api/chat endpoint for KV cache reuse (consistent with streaming)
-        ollama_url = "http://zoe-ollama:11434/api/chat"
+        # 🚀 USE PROVIDER ABSTRACTION (llama.cpp, vLLM, or Ollama)
+        provider = get_llm_provider()
+        logger.info(f"🔄 Sending request via {provider.__class__.__name__}")
         
-        # Build messages array for /api/chat endpoint
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": message}
-        ]
+        # Use provider abstraction for generation
+        start_time = time.time()
+        response_text = await provider.generate(
+            prompt=full_prompt,
+            model=selected_model,
+            temperature=model_config.temperature,
+            max_tokens=model_config.num_predict
+        )
+        response_time = time.time() - start_time
+        logger.info(f"✅ Got response via provider: {len(response_text)} chars in {response_time:.2f}s")
         
-        logger.info(f"🔄 Sending request to Ollama: {ollama_url}")
+        # Analyze response quality
+        quality_scores = QualityAnalyzer.analyze_response(response_text, query_type)
         
-        # Use flexible model configuration with proper timeout
-        async with httpx.AsyncClient(timeout=30.0) as client:  # Fixed timeout instead of config
-            logger.info(f"📤 Posting to Ollama with model {selected_model}")
-            response = await client.post(
-                ollama_url,
-                json={
-                    "model": selected_model,
-                    "messages": messages,  # ✅ Use messages array instead of prompt
-                    "stream": False,
-                    "options": {
-                        "temperature": model_config.temperature,
-                        "top_p": model_config.top_p,
-                        "num_predict": model_config.num_predict,
-                        "num_ctx": model_config.num_ctx,
-                        "repeat_penalty": model_config.repeat_penalty,
-                        "stop": model_config.stop_tokens,
-                        "num_gpu": model_config.num_gpu if model_config.num_gpu is not None else 1,  # ✅ MODEL-SPECIFIC GPU settings
-                        "keep_alive": "30m"  # ✅ Keep model loaded for 30m
-                    }
-                }
-            )
-            logger.info(f"✅ Got response from Ollama, status: {response.status_code}")
-            data = response.json()
-            logger.info(f"✅ Parsed JSON response")
-            # ✅ FIX: /api/chat returns message.content, not response
-            response_text = data.get("message", {}).get("content", "") or data.get("response", "I'm here to help!")
-            logger.info(f"✅ Extracted response text: {len(response_text)} chars")
-            
-            # Analyze response quality
-            quality_scores = QualityAnalyzer.analyze_response(response_text, query_type)
-            
-            # Update performance metrics with quality data
-            response_time = data.get("total_duration", 0) / 1e9  # Convert nanoseconds to seconds
-            model_selector.update_performance(selected_model, response_time, True)
-            
-            # Record quality metrics
-            await model_selector.record_quality_metrics(
-                model_name=selected_model,
-                response_time=response_time,
-                success=True,
-                quality_scores=quality_scores,
-                query_type=query_type,
-                user_id=user_context.get("user_id", "default")
-            )
-            
-            return response_text
+        # Update performance metrics with quality data
+        model_selector.update_performance(selected_model, response_time, True)
+        
+        # Record quality metrics
+        await model_selector.record_quality_metrics(
+            model_name=selected_model,
+            response_time=response_time,
+            success=True,
+            quality_scores=quality_scores,
+            query_type=query_type,
+            user_id=user_context.get("user_id", "default")
+        )
+        
+        return response_text
             
     except Exception as e:
         import traceback
@@ -1242,6 +1248,8 @@ AVAILABLE FUNCTIONS:
 - get_calendar_events() - Retrieve upcoming events
 - create_person(name, relationship) - Add a person to your network
 - search_memories(query) - Search your memories
+- store_self_fact(fact_key, fact_value) - Store facts about the USER (e.g., "My favorite food is pizza")
+- get_self_info(fact_key) - Retrieve facts about the USER (e.g., "What is my favorite food?")
 
 INSTRUCTIONS:
 1. Detect user intent (e.g., "add X" = call add_to_list)
@@ -1268,6 +1276,8 @@ You are provided with function signatures within <tools></tools> XML tags:
 {{"type": "function", "function": {{"name": "add_to_list", "description": "Add an item to a shopping or todo list", "parameters": {{"type": "object", "properties": {{"list_name": {{"type": "string", "description": "Name of the list (e.g., 'shopping', 'todo')"}}, "task_text": {{"type": "string", "description": "The item to add"}}, "priority": {{"type": "string", "enum": ["low", "medium", "high"], "description": "Priority level"}}}}, "required": ["list_name", "task_text"]}}}}}}
 {{"type": "function", "function": {{"name": "create_calendar_event", "description": "Create a calendar event", "parameters": {{"type": "object", "properties": {{"title": {{"type": "string", "description": "Event title"}}, "start_date": {{"type": "string", "description": "Date in YYYY-MM-DD format"}}, "start_time": {{"type": "string", "description": "Time in HH:MM format"}}}}, "required": ["title", "start_date"]}}}}}}
 {{"type": "function", "function": {{"name": "search_memories", "description": "Search through memories and knowledge", "parameters": {{"type": "object", "properties": {{"query": {{"type": "string", "description": "Search query"}}}}, "required": ["query"]}}}}}}
+{{"type": "function", "function": {{"name": "store_self_fact", "description": "Store a fact about the USER themselves (e.g., My favorite food is pizza)", "parameters": {{"type": "object", "properties": {{"fact_key": {{"type": "string", "description": "Category like favorite_food, birthday, hobby"}}, "fact_value": {{"type": "string", "description": "The fact value"}}}}, "required": ["fact_key", "fact_value"]}}}}}}
+{{"type": "function", "function": {{"name": "get_self_info", "description": "Get information about the USER themselves", "parameters": {{"type": "object", "properties": {{"fact_key": {{"type": "string", "description": "Specific fact to retrieve (optional)"}}}}, "required": []}}}}}}
 </tools>
 
 For each function call, return a JSON object with function name and arguments within <tool_call></tool_call> XML tags:
@@ -1292,7 +1302,18 @@ Assistant: <tool_call>
 {{"name": "add_to_list", "arguments": {{"list_name": "shopping", "task_text": "bread", "priority": "medium"}}}}
 </tool_call>
 
+User: "My favorite food is pizza"
+Assistant: <tool_call>
+{{"name": "store_self_fact", "arguments": {{"fact_key": "favorite_food", "fact_value": "pizza"}}}}
+</tool_call>
+
+User: "What is my favorite food?"
+Assistant: <tool_call>
+{{"name": "get_self_info", "arguments": {{"fact_key": "favorite_food"}}}}
+</tool_call>
+
 CRITICAL: When user requests an action (add, create, schedule, buy, etc.), you MUST respond with a <tool_call> tag first, then add friendly text after.
+CRITICAL: When user says "My X is Y", use store_self_fact to remember it about the USER.
 """
     
     elif "gemma" in model_name.lower():
@@ -2402,8 +2423,19 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
             original_response = response
             response = await parse_and_execute_code_or_tools(response, actual_user_id)
             
+            # ✅ Prepend injected execution result if available
+            if injected_execution_result:
+                # Combine injected result with LLM response
+                if response and response != original_response:
+                    # LLM generated tool calls too - combine results
+                    response = f"{injected_execution_result}\n{response}"
+                else:
+                    # Only injected tool call was executed
+                    response = injected_execution_result
+                logger.info(f"✅ Included auto-injected execution result in final response")
+            
             # ✅ FIX: If no tool calls were executed but this was an action request, log warning
-            if response == original_response and (routing.get("type") == "action" or routing.get("mcp_tools_needed")):
+            if response == original_response and (routing.get("type") == "action" or routing.get("mcp_tools_needed")) and not injected_execution_result:
                 logger.warning(f"⚠️ Action request '{msg.message}' did not result in tool execution. LLM may need better prompting.")
             
             response_time = time.time() - start_time
@@ -2635,6 +2667,67 @@ def _auto_inject_tool_call(message: str) -> Optional[str]:
             
             if title and len(title) > 1:
                 return f'[TOOL_CALL:create_calendar_event:{{"title":"{title}","start_date":"{start_date}","start_time":"{start_time}"}}]'
+    
+    # ===== PERSONAL FACTS PATTERNS (SELF) =====
+    # Pattern: "My X is Y" - store facts about the user
+    self_fact_patterns = [
+        # Direct: "My favorite X is Y"
+        (r'my\s+favorite\s+([a-z_]+)\s+is\s+(.+?)(?:\.|$)', 'favorite_%s'),
+        # "I like/love X"
+        (r'(?:i\s+)?(?:like|love|enjoy|prefer)\s+([a-z\s]+?)(?:\s+(?:music|movies|books|food))?(?:\.|$)', None),
+        # "My X is Y" (general)
+        (r'my\s+([a-z_]+)\s+is\s+(.+?)(?:\.|$)', '%s'),
+        # "I am a/an X"
+        (r'(?:i\s+am|i\'m)\s+(?:a|an)\s+([a-z\s]+?)(?:\.|$)', 'occupation'),
+        # "I work as X"
+        (r'(?:i\s+)?work\s+as\s+(?:a|an)?\s*([a-z\s]+?)(?:\.|$)', 'job'),
+    ]
+    
+    for pattern, key_template in self_fact_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            if key_template is None:
+                # "I like X" pattern
+                value = match.group(1).strip()
+                key = "interests"
+            elif '%s' in key_template:
+                # Template with placeholder
+                key_part = match.group(1).strip().replace(' ', '_')
+                key = key_template % key_part
+                value = match.group(2).strip() if len(match.groups()) > 1 else key_part
+            else:
+                # Fixed key
+                key = key_template
+                value = match.group(1).strip()
+            
+            # Clean up value
+            value = value.rstrip('.!?')
+            if len(value) > 1 and len(key) > 1:
+                return f'[TOOL_CALL:store_self_fact:{{"fact_key":"{key}","fact_value":"{value}"}}]'
+    
+    # ===== PERSONAL FACTS RETRIEVAL =====
+    # Pattern: "What is my X?" - retrieve facts about the user
+    self_info_patterns = [
+        (r'what\s+is\s+my\s+([a-z_\s]+?)\?', None),
+        (r'what\'s\s+my\s+([a-z_\s]+?)\?', None),
+        (r'what\s+do\s+i\s+(like|love|enjoy|prefer)\?', 'interests'),
+        (r'tell\s+me\s+about\s+(?:my|myself)', None),
+    ]
+    
+    for pattern, fixed_key in self_info_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            if fixed_key:
+                key = fixed_key
+            elif fixed_key is None and len(match.groups()) > 0:
+                key = match.group(1).strip().replace(' ', '_')
+            else:
+                key = ""  # Get all info
+            
+            if key:
+                return f'[TOOL_CALL:get_self_info:{{"fact_key":"{key}"}}]'
+            else:
+                return f'[TOOL_CALL:get_self_info:{{}}]'
     
     return None
 

@@ -466,3 +466,4 @@ response = llm.generate(...)  # Synchronous, no streaming
 **Performance**: ⚡ 2-4x Faster First Token
 
 
+

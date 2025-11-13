@@ -1,6 +1,6 @@
 """
 LLM Provider Abstraction Layer
-Supports: vLLM (Jetson), Ollama (Raspberry Pi)
+Supports: llama.cpp (Jetson - primary), vLLM (Jetson - fallback), Ollama (Raspberry Pi)
 """
 import httpx
 import json
@@ -79,6 +79,67 @@ class VLLMProvider(LLMProvider):
                                 continue
         except Exception as e:
             logger.error(f"❌ vLLM streaming error: {e}")
+            raise
+
+
+class LlamaCppProvider(LLMProvider):
+    """
+    llama.cpp Provider for Jetson Orin NX
+    Production-ready, excellent GPU utilization (90%+)
+    """
+    
+    def __init__(self, base_url: str = "http://zoe-llamacpp:11434"):
+        self.base_url = base_url
+        logger.info("🚀 Using llama.cpp provider (production mode)")
+    
+    async def generate(self, prompt: str, model: str = "auto", **kwargs) -> str:
+        """Generate with llama.cpp (OpenAI-compatible API)"""
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{self.base_url}/v1/chat/completions",
+                    json={
+                        "messages": [{"role": "user", "content": prompt}],
+                        "stream": False,
+                        "temperature": kwargs.get("temperature", 0.7),
+                        "max_tokens": kwargs.get("max_tokens", 512)
+                    }
+                )
+                result = response.json()
+                return result["choices"][0]["message"]["content"]
+        except Exception as e:
+            logger.error(f"❌ llama.cpp generation error: {e}")
+            raise
+    
+    async def generate_stream(self, prompt: str, **kwargs) -> AsyncGenerator[str, None]:
+        """Stream tokens from llama.cpp"""
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}/v1/chat/completions",
+                    json={
+                        "messages": [{"role": "user", "content": prompt}],
+                        "stream": True,
+                        "temperature": kwargs.get("temperature", 0.7),
+                        "max_tokens": kwargs.get("max_tokens", 512)
+                    }
+                ) as response:
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data = line[6:]
+                            if data == "[DONE]":
+                                break
+                            try:
+                                token_data = json.loads(data)
+                                if "choices" in token_data and len(token_data["choices"]) > 0:
+                                    delta = token_data["choices"][0].get("delta", {})
+                                    if "content" in delta:
+                                        yield delta["content"]
+                            except:
+                                continue
+        except Exception as e:
+            logger.error(f"❌ llama.cpp streaming error: {e}")
             raise
 
 
@@ -180,7 +241,7 @@ def get_llm_provider(force_provider: Optional[str] = None) -> LLMProvider:
     Get LLM provider based on hardware detection or force specific provider
     
     Args:
-        force_provider: Optional["vllm", "ollama"] to override detection
+        force_provider: Optional["llamacpp", "vllm", "ollama"] to override detection
     
     Returns:
         LLMProvider instance
@@ -190,20 +251,28 @@ def get_llm_provider(force_provider: Optional[str] = None) -> LLMProvider:
     if _provider_instance is not None:
         return _provider_instance
     
+    # Check environment variable for provider override
+    import os
+    env_provider = os.getenv("LLM_PROVIDER", "").lower()
+    
     if force_provider:
         provider_type = force_provider
+    elif env_provider in ["llamacpp", "vllm", "ollama"]:
+        provider_type = env_provider
     else:
         hardware = detect_hardware()
         if hardware == "jetson":
-            provider_type = "vllm"
+            provider_type = "llamacpp"  # Primary choice for Jetson (90%+ GPU)
         else:
             provider_type = "ollama"
             logger.warning(
                 f"⚠️ Hardware detection: {hardware}, defaulting to Ollama. "
-                f"For Jetson, use vLLM for best performance."
+                f"For Jetson, use llama.cpp for best performance."
             )
     
-    if provider_type == "vllm":
+    if provider_type == "llamacpp":
+        _provider_instance = LlamaCppProvider()
+    elif provider_type == "vllm":
         _provider_instance = VLLMProvider()
     elif provider_type == "ollama":
         _provider_instance = OllamaProvider()

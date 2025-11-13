@@ -565,6 +565,37 @@ class ZoeMCPServer:
                     }
                 ),
                 Tool(
+                    name="store_self_fact",
+                    description="Store a fact about the user themselves (e.g., 'My favorite food is pizza'). Uses the unified people table with is_self=true.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "fact_key": {
+                                "type": "string",
+                                "description": "Category/key for the fact (e.g., 'favorite_food', 'birthday', 'hobbies')"
+                            },
+                            "fact_value": {
+                                "type": "string",
+                                "description": "The fact value"
+                            }
+                        },
+                        "required": ["fact_key", "fact_value"]
+                    }
+                ),
+                Tool(
+                    name="get_self_info",
+                    description="Get information about the user themselves from their self entry in people table",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "fact_key": {
+                                "type": "string",
+                                "description": "Optional: specific fact to retrieve. If omitted, returns all self info."
+                            }
+                        }
+                    }
+                ),
+                Tool(
                     name="get_collections",
                     description="Get all collections from the collections service",
                     inputSchema={
@@ -1050,6 +1081,10 @@ class ZoeMCPServer:
                     return await self._add_interaction(arguments, user_context)
                 elif name == "get_person_by_name":
                     return await self._get_person_by_name(arguments, user_context)
+                elif name == "store_self_fact":
+                    return await self._store_self_fact(arguments, user_context)
+                elif name == "get_self_info":
+                    return await self._get_self_info(arguments, user_context)
                 # NEW: Calendar Expert Tools
                 elif name == "search_calendar_events":
                     return await self._search_calendar_events(arguments, user_context)
@@ -2390,6 +2425,129 @@ class ZoeMCPServer:
                 return CallToolResult(content=[TextContent(type="text", text=f"❌ '{name}' not found")])
             except Exception as e:
                 return CallToolResult(content=[TextContent(type="text", text=f"❌ Error: {str(e)}")])
+    
+    async def _store_self_fact(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Store a fact about the user themselves"""
+        fact_key = args.get("fact_key", "")
+        fact_value = args.get("fact_value", "")
+        user_id = user_context.get("user_id", "default")
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            # Get self entry
+            cursor.execute("SELECT id, facts FROM people WHERE user_id = ? AND is_self = 1", (user_id,))
+            result = cursor.fetchone()
+            
+            if not result:
+                return CallToolResult(
+                    content=[TextContent(type="text", text=f"❌ No self entry found for user {user_id}. Please contact admin.")]
+                )
+            
+            person_id, facts_json = result
+            
+            # Parse existing facts
+            facts = json.loads(facts_json) if facts_json else {}
+            
+            # Update fact
+            facts[fact_key] = fact_value
+            
+            # Save back
+            cursor.execute("""
+                UPDATE people 
+                SET facts = ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE id = ?
+            """, (json.dumps(facts), person_id))
+            
+            conn.commit()
+            conn.close()
+            
+            return CallToolResult(
+                content=[TextContent(type="text", text=f"✅ Stored: {fact_key} = {fact_value}")]
+            )
+            
+        except Exception as e:
+            conn.close()
+            return CallToolResult(
+                content=[TextContent(type="text", text=f"❌ Error storing fact: {str(e)}")]
+            )
+    
+    async def _get_self_info(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Get information about the user themselves"""
+        fact_key = args.get("fact_key")
+        user_id = user_context.get("user_id", "default")
+        
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            # Get self entry
+            cursor.execute("""
+                SELECT name, facts, preferences, personality_traits, interests 
+                FROM people 
+                WHERE user_id = ? AND is_self = 1
+            """, (user_id,))
+            result = cursor.fetchone()
+            
+            if not result:
+                conn.close()
+                return CallToolResult(
+                    content=[TextContent(type="text", text=f"❌ No self entry found for user {user_id}")]
+                )
+            
+            name, facts_json, prefs_json, traits_json, interests_json = result
+            
+            # Parse JSON fields
+            facts = json.loads(facts_json) if facts_json else {}
+            preferences = json.loads(prefs_json) if prefs_json else {}
+            personality_traits = json.loads(traits_json) if traits_json else {}
+            interests = json.loads(interests_json) if interests_json else {}
+            
+            conn.close()
+            
+            # If specific fact requested
+            if fact_key:
+                value = facts.get(fact_key) or preferences.get(fact_key) or personality_traits.get(fact_key) or interests.get(fact_key)
+                if value:
+                    return CallToolResult(
+                        content=[TextContent(type="text", text=f"ℹ️ {fact_key}: {value}")]
+                    )
+                else:
+                    return CallToolResult(
+                        content=[TextContent(type="text", text=f"ℹ️ No information found for '{fact_key}'")]
+                    )
+            
+            # Return all self info
+            result_text = f"👤 {name} (You)\n\n"
+            
+            if facts:
+                result_text += "📝 Facts:\n"
+                for key, value in facts.items():
+                    result_text += f"  - {key}: {value}\n"
+            
+            if preferences:
+                result_text += "\n⚙️ Preferences:\n"
+                for key, value in preferences.items():
+                    result_text += f"  - {key}: {value}\n"
+            
+            if interests:
+                result_text += "\n💡 Interests:\n"
+                for key, value in interests.items():
+                    result_text += f"  - {key}: {value}\n"
+            
+            if not facts and not preferences and not interests:
+                result_text += "No information stored yet."
+            
+            return CallToolResult(
+                content=[TextContent(type="text", text=result_text.strip())]
+            )
+            
+        except Exception as e:
+            conn.close()
+            return CallToolResult(
+                content=[TextContent(type="text", text=f"❌ Error retrieving self info: {str(e)}")]
+            )
     
     async def _search_calendar_events(self, args: Dict[str, Any], user_context) -> CallToolResult:
         """Search calendar"""

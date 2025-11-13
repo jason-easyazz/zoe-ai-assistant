@@ -496,6 +496,48 @@ async def get_people(request: ToolRequest):
         logger.error(f"Error getting people: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/tools/store_self_fact")
+async def store_self_fact(request: ToolRequest):
+    """Store a fact about the user themselves"""
+    try:
+        # Get user_id from request parameters, not as attribute
+        params = dict(request)
+        user_id = params.get('user_id', 'default')
+        user_context = type('UserContext', (), {'user_id': user_id, 'username': user_id})()
+        
+        result = await mcp_server._store_self_fact(params, user_context)
+        
+        return {
+            "success": True,
+            "message": result.content[0].text,
+            "tool_name": "store_self_fact"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error storing self fact: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/tools/get_self_info")
+async def get_self_info(request: ToolRequest):
+    """Get information about the user themselves"""
+    try:
+        # Get user_id from request parameters, not as attribute
+        params = dict(request)
+        user_id = params.get('user_id', 'default')
+        user_context = type('UserContext', (), {'user_id': user_id, 'username': user_id})()
+        
+        result = await mcp_server._get_self_info(params, user_context)
+        
+        return {
+            "success": True,
+            "message": result.content[0].text,
+            "tool_name": "get_self_info"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting self info: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/tools/get_developer_tasks")
 async def get_developer_tasks(request: ToolRequest):
     """Get developer tasks"""

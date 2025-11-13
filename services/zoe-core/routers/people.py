@@ -24,19 +24,25 @@ def init_people_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # People table
+    # People table - now includes "self" entries for unified storage
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS people (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT DEFAULT 'default',
             name TEXT NOT NULL,
             relationship TEXT,
+            is_self BOOLEAN DEFAULT 0,
             birthday DATE,
             phone TEXT,
             email TEXT,
             address TEXT,
             notes TEXT,
             profile TEXT,
+            facts JSON,
+            preferences JSON,
+            important_dates JSON,
+            personality_traits JSON,
+            interests JSON,
             avatar_url TEXT,
             tags TEXT,
             metadata JSON,
@@ -45,12 +51,23 @@ def init_people_db():
         )
     """)
     
-    # Add profile column to existing tables (migration)
-    try:
-        cursor.execute("ALTER TABLE people ADD COLUMN profile TEXT")
-    except sqlite3.OperationalError:
-        # Column already exists
-        pass
+    # Migration: Add new columns to existing tables
+    migration_columns = [
+        ("profile", "TEXT"),
+        ("is_self", "BOOLEAN DEFAULT 0"),
+        ("facts", "JSON"),
+        ("preferences", "JSON"),
+        ("important_dates", "JSON"),
+        ("personality_traits", "JSON"),
+        ("interests", "JSON"),
+        ("folder_path", "TEXT")
+    ]
+    
+    for col_name, col_type in migration_columns:
+        try:
+            cursor.execute(f"ALTER TABLE people ADD COLUMN {col_name} {col_type}")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
     
     # Relationships table
     cursor.execute("""
@@ -175,6 +192,7 @@ def init_people_db():
     
     # Create indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_people_user ON people(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_people_is_self ON people(user_id, is_self)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_relationships_user ON relationships(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_timeline_person ON person_timeline(person_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_activities_person ON person_activities(person_id)")
@@ -194,6 +212,7 @@ init_people_db()
 class PersonCreate(BaseModel):
     name: str
     relationship: Optional[str] = None
+    is_self: Optional[bool] = False
     birthday: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
@@ -201,6 +220,8 @@ class PersonCreate(BaseModel):
     notes: Optional[str] = None
     avatar_url: Optional[str] = None
     tags: Optional[List[str]] = None
+    facts: Optional[Dict[str, Any]] = None
+    preferences: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
 
 class RelationshipCreate(BaseModel):
@@ -211,6 +232,94 @@ class RelationshipCreate(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 # Core People Endpoints
+
+@router.get("/self")
+async def get_self(
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    """Get the authenticated user's own profile (is_self=true entry)"""
+    user_id = session.user_id
+    
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT * FROM people 
+        WHERE user_id = ? AND is_self = 1
+        LIMIT 1
+    """, (user_id,))
+    
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row:
+        return {"self": None, "message": "No self entry found. Create one with POST /api/people"}
+    
+    # Build person dict with JSON parsing
+    person = dict(row)
+    for field in ['tags', 'facts', 'preferences', 'metadata', 'personality_traits', 'interests', 'important_dates']:
+        if field in person and person[field]:
+            try:
+                person[field] = json.loads(person[field])
+            except:
+                person[field] = {} if field != 'tags' else []
+    
+    return {"self": person}
+
+@router.patch("/self")
+async def update_self(
+    updates: Dict[str, Any],
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    """Update the authenticated user's own profile"""
+    user_id = session.user_id
+    
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Get existing self entry
+    cursor.execute("SELECT id FROM people WHERE user_id = ? AND is_self = 1", (user_id,))
+    result = cursor.fetchone()
+    
+    if not result:
+        conn.close()
+        raise HTTPException(status_code=404, detail="No self entry found. Create one with POST /api/people")
+    
+    person_id = result[0]
+    
+    # Build update query dynamically
+    allowed_fields = ['name', 'birthday', 'phone', 'email', 'address', 'notes', 'avatar_url', 
+                      'facts', 'preferences', 'personality_traits', 'interests', 'tags', 'metadata']
+    
+    update_parts = []
+    values = []
+    for key, value in updates.items():
+        if key in allowed_fields:
+            update_parts.append(f"{key} = ?")
+            # Serialize JSON fields
+            if key in ['facts', 'preferences', 'personality_traits', 'interests', 'tags', 'metadata']:
+                values.append(json.dumps(value) if value else None)
+            else:
+                values.append(value)
+    
+    if not update_parts:
+        conn.close()
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+    
+    update_parts.append("updated_at = CURRENT_TIMESTAMP")
+    values.append(person_id)
+    
+    cursor.execute(f"""
+        UPDATE people 
+        SET {', '.join(update_parts)}
+        WHERE id = ?
+    """, tuple(values))
+    
+    conn.commit()
+    conn.close()
+    
+    return {"success": True, "person_id": person_id, "updated_fields": list(updates.keys())}
 
 @router.get("")
 async def get_people(
@@ -269,14 +378,25 @@ async def create_person(
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
+    # Check if trying to create duplicate "self" entry
+    if person.is_self:
+        cursor.execute("SELECT id FROM people WHERE user_id = ? AND is_self = 1", (user_id,))
+        existing_self = cursor.fetchone()
+        if existing_self:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Self entry already exists. Use update endpoint instead.")
+    
     cursor.execute("""
-        INSERT INTO people (user_id, name, relationship, birthday, phone, email, 
-                          address, notes, avatar_url, tags, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO people (user_id, name, relationship, is_self, birthday, phone, email, 
+                          address, notes, avatar_url, tags, facts, preferences, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        user_id, person.name, person.relationship, person.birthday, person.phone,
-        person.email, person.address, person.notes, person.avatar_url,
+        user_id, person.name, person.relationship, 1 if person.is_self else 0, 
+        person.birthday, person.phone, person.email, person.address, person.notes, 
+        person.avatar_url,
         json.dumps(person.tags) if person.tags else None,
+        json.dumps(person.facts) if person.facts else None,
+        json.dumps(person.preferences) if person.preferences else None,
         json.dumps(person.metadata) if person.metadata else None
     ))
     
@@ -284,7 +404,7 @@ async def create_person(
     conn.commit()
     conn.close()
     
-    return {"person": {"id": person_id, "name": person.name, "relationship": person.relationship}}
+    return {"person": {"id": person_id, "name": person.name, "relationship": person.relationship, "is_self": person.is_self}}
 
 @router.get("/{person_id}")
 async def get_person(
