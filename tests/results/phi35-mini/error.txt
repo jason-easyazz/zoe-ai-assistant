@@ -1,0 +1,1 @@
+ERROR: phi35-mini failed to become healthy

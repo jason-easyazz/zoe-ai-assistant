@@ -1,0 +1,1959 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe AI Dashboard</title>
+    
+    <!-- Gridstack.js - Professional Dashboard Grid System (Local for Offline Support) -->
+    <link rel="stylesheet" href="lib/gridstack/gridstack.min.css" />
+    <link rel="stylesheet" href="lib/gridstack/gridstack-extra.min.css" />
+    
+    <!-- Premium Widget Styles with Advanced Responsive Design -->
+    <link rel="stylesheet" href="css/widgets-premium.css" />
+    <link rel="stylesheet" href="css/widgets-fluid.css" />
+    
+    <style>
+        /* Desktop Widget System Variables */
+        :root {
+            /* Zoe Brand Colors */
+            --primary-gradient: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            --secondary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            
+            /* Desktop-specific sizing */
+            --widget-radius: 16px;
+            --widget-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+            --widget-shadow-hover: 0 12px 40px rgba(0, 0, 0, 0.18);
+            --grid-gap: 24px;
+            --widget-min-width: 320px;
+            --widget-min-height: 240px;
+            
+            /* Desktop touch targets */
+            --touch-target: 44px;
+            --touch-large: 56px;
+            
+            /* Theme colors */
+            --background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            --surface: rgba(255, 255, 255, 0.9);
+            --surface-hover: rgba(255, 255, 255, 0.95);
+            --text-primary: #333;
+            --text-secondary: #666;
+            --border: rgba(255, 255, 255, 0.3);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: var(--background);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        /* Navigation */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold; position: relative;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+            animation: notificationDotPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 8px rgba(123, 97, 255, 0);
+            }
+        }
+        
+        @keyframes notificationDotPulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.2);
+                opacity: 0.7;
+            }
+        }
+        
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .notifications-title {
+            font-size: 18px; font-weight: 600; color: #333; margin: 0;
+        }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content {
+            padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title {
+            font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px;
+        }
+        .notification-meta {
+            font-size: 12px; color: #666; display: flex; gap: 10px;
+        }
+        .notification-time {
+            color: #7B61FF; font-weight: 500;
+        }
+        .notification-priority {
+            padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600;
+        }
+        .no-notifications {
+            text-align: center; color: #666; font-size: 14px; padding: 40px 20px;
+        }
+        
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.warning::before { background: #ea580c; }
+
+        /* Time/Date Display in Top Right */
+        .time-date-display {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time {
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        .current-date {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.2;
+        }
+
+        /* Floating Action Button for Edit Mode */
+        .fab-edit-btn {
+            position: fixed;
+            bottom: 32px;
+            right: 32px;
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: none;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            box-shadow: 0 8px 24px rgba(123, 97, 255, 0.4);
+            z-index: 1100;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .fab-edit-btn:hover {
+            transform: scale(1.1);
+            box-shadow: 0 12px 32px rgba(123, 97, 255, 0.6);
+        }
+
+        .fab-edit-btn.active {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            box-shadow: 0 8px 24px rgba(16, 185, 129, 0.4);
+        }
+        
+        .fab-edit-btn.active:hover {
+            box-shadow: 0 12px 32px rgba(16, 185, 129, 0.6);
+        }
+        
+        /* Add Widget FAB Button - appears in edit mode */
+        .fab-add-widget {
+            position: fixed;
+            bottom: 32px;
+            right: 112px;
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: none;
+            color: white;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            z-index: 1000;
+            box-shadow: 0 8px 24px rgba(123, 97, 255, 0.4);
+            transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+        }
+        
+        .fab-add-widget:hover {
+            transform: scale(1.1);
+            box-shadow: 0 12px 32px rgba(123, 97, 255, 0.6);
+        }
+        
+        .fab-add-widget:active {
+            transform: scale(0.95);
+        }
+
+        /* Main Container */
+        .main-container {
+            padding: 60px 8px 10px;
+            min-height: 100vh;
+        }
+
+        /* Widget Grid - CSS Grid Layout (default) */
+        #widgetGrid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            grid-auto-rows: 80px;
+            gap: 16px;
+            background: transparent;
+            margin: 0 auto;
+            padding: 8px;
+            max-width: 100%;
+        }
+
+        /* When Gridstack is active, it takes over */
+        #widgetGrid.grid-stack {
+            display: block !important;
+        }
+
+        .grid-stack-item {
+            transition: all 0.3s ease !important;
+        }
+
+        .grid-stack-item-content {
+            overflow: visible !important;
+            inset: 8px !important;
+        }
+
+        /* Hide Gridstack's default resize handle */
+        /* Gridstack drag helper */
+        .grid-stack-item.ui-draggable-dragging {
+            opacity: 0.8;
+            z-index: 1000;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            transform: scale(1.02);
+        }
+
+        /* Fast, smooth transitions */
+        .grid-stack-item:not(.ui-draggable-dragging) {
+            transition: transform 0.2s ease, opacity 0.2s ease;
+            will-change: transform;
+        }
+
+        /* Widget inside grid-stack-item */
+        .grid-stack-item-content .widget {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+        }
+
+        /* Laptop/Desktop - 3 widgets across (most common) */
+        @media (min-width: 1024px) and (max-width: 1599px) {
+            .widget-grid {
+                grid-template-columns: repeat(9, 1fr);
+                gap: 10px;
+            }
+        }
+
+        /* Smaller laptop - 2 widgets across */
+        @media (min-width: 768px) and (max-width: 1023px) {
+            .widget-grid {
+                grid-template-columns: repeat(6, 1fr);
+                gap: 10px;
+            }
+        }
+
+        /* Tablet - 1-2 widgets */
+        @media (max-width: 767px) {
+            .widget-grid {
+                grid-template-columns: repeat(4, 1fr);
+                gap: 8px;
+            }
+        }
+
+        /* Mobile - 1 widget */
+        @media (max-width: 480px) {
+            .widget-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 6px;
+            }
+        }
+
+        /* Widget Base Styles */
+        .widget {
+            background: var(--surface);
+            border-radius: var(--widget-radius);
+            padding: 24px;
+            box-shadow: var(--widget-shadow);
+            position: relative;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            overflow: hidden; /* Prevent scrollbars interfering with buttons */
+            display: flex;
+            flex-direction: column;
+        }
+
+        .widget:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--widget-shadow-hover);
+            background: var(--surface-hover);
+        }
+
+        /* Widget Controls (Edit Mode) */
+        /* Gridstack native remove button (X in top-right corner in edit mode) */
+        .grid-stack-item > .grid-stack-item-content {
+            position: relative;
+        }
+        
+        /* Widget remove button (added by dashboard.js) */
+        .widget-remove-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 32px;
+            height: 32px;
+            background: rgba(255, 71, 87, 0.9);
+            border-radius: 8px;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+            border: none;
+            cursor: pointer;
+            z-index: 100;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 8px rgba(255, 71, 87, 0.3);
+            line-height: 1;
+            padding: 0;
+        }
+        
+        /* Larger delete button on mobile for easier tapping */
+        @media (max-width: 768px) {
+            .widget-remove-btn {
+                width: 44px;
+                height: 44px;
+                font-size: 28px;
+                top: 4px;
+                right: 4px;
+            }
+            
+            /* Always show on mobile in edit mode (no hover needed) */
+            body.edit-mode .widget-remove-btn {
+                opacity: 1 !important;
+            }
+        }
+        
+        /* Show remove button only in edit mode on hover */
+        body.edit-mode .widget-remove-btn {
+            display: flex;
+        }
+        
+        body.edit-mode .grid-stack-item:hover .widget-remove-btn {
+            opacity: 1;
+        }
+        
+        .widget-remove-btn:hover {
+            background: rgba(255, 71, 87, 1);
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(255, 71, 87, 0.5);
+        }
+        
+        .widget-remove-btn:active {
+            transform: scale(0.95);
+        }
+
+        /* Old drag handle and resize buttons - DISABLED
+         * Now using native Gridstack resize handles
+         */
+        .widget-drag-handle,
+        .widget-resize-btn {
+            display: none !important;
+            line-height: 1;
+        }
+
+        /* Drag Placeholder */
+        .widget-placeholder {
+            background: repeating-linear-gradient(
+                45deg,
+                rgba(123, 97, 255, 0.1),
+                rgba(123, 97, 255, 0.1) 10px,
+                rgba(90, 224, 224, 0.1) 10px,
+                rgba(90, 224, 224, 0.1) 20px
+            );
+            border: 2px dashed #7B61FF;
+            border-radius: 16px;
+            pointer-events: none;
+        }
+
+        .widget.dragging {
+            opacity: 0.5;
+            z-index: 1000;
+        }
+
+        /* Widget Sizes - 12 Column Grid System */
+        .widget.size-small { 
+            grid-column: span 3;  /* 1/4 width (3 of 12 columns) */
+            grid-row: span 3;     /* 240px (3 * 80px) */
+        }
+        .widget.size-medium { 
+            grid-column: span 3;  /* 1/4 width */
+            grid-row: span 6;     /* 480px (6 * 80px) */
+        }
+        .widget.size-large { 
+            grid-column: span 6;  /* 1/2 width (6 of 12 columns) */
+            grid-row: span 3;     /* 240px */
+        }
+        .widget.size-xlarge { 
+            grid-column: span 6;  /* 1/2 width */
+            grid-row: span 6;     /* 480px */
+        }
+        
+        /* Responsive adjustments */
+        @media (max-width: 1200px) {
+            .widget.size-small, .widget.size-medium { 
+                grid-column: span 4;  /* Adjust for 8-column grid */
+            }
+            .widget.size-large, .widget.size-xlarge { 
+                grid-column: span 8;  /* Full width on tablet */
+            }
+        }
+        
+        @media (max-width: 900px) {
+            .widget.size-small, .widget.size-medium { 
+                grid-column: span 4;  /* Full width on mobile */
+            }
+            .widget.size-large, .widget.size-xlarge { 
+                grid-column: span 4;
+            }
+        }
+
+        /* List Widget Dynamic Column Layouts */
+        .widget[data-widget-type*="list"] .widget-content,
+        .widget[data-widget-type*="tasks"] .widget-content,
+        .widget[data-widget-type*="shopping"] .widget-content {
+            display: grid;
+            gap: 8px;
+            /* grid-template-columns set by updateListWidgetColumns() */
+            width: 100%;
+            box-sizing: border-box;
+            align-content: start; /* Align items to top, not center */
+        }
+
+        /* List items should respect grid */
+        .widget[data-widget-type*="list"] .widget-content > *,
+        .widget[data-widget-type*="tasks"] .widget-content > *,
+        .widget[data-widget-type*="shopping"] .widget-content > * {
+            min-width: 0;
+            max-width: 100%;
+            box-sizing: border-box;
+        }
+
+        /* Widget Headers */
+        .widget-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+
+        .widget-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .widget-badge {
+            background: var(--primary-gradient);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* Widget Content */
+        .widget-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            overflow-x: hidden;
+            width: 100%;
+        }
+        
+        /* Add Item Input for List Widgets */
+        .add-item-input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid rgba(123, 97, 255, 0.2);
+            border-radius: 12px;
+            background: white;
+            font-size: 14px;
+            transition: all 0.2s ease;
+            margin-bottom: 0; /* No margin - grid gap handles spacing */
+            box-sizing: border-box;
+            height: 44px; /* Fixed single-line height */
+            line-height: 20px; /* Proper line height for single line */
+        }
+        
+        .add-item-input:focus {
+            outline: none;
+            border-color: #7B61FF;
+            background: rgba(123, 97, 255, 0.05);
+        }
+        
+        .add-item-input::placeholder {
+            color: #999;
+        }
+        
+        /* Widget Content Areas */
+        #eventsContent, #tasksContent {
+            display: flex;
+            flex-direction: column;
+            padding: 8px;
+            overflow-y: auto;
+            max-height: 200px;
+            min-height: auto;
+        }
+        
+        /* Remove loading widget styles when content is loaded */
+        #eventsContent:not(.loading-widget), #tasksContent:not(.loading-widget) {
+            align-items: stretch;
+            justify-content: flex-start;
+        }
+        
+        /* Calendar Event Items */
+        .calendar-event-item {
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .calendar-event-item:hover {
+            transform: translateX(4px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+        
+        .calendar-event-item.work {
+            background: rgba(59, 130, 246, 0.15);
+            border-left-color: #2563eb !important;
+            color: #1e40af;
+        }
+        
+        .calendar-event-item.personal {
+            background: rgba(147, 51, 234, 0.15);
+            border-left-color: #9333ea !important;
+            color: #7e22ce;
+        }
+        
+        .calendar-event-item.bucket {
+            background: rgba(16, 185, 129, 0.15);
+            border-left-color: #059669 !important;
+            color: #047857;
+        }
+        
+        .calendar-event-item.shopping {
+            background: rgba(251, 146, 60, 0.15);
+            border-left-color: #ea580c !important;
+            color: #c2410c;
+        }
+        
+        .calendar-event-item.health {
+            background: rgba(236, 72, 153, 0.15);
+            border-left-color: #be185d !important;
+            color: #9d174d;
+        }
+        
+        .calendar-event-item.routine {
+            background: rgba(107, 114, 128, 0.15);
+            border-left-color: #374151 !important;
+            color: #1f2937;
+        }
+        
+        .calendar-event-item.social {
+            background: rgba(34, 197, 94, 0.15);
+            border-left-color: #16a34a !important;
+            color: #15803d;
+        }
+        
+        .calendar-event-item.family {
+            background: rgba(168, 85, 247, 0.15);
+            border-left-color: #9333ea !important;
+            color: #7c3aed;
+        }
+        
+        /* Weather Widget - Responsive Purple Gradient Design */
+        .widget[data-widget-type="weather"] {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .widget[data-widget-type="weather"]::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, rgba(123, 97, 255, 0.1) 0%, rgba(90, 224, 224, 0.1) 100%);
+            pointer-events: none;
+        }
+
+        .widget[data-widget-type="weather"] .widget-header,
+        .widget[data-widget-type="weather"] .widget-content {
+            position: relative;
+            z-index: 1;
+        }
+
+        .widget[data-widget-type="weather"] .widget-title {
+            color: white;
+        }
+
+        .widget[data-widget-type="weather"] .widget-badge {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+        }
+
+        .widget[data-widget-type="weather"] .widget-content {
+            color: white;
+        }
+
+        .widget[data-widget-type="weather"] .widget-content [style*="color: #666"] {
+            color: rgba(255, 255, 255, 0.8) !important;
+        }
+
+        /* Weather widget - Dynamic backgrounds based on conditions */
+        .widget[data-widget-type="weather"] {
+            transition: background 0.5s ease;
+        }
+
+        /* Sunny/Clear */
+        .widget[data-widget-type="weather"].weather-sunny {
+            background: linear-gradient(135deg, #FFD93D 0%, #FF8A00 100%);
+        }
+
+        /* Cloudy/Overcast */
+        .widget[data-widget-type="weather"].weather-cloudy {
+            background: linear-gradient(135deg, #95A5A6 0%, #5D6D7E 100%);
+        }
+
+        /* Rainy */
+        .widget[data-widget-type="weather"].weather-rainy {
+            background: linear-gradient(135deg, #5DADE2 0%, #2874A6 100%);
+        }
+
+        /* Stormy */
+        .widget[data-widget-type="weather"].weather-stormy {
+            background: linear-gradient(135deg, #566573 0%, #273746 100%);
+        }
+
+        /* Snowy */
+        .widget[data-widget-type="weather"].weather-snowy {
+            background: linear-gradient(135deg, #E8F8F5 0%, #A9CCE3 100%);
+        }
+
+        /* Partly Cloudy */
+        .widget[data-widget-type="weather"].weather-partly-cloudy {
+            background: linear-gradient(135deg, #F8C471 0%, #85C1E9 100%);
+        }
+
+        /* Weather widget text should be white on colored backgrounds */
+        .widget[data-widget-type="weather"].weather-sunny,
+        .widget[data-widget-type="weather"].weather-cloudy,
+        .widget[data-widget-type="weather"].weather-rainy,
+        .widget[data-widget-type="weather"].weather-stormy,
+        .widget[data-widget-type="weather"].weather-partly-cloudy {
+            color: white;
+        }
+
+        .widget[data-widget-type="weather"].weather-snowy {
+            color: #2C3E50;
+        }
+
+        /* Weather widget - No scroll */
+        .widget[data-widget-type="weather"] .widget-content {
+            overflow: hidden !important;
+            text-align: center;
+        }
+
+        /* Weather sizing - handled by widgets-premium.css and widgets-fluid.css */
+        .weather-content .weather-small,
+        .weather-content .weather-medium,
+        .weather-content .weather-large {
+            display: none;
+        }
+
+        /* Responsive sizing handled by clamp() in widgets-premium.css */
+
+        /* Time Widget - Responsive styling handled by widgets-premium.css */
+        /* Background gradient kept for compatibility */
+        .widget[data-widget-type="time"] {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        /* Task Items */
+        .task-item {
+            cursor: grab;
+            transition: all 0.3s;
+        }
+        
+        .task-item:hover {
+            transform: translateX(4px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+        
+        .task-item.work {
+            background: rgba(59, 130, 246, 0.15);
+            color: #1e40af;
+        }
+        
+        .task-item.personal {
+            background: rgba(147, 51, 234, 0.15);
+            color: #7e22ce;
+        }
+        
+        .task-item.bucket {
+            background: rgba(16, 185, 129, 0.15);
+            color: #047857;
+        }
+        
+        .task-item.shopping {
+            background: rgba(251, 146, 60, 0.15);
+            color: #c2410c;
+        }
+        
+        .task-item.health {
+            background: rgba(236, 72, 153, 0.15);
+            color: #9d174d;
+        }
+        
+        .task-item.routine {
+            background: rgba(107, 114, 128, 0.15);
+            color: #1f2937;
+        }
+        
+        .task-item.social {
+            background: rgba(34, 197, 94, 0.15);
+            color: #15803d;
+        }
+        
+        .task-item.family {
+            background: rgba(168, 85, 247, 0.15);
+            color: #7c3aed;
+        }
+
+        /* Drag and Drop Styles */
+        .widget.dragging {
+            opacity: 0.5;
+            transform: rotate(5deg);
+            z-index: 1000;
+        }
+
+        .widget.drag-over {
+            border: 2px dashed #7B61FF;
+            background: rgba(123, 97, 255, 0.05);
+        }
+
+        /* Drop Zones */
+        .drop-zone {
+            position: relative;
+        }
+
+        .drop-zone::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            border: 2px dashed rgba(123, 97, 255, 0.3);
+            border-radius: 16px;
+            background: rgba(123, 97, 255, 0.05);
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .drop-zone.drag-over::after {
+            opacity: 1;
+        }
+
+        /* Calendar Pulse Animation */
+        @keyframes calendarPulse {
+            0%, 100% {
+                background-color: rgba(255, 0, 0, 0.1);
+                box-shadow: 0 0 0 0 rgba(255, 0, 0, 0.4);
+            }
+            50% {
+                background-color: rgba(255, 0, 0, 0.2);
+                box-shadow: 0 0 0 10px rgba(255, 0, 0, 0);
+            }
+        }
+
+        .calendar-pulse {
+            animation: calendarPulse 2s ease-in-out infinite;
+        }
+
+        .calendar-pulse .widget {
+            animation: calendarPulse 2s ease-in-out infinite;
+        }
+
+        .widget.new {
+            animation: widgetAppear 0.5s ease-out;
+        }
+
+        @keyframes widgetAppear {
+            from {
+                opacity: 0;
+                transform: scale(0.8) translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+
+        /* Edit Mode Styles */
+        body.edit-mode .widget {
+            border: 2px dashed rgba(123, 97, 255, 0.3);
+        }
+
+        body.edit-mode .widget:hover {
+            border-color: rgba(123, 97, 255, 0.6);
+        }
+
+        body.edit-mode .widget::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(123, 97, 255, 0.05);
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        /* Widget Library Overlay */
+        .widget-library-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(8px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+
+        .widget-library-overlay.active {
+            display: flex;
+            opacity: 1;
+        }
+
+        .widget-library {
+            background: white;
+            border-radius: 20px;
+            padding: 32px;
+            max-width: 800px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            transform: scale(0.8);
+            transition: transform 0.3s ease;
+        }
+
+        .widget-library-overlay.active .widget-library {
+            transform: scale(1);
+        }
+
+        .library-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .library-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .close-library {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .close-library:hover {
+            background: #ff4757;
+            color: white;
+        }
+
+        .library-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .library-widget {
+            background: #f8f9fa;
+            border: 2px solid transparent;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .library-widget:hover {
+            border-color: #7B61FF;
+            background: rgba(123, 97, 255, 0.05);
+            transform: translateY(-2px);
+        }
+
+        .library-widget-icon {
+            font-size: 32px;
+            margin-bottom: 12px;
+            display: block;
+        }
+
+        .library-widget-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .library-widget-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        
+        .library-tab {
+            transition: all 0.2s ease;
+        }
+        
+        .library-tab:hover {
+            color: #7B61FF;
+            background: rgba(123, 97, 255, 0.05);
+        }
+        
+        /* Widget Library Grid */
+        .library-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 16px;
+            margin-top: 20px;
+        }
+        
+        /* Widget Item Cards */
+        .widget-item {
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            border: 2px solid rgba(123, 97, 255, 0.1);
+            border-radius: 16px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .widget-item::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            z-index: 0;
+        }
+        
+        .widget-item:hover {
+            transform: translateY(-4px) scale(1.02);
+            border-color: #7B61FF;
+            box-shadow: 0 12px 24px rgba(123, 97, 255, 0.2);
+        }
+        
+        .widget-item:hover::before {
+            opacity: 0.05;
+        }
+        
+        .widget-item:active {
+            transform: translateY(-2px) scale(0.98);
+        }
+        
+        .widget-icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+            position: relative;
+            z-index: 1;
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+        }
+        
+        .widget-name {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .widget-desc {
+            font-size: 13px;
+            color: var(--text-secondary);
+            position: relative;
+            z-index: 1;
+            line-height: 1.4;
+        }
+        
+        /* Mobile responsive grid */
+        @media (max-width: 768px) {
+            .library-grid {
+                grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+                gap: 12px;
+            }
+            
+            .widget-item {
+                padding: 16px;
+            }
+            
+            .widget-icon {
+                font-size: 40px;
+            }
+            
+            .widget-name {
+                font-size: 14px;
+            }
+            
+            .widget-desc {
+                font-size: 12px;
+            }
+        }
+
+        /* Loading States */
+        .loading-widget {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 200px;
+            color: var(--text-secondary);
+        }
+
+        .spinner {
+            width: 24px;
+            height: 24px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #7B61FF;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 12px;
+        }
+
+        @keyframes slideInRight {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        @keyframes slideOutRight {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+        }
+
+        /* Zoe Widget Styles */
+        .zoe-widget {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 200px;
+        }
+
+        .zoe-orb-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+        }
+
+        .zoe-orb {
+            width: clamp(80px, 10vw, 120px);
+            height: clamp(80px, 10vw, 120px);
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            position: relative;
+            cursor: pointer;
+            transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            animation: zoeBreathe 4s ease-in-out infinite;
+            box-shadow: 
+                0 0 60px rgba(123, 97, 255, 0.4),
+                0 0 120px rgba(90, 224, 224, 0.2);
+        }
+
+        .zoe-orb:hover {
+            transform: scale(1.1);
+            box-shadow: 
+                0 0 80px rgba(123, 97, 255, 0.6),
+                0 0 160px rgba(90, 224, 224, 0.3);
+        }
+
+        .zoe-orb.listening {
+            animation: zoeListening 0.5s ease-in-out infinite alternate;
+            background: linear-gradient(135deg, #ff6b6b 0%, #ffa500 100%);
+        }
+
+        .zoe-orb.processing {
+            animation: zoeProcessing 1s ease-in-out infinite;
+            background: linear-gradient(135deg, #4ecdc4 0%, #44a08d 100%);
+        }
+
+        @keyframes zoeBreathe {
+            0%, 100% { 
+                transform: scale(1);
+                filter: brightness(1);
+            }
+            50% { 
+                transform: scale(1.05);
+                filter: brightness(1.1);
+            }
+        }
+
+        @keyframes zoeListening {
+            0% { transform: scale(1); }
+            100% { transform: scale(1.1); }
+        }
+
+        @keyframes zoeProcessing {
+            0%, 100% { transform: rotate(0deg) scale(1); }
+            50% { transform: rotate(180deg) scale(1.05); }
+        }
+
+        .zoe-status {
+            position: absolute;
+            bottom: -30px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: 12px;
+            font-weight: 500;
+            text-align: center;
+            opacity: 0.9;
+            white-space: nowrap;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 900px) {
+            .nav-menu { display: none !important; }
+            .mini-orb { display: flex !important; }
+            .widget-grid { grid-template-columns: 1fr; }
+        }
+        
+        /* Mini-orb visible on all screens */
+        @media (min-width: 901px) {
+            /* Mobile menu hidden on desktop */
+            .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
+        }
+        
+        @media (max-width: 420px) {
+            .main-container { padding: 80px 10px 20px; }
+            .widget-grid { gap: 15px; }
+            .widget.size-large,
+            .widget.size-xlarge {
+                grid-column: span 1;
+            }
+        }
+        
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+
+        /* Mobile Navigation Menu */
+        .mobile-nav-menu {
+            position: fixed; top: 0; left: -280px; width: 280px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.3); z-index: 2000;
+            transition: left 0.3s ease; display: flex; flex-direction: column;
+        }
+        .mobile-nav-menu.open { left: 0; }
+        .mobile-nav-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .mobile-nav-header h3 {
+            margin: 0; font-size: 20px; font-weight: 600; color: #333;
+        }
+        .mobile-nav-close {
+            width: 40px; height: 40px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 24px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: all 0.3s ease;
+        }
+        .mobile-nav-close:active { background: rgba(255, 255, 255, 0.5); }
+        .mobile-nav-content { flex: 1; overflow-y: auto; padding: 10px; }
+        .mobile-nav-item {
+            display: flex; align-items: center; gap: 12px; padding: 16px; margin: 4px 0;
+            color: #666; text-decoration: none; font-size: 16px; font-weight: 500;
+            border-radius: 12px; transition: all 0.3s ease;
+        }
+        .mobile-nav-item:active { background: rgba(123, 97, 255, 0.1); color: #7B61FF; }
+        .mobile-nav-item.active {
+            background: rgba(123, 97, 255, 0.15); color: #7B61FF; font-weight: 600;
+        }
+        .mobile-nav-item.logout { color: #ff4444; }
+        .mobile-nav-divider {
+            height: 1px; background: rgba(255, 255, 255, 0.3); margin: 10px 0;
+        }
+        .mobile-nav-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.3); z-index: 1999; opacity: 0;
+            pointer-events: none; transition: opacity 0.3s ease;
+        }
+        .mobile-nav-overlay.open { opacity: 1; pointer-events: auto; }
+        @media (min-width: 769px) {
+            .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
+        }
+        
+        /* Native Gridstack Resize Handles - Make them visible and pretty */
+        .grid-stack-item > .ui-resizable-handle {
+            background: transparent !important;
+        }
+        
+        /* Corner resize handles */
+        .grid-stack-item > .ui-resizable-se,
+        .grid-stack-item > .ui-resizable-sw {
+            width: 24px !important;
+            height: 24px !important;
+        }
+        
+        /* Larger touch targets on mobile */
+        @media (max-width: 768px) {
+            .grid-stack-item > .ui-resizable-se,
+            .grid-stack-item > .ui-resizable-sw {
+                width: 44px !important;
+                height: 44px !important;
+            }
+            
+            .grid-stack-item > .ui-resizable-e,
+            .grid-stack-item > .ui-resizable-w {
+                width: 20px !important;
+            }
+            
+            .grid-stack-item > .ui-resizable-s {
+                height: 20px !important;
+            }
+        }
+        
+        /* Visible resize indicators */
+        .grid-stack-item > .ui-resizable-se::after {
+            content: '';
+            position: absolute;
+            bottom: 4px;
+            right: 4px;
+            width: 0;
+            height: 0;
+            border-style: solid;
+            border-width: 0 0 14px 14px;
+            border-color: transparent transparent rgba(123, 97, 255, 0.3) transparent;
+            transition: border-color 0.2s;
+        }
+        
+        .grid-stack-item > .ui-resizable-sw::after {
+            content: '';
+            position: absolute;
+            bottom: 4px;
+            left: 4px;
+            width: 0;
+            height: 0;
+            border-style: solid;
+            border-width: 0 0 14px 14px;
+            border-color: transparent transparent transparent rgba(123, 97, 255, 0.3);
+            transform: scaleX(-1);
+            transition: border-color 0.2s;
+        }
+        
+        /* Side handles */
+        .grid-stack-item > .ui-resizable-e,
+        .grid-stack-item > .ui-resizable-w,
+        .grid-stack-item > .ui-resizable-s {
+            background: rgba(123, 97, 255, 0.1) !important;
+            transition: background 0.2s;
+        }
+        
+        /* Only show resize handles in edit mode */
+        body:not(.edit-mode) .ui-resizable-handle {
+            display: none !important;
+        }
+        
+        /* On mobile: only show bottom resize handle (doesn't overlap delete button) */
+        @media (max-width: 768px) {
+            /* Hide all handles except bottom */
+            .ui-resizable-e,
+            .ui-resizable-w,
+            .ui-resizable-se,
+            .ui-resizable-sw {
+                display: none !important;
+            }
+            
+            /* Keep bottom handle and make it larger for easier touch */
+            .ui-resizable-s {
+                height: 20px !important;
+                background: rgba(123, 97, 255, 0.3) !important;
+            }
+            
+            /* Always visible in edit mode on mobile */
+            body.edit-mode .ui-resizable-s {
+                background: rgba(123, 97, 255, 0.5) !important;
+            }
+        }
+        
+        /* Hover effect in edit mode */
+        body.edit-mode .grid-stack-item:hover .ui-resizable-se::after,
+        body.edit-mode .grid-stack-item:hover .ui-resizable-sw::after {
+            border-color: transparent transparent rgba(123, 97, 255, 0.8) transparent;
+        }
+        
+        body.edit-mode .grid-stack-item:hover .ui-resizable-e,
+        body.edit-mode .grid-stack-item:hover .ui-resizable-w,
+        body.edit-mode .grid-stack-item:hover .ui-resizable-s {
+            background: rgba(123, 97, 255, 0.2) !important;
+        }
+        
+        /* Smooth resize transition */
+        .grid-stack-item.ui-resizable-resizing {
+            opacity: 0.9;
+            transition: none;
+        }
+        
+        .grid-stack-item.ui-resizable-resizing .widget {
+            box-shadow: 0 12px 40px rgba(123, 97, 255, 0.3);
+        }
+        
+        /* Prevent text selection during drag */
+        .grid-stack-item-content {
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
+        }
+        
+        /* Allow text selection in interactive elements */
+        .grid-stack-item-content input,
+        .grid-stack-item-content textarea,
+        .grid-stack-item-content [contenteditable] {
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+            user-select: text;
+        }
+        
+        /* Visual drag handle indicator on mobile in edit mode */
+        @media (max-width: 768px) {
+            body.edit-mode .grid-stack-item-content::before {
+                content: '⋮⋮';
+                position: absolute;
+                top: 8px;
+                left: 50%;
+                transform: translateX(-50%);
+                font-size: 20px;
+                color: rgba(123, 97, 255, 0.4);
+                letter-spacing: -4px;
+                pointer-events: none;
+                z-index: 10;
+            }
+        }
+        
+        /* Dragging visual feedback */
+        .grid-stack-item.ui-draggable-dragging {
+            opacity: 0.7;
+            z-index: 1000 !important;
+        }
+        
+        .grid-stack-item.ui-draggable-dragging .widget {
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            transform: rotate(2deg);
+        }
+        
+        /* Edit mode cursor */
+        body.edit-mode .grid-stack-item {
+            cursor: move;
+        }
+        
+        body.edit-mode .grid-stack-item:active {
+            cursor: grabbing;
+        }
+        
+        /* Pull to Refresh Indicator */
+        .pull-to-refresh {
+            position: fixed;
+            top: 60px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-100px);
+            background: white;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            transition: transform 0.3s ease, opacity 0.3s ease;
+            opacity: 0;
+            z-index: 9999;
+            pointer-events: none;
+        }
+        
+        .pull-to-refresh.visible {
+            transform: translateX(-50%) translateY(10px);
+            opacity: 1;
+        }
+        
+        .pull-to-refresh.loading {
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            from { transform: translateX(-50%) translateY(10px) rotate(0deg); }
+            to { transform: translateX(-50%) translateY(10px) rotate(360deg); }
+        }
+    </style>
+    <script src="js/auth.js"></script>
+    <script>
+        // DEBUG: Log session state immediately
+        console.log('🔍 Dashboard loading - Session check:');
+        console.log('  localStorage.zoe_session:', localStorage.getItem('zoe_session'));
+        try {
+            const session = JSON.parse(localStorage.getItem('zoe_session'));
+            console.log('  Parsed session:', session);
+            if (session?.expires_at) {
+                const expiresAt = new Date(session.expires_at);
+                const now = new Date();
+                console.log('  Expires:', expiresAt.toISOString());
+                console.log('  Now:', now.toISOString());
+                console.log('  Is expired?', now >= expiresAt);
+                console.log('  Minutes until expiry:', Math.round((expiresAt - now) / 60000));
+            }
+        } catch (e) {
+            console.error('  Error parsing session:', e);
+        }
+        console.log('  zoeAuth available?', typeof window.zoeAuth);
+    </script>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
+</head>
+<body>
+    <!-- Pull-to-Refresh Indicator -->
+    <div id="pullToRefreshIndicator" style="position: fixed; top: 0; left: 50%; transform: translateX(-50%) translateY(-100px); width: 50px; height: 50px; background: rgba(123, 97, 255, 0.9); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; z-index: 10000; opacity: 0; transition: opacity 0.3s, transform 0.3s; backdrop-filter: blur(10px); box-shadow: 0 4px 16px rgba(123, 97, 255, 0.3);">
+        ⬇️
+    </div>
+
+    <!-- Navigation -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="toggleMobileMenu()"></div>
+            <div class="nav-menu">
+                <a href="chat.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item active">Dashboard</a>
+                <a href="lists.html" class="nav-item">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            
+            <button class="notifications-btn" onclick="forceRefreshCache()" title="Refresh App (clears cache)">🔄</button>
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- Time/Date Display -->
+            <div class="time-date-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('people.html')">
+                    <div class="more-item-icon">👥</div>
+                    <div class="more-item-label">People</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Navigation Menu -->
+    <div class="mobile-nav-menu" id="mobileNavMenu">
+        <div class="mobile-nav-header">
+            <h3>Navigation</h3>
+            <button class="mobile-nav-close" onclick="toggleMobileMenu()">✕</button>
+        </div>
+        <div class="mobile-nav-content">
+            <a href="chat.html" class="mobile-nav-item">💬 Chat</a>
+            <a href="dashboard.html" class="mobile-nav-item active">📊 Dashboard</a>
+            <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
+            <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
+            <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
+            <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
+            <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
+            <div class="mobile-nav-divider"></div>
+            <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
+        </div>
+    </div>
+    <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+
+    <!-- Pull to Refresh Indicator -->
+    <div class="pull-to-refresh" id="pullToRefresh">
+        🔄
+    </div>
+    
+    <!-- Main Content -->
+    <div class="main-container">
+        <div class="grid-stack" id="widgetGrid">
+            <!-- Widgets will be dynamically loaded here with Gridstack -->
+        </div>
+    </div>
+    
+    <!-- Floating Action Buttons -->
+    <button class="fab-edit-btn" id="fabEditBtn" onclick="toggleEditMode()" title="Edit Dashboard">
+        <span id="fabEditIcon">✏️</span>
+    </button>
+    
+    <button class="fab-add-widget" onclick="openWidgetLibrary()" title="Add Widget">
+        <span>+</span>
+    </button>
+
+    <!-- Widget Library Overlay -->
+    <div class="widget-library-overlay" id="widgetLibraryOverlay">
+        <div class="widget-library">
+            <div class="library-header">
+                <h2 class="library-title">Add Widget</h2>
+                <button class="close-library" onclick="closeWidgetLibrary()">×</button>
+            </div>
+            
+            <!-- Tabs for Core vs Marketplace -->
+            <div style="display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #ddd;">
+                <button id="coreWidgetsTab" class="library-tab active" onclick="switchLibraryTab('core')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid #7B61FF; font-weight: 500;">Core Widgets</button>
+                <button id="marketplaceTab" class="library-tab" onclick="switchLibraryTab('marketplace')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500;">Marketplace</button>
+                <button id="aiGenerateTab" class="library-tab" onclick="switchLibraryTab('ai')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500;">✨ AI Generate</button>
+            </div>
+            
+            <!-- Core Widgets Grid -->
+            <div id="coreWidgetsGrid" class="library-grid">
+                <!-- Core widget library items will be populated here -->
+            </div>
+            
+            <!-- Marketplace Grid -->
+            <div id="marketplaceGrid" class="library-grid" style="display: none;">
+                <!-- Marketplace widgets will be populated here -->
+            </div>
+            
+            <!-- AI Generate Panel -->
+            <div id="aiGeneratePanel" style="display: none;">
+                <div style="margin-bottom: 16px;">
+                    <h3 style="font-size: 16px; margin-bottom: 8px;">Describe Your Widget</h3>
+                    <textarea id="aiWidgetDescription" placeholder="Example: Create a widget showing my daily step count as a circular progress gauge..." style="width: 100%; min-height: 100px; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; font-family: inherit; resize: vertical;"></textarea>
+                </div>
+                <button onclick="generateWidgetWithAI()" style="width: 100%; padding: 12px; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer;">✨ Generate Widget</button>
+                <div id="aiGenerationStatus" style="margin-top: 16px; padding: 12px; border-radius: 8px; display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/common.js"></script>
+    <script src="js/websocket-sync.js"></script>
+    
+    <!-- Widget System Core -->
+    <script src="js/widget-base.js"></script>
+    <script src="js/widget-system.js"></script>
+    
+    <!-- Core Widgets -->
+    <script src="js/widgets/core/events.js"></script>
+    <script src="js/widgets/core/tasks.js"></script>
+    <script src="js/widgets/core/time.js"></script>
+    <script src="js/widgets/core/weather.js"></script>
+    <script src="js/widgets/core/home.js"></script>
+    <script src="js/widgets/core/system.js"></script>
+    <script src="js/widgets/core/notes.js"></script>
+    <script src="js/widgets/core/zoe-orb.js"></script>
+    <script src="js/widgets/core/journal.js"></script>
+    
+    <!-- List Widgets -->
+    <script src="js/widgets/core/shopping.js"></script>
+    <script src="js/widgets/core/personal.js"></script>
+    <script src="js/widgets/core/work.js"></script>
+    <script src="js/widgets/core/bucket.js"></script>
+    <script src="js/widgets/core/reminders.js"></script>
+    <script src="js/widgets/core/dynamic-list.js"></script>
+    <script src="js/widgets/core/week-planner.js"></script>
+    
+    <!-- Widget registration will happen after dashboard.js is loaded -->
+
+    <!-- Widget Library Functions -->
+    <script>
+        // Open widget library
+        function openWidgetLibrary() {
+            const overlay = document.getElementById('widgetLibraryOverlay');
+            loadCoreWidgets();
+            overlay.classList.add('active');
+        }
+        
+        // Close widget library
+        function closeWidgetLibrary() {
+            document.getElementById('widgetLibraryOverlay').classList.remove('active');
+        }
+        
+        // Load available widgets into library
+        function loadCoreWidgets() {
+            const grid = document.getElementById('coreWidgetsGrid');
+            
+            const availableWidgets = [
+                { type: 'time', icon: '🕐', name: 'Clock', desc: 'Current time and date' },
+                { type: 'weather', icon: '🌤️', name: 'Weather', desc: 'Weather forecast' },
+                { type: 'zoe-orb', icon: '💬', name: 'Zoe Chat', desc: 'Chat with Zoe AI' },
+                { type: 'events', icon: '📅', name: 'Events', desc: 'Calendar events' },
+                { type: 'tasks', icon: '✅', name: 'Tasks', desc: 'Task list' },
+                { type: 'shopping', icon: '🛒', name: 'Shopping', desc: 'Shopping list' },
+                { type: 'notes', icon: '📝', name: 'Notes', desc: 'Quick notes' },
+                { type: 'journal', icon: '📔', name: 'Quick Journal', desc: 'Journal with photo & text' },
+                { type: 'home', icon: '🏠', name: 'Home', desc: 'Smart home controls' },
+                { type: 'personal', icon: '📝', name: 'Personal', desc: 'Personal list' },
+                { type: 'work', icon: '💼', name: 'Work', desc: 'Work tasks' },
+                { type: 'bucket', icon: '🎯', name: 'Bucket List', desc: 'Goals' },
+                { type: 'reminders', icon: '🔔', name: 'Reminders', desc: 'Reminders' },
+                { type: 'system', icon: '💻', name: 'System', desc: 'System info' },
+                { type: 'week-planner', icon: '📅', name: 'Week Planner', desc: 'Weekly events, lists, and transactions' }
+            ];
+            
+            grid.innerHTML = availableWidgets.map(widget => `
+                <div class="widget-item" onclick="addWidget('${widget.type}')">
+                    <div class="widget-icon">${widget.icon}</div>
+                    <div class="widget-name">${widget.name}</div>
+                    <div class="widget-desc">${widget.desc}</div>
+                </div>
+            `).join('');
+        }
+        
+        // Add widget to dashboard
+        function addWidget(type) {
+            console.log('📞 HTML addWidget called with type:', type);
+            console.log('📊 window.dashboard exists?', !!window.dashboard);
+            
+            if (window.dashboard && window.dashboard.addWidget) {
+                console.log('✅ Calling dashboard.addWidget...');
+                const gridItem = window.dashboard.addWidget(type);
+                
+                if (gridItem) {
+                    console.log('✅ Widget added successfully');
+                } else {
+                    console.error('❌ Failed to create widget');
+                }
+            } else {
+                console.error('❌ Dashboard not initialized');
+                console.log('Debug info:', {
+                    hasDashboard: !!window.dashboard,
+                    hasAddWidget: !!(window.dashboard && window.dashboard.addWidget),
+                    dashboardType: typeof window.dashboard
+                });
+            }
+            
+            closeWidgetLibrary();
+        }
+        
+        // Tab switching (for future use)
+        function switchLibraryTab(tab) {
+            document.querySelectorAll('.library-tab').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            if (tab === 'core') {
+                document.getElementById('coreWidgetsTab').classList.add('active');
+                document.getElementById('coreWidgetsGrid').style.display = 'grid';
+            }
+        }
+    </script>
+
+    <!-- UI Functions -->
+    <script>
+        // Toggle mobile menu
+        function toggleMobileMenu() {
+            const menu = document.getElementById('mobileNavMenu');
+            const overlay = document.getElementById('mobileNavOverlay');
+            menu.classList.toggle('open');
+            overlay.classList.toggle('open');
+        }
+        
+        // Open more overlay
+        function openMoreOverlay() {
+            const overlay = document.querySelector('.more-overlay');
+            if (overlay) overlay.classList.add('active');
+        }
+        
+        // Close more overlay
+        function closeMoreOverlay() {
+            const overlay = document.querySelector('.more-overlay');
+            if (overlay) overlay.classList.remove('active');
+        }
+        
+        // Navigate to page
+        function navigateToPage(page) {
+            window.location.href = page;
+        }
+        
+        // Open notifications
+        function openNotifications() {
+            const panel = document.getElementById('notificationsPanel');
+            if (panel) panel.classList.add('open');
+        }
+        
+        // Close notifications
+        function closeNotifications() {
+            const panel = document.getElementById('notificationsPanel');
+            if (panel) panel.classList.remove('open');
+        }
+    </script>
+    
+    <!-- Gridstack.js Library (Local for Offline Support) -->
+    <script src="lib/gridstack/gridstack-all.js"></script>
+    
+    <!-- Clean Dashboard Implementation (Native Gridstack) -->
+    <script src="js/dashboard.js"></script>
+    
+    <!-- Register all widgets AFTER dashboard.js has set up its listener -->
+    <script>
+        // Initialize widget registration
+        (async () => {
+            console.log('🔧 Registering widgets...');
+            window.widgetsRegistered = false;
+            
+            if (typeof registerAllWidgets === 'function') {
+                const count = await registerAllWidgets();
+                console.log('✅ Widget registration complete:', count, 'modules');
+                window.widgetsRegistered = true;
+                console.log('📢 Dispatching widgets-registered event');
+                window.dispatchEvent(new Event('widgets-registered'));
+            } else {
+                console.error('❌ registerAllWidgets function not found!');
+                window.widgetsRegistered = true; // Set to true even on error to prevent blocking
+                console.log('📢 Dispatching widgets-registered event (error case)');
+                window.dispatchEvent(new Event('widgets-registered'));
+            }
+        })();
+    </script>
+</body>
+</html>
+
+
+
+
+

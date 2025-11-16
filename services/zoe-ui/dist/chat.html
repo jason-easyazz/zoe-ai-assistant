@@ -1,0 +1,2771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>Zoe - AI Chat</title>
+    <style>
+        * { 
+            margin: 0; padding: 0; box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            overflow: hidden; height: 100vh;
+        }
+        
+        /* Navigation Bar - matching calendar.html */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .api-indicator { 
+            font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 8px; 
+            display: flex; align-items: center; gap: 6px; 
+        }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        
+        .time-date-display {
+            display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+        }
+        .current-time { font-size: 16px; font-weight: 500; color: #333; line-height: 1.2; }
+        .current-date { font-size: 11px; color: #666; line-height: 1.2; }
+        
+        /* Main Layout */
+        .app-container {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            height: calc(100vh - 60px);
+            margin-top: 60px;
+            gap: 0;
+            transition: grid-template-columns 0.3s ease;
+        }
+        
+        .app-container.sessions-collapsed {
+            grid-template-columns: 1fr 0px;
+        }
+        
+        /* Chat Area */
+        .chat-area {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.3);
+        }
+        
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 30px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+        
+        .messages-container::-webkit-scrollbar { width: 8px; }
+        .messages-container::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 10px;
+        }
+        .messages-container::-webkit-scrollbar-thumb {
+            background: rgba(123, 97, 255, 0.3);
+            border-radius: 10px;
+        }
+        
+        /* Message Groups */
+        .message-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            animation: messageSlide 0.3s ease-out;
+        }
+        
+        @keyframes messageSlide {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .message-group.user {
+            align-items: flex-end;
+        }
+        
+        .message-group.assistant {
+            align-items: flex-start;
+        }
+        
+        .message-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+        }
+        
+        .message-avatar {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: white;
+        }
+        
+        .message-name {
+            font-size: 12px;
+            font-weight: 600;
+            color: #666;
+        }
+        
+        .message-time {
+            font-size: 11px;
+            color: #999;
+        }
+        
+        .message-content {
+            max-width: 70%;
+            padding: 16px 20px;
+            border-radius: 20px;
+            font-size: 15px;
+            line-height: 1.6;
+            word-wrap: break-word;
+        }
+        
+        .message-group.user .message-content {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+        
+        .message-group.assistant .message-content {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            color: #333;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            border-bottom-left-radius: 4px;
+        }
+        
+        /* Subgraph Execution Cards */
+        .subgraph-card {
+            margin: 16px 0 16px 32px;
+            background: rgba(123, 97, 255, 0.05);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(123, 97, 255, 0.2);
+            border-radius: 16px;
+            padding: 20px;
+            animation: subgraphSlide 0.4s ease-out;
+        }
+        
+        @keyframes subgraphSlide {
+            from { opacity: 0; transform: translateY(10px) scale(0.95); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        
+        .subgraph-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+        
+        .subgraph-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 15px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .subgraph-icon {
+            font-size: 24px;
+            animation: subgraphPulse 2s ease-in-out infinite;
+        }
+        
+        @keyframes subgraphPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.15); }
+        }
+        
+        .subgraph-status {
+            font-size: 11px;
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .subgraph-status.running {
+            background: rgba(251, 146, 60, 0.15);
+            color: #ea580c;
+        }
+        
+        .subgraph-status.complete {
+            background: rgba(34, 197, 94, 0.15);
+            color: #059669;
+        }
+        
+        .subgraph-body {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 16px;
+            line-height: 1.5;
+        }
+        
+        .subgraph-steps {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        .subgraph-step {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 14px;
+            background: rgba(255, 255, 255, 0.6);
+            border-radius: 10px;
+            font-size: 13px;
+            transition: all 0.3s ease;
+        }
+        
+        .subgraph-step-icon {
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+        
+        .subgraph-step.running {
+            color: #ea580c;
+            border-left: 3px solid #ea580c;
+            animation: stepPulse 1.5s ease-in-out infinite;
+        }
+        
+        .subgraph-step.complete {
+            color: #059669;
+            border-left: 3px solid #059669;
+        }
+        
+        @keyframes stepPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+        
+        .subgraph-result {
+            margin-top: 16px;
+            padding: 16px;
+            background: rgba(34, 197, 94, 0.05);
+            border: 1px solid rgba(34, 197, 94, 0.2);
+            border-radius: 12px;
+        }
+        
+        .subgraph-result-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #059669;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .subgraph-result-content {
+            font-size: 14px;
+            color: #333;
+            line-height: 1.6;
+        }
+        
+        /* Message Actions */
+        .message-actions {
+            display: flex;
+            gap: 6px;
+            margin-left: 32px;
+            margin-top: 8px;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+        
+        .message-group:hover .message-actions {
+            opacity: 1;
+        }
+        
+        .action-btn {
+            padding: 6px 12px;
+            background: rgba(255, 255, 255, 0.8);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            font-size: 12px;
+            color: #666;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-weight: 500;
+        }
+        
+        .action-btn:hover {
+            background: rgba(123, 97, 255, 0.1);
+            border-color: #7B61FF;
+            color: #7B61FF;
+            transform: translateY(-1px);
+        }
+        
+        .action-btn.active {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            border-color: transparent;
+        }
+        
+        /* Activity Indicators */
+        .activity-indicator {
+            margin-left: 32px;
+            margin-bottom: 12px;
+            animation: activitySlide 0.3s ease-out;
+        }
+        
+        @keyframes activitySlide {
+            from { opacity: 0; transform: translateX(-10px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        
+        .activity-content {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 12px;
+            font-size: 13px;
+            color: #666;
+        }
+        
+        .activity-icon {
+            font-size: 18px;
+            animation: activityPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes activityPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.15); }
+        }
+        
+        .activity-indicator.thinking .activity-content {
+            background: rgba(155, 89, 182, 0.12);
+            border-color: rgba(155, 89, 182, 0.3);
+            color: #9b59b6;
+        }
+        
+        .activity-indicator.searching .activity-content {
+            background: rgba(52, 152, 219, 0.12);
+            border-color: rgba(52, 152, 219, 0.3);
+            color: #3498db;
+        }
+        
+        .activity-indicator.executing .activity-content {
+            background: rgba(251, 146, 60, 0.12);
+            border-color: rgba(251, 146, 60, 0.3);
+            color: #ea580c;
+        }
+        
+        /* Streaming Cursor */
+        .streaming-cursor {
+            display: inline-block;
+            width: 2px;
+            height: 1em;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            margin-left: 4px;
+            animation: cursorBlink 1s infinite;
+            vertical-align: text-bottom;
+        }
+        
+        @keyframes cursorBlink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+
+        /* Input Area */
+        .input-area {
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            border-top: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .input-wrapper {
+            display: flex;
+            gap: 12px;
+            align-items: flex-end;
+        }
+        
+        .input-field {
+            flex: 1;
+            min-height: 48px;
+            max-height: 120px;
+            padding: 14px 18px;
+            border: 2px solid rgba(123, 97, 255, 0.2);
+            border-radius: 24px;
+            font-size: 15px;
+            font-family: inherit;
+            resize: none;
+            outline: none;
+            transition: all 0.3s ease;
+            background: white;
+            overflow: hidden;
+        }
+        
+        .input-field:focus {
+            border-color: #7B61FF;
+            box-shadow: 0 0 0 4px rgba(123, 97, 255, 0.1);
+            overflow-y: auto;
+        }
+        
+        .send-btn {
+            width: 48px;
+            height: 48px;
+            border: none;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            font-size: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        
+        .send-btn:hover:not(:disabled) {
+            transform: scale(1.05);
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4);
+        }
+        
+        .send-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        /* Sessions Panel */
+        .sessions-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        
+        .app-container.sessions-collapsed .sessions-panel {
+            opacity: 0;
+            pointer-events: none;
+        }
+        
+        .sessions-header {
+            padding: 20px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .sessions-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .collapse-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: rgba(0, 0, 0, 0.05);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            color: #666;
+        }
+        
+        .collapse-btn:hover {
+            background: rgba(123, 97, 255, 0.1);
+            color: #7B61FF;
+        }
+        
+        .new-session-btn {
+            width: calc(100% - 40px);
+            margin: 0 20px 20px 20px;
+            padding: 12px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .new-session-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+        
+        .sessions-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0 20px 20px 20px;
+        }
+        
+        .sessions-list::-webkit-scrollbar { width: 6px; }
+        .sessions-list::-webkit-scrollbar-track { background: transparent; }
+        .sessions-list::-webkit-scrollbar-thumb {
+            background: rgba(123, 97, 255, 0.3);
+            border-radius: 10px;
+        }
+        
+        .session-item {
+            padding: 14px;
+            background: rgba(255, 255, 255, 0.6);
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            border-radius: 12px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .session-item:hover {
+            background: rgba(123, 97, 255, 0.08);
+            border-color: rgba(123, 97, 255, 0.2);
+            transform: translateX(4px);
+        }
+        
+        .session-item.active {
+            background: linear-gradient(135deg, rgba(123, 97, 255, 0.15) 0%, rgba(90, 224, 224, 0.1) 100%);
+            border-color: #7B61FF;
+        }
+        
+        .session-title {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 6px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .session-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #666;
+        }
+        
+        /* Quick Actions */
+        .quick-actions {
+            padding: 20px;
+            border-top: 1px solid rgba(0, 0, 0, 0.1);
+        }
+        
+        .quick-actions-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #666;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .action-chips {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .action-chip {
+            padding: 10px 14px;
+            background: rgba(0, 0, 0, 0.03);
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            border-radius: 10px;
+            font-size: 13px;
+            color: #666;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .action-chip:hover {
+            background: rgba(123, 97, 255, 0.1);
+            border-color: #7B61FF;
+            color: #7B61FF;
+            transform: translateX(4px);
+        }
+        
+        /* Expand Button (when collapsed) */
+        .expand-btn {
+            position: fixed;
+            right: 20px;
+            top: 80px;
+            width: 48px;
+            height: 48px;
+            border: none;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border-radius: 50%;
+            color: white;
+            font-size: 20px;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+            transition: all 0.3s ease;
+            z-index: 99;
+            display: none;
+        }
+        
+        .app-container.sessions-collapsed .expand-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .expand-btn:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4);
+        }
+        
+        /* Welcome Section */
+        .welcome-section {
+            padding: 40px 20px;
+            text-align: center;
+        }
+        
+        .welcome-title {
+            font-size: 32px;
+            font-weight: 300;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 12px;
+        }
+        
+        .welcome-subtitle {
+            font-size: 16px;
+            color: #666;
+            margin-bottom: 30px;
+        }
+        
+        .suggestion-chips {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        .suggestion-chip {
+            padding: 16px;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(123, 97, 255, 0.2);
+            border-radius: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .suggestion-chip:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+        
+        .suggestion-icon {
+            font-size: 32px;
+            margin-bottom: 8px;
+        }
+        
+        .suggestion-label {
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        /* Responsive */
+        @media (max-width: 968px) {
+            .app-container {
+                grid-template-columns: 1fr;
+            }
+            .sessions-panel {
+                display: none;
+            }
+            .expand-btn {
+                display: none !important;
+            }
+        }
+        
+        /* Action Cards Styling */
+        .action-cards-container {
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .action-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        }
+
+        .action-card.high {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+
+        .action-card.medium {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        }
+
+        .action-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        }
+
+        .card-header {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 12px;
+            color: white;
+        }
+
+        .card-icon {
+            font-size: 32px;
+        }
+
+        .card-info {
+            flex: 1;
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .card-description {
+            font-size: 13px;
+            opacity: 0.9;
+        }
+
+        .card-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .card-action-btn {
+            background: rgba(255,255,255,0.2);
+            border: 1px solid rgba(255,255,255,0.3);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .card-action-btn:hover:not(:disabled) {
+            background: rgba(255,255,255,0.3);
+            transform: scale(1.05);
+        }
+
+        .card-action-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .card-action-btn.success {
+            background: rgba(46, 213, 115, 0.3);
+            border-color: rgba(46, 213, 115, 0.5);
+        }
+
+        .card-action-btn.error {
+            background: rgba(255, 71, 87, 0.3);
+            border-color: rgba(255, 71, 87, 0.5);
+        }
+
+        .calendar-action-container {
+            position: relative;
+            width: 100%;
+        }
+
+        .time-slot-picker {
+            margin-top: 12px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 8px;
+            padding: 12px;
+            backdrop-filter: blur(10px);
+        }
+
+        .time-slot-options {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .slot-header {
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: white;
+            font-size: 14px;
+        }
+
+        .time-slot-option {
+            background: rgba(255,255,255,0.15);
+            border: 2px solid transparent;
+            border-radius: 8px;
+            padding: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .time-slot-option:hover {
+            background: rgba(255,255,255,0.25);
+            border-color: rgba(255,255,255,0.5);
+        }
+
+        .time-slot-option.selected {
+            border-color: #4ade80;
+            background: rgba(74, 222, 128, 0.2);
+        }
+
+        .time-slot-option.recommended {
+            border-color: rgba(74, 222, 128, 0.3);
+        }
+
+        .time-slot-option input[type="radio"] {
+            margin: 0;
+        }
+
+        .time-slot-option label {
+            flex: 1;
+            cursor: pointer;
+            color: white;
+        }
+
+        .slot-time {
+            font-weight: 600;
+            font-size: 15px;
+            margin-bottom: 4px;
+        }
+
+        .slot-info {
+            font-size: 13px;
+            opacity: 0.9;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .badge {
+            background: rgba(74, 222, 128, 0.3);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .badge.warning {
+            background: rgba(251, 191, 36, 0.3);
+        }
+
+        .dropdown-arrow {
+            font-size: 12px;
+            margin-left: 4px;
+        }
+
+        .no-slots {
+            color: rgba(255,255,255,0.8);
+            padding: 12px;
+            text-align: center;
+            font-size: 14px;
+        }
+
+        .time-slot-confirmation {
+            padding: 12px;
+            text-align: center;
+            color: white;
+        }
+
+        .time-slot-confirmation p {
+            margin-bottom: 16px;
+            font-size: 15px;
+        }
+
+        .confirmation-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+        }
+
+        .btn-cancel,
+        .btn-confirm {
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .btn-cancel {
+            background: rgba(255,255,255,0.2);
+            color: white;
+        }
+
+        .btn-confirm {
+            background: white;
+            color: #667eea;
+        }
+
+        .btn-cancel:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
+        .btn-confirm:hover {
+            background: rgba(255,255,255,0.9);
+        }
+        
+
+        /* Navigation Bar - Standardized */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400;
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications { animation: notificationPulse 2s ease-in-out infinite; }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        
+        .api-indicator { 
+            font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 8px; 
+            display: flex; align-items: center; gap: 6px; 
+        }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.connecting { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.connecting::before { background: #ea580c; }
+        
+        /* Time/Date Display */
+        .time-date-display {
+            display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time { font-size: 16px; font-weight: 500; color: #333; line-height: 1.2; }
+        .current-date { font-size: 11px; color: #666; line-height: 1.2; }
+
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center; 
+        }
+        .notifications-title { font-size: 18px; font-weight: 600; color: #333; margin: 0; }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content { padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title { font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px; }
+        .notification-meta { font-size: 12px; color: #666; display: flex; gap: 10px; }
+        .notification-time { color: #7B61FF; font-weight: 500; }
+        .no-notifications { text-align: center; color: #666; font-size: 14px; padding: 40px 20px; }
+
+        /* Mobile Navigation Menu */
+        .mobile-nav-menu {
+            position: fixed; top: 0; left: -280px; width: 280px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.3); z-index: 2000;
+            transition: left 0.3s ease; display: flex; flex-direction: column;
+        }
+        .mobile-nav-menu.open { left: 0; }
+        .mobile-nav-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .mobile-nav-header h3 { margin: 0; font-size: 20px; font-weight: 600; color: #333; }
+        .mobile-nav-close {
+            width: 40px; height: 40px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 24px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: all 0.3s ease;
+        }
+        .mobile-nav-close:active { background: rgba(255, 255, 255, 0.5); }
+        .mobile-nav-content { flex: 1; overflow-y: auto; padding: 10px; }
+        .mobile-nav-item {
+            display: flex; align-items: center; gap: 12px; padding: 16px; margin: 4px 0;
+            color: #666; text-decoration: none; font-size: 16px; font-weight: 500;
+            border-radius: 12px; transition: all 0.3s ease;
+        }
+        .mobile-nav-item:active { background: rgba(123, 97, 255, 0.1); color: #7B61FF; }
+        .mobile-nav-item.active { background: rgba(123, 97, 255, 0.15); color: #7B61FF; font-weight: 600; }
+        .mobile-nav-item.logout { color: #ff4444; }
+        .mobile-nav-divider { height: 1px; background: rgba(255, 255, 255, 0.3); margin: 10px 0; }
+        .mobile-nav-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.3); z-index: 1999; opacity: 0;
+            pointer-events: none; transition: opacity 0.3s ease;
+        }
+        .mobile-nav-overlay.open { opacity: 1; pointer-events: auto; }
+        
+        /* Responsive: hide nav-menu on mobile, show mini-orb */
+        @media (max-width: 768px) {
+            .nav-menu { display: none !important; }
+            .mini-orb { display: flex !important; }
+        }
+        @media (min-width: 769px) {
+            .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
+        }
+
+    </style>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
+</head>
+<body>
+    <!-- Navigation -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="toggleMobileMenu()"></div>
+            <div class="nav-menu">
+                <a href="chat.html" class="nav-item active">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="lists.html" class="nav-item">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- Time/Date Display -->
+            <div class="time-date-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('people.html')">
+                    <div class="more-item-icon">👥</div>
+                    <div class="more-item-label">People</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Navigation Menu -->
+    <div class="mobile-nav-menu" id="mobileNavMenu">
+        <div class="mobile-nav-header">
+            <h3>Navigation</h3>
+            <button class="mobile-nav-close" onclick="toggleMobileMenu()">✕</button>
+        </div>
+        <div class="mobile-nav-content">
+            <a href="chat.html" class="mobile-nav-item active">💬 Chat</a>
+            <a href="dashboard.html" class="mobile-nav-item">📊 Dashboard</a>
+            <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
+            <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
+            <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
+            <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
+            <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
+            <div class="mobile-nav-divider"></div>
+            <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
+        </div>
+    </div>
+    <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+            </div>
+            
+    <!-- Expand Button (shown when collapsed) -->
+    <button class="expand-btn" onclick="toggleSessions()">📋</button>
+
+    <!-- Main Container -->
+    <div class="app-container" id="appContainer">
+        <!-- Chat Area -->
+        <div class="chat-area">
+            <div class="messages-container" id="messagesContainer">
+                <!-- Welcome Section -->
+                <div class="welcome-section" id="welcomeSection">
+                    <h1 class="welcome-title">Chat with Zoe</h1>
+                    <p class="welcome-subtitle">Intelligent AI Assistant</p>
+                    <div class="suggestion-chips" id="dynamicSuggestions">
+                        <div class="suggestion-chip" onclick="tryPrompt('Help me plan my day')">
+                            <div class="suggestion-icon">🌅</div>
+                            <div class="suggestion-label">Plan My Day</div>
+                        </div>
+                        <div class="suggestion-chip" onclick="tryPrompt('What should I focus on today?')">
+                            <div class="suggestion-icon">🎯</div>
+                            <div class="suggestion-label">Daily Focus</div>
+                        </div>
+                        <div class="suggestion-chip" onclick="tryPrompt('Review my tasks and priorities')">
+                            <div class="suggestion-icon">📋</div>
+                            <div class="suggestion-label">Task Review</div>
+                        </div>
+                        <div class="suggestion-chip" onclick="tryPrompt('Give me smart insights about my routine')">
+                            <div class="suggestion-icon">💡</div>
+                            <div class="suggestion-label">Smart Insights</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Input Area -->
+            <div class="input-area">
+                <div class="input-wrapper">
+                    <textarea 
+                        class="input-field" 
+                        id="chatInput" 
+                        placeholder="Ask me anything..."
+                        rows="1"
+                        onkeydown="handleKeyDown(event)"
+                        oninput="adjustTextareaHeight(this)"
+                    ></textarea>
+                    <button class="send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
+                </div>
+                </div>
+            </div>
+
+        <!-- Sessions Panel -->
+        <div class="sessions-panel">
+            <div class="sessions-header">
+                <div class="sessions-title">💬 Sessions</div>
+                <button class="collapse-btn" onclick="toggleSessions()" title="Collapse">→</button>
+        </div>
+
+            <button class="new-session-btn" onclick="createNewSession()">+ New Chat</button>
+            
+            <div class="sessions-list" id="sessionsList">
+                <!-- Active session -->
+                <div class="session-item active">
+                    <div class="session-title">Current Chat</div>
+                    <div class="session-meta">
+                        <span>0 messages</span>
+                        <span>Now</span>
+            </div>
+        </div>
+    </div>
+
+            <!-- Quick Actions -->
+            <div class="quick-actions">
+                <div class="quick-actions-title">Quick Actions</div>
+                <div class="action-chips">
+                    <div class="action-chip" onclick="tryPrompt('Plan my day')">
+                        📅 Plan Day
+            </div>
+                    <div class="action-chip" onclick="tryPrompt('What smart actions can you help me with?')">
+                        🎯 Smart Actions
+                </div>
+                    <div class="action-chip" onclick="tryPrompt('Analyze productivity')">
+                        📊 Productivity
+                </div>
+                    <div class="action-chip" onclick="tryPrompt('Review week')">
+                        📝 Weekly Review
+                </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/auth.js?v=9.0&t=1760020000"></script>
+    <script src="js/common.js?v=9.0&t=1760020000"></script>
+    <script>
+        // Cache buster - force browser to reload this script
+        console.log('🔄 Chat.html v10.0 - COMPLETE ORCHESTRATION: Interactive Action Cards with Time Slot Picker!');
+    </script>
+    <script>
+        // State
+        let isStreaming = false;
+        let currentSessionId = null;
+        let messageCount = 0;
+
+        // Initialize
+        function init() {
+            updateTimeDate();
+            setInterval(updateTimeDate, 60000);
+            document.getElementById('chatInput').focus();
+            
+            // Load sessions from backend (but don't auto-load messages)
+            loadSessions();
+            
+            // Don't create session on page load - only when user sends first message
+            // Session will be created automatically by saveMessageToSession()
+            // createOrGetCurrentSession();
+            
+            // Dynamic suggestions disabled - causing mixed content errors
+            // Using static suggestions instead
+            // generateDynamicSuggestions();
+        }
+
+        // Time/Date
+        function updateTimeDate() {
+            const now = new Date();
+            document.getElementById('currentTime').textContent = 
+                now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            document.getElementById('currentDate').textContent = 
+                now.toLocaleDateString([], { month: 'short', day: 'numeric' });
+        }
+
+        // Sessions Panel Toggle
+        function toggleSessions() {
+            document.getElementById('appContainer').classList.toggle('sessions-collapsed');
+        }
+
+        // Session Management
+        async function loadSessions() {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId = session?.user_info?.user_id || session?.user_id;
+                
+                const response = await apiRequest(`/api/chat/sessions/?user_id=${userId}`);
+                const sessions = response.sessions || [];
+                
+                const sessionsList = document.getElementById('sessionsList');
+                sessionsList.innerHTML = sessions.map((s, idx) => `
+                    <div class="session-item ${s.id === currentSessionId ? 'active' : ''}" onclick="loadSession('${s.id}')">
+                        <div class="session-title">${s.title}</div>
+                        <div class="session-meta">
+                            <span>${s.message_count} messages</span>
+                            <span>${formatSessionTime(s.updated_at)}</span>
+                        </div>
+                    </div>
+                `).join('');
+                
+                // Don't auto-load old sessions - let user click to view history
+                // Always start with a clean chat unless explicitly loading a session
+                // if (sessions.length > 0 && !currentSessionId) {
+                //     currentSessionId = sessions[0].id;
+                //     await loadSessionMessages(currentSessionId);
+                // }
+            } catch (error) {
+                console.error('Failed to load sessions:', error);
+            }
+        }
+
+        async function createOrGetCurrentSession() {
+            if (!currentSessionId) {
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId = session?.user_info?.user_id || session?.user_id;
+                
+                console.log('💬 Creating/getting chat session for user:', userId);
+                
+                try {
+                    const response = await apiRequest('/api/chat/sessions/', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            user_id: userId,
+                            title: 'New Chat'
+                        })
+                    });
+                    currentSessionId = response.session_id;
+                    console.log('✅ Created new session:', currentSessionId);
+                } catch (error) {
+                    console.error('Failed to create session:', error);
+                    currentSessionId = `session_${Date.now()}`;
+                }
+            }
+        }
+
+        async function createNewSession() {
+            const session = window.zoeAuth?.getCurrentSession();
+            const userId = session?.user_info?.user_id || session?.user_id || 'default';
+            
+            console.log('💬 Creating new chat session for user:', userId);
+            
+            try {
+                const response = await apiRequest('/api/chat/sessions/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        title: `Chat ${new Date().toLocaleString()}`
+                    })
+                });
+                
+                currentSessionId = response.session_id;
+                messageCount = 0;
+                
+                document.getElementById('messagesContainer').innerHTML = `
+                    <div class="welcome-section" id="welcomeSection">
+                        <h1 class="welcome-title">New Chat</h1>
+                        <p class="welcome-subtitle">Start a fresh conversation</p>
+                    </div>
+                `;
+                
+                // Reload sessions list
+            await loadSessions();
+            
+            // Generate intelligent suggestions
+            await generateDynamicSuggestions();
+        } catch (error) {
+                console.error('Failed to create new session:', error);
+            }
+        }
+
+        async function loadSession(sessionId) {
+            try {
+                currentSessionId = sessionId;
+                
+                // Update UI to show active session
+                document.querySelectorAll('.session-item').forEach(item => {
+                    item.classList.remove('active');
+                });
+                event.target.closest('.session-item').classList.add('active');
+                
+                // Load session messages
+                await loadSessionMessages(sessionId);
+            } catch (error) {
+                console.error('Failed to load session:', error);
+            }
+        }
+
+        async function loadSessionMessages(sessionId) {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId = session?.user_info?.user_id || session?.user_id;
+                
+                const response = await apiRequest(`/api/chat/sessions/${sessionId}/messages/?user_id=${userId}`);
+                const messages = response.messages || [];
+                
+                const container = document.getElementById('messagesContainer');
+                container.innerHTML = '';
+                
+                // Display all messages (skip saving since they're already in DB)
+                messages.forEach(msg => {
+                    if (msg.role === 'user') {
+                        addUserMessage(msg.content, true); // skipSave = true
+                    } else {
+                        addAssistantMessage(msg.content);
+                    }
+                });
+                
+                messageCount = messages.length;
+            } catch (error) {
+                console.error('Failed to load session messages:', error);
+            }
+        }
+
+        async function saveMessageToSession(role, content) {
+            if (!currentSessionId) {
+                await createOrGetCurrentSession();
+            }
+            
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId = session?.user_info?.user_id || session?.user_id;
+                
+                await apiRequest(`/api/chat/sessions/${currentSessionId}/messages/?user_id=${userId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        role: role,
+                        content: content
+                    })
+                });
+            } catch (error) {
+                console.error('Failed to save message:', error);
+            }
+        }
+
+        function formatSessionTime(timestamp) {
+            const date = new Date(timestamp);
+            const now = new Date();
+            const diffMs = now - date;
+            const diffMins = Math.floor(diffMs / 60000);
+            
+            if (diffMins < 1) return 'just now';
+            if (diffMins < 60) return `${diffMins}m ago`;
+            if (diffMins < 1440) return `${Math.floor(diffMins / 60)}h ago`;
+            return date.toLocaleDateString();
+        }
+
+        // Input Handling
+        function handleKeyDown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        function adjustTextareaHeight(textarea) {
+            textarea.style.height = 'auto';
+            textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+        }
+
+        function tryPrompt(text) {
+            document.getElementById('chatInput').value = text;
+            sendMessage();
+        }
+
+        // Message Handling
+        async function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message || isStreaming) return;
+
+            // Remove welcome
+            const welcome = document.getElementById('welcomeSection');
+            if (welcome) welcome.remove();
+
+            // Add user message (but don't save yet - wait for backend session ID)
+            addUserMessage(message, true); // skipSave = true
+            input.value = '';
+            adjustTextareaHeight(input);
+            messageCount++;
+
+            // Process with real chat (backend will save messages)
+            await processWithSubgraphs(message);
+        }
+
+        function addUserMessage(text, skipSave = false) {
+            const container = document.getElementById('messagesContainer');
+            const group = document.createElement('div');
+            group.className = 'message-group user';
+            group.innerHTML = `
+                <div class="message-header">
+                    <div class="message-avatar">👤</div>
+                    <div class="message-name">You</div>
+                    <div class="message-time">just now</div>
+                </div>
+                <div class="message-content">${text.replace(/\n/g, '<br>')}</div>
+            `;
+            container.appendChild(group);
+            scrollToBottom();
+            
+            // Save to session (unless loading history)
+            if (!skipSave) {
+                saveMessageToSession('user', text);
+            }
+        }
+
+        async function processWithSubgraphs(message) {
+            isStreaming = true;
+            document.getElementById('sendBtn').disabled = true;
+
+            // All messages go through real chat API (no demo functions)
+            // The backend handles intent detection and routing
+            await executeGeneralResponse(message);
+
+            // Button re-enabled in executeGeneralResponse on session_end
+            messageCount++;
+        }
+
+        // Subgraph Executors
+        async function executePlanDaySubgraph() {
+            const container = document.getElementById('messagesContainer');
+            
+            // Assistant message
+            addAssistantMessage("I'll help you plan your day! Let me analyze your schedule.");
+            await sleep(500);
+
+            // Subgraph card
+            const subgraph = createSubgraphCard('📅', 'Day Planning Subgraph', 'Analyzing your schedule and priorities...');
+            container.appendChild(subgraph);
+            scrollToBottom();
+
+            // Execute steps
+            const steps = [
+                { icon: '📅', text: 'Fetching calendar events', delay: 800 },
+                { icon: '✓', text: 'Found 5 events today', delay: 600 },
+                { icon: '📋', text: 'Loading task list', delay: 700 },
+                { icon: '✓', text: 'Found 8 pending tasks', delay: 600 },
+                { icon: '🎯', text: 'Analyzing priorities', delay: 900 },
+                { icon: '✓', text: 'Generated optimized schedule', delay: 500 }
+            ];
+
+            await executeSteps(subgraph, steps);
+            completeSubgraph(subgraph);
+
+            // Add result
+            const result = `
+                <strong>Morning (8-12pm):</strong><br>
+                • Team standup (9am) - 30min<br>
+                • Focus: Complete project proposal (high priority)<br>
+                • Quick break at 11am<br><br>
+                
+                <strong>Afternoon (12-5pm):</strong><br>
+                • Lunch with Sarah (12:30pm)<br>
+                • Review pull requests (2-3pm)<br>
+                • Doctor appointment (4:30pm)<br><br>
+                
+                <strong>Evening:</strong><br>
+                • Dinner with friends (7pm)<br>
+                • Light reading before bed
+            `;
+            addSubgraphResult(subgraph, '✨ Your Optimized Day Plan', result);
+        }
+
+        async function executeWorkflowDesignSubgraph(message) {
+            const container = document.getElementById('messagesContainer');
+            
+            addAssistantMessage("I'll design an N8N workflow for you! Analyzing your requirements...");
+            await sleep(500);
+
+            const subgraph = createSubgraphCard('🔧', 'Workflow Design Subgraph', 'Creating N8N workflow architecture...');
+            container.appendChild(subgraph);
+            scrollToBottom();
+
+            const steps = [
+                { icon: '🧠', text: 'Analyzing workflow requirements', delay: 800 },
+                { icon: '✓', text: 'Identified key automation points', delay: 700 },
+                { icon: '🔗', text: 'Designing node connections', delay: 900 },
+                { icon: '✓', text: 'Generated 6-node workflow', delay: 600 },
+                { icon: '📤', text: 'Exporting to N8N format', delay: 500 }
+            ];
+
+            await executeSteps(subgraph, steps);
+            completeSubgraph(subgraph);
+
+            const result = `
+                <strong>Daily Summary Email Workflow</strong><br><br>
+                
+                <strong>Trigger:</strong> Schedule (Daily at 8:00 AM)<br><br>
+                
+                <strong>Nodes:</strong><br>
+                1️⃣ Get today's calendar events<br>
+                2️⃣ Fetch pending tasks<br>
+                3️⃣ Check weather forecast<br>
+                4️⃣ Format email template<br>
+                5️⃣ Send email (Gmail)<br>
+                6️⃣ Log execution<br><br>
+                
+                <a href="/n8n" target="_blank" style="color: #7B61FF; text-decoration: none;">→ Open in N8N Editor</a>
+            `;
+            addSubgraphResult(subgraph, '✨ Workflow Created', result);
+        }
+
+        async function executeProductivitySubgraph() {
+            const container = document.getElementById('messagesContainer');
+            
+            addAssistantMessage("Let me analyze your productivity patterns!");
+            await sleep(500);
+
+            const subgraph = createSubgraphCard('🧠', 'Intelligence Analysis', 'Examining your patterns...');
+            container.appendChild(subgraph);
+            scrollToBottom();
+
+            const steps = [
+                { icon: '📈', text: 'Loading activity data (30 days)', delay: 800 },
+                { icon: '✓', text: 'Processed 247 tasks', delay: 600 },
+                { icon: '🕐', text: 'Analyzing time patterns', delay: 900 },
+                { icon: '✓', text: 'Identified peak hours: 9-11am', delay: 700 },
+                { icon: '🎯', text: 'Generating recommendations', delay: 800 }
+            ];
+
+            await executeSteps(subgraph, steps);
+            completeSubgraph(subgraph);
+
+            const result = `
+                <strong>Peak Performance:</strong> 9-11am (85% completion)<br>
+                <strong>Average Focus Time:</strong> 2.5 hours/day<br>
+                <strong>Task Completion Rate:</strong> 78%<br><br>
+                
+                <strong>Recommendations:</strong><br>
+                • Schedule deep work for morning hours<br>
+                • Take breaks every 90 minutes<br>
+                • Batch similar tasks together<br>
+                • Reduce afternoon meetings
+            `;
+            addSubgraphResult(subgraph, '✨ Productivity Insights', result);
+        }
+
+        async function executeShoppingSubgraph() {
+            const container = document.getElementById('messagesContainer');
+            
+            addAssistantMessage("I'll help you create a smart shopping list!");
+            await sleep(500);
+
+            const subgraph = createSubgraphCard('🛒', 'Shopping List Subgraph', 'Analyzing your needs...');
+            container.appendChild(subgraph);
+            scrollToBottom();
+
+            const steps = [
+                { icon: '🍽️', text: 'Checking meal plan', delay: 700 },
+                { icon: '✓', text: 'Found 5 planned meals', delay: 600 },
+                { icon: '📦', text: 'Checking pantry inventory', delay: 800 },
+                { icon: '✓', text: 'Identified missing items', delay: 600 },
+                { icon: '🏪', text: 'Optimizing shopping route', delay: 700 }
+            ];
+
+            await executeSteps(subgraph, steps);
+            completeSubgraph(subgraph);
+
+            const result = `
+                <strong>Produce:</strong><br>
+                • Tomatoes (4)<br>
+                • Lettuce (1 head)<br>
+                • Bananas (6)<br><br>
+                
+                <strong>Dairy:</strong><br>
+                • Milk (1 gallon)<br>
+                • Eggs (dozen)<br>
+                • Cheese (cheddar)<br><br>
+                
+                <strong>Pantry:</strong><br>
+                • Pasta<br>
+                • Coffee<br>
+                • Rice
+            `;
+            addSubgraphResult(subgraph, '✨ Your Shopping List', result);
+        }
+
+        async function executeGeneralResponse(message) {
+            const container = document.getElementById('messagesContainer');
+            
+            // Show thinking indicator
+            const thinkingIndicator = document.createElement('div');
+            thinkingIndicator.className = 'activity-indicator thinking';
+            thinkingIndicator.innerHTML = `
+                <div class="activity-content">
+                    <span class="activity-icon">🧠</span>
+                    <span>Zoe is thinking...</span>
+                </div>
+            `;
+            container.appendChild(thinkingIndicator);
+            scrollToBottom();
+            
+            // Create assistant message group
+            const group = document.createElement('div');
+            group.className = 'message-group assistant';
+            group.innerHTML = `
+                <div class="message-header">
+                    <div class="message-avatar">🤖</div>
+                    <div class="message-name">Zoe</div>
+                    <div class="message-time">just now</div>
+                    </div>
+                <div class="message-content"></div>
+            `;
+            container.appendChild(group);
+
+            const contentEl = group.querySelector('.message-content');
+
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId = session?.user_info?.user_id || session?.user_id;
+                
+                // Call REAL streaming API with AG-UI protocol
+                const response = await fetch(`/api/chat/?user_id=${userId}&stream=true`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: message,
+                        user_id: userId,
+                        context: { 
+                            mode: 'main_chat',
+                            onboarding_mode: isOnboardingMode
+                        },
+                        session_id: currentSessionId || `session_${Date.now()}`
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                // Read SSE stream
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let streamingText = '';
+
+                while (true) {
+                    const {value, done} = await reader.read();
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, {stream: true});
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                console.log('📡 AG-UI Event:', data.type, data);
+                                
+                                // AG-UI Protocol Event Handlers
+                                if (data.type === 'session_start') {
+                                    console.log('🎯 Session started:', data.session_id);
+                                    currentSessionId = data.session_id;
+                                    // Reload sessions list to show new session (non-blocking)
+                                    loadSessions().catch(err => {
+                                        console.warn('⚠️ Failed to reload sessions (non-critical):', err);
+                                    });
+                                } else if (data.type === 'agent_state_delta') {
+                                    console.log('🔄 Agent state:', data.state);
+                                    // Update thinking indicator based on state
+                                    if (data.state?.status === 'generating') {
+                                        thinkingIndicator.querySelector('span:last-child').textContent = 
+                                            `Generating response with ${data.state.model || 'AI'}...`;
+                                    }
+                                    // Show context information if available
+                                    if (data.state?.context) {
+                                        const ctx = data.state.context;
+                                        const ctxInfo = [];
+                                        if (ctx.events) ctxInfo.push(`${ctx.events} events`);
+                                        if (ctx.memories_found) ctxInfo.push(`${ctx.memories_found} memories`);
+                                        if (ctxInfo.length > 0) {
+                                            console.log('📊 Context:', ctxInfo.join(', '));
+                                        }
+                                    }
+                                    // Show routing information
+                                    if (data.state?.routing) {
+                                        console.log('🎯 Routing type:', data.state.routing);
+                                    }
+                                } else if (data.type === 'action') {
+                                    console.log('🔧 Tool executing:', data.name);
+                                    // Show tool execution indicator
+                                    thinkingIndicator.className = 'activity-indicator executing';
+                                    thinkingIndicator.querySelector('span:first-child').textContent = '🔧';
+                                    thinkingIndicator.querySelector('span:last-child').textContent = 
+                                        `Executing: ${data.name}...`;
+                                    scrollToBottom();
+                                } else if (data.type === 'action_result') {
+                                    console.log('✅ Tool completed');
+                                    thinkingIndicator.className = 'activity-indicator thinking';
+                                    thinkingIndicator.querySelector('span:first-child').textContent = '🧠';
+                                    thinkingIndicator.querySelector('span:last-child').textContent = 
+                                        'Processing results...';
+                                } else if (data.type === 'message_delta') {
+                                    // Remove thinking indicator on first content
+                                    if (streamingText.length === 0 && thinkingIndicator.parentNode) {
+                                        thinkingIndicator.remove();
+                                    }
+                                    // AG-UI standard: message_delta for content streaming
+                                    streamingText += data.delta;
+                                    contentEl.innerHTML = streamingText.replace(/\n/g, '<br>') + 
+                                                        '<span class="streaming-cursor"></span>';
+                                    scrollToBottom();
+                                } else if (data.type === 'action_cards') {
+                                    console.log('💡 Rendering action cards:', data.cards);
+                                    // Render interactive action cards
+                                    const cardsHtml = renderActionCards(data.cards);
+                                    streamingText += cardsHtml;
+                                    contentEl.innerHTML = streamingText.replace(/\n/g, '<br>');
+                                    scrollToBottom();
+                                } else if (data.type === 'session_end') {
+                                    console.log('✅ Session ended:', data.session_id);
+                                    if (data.final_state) {
+                                        console.log('📊 Final state:', {
+                                            tokens: data.final_state.tokens,
+                                            complete: data.final_state.complete
+                                        });
+                                    }
+                                    contentEl.innerHTML = streamingText.replace(/\n/g, '<br>');
+                                    // Backend already saved messages, no need to save here
+                                    // Re-enable send button
+                                    isStreaming = false;
+                                    document.getElementById('sendBtn').disabled = false;
+                                    // Remove thinking indicator
+                                    if (thinkingIndicator && thinkingIndicator.parentNode) {
+                                        thinkingIndicator.remove();
+                                    }
+                                } else if (data.type === 'error') {
+                                    console.error('❌ AG-UI Error:', data.error);
+                                    contentEl.innerHTML = `<span style="color: #ef4444;">Error: ${data.error.message}</span>`;
+                                    if (thinkingIndicator.parentNode) {
+                                        thinkingIndicator.remove();
+                                    }
+                                }
+                            } catch (e) {
+                                console.error('Failed to parse AG-UI event:', e, line);
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Chat error:', error);
+                contentEl.innerHTML = 'Sorry, I encountered an error. Please try again.';
+                // Remove thinking indicator on error
+                if (thinkingIndicator && thinkingIndicator.parentNode) {
+                    thinkingIndicator.remove();
+                }
+                // Re-enable send button
+                isStreaming = false;
+                document.getElementById('sendBtn').disabled = false;
+            }
+
+            // Add actions
+            addMessageActions(group);
+        }
+
+        // Helper Functions
+        function addAssistantMessage(text) {
+            const container = document.getElementById('messagesContainer');
+            const group = document.createElement('div');
+            group.className = 'message-group assistant';
+            group.innerHTML = `
+                <div class="message-header">
+                    <div class="message-avatar">🤖</div>
+                    <div class="message-name">Zoe</div>
+                    <div class="message-time">just now</div>
+                </div>
+                <div class="message-content">${text}</div>
+            `;
+            container.appendChild(group);
+            scrollToBottom();
+        }
+
+        function createSubgraphCard(icon, title, description) {
+            const card = document.createElement('div');
+            card.className = 'subgraph-card';
+            card.innerHTML = `
+                <div class="subgraph-header">
+                    <div class="subgraph-title">
+                        <div class="subgraph-icon">${icon}</div>
+                        <span>${title}</span>
+                </div>
+                    <div class="subgraph-status running">Running...</div>
+                    </div>
+                <div class="subgraph-body">${description}</div>
+                <div class="subgraph-steps"></div>
+            `;
+            return card;
+        }
+
+        async function executeSteps(subgraph, steps) {
+            const stepsContainer = subgraph.querySelector('.subgraph-steps');
+            
+            for (let step of steps) {
+                await sleep(step.delay);
+                const stepEl = document.createElement('div');
+                stepEl.className = step.icon === '✓' ? 'subgraph-step complete' : 'subgraph-step running';
+                stepEl.innerHTML = `<span class="subgraph-step-icon">${step.icon}</span><span>${step.text}</span>`;
+                stepsContainer.appendChild(stepEl);
+                
+                if (step.icon === '✓') {
+                    stepEl.className = 'subgraph-step complete';
+                }
+                scrollToBottom();
+            }
+        }
+
+        function completeSubgraph(subgraph) {
+            const status = subgraph.querySelector('.subgraph-status');
+            status.textContent = 'Complete';
+            status.className = 'subgraph-status complete';
+        }
+
+        function addSubgraphResult(subgraph, title, content) {
+            const result = document.createElement('div');
+            result.className = 'subgraph-result';
+            result.innerHTML = `
+                <div class="subgraph-result-title">${title}</div>
+                <div class="subgraph-result-content">${content}</div>
+            `;
+            subgraph.appendChild(result);
+            scrollToBottom();
+        }
+
+        function addMessageActions(group, interactionId = null) {
+            const actions = document.createElement('div');
+            actions.className = 'message-actions';
+            actions.setAttribute('data-interaction-id', interactionId || 'unknown');
+            actions.innerHTML = `
+                <button class="action-btn" onclick="copyMessage(this)">📋 Copy</button>
+                <button class="action-btn" onclick="feedbackPositive(this)">👍 Good</button>
+                <button class="action-btn" onclick="feedbackNegative(this)">👎 Bad</button>
+                <button class="action-btn" onclick="correctResponse(this)">✏️ Correct</button>
+            `;
+            group.appendChild(actions);
+        }
+
+        // Feedback Actions
+        function copyMessage(btn) {
+            const messageGroup = btn.closest('.message-group');
+            const messageText = messageGroup.querySelector('.message-content').innerText;
+            navigator.clipboard.writeText(messageText).then(() => {
+                btn.textContent = '✓ Copied';
+                setTimeout(() => { btn.textContent = '📋 Copy'; }, 2000);
+            });
+        }
+
+        async function feedbackPositive(btn) {
+            btn.classList.toggle('active');
+            const negBtn = btn.parentElement.querySelector('.action-btn:nth-child(3)');
+            if (negBtn) negBtn.classList.remove('active');
+            
+            // ✅ NEW: Send feedback to backend
+            const actionsDiv = btn.closest('.message-actions');
+            const interactionId = actionsDiv.getAttribute('data-interaction-id');
+            
+            if (interactionId && interactionId !== 'unknown') {
+                try {
+                    const session = window.zoeAuth?.getCurrentSession();
+                    const userId = session?.user_info?.user_id || session?.user_id;
+                    
+                    const response = await fetch(`/api/chat/feedback/${interactionId}?feedback_type=thumbs_up&user_id=${userId}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        showNotification(data.message || '✨ Thanks for the feedback!');
+                    }
+                } catch (error) {
+                    console.error('Failed to send feedback:', error);
+                }
+            }
+        }
+
+        async function feedbackNegative(btn) {
+            btn.classList.toggle('active');
+            const posBtn = btn.parentElement.querySelector('.action-btn:nth-child(2)');
+            if (posBtn) posBtn.classList.remove('active');
+            
+            // ✅ NEW: Send feedback to backend
+            const actionsDiv = btn.closest('.message-actions');
+            const interactionId = actionsDiv.getAttribute('data-interaction-id');
+            
+            if (interactionId && interactionId !== 'unknown') {
+                try {
+                    const session = window.zoeAuth?.getCurrentSession();
+                    const userId = session?.user_info?.user_id || session?.user_id;
+                    
+                    const response = await fetch(`/api/chat/feedback/${interactionId}?feedback_type=thumbs_down&user_id=${userId}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        showNotification(data.message || 'Thanks for the feedback!');
+                    }
+                } catch (error) {
+                    console.error('Failed to send feedback:', error);
+                }
+            }
+        }
+
+        async function correctResponse(btn) {
+            const actionsDiv = btn.closest('.message-actions');
+            const interactionId = actionsDiv.getAttribute('data-interaction-id');
+            
+            if (!interactionId || interactionId === 'unknown') {
+                showNotification('Cannot correct this message (no interaction ID)');
+                return;
+            }
+            
+            const messageGroup = btn.closest('.message-group');
+            const currentResponse = messageGroup.querySelector('.message-content').innerText;
+            
+            const correction = prompt('How should Zoe have responded?', currentResponse);
+            if (correction && correction.trim()) {
+                try {
+                    const session = window.zoeAuth?.getCurrentSession();
+                    const userId = session?.user_info?.user_id || session?.user_id;
+                    
+                    const response = await fetch(`/api/chat/feedback/${interactionId}?feedback_type=correction&user_id=${userId}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            corrected_response: correction
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        showNotification(data.message || '✨ Thanks! Zoe will learn from this tonight.');
+                        btn.textContent = '✓ Learned';
+                        btn.classList.add('active');
+                    }
+                } catch (error) {
+                    console.error('Failed to send correction:', error);
+                    showNotification('Failed to send correction');
+                }
+            }
+        }
+
+        // Utilities
+        function scrollToBottom() {
+            const container = document.getElementById('messagesContainer');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        // Action Cards Rendering
+        function renderActionCards(cards) {
+            if (!cards || cards.length === 0) return '';
+            
+            let html = '<div class="action-cards-container">';
+            
+            for (const card of cards) {
+                const priorityClass = card.priority || '';
+                html += `
+                    <div class="action-card ${priorityClass}" data-card-id="${card.id}">
+                        <div class="card-header">
+                            <span class="card-icon">${card.icon}</span>
+                            <div class="card-info">
+                                <div class="card-title">${card.title}</div>
+                                <div class="card-description">${card.description}</div>
+                            </div>
+                        </div>
+                        <div class="card-actions" id="${card.id}_actions">
+                            ${renderCardActions(card.actions, card.id)}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            html += '</div>';
+            return html;
+        }
+
+        function renderCardActions(actions, cardId) {
+            if (!actions) return '';
+            
+            return actions.map((action, index) => {
+                const actionId = `${cardId}_${action.type}_${index}`;
+                
+                if (action.type === 'add_to_calendar_with_slots') {
+                    // Render expandable time slot picker
+                    return `
+                        <div class="calendar-action-container" id="${actionId}_container">
+                            <button 
+                                class="card-action-btn add-to-calendar" 
+                                onclick="toggleTimeSlotPicker('${actionId}', '${cardId}', ${JSON.stringify(action.data).replace(/"/g, '&quot;')})"
+                            >
+                                ${action.label} <span class="dropdown-arrow">▼</span>
+                            </button>
+                            <div class="time-slot-picker" id="${actionId}_picker" style="display: none;">
+                                <!-- Time slots will be rendered here -->
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    // Regular action button
+                    return `
+                        <button 
+                            class="card-action-btn ${action.type}" 
+                            onclick="executeCardAction('${cardId}', '${action.type}', ${JSON.stringify(action.data).replace(/"/g, '&quot;')})"
+                        >
+                            ${action.label}
+                        </button>
+                    `;
+                }
+            }).join('');
+        }
+
+        function toggleTimeSlotPicker(actionId, cardId, dataStr) {
+            const data = typeof dataStr === 'string' ? JSON.parse(dataStr) : dataStr;
+            const picker = document.getElementById(`${actionId}_picker`);
+            const isVisible = picker.style.display !== 'none';
+            
+            if (isVisible) {
+                // Hide picker
+                picker.style.display = 'none';
+                const btn = document.querySelector(`[onclick*="${actionId}"]`);
+                if (btn) btn.querySelector('.dropdown-arrow').textContent = '▼';
+            } else {
+                // Show picker and render slots
+                renderTimeSlotOptions(picker, actionId, cardId, data);
+                picker.style.display = 'block';
+                const btn = document.querySelector(`[onclick*="${actionId}"]`);
+                if (btn) btn.querySelector('.dropdown-arrow').textContent = '▲';
+            }
+        }
+
+        function renderTimeSlotOptions(picker, actionId, cardId, data) {
+            const availableSlots = data.available_slots || [];
+            const taskDuration = data.duration_minutes;
+            
+            let html = '<div class="time-slot-options">';
+            html += '<div class="slot-header">📅 Choose a time slot:</div>';
+            
+            if (availableSlots.length === 0) {
+                html += '<div class="no-slots">No matching free slots found. Try a custom time.</div>';
+            } else {
+                // Render each available slot
+                availableSlots.forEach((slot, index) => {
+                    const slotId = `${actionId}_slot_${index}`;
+                    const durationMatch = slot.duration_minutes >= taskDuration;
+                    const slotLabel = formatTimeSlot(slot);
+                    
+                    html += `
+                        <div class="time-slot-option ${durationMatch ? 'recommended' : ''}" 
+                             onclick="selectTimeSlot('${actionId}', '${cardId}', ${index}, ${JSON.stringify(data).replace(/"/g, '&quot;')})">
+                            <input type="radio" name="${actionId}_slot" id="${slotId}" value="${index}">
+                            <label for="${slotId}">
+                                <div class="slot-time">${slotLabel}</div>
+                                <div class="slot-info">
+                                    ${formatDuration(slot.duration_minutes)} free
+                                    ${durationMatch ? '<span class="badge">✓ Fits task</span>' : '<span class="badge warning">⚠️ Too short</span>'}
+                                </div>
+                            </label>
+                        </div>
+                    `;
+                });
+            }
+            
+            html += '</div>';
+            picker.innerHTML = html;
+        }
+
+        async function selectTimeSlot(actionId, cardId, slotIndex, dataStr) {
+            const data = typeof dataStr === 'string' ? JSON.parse(dataStr) : dataStr;
+            const slot = data.available_slots[slotIndex];
+            
+            // Show confirmation in picker
+            const picker = document.getElementById(`${actionId}_picker`);
+            picker.innerHTML = `
+                <div class="time-slot-confirmation">
+                    <p>Schedule "${data.title}" for ${formatTimeSlot(slot)}?</p>
+                    <div class="confirmation-actions">
+                        <button class="btn-cancel" onclick="toggleTimeSlotPicker('${actionId}', '${cardId}', ${JSON.stringify(data).replace(/"/g, '&quot;')})">Cancel</button>
+                        <button class="btn-confirm" onclick="confirmSlotSelection('${actionId}', '${cardId}', ${slotIndex}, ${JSON.stringify(data).replace(/"/g, '&quot;')})">Confirm</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function confirmSlotSelection(actionId, cardId, slotIndex, dataStr) {
+            const data = typeof dataStr === 'string' ? JSON.parse(dataStr) : dataStr;
+            const slot = data.available_slots[slotIndex];
+            
+            const btn = document.querySelector(`#${actionId}_container .card-action-btn`);
+            const originalText = btn.innerHTML;
+            
+            // Show loading
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Adding...';
+            
+            try {
+                // ✅ FIX: Get authenticated user
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId = session?.user_info?.user_id || session?.user_id;
+                
+                // Add to calendar
+                await apiRequest(`/calendar/events?user_id=${userId}`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        title: data.title,
+                        start_date: slot.date,
+                        start_time: slot.start_time,
+                        end_time: slot.end_time || calculateEndTime(slot.start_time, data.duration_minutes)
+                    })
+                });
+                
+                // Success!
+                btn.innerHTML = '✅ Added to Calendar!';
+                btn.classList.add('success');
+                
+                // Hide picker
+                const picker = document.getElementById(`${actionId}_picker`);
+                setTimeout(() => {
+                    picker.style.display = 'none';
+                }, 500);
+                
+                // Fade out card after 3 seconds
+                setTimeout(() => {
+                    const card = document.querySelector(`[data-card-id="${cardId}"]`);
+                    if (card) card.style.opacity = '0.5';
+                }, 3000);
+                
+            } catch (error) {
+                console.error('Failed to add to calendar:', error);
+                btn.innerHTML = '❌ Failed';
+                btn.classList.add('error');
+                setTimeout(() => {
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                }, 2000);
+            }
+        }
+
+        async function executeCardAction(cardId, actionType, dataStr) {
+            const data = typeof dataStr === 'string' ? JSON.parse(dataStr) : dataStr;
+            const btn = event.target;
+            const originalText = btn.textContent;
+            
+            // ✅ FIX: Get authenticated user
+            const session = window.zoeAuth?.getCurrentSession();
+            const userId = session?.user_info?.user_id || session?.user_id || 'default';
+            
+            // Show loading
+            btn.disabled = true;
+            btn.textContent = '⏳ Processing...';
+            
+            try {
+                if (actionType === 'add_to_calendar') {
+                    await apiRequest(`/calendar/events?user_id=${userId}`, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            title: data.title,
+                            start_date: data.start_date || new Date().toISOString().split('T')[0],
+                            all_day: data.all_day || false
+                        })
+                    });
+                    btn.textContent = '✅ Added!';
+                    
+                } else if (actionType === 'add_to_list') {
+                    await apiRequest(`/lists/tasks?user_id=${userId}`, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            text: data.text,
+                            list_name: data.list_name || 'Tasks',
+                            priority: data.priority || 'medium'
+                        })
+                    });
+                    btn.textContent = '✅ Added!';
+                    
+                } else if (actionType === 'set_reminder') {
+                    // For now, just show success (reminder API may not exist)
+                    btn.textContent = '✅ Reminder Set!';
+                }
+                
+                btn.classList.add('success');
+                
+                // Fade out card after 2 seconds
+                setTimeout(() => {
+                    const card = document.querySelector(`[data-card-id="${cardId}"]`);
+                    if (card) card.style.opacity = '0.5';
+                }, 2000);
+                
+            } catch (error) {
+                console.error('Card action failed:', error);
+                btn.textContent = '❌ Failed';
+                btn.classList.add('error');
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.disabled = false;
+                }, 2000);
+            }
+        }
+
+        function formatTimeSlot(slot) {
+            return `${formatTime(slot.start_time)} - ${formatTime(slot.end_time)}`;
+        }
+
+        function formatTime(time24) {
+            if (!time24) return '';
+            const [hours, minutes] = time24.split(':').map(Number);
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            const hours12 = hours % 12 || 12;
+            return `${hours12}:${String(minutes).padStart(2, '0')} ${ampm}`;
+        }
+
+        function formatDuration(minutes) {
+            const hours = Math.floor(minutes / 60);
+            const mins = minutes % 60;
+            if (hours === 0) return `${mins}min`;
+            if (mins === 0) return `${hours}h`;
+            return `${hours}h ${mins}min`;
+        }
+
+        function calculateEndTime(startTime, durationMinutes) {
+            if (!startTime || !durationMinutes) return null;
+            
+            const [hours, minutes] = startTime.split(':').map(Number);
+            const endMinutes = hours * 60 + minutes + durationMinutes;
+            const endHours = Math.floor(endMinutes / 60) % 24;
+            const endMins = endMinutes % 60;
+            
+            return `${String(endHours).padStart(2, '0')}:${String(endMins).padStart(2, '0')}`;
+        }
+
+        // Intelligent Proactive Assistant
+        async function generateDynamicSuggestions() {
+            const suggestionsContainer = document.getElementById('dynamicSuggestions');
+            if (!suggestionsContainer) return;
+            
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId = session?.user_info?.user_id || session?.user_id;
+                
+                // Get user context from all available services
+                const startDate = new Date().toISOString().split('T')[0];
+                const endDate = new Date(Date.now() + 7*24*60*60*1000).toISOString().split('T')[0];
+                
+                const [calendarData, tasksData, memoriesData] = await Promise.allSettled([
+                    apiRequest(`/api/calendar/events/?user_id=${userId}&start_date=${startDate}&end_date=${endDate}`).catch(e => ({events: []})),
+                    apiRequest(`/api/lists/?user_id=${userId}&list_name=personal_todos`).catch(e => ({items: []})),
+                    apiRequest(`/api/people?user_id=${userId}`).catch(e => ({people: []}))
+                ]);
+                
+                const suggestions = [];
+                
+                // Analyze calendar for day planning
+                if (calendarData.status === 'fulfilled' && calendarData.value?.events?.length > 0) {
+                    const todayEvents = calendarData.value.events.filter(e => 
+                        new Date(e.start_time).toDateString() === new Date().toDateString()
+                    );
+                    if (todayEvents.length > 0) {
+                        suggestions.push({
+                            icon: '📅',
+                            label: 'Plan My Day',
+                            prompt: `I have ${todayEvents.length} events today. Help me plan my day around them and any tasks I need to complete.`,
+                            priority: 'high'
+                        });
+                    }
+                }
+                
+                // Analyze tasks for productivity insights
+                if (tasksData.status === 'fulfilled' && tasksData.value?.items?.length > 0) {
+                    const pendingTasks = tasksData.value.items.filter(t => !t.completed);
+                    if (pendingTasks.length > 3) {
+                        suggestions.push({
+                            icon: '📋',
+                            label: 'Task Review',
+                            prompt: `I have ${pendingTasks.length} pending tasks. Help me prioritize and schedule them effectively.`,
+                            priority: 'medium'
+                        });
+                    }
+                }
+                
+                // Analyze memories for relationship insights
+                if (memoriesData.status === 'fulfilled' && memoriesData.value?.people?.length > 0) {
+                    suggestions.push({
+                        icon: '👥',
+                        label: 'People Insights',
+                        prompt: 'Help me review my relationships and suggest ways to strengthen connections.',
+                        priority: 'low'
+                    });
+                }
+                
+                // Default intelligent suggestions
+                if (suggestions.length === 0) {
+                    suggestions.push(
+                        {
+                            icon: '🌅',
+                            label: 'Morning Planning',
+                            prompt: 'Help me plan my day with productivity insights and goal alignment.',
+                            priority: 'high'
+                        },
+                        {
+                            icon: '🎯',
+                            label: 'Goal Review',
+                            prompt: 'Review my current goals and suggest actionable steps for this week.',
+                            priority: 'medium'
+                        },
+                        {
+                            icon: '💡',
+                            label: 'Smart Insights',
+                            prompt: 'Analyze my patterns and suggest improvements for my daily routine.',
+                            priority: 'low'
+                        }
+                    );
+                }
+                
+                // Sort by priority and render
+                suggestions.sort((a, b) => {
+                    const priorityOrder = { high: 0, medium: 1, low: 2 };
+                    return priorityOrder[a.priority] - priorityOrder[b.priority];
+                });
+                
+                suggestionsContainer.innerHTML = suggestions.slice(0, 4).map(suggestion => `
+                    <div class="suggestion-chip" onclick="tryPrompt('${suggestion.prompt}')">
+                        <div class="suggestion-icon">${suggestion.icon}</div>
+                        <div class="suggestion-label">${suggestion.label}</div>
+                    </div>
+                `).join('');
+                
+            } catch (error) {
+                console.error('Error generating dynamic suggestions:', error);
+                // Fallback to default suggestions
+                suggestionsContainer.innerHTML = `
+                    <div class="suggestion-chip" onclick="tryPrompt('Help me plan my day')">
+                        <div class="suggestion-icon">🌅</div>
+                        <div class="suggestion-label">Plan My Day</div>
+                    </div>
+                    <div class="suggestion-chip" onclick="tryPrompt('What should I focus on today?')">
+                        <div class="suggestion-icon">🎯</div>
+                        <div class="suggestion-label">Daily Focus</div>
+                    </div>
+                `;
+            }
+        }
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', init);
+    
+
+        // Navigation helper functions
+        function openMoreOverlay() {
+            document.getElementById('moreOverlay').classList.add('active');
+        }
+        
+        function closeMoreOverlay() {
+            document.getElementById('moreOverlay').classList.remove('active');
+        }
+        
+        function navigateToPage(page) {
+            window.location.href = page;
+        }
+        
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+            const notificationBtn = document.querySelector('.notifications-btn');
+            if (notificationBtn) notificationBtn.classList.remove('has-notifications');
+        }
+        
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+
+        // Mobile menu toggle
+        function toggleMobileMenu() {
+            if (window.innerWidth > 768) { window.location.href = 'index.html'; return; }
+            const menu = document.getElementById('mobileNavMenu');
+            const overlay = document.getElementById('mobileNavOverlay');
+            if (menu && overlay) {
+                menu.classList.toggle('open');
+                overlay.classList.toggle('open');
+            }
+        }
+
+        function handleLogout() {
+            if (window.innerWidth <= 768) {
+                toggleMobileMenu();
+            }
+            logout();
+        }
+        
+        async function loadNotifications() {
+            try {
+                const response = await apiRequest('/reminders/notifications/pending');
+                const notifications = response.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+        
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            if (notifications.length > 0 && notificationBtn) {
+                notificationBtn.classList.add('has-notifications');
+            } else if (notificationBtn) {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
+                     onclick="handleNotificationClick(${notification.id})">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${formatNotificationTime(notification.notification_time)}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        function formatNotificationTime(timeStr) {
+            const date = new Date(timeStr);
+            const now = new Date();
+            const diff = now - date;
+            const minutes = Math.floor(diff / 60000);
+            const hours = Math.floor(minutes / 60);
+            const days = Math.floor(hours / 24);
+            
+            if (minutes < 1) return 'Just now';
+            if (minutes < 60) return `${minutes}m ago`;
+            if (hours < 24) return `${hours}h ago`;
+            return `${days}d ago`;
+        }
+        
+        async function handleNotificationClick(notificationId) {
+            try {
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
+                    method: 'POST'
+                });
+                loadNotifications();
+            } catch (error) {
+                console.error('Failed to acknowledge notification:', error);
+            }
+            closeNotifications();
+        }
+        
+        // Update time/date display
+        function updateTimeDate() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            const timeElement = document.getElementById('currentTime');
+            const dateElement = document.getElementById('currentDate');
+            
+            if (timeElement) timeElement.textContent = timeString;
+            if (dateElement) dateElement.textContent = dateString;
+        }
+        
+        // Onboarding mode detection
+        let isOnboardingMode = false;
+        
+        // Check URL for onboarding parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('onboarding') === 'true') {
+            isOnboardingMode = true;
+            console.log('Onboarding mode activated');
+        }
+        
+        // Initialize time/date updates
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function() {
+                updateTimeDate();
+                setInterval(updateTimeDate, 60000);
+                loadNotifications();
+                
+                // Handle onboarding mode
+                if (isOnboardingMode) {
+                    handleOnboardingMode();
+                }
+            });
+        } else {
+            updateTimeDate();
+            setInterval(updateTimeDate, 60000);
+            loadNotifications();
+            
+            if (isOnboardingMode) {
+                handleOnboardingMode();
+            }
+        }
+        
+        async function handleOnboardingMode() {
+            console.log('Starting onboarding conversation');
+            
+            // Add a welcome message to the chat
+            const messagesContainer = document.getElementById('messagesContainer');
+            const onboardingMessage = `
+                <div class="message-group assistant-message">
+                    <div class="message-avatar">
+                        <div class="avatar">Z</div>
+                    </div>
+                    <div class="message-bubble">
+                        <p><strong>Hi! I'm Zoe 👋</strong></p>
+                        <p>I'd love to get to know you better so I can be more helpful. Would you like to tell me about yourself?</p>
+                        <p>Here are some things I'd like to know:</p>
+                        <ul style="margin-top: 10px; padding-left: 20px;">
+                            <li>Your name and maybe where you're from</li>
+                            <li>What you're interested in or passionate about</li>
+                            <li>What you hope to use me for</li>
+                            <li>Anything else you'd like to share!</li>
+                        </ul>
+                        <p style="margin-top: 10px;">Just chat with me naturally and I'll learn about you as we talk. 😊</p>
+                    </div>
+                </div>
+            `;
+            
+            if (messagesContainer) {
+                messagesContainer.insertAdjacentHTML('beforeend', onboardingMessage);
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }
+        }
+
+    </script>
+</body>
+</html><!-- Cache Bust: 1760009000 - v8.1 Fresh Start -->

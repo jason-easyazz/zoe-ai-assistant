@@ -1,0 +1,62 @@
+import os
+import pytest
+from fastapi.testclient import TestClient
+import jwt
+from datetime import datetime, timedelta
+import sys
+from pathlib import Path
+
+# Auto-detect project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
+
+# Add zoe-core to path for all tests to import modules like light_rag_memory, self_awareness
+ZOE_CORE_PATH = str(PROJECT_ROOT / "services/zoe-core")
+if ZOE_CORE_PATH not in sys.path:
+    sys.path.insert(0, ZOE_CORE_PATH)
+
+SECRET_KEY = os.getenv("ZOE_AUTH_SECRET_KEY", "change-me-in-prod")
+ALGORITHM = "HS256"
+
+
+def generate_test_jwt(user_id: str = "test_user", username: str = "test_user") -> str:
+    """Generate valid JWT token for testing"""
+    payload = {
+        "user_id": user_id,
+        "username": username,
+        "exp": datetime.utcnow() + timedelta(hours=1),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+@pytest.fixture(scope="session")
+def app():
+    """FastAPI app instance"""
+    from main import app
+    return app
+
+
+@pytest.fixture
+def client(app):
+    """Test client for API requests"""
+    return TestClient(app)
+
+
+@pytest.fixture
+def auth_headers():
+    """Valid JWT token headers for authenticated requests"""
+    token = generate_test_jwt()
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def mock_memory_data():
+    """Sample memory data for tests"""
+    return {
+        "people": [
+            {"name": "Sarah", "relationship": "friend"},
+            {"name": "John", "relationship": "colleague"}
+        ],
+        "conversations": [
+            {"person": "Sarah", "topic": "Arduino", "date": "2024-05-12"}
+        ]
+    }

@@ -1,0 +1,1291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Calendar</title>
+    <style>
+        /* Google Nest Hub Inspired Variables */
+        :root {
+            /* Zoe Brand Colors - Matching Dashboard */
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --chat-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            
+            /* Event Categories - Matching Desktop Calendar */
+            --work-color: rgba(59, 130, 246, 0.15);
+            --work-border: #2563eb;
+            --work-text: #1e40af;
+            
+            --personal-color: rgba(147, 51, 234, 0.15);
+            --personal-border: #9333ea;
+            --personal-text: #7e22ce;
+            
+            --bucket-color: rgba(16, 185, 129, 0.15);
+            --bucket-border: #059669;
+            --bucket-text: #047857;
+            
+            --shopping-color: rgba(251, 146, 60, 0.15);
+            --shopping-border: #ea580c;
+            --shopping-text: #c2410c;
+            
+            --health-color: rgba(236, 72, 153, 0.15);
+            --health-border: #be185d;
+            --health-text: #9d174d;
+            
+            --routine-color: rgba(107, 114, 128, 0.15);
+            --routine-border: #374151;
+            --routine-text: #1f2937;
+            
+            --social-color: rgba(34, 197, 94, 0.15);
+            --social-border: #16a34a;
+            --social-text: #15803d;
+            
+            --family-color: rgba(168, 85, 247, 0.15);
+            --family-border: #9333ea;
+            --family-text: #7c3aed;
+            
+            /* Theme Colors - Matching Dashboard */
+            --background-dark: #1a1a1a;
+            --background-light: #f5f5f5;
+            --surface: rgba(255, 255, 255, 0.9);
+            --surface-dark: rgba(30, 30, 30, 0.95);
+            --text-primary: #1a1a1a;
+            --text-secondary: #666666;
+            --text-primary-dark: #ffffff;
+            --text-secondary-dark: #b0b0b0;
+            
+            /* Widget System - Matching Dashboard */
+            --widget-radius: 24px;
+            --widget-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+            --widget-shadow-dark: 0 8px 32px rgba(0, 0, 0, 0.4);
+            
+            /* Touch Targets */
+            --touch-target: 56px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Google Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--background-light);
+            color: var(--text-primary);
+            overflow-x: hidden;
+            -webkit-tap-highlight-color: transparent;
+            transition: all 0.3s ease;
+            min-height: 100vh;
+        }
+
+        /* Dark mode */
+        body.dark-theme {
+            background: var(--background-dark);
+            color: var(--text-primary-dark);
+        }
+
+        /* Header Bar */
+        .header-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            z-index: 1000;
+            height: 70px;
+        }
+
+        .dark-theme .header-bar {
+            background: rgba(30, 30, 30, 0.8);
+            border-bottom-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .back-button {
+            width: 48px;
+            height: 48px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--text-primary);
+            font-size: 18px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .dark-theme .back-button {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary-dark);
+        }
+
+        .back-button:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: scale(1.05);
+        }
+
+        .page-title {
+            font-size: 24px;
+            font-weight: 500;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .view-toggle {
+            display: flex;
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 12px;
+            padding: 4px;
+            gap: 4px;
+        }
+
+        .dark-theme .view-toggle {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .view-button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-primary);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .dark-theme .view-button {
+            color: var(--text-primary-dark);
+        }
+
+        .view-button.active {
+            background: var(--primary-gradient);
+            color: white;
+        }
+
+        .header-button {
+            width: 48px;
+            height: 48px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--text-primary);
+            font-size: 18px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .dark-theme .header-button {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary-dark);
+        }
+
+        .header-button:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: scale(1.05);
+        }
+
+        /* Main Content */
+        .main-container {
+            padding: 90px 20px 40px;
+            min-height: 100vh;
+        }
+
+        /* Calendar Layout - Two Panel Design */
+        .calendar-layout {
+            display: grid;
+            grid-template-columns: 1fr 300px;
+            gap: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+            align-items: start;
+            min-height: calc(100vh - 160px);
+        }
+
+        /* Calendar Grid */
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 3px;
+            background: var(--surface);
+            backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: var(--widget-radius);
+            padding: 20px;
+            height: calc(100vh - 200px);
+            min-height: 500px;
+        }
+
+        .dark-theme .calendar-grid {
+            background: var(--surface-dark);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .day-header {
+            text-align: center;
+            padding: 6px 2px;
+            font-size: clamp(10px, 2vw, 12px);
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            line-height: 1.2;
+        }
+
+        .calendar-day {
+            aspect-ratio: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            font-size: clamp(14px, 3vw, 18px);
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            min-height: 40px;
+            max-height: 80px;
+            touch-action: manipulation;
+        }
+
+        .calendar-day:hover {
+            background: rgba(123, 97, 255, 0.1);
+            transform: scale(1.05);
+        }
+
+        .calendar-day.today {
+            background: var(--primary-gradient);
+            color: white;
+            font-weight: 600;
+        }
+
+        .calendar-day.selected {
+            background: rgba(123, 97, 255, 0.3);
+            color: #7B61FF;
+            font-weight: 600;
+            border: 2px solid #7B61FF;
+        }
+
+        .calendar-day.has-event {
+            background: rgba(123, 97, 255, 0.2);
+            color: #7B61FF;
+        }
+
+        .calendar-day.has-event::after {
+            content: '';
+            position: absolute;
+            bottom: 4px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 4px;
+            height: 4px;
+            background: #7B61FF;
+            border-radius: 50%;
+        }
+
+        .calendar-day.other-month {
+            color: #ccc;
+            opacity: 0.5;
+        }
+
+        /* Day View Layout */
+        .day-view {
+            display: none;
+        }
+
+        .day-view.active {
+            display: block;
+        }
+
+        .day-view-layout {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            min-height: calc(100vh - 140px);
+            overflow: hidden;
+        }
+
+        /* Day Events Panel */
+        .day-events {
+            background: var(--surface);
+            backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 12px;
+            padding: 20px;
+            overflow-y: auto;
+            height: calc(100vh - 200px);
+            min-height: 500px;
+        }
+
+        .dark-theme .day-events {
+            background: var(--surface-dark);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .day-view-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .dark-theme .day-view-header {
+            border-bottom-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .day-view-title {
+            font-size: 20px;
+            font-weight: 600;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .day-view-nav {
+            display: flex;
+            gap: 8px;
+        }
+
+        .nav-button {
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--text-primary);
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .dark-theme .nav-button {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary-dark);
+        }
+
+        .nav-button:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: scale(1.05);
+        }
+
+        /* Day Tasks Panel */
+        .day-tasks {
+            background: var(--surface);
+            backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 12px;
+            padding: 16px;
+            overflow-y: auto;
+            height: 100%;
+        }
+
+        .dark-theme .day-tasks {
+            background: var(--surface-dark);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .task-filter-buttons {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .filter-btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 6px;
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--text-primary);
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .dark-theme .filter-btn {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary-dark);
+        }
+
+        .filter-btn.active {
+            background: var(--primary-gradient);
+            color: white;
+        }
+
+        /* Event Items */
+        .event-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border-left: 3px solid transparent;
+        }
+
+        .event-item:hover {
+            transform: translateX(4px);
+        }
+
+        /* Category-specific styling */
+        .event-item.category-personal {
+            background: var(--personal-color);
+            border-left-color: var(--personal-border);
+            color: var(--personal-text);
+        }
+
+        .event-item.category-work {
+            background: var(--work-color);
+            border-left-color: var(--work-border);
+            color: var(--work-text);
+        }
+
+        .event-item.category-health {
+            background: var(--health-color);
+            border-left-color: var(--health-border);
+            color: var(--health-text);
+        }
+
+        .event-item.category-social {
+            background: var(--social-color);
+            border-left-color: var(--social-border);
+            color: var(--social-text);
+        }
+
+        .event-item.category-family {
+            background: var(--family-color);
+            border-left-color: var(--family-border);
+            color: var(--family-text);
+        }
+
+        .event-item.category-bucket {
+            background: var(--bucket-color);
+            border-left-color: var(--bucket-border);
+            color: var(--bucket-text);
+        }
+
+        .event-item.category-shopping {
+            background: var(--shopping-color);
+            border-left-color: var(--shopping-border);
+            color: var(--shopping-text);
+        }
+
+        .event-item.category-routine {
+            background: var(--routine-color);
+            border-left-color: var(--routine-border);
+            color: var(--routine-text);
+        }
+
+        .event-time {
+            font-size: 14px;
+            font-weight: 600;
+            min-width: 60px;
+        }
+
+        .event-content {
+            flex: 1;
+        }
+
+        .event-title {
+            font-weight: 500;
+            margin-bottom: 2px;
+        }
+
+        /* Task Items */
+        .task-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border-left: 3px solid transparent;
+            background: rgba(0, 0, 0, 0.02);
+        }
+
+        .dark-theme .task-item {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .task-item:hover {
+            transform: translateX(4px);
+        }
+
+        .task-item.category-work {
+            background: var(--work-color);
+            border-left-color: var(--work-border);
+            color: var(--work-text);
+        }
+
+        .task-item.category-personal {
+            background: var(--personal-color);
+            border-left-color: var(--personal-border);
+            color: var(--personal-text);
+        }
+
+        .task-item.category-bucket {
+            background: var(--bucket-color);
+            border-left-color: var(--bucket-border);
+            color: var(--bucket-text);
+        }
+
+        .task-item.category-shopping {
+            background: var(--shopping-color);
+            border-left-color: var(--shopping-border);
+            color: var(--shopping-text);
+        }
+
+        .task-item.category-health {
+            background: var(--health-color);
+            border-left-color: var(--health-border);
+            color: var(--health-text);
+        }
+
+        .task-item.category-routine {
+            background: var(--routine-color);
+            border-left-color: var(--routine-border);
+            color: var(--routine-text);
+        }
+
+        .task-item.category-social {
+            background: var(--social-color);
+            border-left-color: var(--social-border);
+            color: var(--social-text);
+        }
+
+        .task-item.category-family {
+            background: var(--family-color);
+            border-left-color: var(--family-border);
+            color: var(--family-text);
+        }
+
+        .task-checkbox {
+            width: 20px;
+            height: 20px;
+            border: 2px solid currentColor;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+        }
+
+        .task-checkbox.checked {
+            background: currentColor;
+            color: white;
+        }
+
+        .task-text {
+            flex: 1;
+            font-size: 14px;
+        }
+
+        .task-text.completed {
+            text-decoration: line-through;
+            opacity: 0.6;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 1200px) {
+            .main-container {
+                padding: 90px 15px 40px;
+            }
+            
+            .calendar-layout {
+                grid-template-columns: 1fr 280px;
+                gap: 15px;
+            }
+            
+            .calendar-grid {
+                padding: 16px;
+                gap: 2px;
+            }
+        }
+
+        @media (max-width: 1024px) {
+            .main-container {
+                padding: 90px 15px 40px;
+            }
+            
+            .calendar-layout {
+                grid-template-columns: 1fr 250px;
+                gap: 15px;
+            }
+            
+            .day-view-layout {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+            
+            .day-events, .day-tasks {
+                min-height: 300px;
+            }
+            
+            .calendar-grid {
+                height: calc(100vh - 220px);
+                min-height: 400px;
+                padding: 16px;
+            }
+            
+            .day-events {
+                height: calc(100vh - 220px);
+                min-height: 400px;
+                padding: 16px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .main-container {
+                padding: 90px 15px 40px;
+            }
+            
+            .calendar-layout {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+            
+            .calendar-grid {
+                padding: 16px;
+                gap: 2px;
+                height: calc(65vh - 120px);
+                min-height: 400px;
+            }
+            
+            .day-events {
+                height: calc(35vh - 120px);
+                min-height: 250px;
+                padding: 16px;
+            }
+            
+            .calendar-day {
+                min-height: 45px;
+                max-height: 70px;
+                font-size: clamp(14px, 4vw, 18px);
+            }
+            
+            .day-header {
+                font-size: clamp(11px, 3vw, 13px);
+                padding: 8px 2px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .main-container {
+                padding: 90px 10px 40px;
+            }
+            
+            .calendar-grid {
+                padding: 12px;
+                height: calc(70vh - 130px);
+                min-height: 350px;
+            }
+            
+            .day-events {
+                height: calc(30vh - 130px);
+                min-height: 200px;
+                padding: 12px;
+            }
+            
+            .calendar-day {
+                min-height: 40px;
+                max-height: 60px;
+                font-size: clamp(12px, 5vw, 16px);
+            }
+            
+            .day-header {
+                font-size: clamp(10px, 4vw, 12px);
+                padding: 6px 1px;
+            }
+        }
+
+        /* Landscape orientation adjustments */
+        @media (max-height: 600px) and (orientation: landscape) {
+            .main-container {
+                padding: 80px 15px 20px;
+            }
+            
+            .calendar-layout {
+                grid-template-columns: 1fr 250px;
+                gap: 15px;
+            }
+            
+            .calendar-grid {
+                height: calc(100vh - 140px);
+                min-height: 300px;
+                padding: 12px;
+            }
+            
+            .day-events {
+                height: calc(100vh - 140px);
+                min-height: 300px;
+                padding: 12px;
+            }
+            
+            .calendar-day {
+                min-height: 35px;
+                max-height: 50px;
+                font-size: clamp(12px, 3vw, 16px);
+            }
+        }
+    </style>
+    <script src="/js/auth.js"></script>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
+</head>
+<body>
+    <!-- Header Bar -->
+    <div class="header-bar">
+        <div class="header-left">
+            <button class="back-button" onclick="goBack()" title="Back to Dashboard">
+                ←
+            </button>
+            <h1 class="page-title">📅 Calendar</h1>
+        </div>
+        <div class="header-right">
+            <div class="view-toggle">
+                <button class="view-button active" id="monthViewBtn" onclick="switchView('month')">Month</button>
+                <button class="view-button" id="dayViewBtn" onclick="switchView('day')">Day</button>
+            </div>
+            <button class="header-button" onclick="toggleTheme()" title="Toggle Theme">
+                🌙
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <!-- Month View -->
+        <div class="calendar-layout" id="monthView">
+            <!-- Calendar Grid -->
+            <div class="calendar-grid" id="calendarGrid">
+                <!-- Calendar will be generated by JavaScript -->
+            </div>
+
+            <!-- Today's Events -->
+            <div class="day-events">
+                <h2 class="section-title">📅 Today's Events</h2>
+                <div class="events-list" id="eventsList">
+                    <!-- Events will be loaded by JavaScript -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Day View -->
+        <div class="day-view" id="dayView">
+            <div class="day-view-layout">
+                <!-- Left Side: Day Schedule -->
+                <div class="day-events">
+                    <div class="day-view-header">
+                        <h2 class="day-view-title" id="dayViewTitle">Today</h2>
+                        <div class="day-view-nav">
+                            <button class="nav-button" onclick="previousDay()" title="Previous Day">‹</button>
+                            <button class="nav-button" onclick="nextDay()" title="Next Day">›</button>
+                        </div>
+                    </div>
+                    <div class="day-events-list" id="dayEventsList">
+                        <!-- Day events will be loaded by JavaScript -->
+                    </div>
+                </div>
+                
+                <!-- Right Side: Available Tasks -->
+                <div class="day-tasks">
+                    <h2 class="section-title">📋 Tasks</h2>
+                    <div class="task-filter-buttons">
+                        <button class="filter-btn active" id="allTasksBtn" onclick="setTaskFilter('all')">All</button>
+                        <button class="filter-btn" id="workTasksBtn" onclick="setTaskFilter('work')">Work</button>
+                        <button class="filter-btn" id="personalTasksBtn" onclick="setTaskFilter('personal')">Personal</button>
+                    </div>
+                    <div class="tasks-list" id="tasksList">
+                        <!-- Tasks will be loaded by JavaScript -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let isDarkTheme = false;
+        let currentDate = new Date();
+        let selectedDate = new Date();
+        let currentView = 'month';
+        let events = [];
+        let tasks = [];
+        let currentTaskFilter = 'all';
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            generateCalendar();
+            loadEvents();
+            loadTasks();
+            adjustCalendarForScreen();
+            
+            // Auto theme based on time
+            const hour = new Date().getHours();
+            if (hour < 7 || hour > 19) {
+                toggleTheme(true);
+            }
+            
+            // Handle window resize
+            window.addEventListener('resize', adjustCalendarForScreen);
+        });
+
+        function adjustCalendarForScreen() {
+            const calendarGrid = document.getElementById('calendarGrid');
+            const dayEvents = document.querySelector('.day-events');
+            if (!calendarGrid) return;
+            
+            const screenWidth = window.innerWidth;
+            const screenHeight = window.innerHeight;
+            const isLandscape = screenHeight < 600 && window.innerWidth > window.innerHeight;
+            
+            // Adjust calendar grid and events panel based on screen size
+            if (isLandscape) {
+                calendarGrid.style.height = 'calc(100vh - 140px)';
+                calendarGrid.style.minHeight = '300px';
+                if (dayEvents) {
+                    dayEvents.style.height = 'calc(100vh - 140px)';
+                    dayEvents.style.minHeight = '300px';
+                }
+            } else if (screenWidth < 480) {
+                calendarGrid.style.height = 'calc(70vh - 130px)';
+                calendarGrid.style.minHeight = '350px';
+                if (dayEvents) {
+                    dayEvents.style.height = 'calc(30vh - 130px)';
+                    dayEvents.style.minHeight = '200px';
+                }
+            } else if (screenWidth < 768) {
+                calendarGrid.style.height = 'calc(65vh - 120px)';
+                calendarGrid.style.minHeight = '400px';
+                if (dayEvents) {
+                    dayEvents.style.height = 'calc(35vh - 120px)';
+                    dayEvents.style.minHeight = '250px';
+                }
+            } else if (screenWidth < 1024) {
+                calendarGrid.style.height = 'calc(100vh - 220px)';
+                calendarGrid.style.minHeight = '400px';
+                if (dayEvents) {
+                    dayEvents.style.height = 'calc(100vh - 220px)';
+                    dayEvents.style.minHeight = '400px';
+                }
+            } else {
+                calendarGrid.style.height = 'calc(100vh - 200px)';
+                calendarGrid.style.minHeight = '500px';
+                if (dayEvents) {
+                    dayEvents.style.height = 'calc(100vh - 200px)';
+                    dayEvents.style.minHeight = '500px';
+                }
+            }
+        }
+
+        function goBack() {
+            console.log('🔙 Returning to dashboard');
+            // Clear any calendar-specific state
+            sessionStorage.removeItem('calendarView');
+            sessionStorage.removeItem('selectedDate');
+            // Navigate back to dashboard
+            window.location.href = 'dashboard.html';
+        }
+
+        function toggleTheme(force = null) {
+            if (force !== null) {
+                isDarkTheme = force;
+            } else {
+                isDarkTheme = !isDarkTheme;
+            }
+            
+            document.body.classList.toggle('dark-theme', isDarkTheme);
+            document.querySelector('.header-button').textContent = isDarkTheme ? '☀️' : '🌙';
+        }
+
+        function switchView(view) {
+            currentView = view;
+            
+            // Update button states
+            document.getElementById('monthViewBtn').classList.toggle('active', view === 'month');
+            document.getElementById('dayViewBtn').classList.toggle('active', view === 'day');
+            
+            // Show/hide views
+            const monthView = document.getElementById('monthView');
+            const dayView = document.getElementById('dayView');
+            
+            if (view === 'month') {
+                monthView.style.display = 'grid';
+                dayView.classList.remove('active');
+            } else {
+                monthView.style.display = 'none';
+                dayView.classList.add('active');
+                updateDayView();
+            }
+        }
+
+        function previousDay() {
+            selectedDate.setDate(selectedDate.getDate() - 1);
+            updateDayView();
+        }
+
+        function nextDay() {
+            selectedDate.setDate(selectedDate.getDate() + 1);
+            updateDayView();
+        }
+
+        function updateDayView() {
+            const dayViewTitle = document.getElementById('dayViewTitle');
+            const dayEventsList = document.getElementById('dayEventsList');
+            
+            // Update title
+            const today = new Date();
+            const isToday = selectedDate.toDateString() === today.toDateString();
+            const isYesterday = selectedDate.toDateString() === new Date(today.getTime() - 24 * 60 * 60 * 1000).toDateString();
+            const isTomorrow = selectedDate.toDateString() === new Date(today.getTime() + 24 * 60 * 60 * 1000).toDateString();
+            
+            if (isToday) {
+                dayViewTitle.textContent = 'Today';
+            } else if (isYesterday) {
+                dayViewTitle.textContent = 'Yesterday';
+            } else if (isTomorrow) {
+                dayViewTitle.textContent = 'Tomorrow';
+            } else {
+                dayViewTitle.textContent = selectedDate.toLocaleDateString('en-US', { 
+                    weekday: 'long', 
+                    month: 'long', 
+                    day: 'numeric' 
+                });
+            }
+            
+            // Load events and tasks for selected day
+            const dayEvents = getEventsForDate(selectedDate);
+            renderDayEvents(dayEvents);
+            renderTasks();
+        }
+
+        function renderDayEvents(dayEvents) {
+            const dayEventsList = document.getElementById('dayEventsList');
+            
+            if (dayEvents.length === 0) {
+                dayEventsList.innerHTML = '<div style="text-align: center; color: var(--text-secondary); padding: 20px;">No events scheduled</div>';
+                return;
+            }
+            
+            dayEventsList.innerHTML = dayEvents.map(event => {
+                const time = formatEventTime(event.start_time || event.time);
+                const category = event.category || 'personal';
+                
+                return `
+                    <div class="event-item category-${category}" onclick="selectEvent('${event.id}')">
+                        <div class="event-time">${time}</div>
+                        <div class="event-content">
+                            <div class="event-title">${event.title}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderTasks() {
+            const tasksList = document.getElementById('tasksList');
+            const filteredTasks = tasks.filter(task => {
+                if (currentTaskFilter === 'all') return true;
+                if (currentTaskFilter === 'work') return task.category === 'work';
+                if (currentTaskFilter === 'personal') return task.category === 'personal';
+                return true;
+            });
+            
+            if (filteredTasks.length === 0) {
+                tasksList.innerHTML = '<div style="text-align: center; color: var(--text-secondary); padding: 20px;">No tasks available</div>';
+                return;
+            }
+            
+            tasksList.innerHTML = filteredTasks.map(task => {
+                const category = task.category || 'personal';
+                
+                return `
+                    <div class="task-item category-${category}" onclick="toggleTask('${task.id}')">
+                        <div class="task-checkbox ${task.completed ? 'checked' : ''}">
+                            ${task.completed ? '✓' : ''}
+                        </div>
+                        <div class="task-text ${task.completed ? 'completed' : ''}">${task.text}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function setTaskFilter(filter) {
+            currentTaskFilter = filter;
+            
+            // Update button states
+            document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+            document.getElementById(filter + 'TasksBtn').classList.add('active');
+            
+            renderTasks();
+        }
+
+        function toggleTask(taskId) {
+            const task = tasks.find(t => t.id === taskId);
+            if (task) {
+                task.completed = !task.completed;
+                renderTasks();
+            }
+        }
+
+        function selectEvent(eventId) {
+            console.log('Selected event:', eventId);
+            // Could show event details modal
+        }
+
+        function generateCalendar() {
+            const grid = document.getElementById('calendarGrid');
+            const year = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+            
+            // Clear grid
+            grid.innerHTML = '';
+            
+            // Add day headers
+            const dayHeaders = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            dayHeaders.forEach(day => {
+                const header = document.createElement('div');
+                header.className = 'day-header';
+                header.textContent = day;
+                grid.appendChild(header);
+            });
+            
+            // Get first day of month and number of days
+            const firstDay = new Date(year, month, 1).getDay();
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const today = new Date();
+            
+            // Add empty cells for days before month starts
+            for (let i = 0; i < firstDay; i++) {
+                const day = document.createElement('div');
+                day.className = 'calendar-day other-month';
+                const prevMonth = new Date(year, month, -firstDay + i + 1);
+                day.textContent = prevMonth.getDate();
+                grid.appendChild(day);
+            }
+            
+            // Add days of current month
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dayElement = document.createElement('div');
+                const date = new Date(year, month, day);
+                const isToday = date.toDateString() === today.toDateString();
+                const isSelected = date.toDateString() === selectedDate.toDateString();
+                const dayEvents = getEventsForDate(date);
+                const hasEvents = dayEvents.length > 0;
+                
+                let className = 'calendar-day';
+                if (isToday) className += ' today';
+                if (isSelected) className += ' selected';
+                if (hasEvents) className += ' has-event';
+                
+                dayElement.className = className;
+                dayElement.textContent = day;
+                dayElement.onclick = () => selectDate(date);
+                grid.appendChild(dayElement);
+            }
+        }
+
+        function selectDate(date) {
+            selectedDate = new Date(date);
+            generateCalendar(); // Regenerate to show selection
+            updateDayView(); // Update day view if active
+        }
+
+        function getEventsForDate(date) {
+            const dateStr = date.toISOString().split('T')[0];
+            return events.filter(event => {
+                const eventDate = event.start_date || event.start_time?.split('T')[0];
+                return eventDate === dateStr;
+            });
+        }
+
+        async function loadEvents() {
+            try {
+                const response = await fetch('/api/calendar/events');
+                const data = await response.json();
+                
+                if (data.events) {
+                    events = data.events;
+                    updateEventsList();
+                    generateCalendar();
+                }
+            } catch (error) {
+                console.error('Failed to load events:', error);
+                // Show demo events
+                events = [
+                    {
+                        id: '1',
+                        title: 'Team Meeting',
+                        start_time: '2024-01-15T10:00:00',
+                        category: 'work'
+                    },
+                    {
+                        id: '2',
+                        title: 'Doctor Appointment',
+                        start_time: '2024-01-15T14:00:00',
+                        category: 'health'
+                    },
+                    {
+                        id: '3',
+                        title: 'Dinner with Family',
+                        start_time: '2024-01-15T18:00:00',
+                        category: 'family'
+                    }
+                ];
+                updateEventsList();
+                generateCalendar();
+            }
+        }
+
+        async function loadTasks() {
+            try {
+                const response = await fetch('/api/lists/tasks');
+                const data = await response.json();
+                
+                if (data.lists) {
+                    tasks = [];
+                    data.lists.forEach(list => {
+                        if (list.items) {
+                            list.items.forEach(item => {
+                                tasks.push({
+                                    id: item.id,
+                                    text: item.text,
+                                    completed: item.completed,
+                                    category: list.id.includes('work') ? 'work' : 'personal'
+                                });
+                            });
+                        }
+                    });
+                    renderTasks();
+                }
+            } catch (error) {
+                console.error('Failed to load tasks:', error);
+                // Show empty tasks on error
+                tasks = [];
+                renderTasks();
+            }
+        }
+
+        function updateEventsList() {
+            const eventsList = document.getElementById('eventsList');
+            const today = new Date().toISOString().split('T')[0];
+            const todaysEvents = events.filter(event => {
+                const eventDate = event.start_date || event.start_time?.split('T')[0];
+                return eventDate === today;
+            });
+            
+            eventsList.innerHTML = '';
+            
+            if (todaysEvents.length === 0) {
+                eventsList.innerHTML = '<div style="text-align: center; color: var(--text-secondary); padding: 20px;">No events today</div>';
+                return;
+            }
+            
+            todaysEvents.forEach(event => {
+                const eventItem = document.createElement('div');
+                const category = event.category || 'personal';
+                eventItem.className = `event-item category-${category}`;
+                eventItem.onclick = () => selectEvent(event.id);
+                
+                const time = formatEventTime(event.start_time || event.time);
+                
+                eventItem.innerHTML = `
+                    <div class="event-time">${time}</div>
+                    <div class="event-content">
+                        <div class="event-title">${event.title}</div>
+                    </div>
+                `;
+                
+                eventsList.appendChild(eventItem);
+            });
+        }
+
+        function formatEventTime(timeString) {
+            try {
+                if (!timeString) return 'All Day';
+                
+                let time;
+                if (timeString.includes('T')) {
+                    time = new Date(timeString);
+                } else if (timeString.includes(':')) {
+                    const [hours, minutes] = timeString.split(':');
+                    const today = new Date();
+                    time = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 
+                                  parseInt(hours), parseInt(minutes));
+                } else {
+                    return 'All Day';
+                }
+                
+                return time.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+            } catch (error) {
+                return 'All Day';
+            }
+        }
+    </script>
+</body>
+</html>

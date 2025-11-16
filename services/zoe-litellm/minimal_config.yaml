@@ -1,0 +1,88 @@
+model_list:
+  # llama.cpp models (OpenAI-compatible API)
+  - model_name: hermes3-8b
+    litellm_params:
+      model: openai/hermes3-8b
+      api_base: http://zoe-llamacpp:11434/v1
+      api_key: dummy  # llama.cpp doesn't need a key
+      temperature: 0.7
+      max_tokens: 512
+      timeout: 30
+
+  - model_name: gemma-2-2b
+    litellm_params:
+      model: openai/gemma-2-2b
+      api_base: http://zoe-llamacpp:11434/v1
+      api_key: dummy
+      temperature: 0.7
+      max_tokens: 256
+      timeout: 20
+
+  - model_name: qwen2.5-7b
+    litellm_params:
+      model: openai/qwen2.5-7b
+      api_base: http://zoe-llamacpp:11434/v1
+      api_key: dummy
+      temperature: 0.7
+      max_tokens: 512
+      timeout: 30
+
+  # External models (if API keys available)
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: gpt-4o-mini
+      api_key: ${OPENAI_API_KEY:-dummy}
+      temperature: 0.7
+      max_tokens: 1000
+      timeout: 30
+
+  - model_name: claude-3-5-sonnet
+    litellm_params:
+      model: claude-3-5-sonnet-20241022
+      api_key: ${ANTHROPIC_API_KEY:-dummy}
+      temperature: 0.7
+      max_tokens: 1000
+      timeout: 30
+
+router_settings:
+  routing_strategy: simple-shuffle  # or "least-busy", "latency-based-routing"
+  model_group_alias:
+    fast-model:
+      - gemma-2-2b
+      - qwen2.5-7b
+    function-calling:
+      - hermes3-8b
+      - gpt-4o-mini
+    powerful:
+      - claude-3-5-sonnet
+      - gpt-4o-mini
+  
+  # Fallback order
+  fallbacks:
+    - hermes3-8b
+    - qwen2.5-7b
+    - gemma-2-2b
+
+general_settings:
+  master_key: "sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f"
+  disable_database_usage: true
+  disable_spend_logs: true
+  disable_otel_logging: true
+  disable_ui: false  # Enable UI for debugging
+  store_model_in_db: false
+  
+  # Enable loadbalancing
+  num_workers: 4
+  
+  # Caching for faster responses
+  cache: true
+  cache_params:
+    type: "redis"
+    host: "zoe-redis"
+    port: 6379
+    ttl: 600  # 10 minutes
+
+litellm_settings:
+  drop_params: true  # Drop unsupported params instead of erroring
+  success_callback: ["langfuse"]  # Optional: track usage
+  failure_callback: ["langfuse"]

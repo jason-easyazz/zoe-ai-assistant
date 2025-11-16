@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Lists</title>
+    <style>
+        /* Google Nest Hub Inspired Variables */
+        :root {
+            /* Zoe Brand Colors */
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            
+            /* Theme Colors */
+            --background-dark: #1a1a1a;
+            --background-light: #f5f5f5;
+            --surface: rgba(255, 255, 255, 0.9);
+            --surface-dark: rgba(30, 30, 30, 0.95);
+            --text-primary: #1a1a1a;
+            --text-secondary: #666666;
+            --text-primary-dark: #ffffff;
+            --text-secondary-dark: #b0b0b0;
+            
+            /* Widget System */
+            --widget-radius: 24px;
+            --widget-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+            --widget-shadow-dark: 0 8px 32px rgba(0, 0, 0, 0.4);
+            
+            /* Touch Targets */
+            --touch-target: 56px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'DejaVu Sans', 'Liberation Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--background-light);
+            color: var(--text-primary);
+            overflow-x: hidden;
+            -webkit-tap-highlight-color: transparent;
+            transition: all 0.3s ease;
+        }
+
+        /* Dark mode */
+        body.dark-theme {
+            background: var(--background-dark);
+            color: var(--text-primary-dark);
+        }
+
+        /* Header Bar */
+        .header-bar {
+            position: sticky;
+            top: 0;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+            padding: 16px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            z-index: 1000;
+            transition: all 0.3s ease;
+        }
+
+        .dark-theme .header-bar {
+            background: rgba(30, 30, 30, 0.95);
+            border-bottom-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .back-button {
+            width: 48px;
+            height: 48px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--text-primary);
+            font-size: 18px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .dark-theme .back-button {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary-dark);
+        }
+
+        .back-button:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: scale(1.05);
+        }
+
+        .page-title {
+            font-size: 24px;
+            font-weight: 500;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header-button {
+            width: 48px;
+            height: 48px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--text-primary);
+            font-size: 18px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .dark-theme .header-button {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary-dark);
+        }
+
+        .header-button:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: scale(1.05);
+        }
+
+        /* Main Content */
+        .lists-container {
+            padding: 32px;
+            min-height: calc(100vh - 100px);
+            overflow-x: auto;
+            overflow-y: hidden;
+            scroll-behavior: smooth;
+            scrollbar-width: thin;
+            scrollbar-color: var(--primary-gradient) transparent;
+        }
+
+        .lists-container::-webkit-scrollbar {
+            height: 8px;
+        }
+
+        .lists-container::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .lists-container::-webkit-scrollbar-thumb {
+            background: var(--primary-gradient);
+            border-radius: 4px;
+        }
+
+        .lists-container::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%);
+        }
+
+        .lists-grid {
+            display: grid;
+            grid-auto-flow: column;
+            grid-auto-columns: minmax(300px, 360px);
+            grid-template-rows: 1fr;
+            gap: 20px;
+            align-items: stretch;
+            overflow-x: auto;
+            overflow-y: hidden;
+            padding-bottom: 20px;
+            scroll-snap-type: x mandatory;
+        }
+
+        .lists-grid > .list-card { 
+            scroll-snap-align: start; 
+        }
+
+        .list-card {
+            background: var(--surface);
+            border-radius: var(--widget-radius);
+            padding: 20px;
+            box-shadow: var(--widget-shadow);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transition: all 0.3s ease;
+            cursor: pointer;
+            min-height: 400px;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .dark-theme .list-card {
+            background: var(--surface-dark);
+            box-shadow: var(--widget-shadow-dark);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .list-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        .dark-theme .list-card:hover {
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+        }
+
+        .list-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+
+        .list-title {
+            font-size: 18px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .list-count {
+            background: var(--primary-gradient);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .list-items {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            flex: 1;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(103, 126, 234, 0.3) transparent;
+        }
+
+        .list-items::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .list-items::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .list-items::-webkit-scrollbar-thumb {
+            background: rgba(103, 126, 234, 0.3);
+            border-radius: 2px;
+        }
+
+        .list-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            border-radius: 8px;
+            transition: all 0.2s ease;
+            min-height: 48px;
+        }
+
+        .list-item:hover {
+            background: rgba(103, 126, 234, 0.1);
+        }
+
+        .item-checkbox {
+            width: 24px;
+            height: 24px;
+            border: 2px solid var(--text-secondary);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+        }
+
+        .item-checkbox:hover {
+            border-color: var(--primary-gradient);
+            transform: scale(1.1);
+        }
+
+        .item-checkbox.checked {
+            background: var(--primary-gradient);
+            border-color: transparent;
+            color: white;
+        }
+
+        .item-text {
+            flex: 1;
+            font-size: 15px;
+        }
+
+        .item-text.completed {
+            text-decoration: line-through;
+            opacity: 0.6;
+        }
+
+        .item-priority {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .item-priority.high {
+            background: #ff3b30;
+        }
+
+        .item-priority.medium {
+            background: #ff9500;
+        }
+
+        .item-priority.low {
+            background: #34c759;
+        }
+
+        .add-item-form {
+            display: flex;
+            gap: 12px;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .dark-theme .add-item-form {
+            border-top-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .add-item-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.02);
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+
+        .dark-theme .add-item-input {
+            border-color: rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary-dark);
+        }
+
+        .add-item-input:focus {
+            outline: none;
+            border-color: var(--primary-gradient);
+            background: rgba(103, 126, 234, 0.05);
+        }
+
+        .add-item-button {
+            padding: 12px 20px;
+            background: var(--primary-gradient);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .add-item-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(103, 126, 234, 0.3);
+        }
+
+        /* Scroll indicator */
+        .scroll-indicator {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: var(--primary-gradient);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+
+        .scroll-indicator.show {
+            opacity: 1;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .lists-container {
+                padding: 16px;
+            }
+            
+            .lists-grid {
+                grid-auto-columns: minmax(280px, 80%);
+                gap: 16px;
+            }
+            
+            .list-card {
+                min-height: 350px;
+            }
+        }
+    </style>
+    <script src="/js/auth.js"></script>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
+</head>
+<body>
+    <!-- Header Bar -->
+    <div class="header-bar">
+        <div class="header-left">
+            <button class="back-button" onclick="goBack()" title="Back to Dashboard">
+                ←
+            </button>
+            <h1 class="page-title">📝 Lists</h1>
+        </div>
+        <div class="header-right">
+            <button class="header-button" onclick="toggleTheme()" title="Toggle Theme">
+                🌙
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="lists-container" id="listsContainer">
+        <div class="lists-grid" id="listsGrid">
+            <!-- Lists will be loaded by JavaScript -->
+        </div>
+    </div>
+
+    <!-- Scroll Indicator -->
+    <div class="scroll-indicator" id="scrollIndicator">
+        ← Scroll to see more lists
+    </div>
+
+    <script>
+        // Utility function to get user ID from session
+        function getUserId() {
+            try {
+                const sessionData = localStorage.getItem('zoe_session');
+                if (sessionData) {
+                    const session = JSON.parse(sessionData);
+                    return session.user_info?.user_id || session.user_id || 'default';
+                }
+            } catch (e) {
+                console.warn('Failed to get user session:', e);
+            }
+            return 'default';
+        }
+
+        let isDarkTheme = false;
+        let lists = [];
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            loadLists();
+            setupScrollIndicator();
+            
+            // Auto theme based on time
+            const hour = new Date().getHours();
+            if (hour < 7 || hour > 19) {
+                toggleTheme(true);
+            }
+        });
+
+        function setupScrollIndicator() {
+            const container = document.getElementById('listsContainer');
+            const indicator = document.getElementById('scrollIndicator');
+            
+            function updateScrollIndicator() {
+                const isScrollable = container.scrollWidth > container.clientWidth;
+                const isAtStart = container.scrollLeft === 0;
+                
+                if (isScrollable && isAtStart) {
+                    indicator.classList.add('show');
+                } else {
+                    indicator.classList.remove('show');
+                }
+            }
+            
+            container.addEventListener('scroll', updateScrollIndicator);
+            window.addEventListener('resize', updateScrollIndicator);
+            
+            // Initial check
+            updateScrollIndicator();
+        }
+
+        function goBack() {
+            window.location.href = 'dashboard.html';
+        }
+
+        function toggleTheme(force = null) {
+            if (force !== null) {
+                isDarkTheme = force;
+            } else {
+                isDarkTheme = !isDarkTheme;
+            }
+            
+            document.body.classList.toggle('dark-theme', isDarkTheme);
+            document.querySelector('.header-button').textContent = isDarkTheme ? '☀️' : '🌙';
+        }
+
+        async function loadLists() {
+            try {
+                // Get user ID from session
+                const userId = getUserId();
+                
+                // Load different list types
+                const listTypes = ['personal_todos', 'work_todos', 'shopping', 'bucket'];
+                const listPromises = listTypes.map(type => fetch(`/api/lists/${type}?user_id=${userId}`));
+                
+                const responses = await Promise.all(listPromises);
+                const listData = await Promise.all(responses.map(r => r.json()));
+                
+                lists = [];
+                listData.forEach((data, index) => {
+                    if (data.lists && data.lists.length > 0) {
+                        lists.push({
+                            type: listTypes[index],
+                            name: getListDisplayName(listTypes[index]),
+                            icon: getListIcon(listTypes[index]),
+                            items: data.lists[0].items || []
+                        });
+                    }
+                });
+                
+                renderLists();
+            } catch (error) {
+                console.error('Failed to load lists:', error);
+                // Show empty lists on error
+                lists = [];
+                renderLists();
+            }
+        }
+
+        function getListDisplayName(type) {
+            const names = {
+                'personal_todos': 'Personal Tasks',
+                'work_todos': 'Work Tasks',
+                'shopping': 'Shopping List',
+                'bucket': 'Bucket List'
+            };
+            return names[type] || type;
+        }
+
+        function getListIcon(type) {
+            const icons = {
+                'personal_todos': '🏠',
+                'work_todos': '💼',
+                'shopping': '🛒',
+                'bucket': '🎯'
+            };
+            return icons[type] || '📝';
+        }
+
+        function renderLists() {
+            const grid = document.getElementById('listsGrid');
+            grid.innerHTML = '';
+            
+            lists.forEach(list => {
+                const listCard = document.createElement('div');
+                listCard.className = 'list-card';
+                
+                const completedCount = list.items.filter(item => item.completed).length;
+                const totalCount = list.items.length;
+                
+                listCard.innerHTML = `
+                    <div class="list-header">
+                        <div class="list-title">
+                            <span>${list.icon}</span>
+                            <span>${list.name}</span>
+                        </div>
+                        <div class="list-count">${completedCount}/${totalCount}</div>
+                    </div>
+                    <div class="list-items">
+                        ${list.items.slice(0, 5).map(item => `
+                            <div class="list-item">
+                                <div class="item-checkbox ${item.completed ? 'checked' : ''}" 
+                                     onclick="toggleItem('${list.type}', ${list.items.indexOf(item)}, ${item.completed})">
+                                    ${item.completed ? '✓' : ''}
+                                </div>
+                                <div class="item-text ${item.completed ? 'completed' : ''}">${item.text}</div>
+                                <div class="item-priority ${item.priority || 'low'}"></div>
+                            </div>
+                        `).join('')}
+                        ${list.items.length > 5 ? `<div style="text-align: center; color: var(--text-secondary); padding: 8px;">+${list.items.length - 5} more items</div>` : ''}
+                    </div>
+                    <div class="add-item-form">
+                        <input type="text" class="add-item-input" placeholder="Add new item..." 
+                               onkeypress="if(event.key==='Enter') addItem('${list.type}', this)">
+                        <button class="add-item-button" onclick="addItem('${list.type}', this.previousElementSibling)">Add</button>
+                    </div>
+                `;
+                
+                grid.appendChild(listCard);
+            });
+        }
+
+        async function toggleItem(listType, itemIndex, currentStatus) {
+            try {
+                // Get user ID
+                const userId = getUserId();
+                
+                // Update via API
+                const response = await fetch(`/api/lists/${listType}?user_id=${userId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        items: await getUpdatedItems(listType, itemIndex, !currentStatus)
+                    })
+                });
+                
+                if (response.ok) {
+                    // Reload lists to reflect changes
+                    loadLists();
+                }
+            } catch (error) {
+                console.error('Failed to update item:', error);
+            }
+        }
+
+        async function getUpdatedItems(listType, itemIndex, completed) {
+            try {
+                const userId = getUserId();
+                const response = await fetch(`/api/lists/${listType}?user_id=${userId}`);
+                const data = await response.json();
+                
+                if (data.lists && data.lists[0].items) {
+                    data.lists[0].items[itemIndex].completed = completed;
+                    return data.lists[0].items;
+                }
+                
+                return [];
+            } catch (error) {
+                console.error('Failed to get items for update:', error);
+                return [];
+            }
+        }
+
+        async function addItem(listType, input) {
+            const text = input.value.trim();
+            if (!text) return;
+            
+            try {
+                const userId = getUserId();
+                const response = await fetch(`/api/lists/${listType}?user_id=${userId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        text: text,
+                        priority: 'low',
+                        completed: false
+                    })
+                });
+                
+                if (response.ok) {
+                    input.value = '';
+                    loadLists(); // Reload to show new item
+                }
+            } catch (error) {
+                console.error('Failed to add item:', error);
+            }
+        }
+    </script>
+</body>
+</html>

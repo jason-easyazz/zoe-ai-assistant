@@ -1,0 +1,53 @@
+vLLM Cleanup Log
+================
+Date: 2025-11-13 20:38 UTC
+Action: Removed all vLLM files and references
+
+ARCHIVED FILES (8 files, 80KB):
+- README.md (archive explanation)
+- VLLM_BUILD_CHALLENGES.md
+- VLLM_EXHAUSTIVE_DEBUG_SUMMARY.md
+- VLLM_MIGRATION_BLOCKED.md
+- VLLM_MIGRATION_STATUS.md
+- VLLM_MIGRATION_SUMMARY.md
+- VLLM_PRODUCTION_ARCHITECTURE.md
+- vllm-debug-log.md
+
+REMOVED DIRECTORIES:
+- services/zoe-vllm/ (entire directory)
+
+UPDATED FILES:
+- docker-compose.yml (removed zoe-vllm service)
+- docker-compose.yml (updated zoe-litellm dependency)
+
+REMOVED REFERENCES:
+- All vLLM imports (verified: none found)
+- All vLLM service definitions
+- All vLLM documentation (archived, not deleted)
+
+GIT COMMITS:
+1. Pre-cleanup safety commit (tag: pre-vllm-cleanup-20251113-203751)
+2. Archive vLLM documentation
+3. Remove vLLM service files
+4. Update docker-compose.yml
+
+REASON FOR REMOVAL:
+vLLM migration blocked by PyTorch CUDA allocator bug on Jetson Orin NX.
+Fundamental incompatibility with R36.4.3.
+Switched to llama.cpp with 100% success.
+
+ROLLBACK AVAILABLE:
+git checkout pre-vllm-cleanup-20251113-203751
+
+SYSTEM STATUS:
+✅ All services running
+✅ llama.cpp operational (13.55 tok/s)
+✅ No broken references
+✅ Cleanup complete
+
+Archive preserved for historical reference and future Jetson developers.
+
+
+
+
+

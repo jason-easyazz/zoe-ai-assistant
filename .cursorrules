@@ -1,0 +1,299 @@
+# Zoe AI Assistant Development Rules
+# These rules ensure safe, maintainable, and efficient code
+# Updated: November 10, 2025 - Added Multi-Platform Hardware Support
+
+## 🛡️ FILE ORGANIZATION & CLEANUP SAFETY - MANDATORY
+
+### BEFORE Touching ANY Files:
+1. Check if file in manifest: .zoe/manifest.json
+2. Run validator: python3 tools/audit/validate_structure.py
+3. If not in manifest: ASK USER before proceeding
+4. NEVER assume a file is safe to delete
+
+### NEVER Delete Without Validation:
+- Run: python3 tools/audit/validate_critical_files.py
+- Run: bash tools/audit/find_file_references.sh <filename>
+- Create safety commit BEFORE cleanup: git commit -am "Pre-cleanup safety"
+- Work in feature branch, NOT main: git checkout -b cleanup-YYYYMMDD
+- Delete max 5-10 files at a time
+- Test after EACH deletion (check browser console F12)
+
+### CRITICAL FILES (Never Delete):
+- services/zoe-ui/dist/css/**/*.css (ALL CSS files)
+- services/zoe-ui/dist/js/**/*.js (ALL JavaScript files)
+- services/zoe-ui/dist/js/widgets/core/**/*.js (ALL widget files)
+- services/zoe-ui/dist/components/**/*.html (ALL components)
+- services/zoe-ui/dist/*.html (ALL HTML pages)
+- services/zoe-core/main.py, routers/chat.py, ai_client.py
+- docker-compose.yml, .env, nginx.conf
+
+### PROHIBITED PATTERNS (Never Commit):
+- *_backup.*, *_old.*, *_v2.*, *_new.*, *_fixed.*
+- ._* (Mac metadata files)
+- *.log, *.tmp (logs don't belong in repo)
+- *.jar, *.sql, *.conf in project root
+- test_*.py in project root (use tests/ directory)
+
+### CLEANUP PROCESS (Mandatory Steps):
+1. Dry-run: python3 tools/cleanup/safe_cleanup.py
+2. Review ALL proposed deletions with user
+3. Get explicit user approval for each category
+4. Execute: python3 tools/cleanup/safe_cleanup.py --execute
+5. Commit with detailed message listing what was removed and why
+6. Validate: python3 tools/audit/validate_structure.py
+
+### FILE STRUCTURE RULES:
+- Root has MAX 10 .md files (currently 6/10 - compliant)
+- Tests go in tests/{unit|integration|performance|e2e}/
+- Scripts go in scripts/{setup|maintenance|deployment|security|utilities}/
+- Docs go in docs/{guides|api|architecture|governance|archive}/
+- Tools go in tools/{audit|cleanup|validation|generators}/
+- **NEW DOCUMENTATION**: Always place in docs/{category}/, NEVER in root
+
+## 🏛️ ARCHITECTURE RULES
+
+### Single Source of Truth:
+- ONLY ONE chat router: services/zoe-core/routers/chat.py
+- NEVER create chat_v2.py, chat_new.py, chat_optimized.py
+- Use git branches for changes, NOT file duplication
+- Backup files must use git, not file copying
+
+### Intelligent Systems (Use Them, Don't Replace):
+- MemAgentClient for semantic memory search
+- EnhancedMemAgentClient for action execution
+- ExpertOrchestrator for multi-step task coordination
+- AgentPlanner for task decomposition
+- RouteLLM for intelligent model selection
+- MCP Server for tool-based actions
+- NEVER hardcode regex patterns or canned responses in chat.py
+- Let specialized systems do their jobs
+
+### No Hardcoding:
+- NO "if/else" command detection in chat router
+- Use LLM + Agent system for natural language understanding
+- Example WRONG: if "add" in message and "shopping" in message: return "Added"
+- Example RIGHT: result = await enhanced_mem_agent.execute_action(message, user_id)
+
+## Security Rules
+- Never hardcode API keys, passwords, or secrets
+- Always use environment variables for sensitive data
+- Validate all user inputs before processing
+- Use parameterized queries for database operations
+- Never execute user input directly as code
+
+## File System Safety
+- Don't use os.remove() without confirmation
+- Don't use shutil.rmtree() without backup verification
+- Always check file existence before operations
+- Use safe file paths (no ../ or absolute paths from user input)
+- Don't overwrite critical system files
+
+## Docker & Container Safety
+- Don't run `docker rm -f` without explicit confirmation
+- Don't run `docker system prune` or `docker prune -f`
+- Always backup before destructive operations
+- Don't modify running containers without stopping them first
+- Don't delete volumes without backup
+
+## Database Safety
+- Don't use DROP TABLE without confirmation
+- Don't use DELETE without WHERE clause
+- Always backup before schema changes
+- Use transactions for multi-step operations
+- Don't truncate tables without backup
+
+## Code Quality
+- Add error handling for all risky operations
+- Use type hints for function parameters
+- Add docstrings to functions and classes
+- Keep functions under 50 lines when possible
+- Use meaningful variable names
+
+## Performance
+- Don't run blocking operations in main thread
+- Use async/await for I/O operations
+- Don't load large files into memory at once
+- Use generators for large data processing
+- Cache expensive operations
+
+## Testing
+- Test all new functionality
+- Add unit tests for critical functions
+- Test error conditions and edge cases
+- Verify rollback procedures work
+- Test with different user permissions
+
+## Documentation
+- Update README for new features
+- Document API changes
+- Add inline comments for complex logic
+- Keep architecture diagrams current
+- Document configuration options
+
+## Error Handling
+- Always handle exceptions gracefully
+- Log errors with sufficient context
+- Provide helpful error messages to users
+- Don't expose internal system details
+- Implement proper rollback mechanisms
+
+## Memory Management
+- Don't create memory leaks
+- Clean up resources properly
+- Use context managers for file operations
+- Don't store large objects in global scope
+- Monitor memory usage in long-running processes
+
+## 🎯 GOLDEN RULES
+
+1. When in doubt, DON'T delete - move to docs/archive/ instead
+2. Test BEFORE committing - one broken deployment is worse than clutter
+3. Small commits - easy to revert, easy to review
+4. Document reasoning - future you will thank present you
+5. Use git history - don't duplicate files, use version control
+6. Validate after changes - run structure validator before commit
+7. Prevention > Recovery - use pre-commit hooks
+8. **MULTI-PLATFORM**: Code must work on BOTH Jetson Orin NX AND Raspberry Pi 5
+
+## 🖥️ HARDWARE PLATFORM RULES - MANDATORY
+
+### Dual Platform Support
+Zoe runs on TWO platforms simultaneously:
+- **Jetson Orin NX 16GB**: GPU-accelerated, TensorRT, production
+- **Raspberry Pi 5 16GB**: CPU-only, edge deployment, development
+
+### Hardware-Specific Code Requirements
+
+**ALWAYS check hardware before:**
+- Setting GPU configurations (`num_gpu`)
+- Loading models (different models for each platform)
+- Using CUDA/TensorRT features
+- Setting performance parameters
+
+**Use environment variable**: `HARDWARE_PLATFORM=jetson|pi5|auto`
+
+**Example Pattern**:
+```python
+import os
+HARDWARE = os.getenv('HARDWARE_PLATFORM', 'auto')
+
+if HARDWARE == 'jetson':
+    # GPU-accelerated path
+    model_config = {"num_gpu": 99, "use_tensorrt": True}
+elif HARDWARE == 'pi5':
+    # CPU-optimized path
+    model_config = {"num_gpu": 0, "num_threads": 4}
+```
+
+### Model Selection Rules
+
+**Jetson Models** (GPU-accelerated):
+- Primary: `hermes3:8b-llama3.1-q4_K_M` (4.9GB)
+- Chat: `gemma3n-e2b-gpu-fixed` (5.6GB, num_gpu=99)
+- Vision: `gemma3n-e2b-gpu-fixed` (multimodal)
+- Memory: `qwen2.5:7b` (4.7GB)
+
+**Pi5 Models** (CPU-optimized):
+- Primary: `phi3:mini` (2.2GB, num_gpu=0)
+- Chat: `phi3:mini` (fast on CPU)
+- Vision: `llava:7b-v1.6-q4` (CPU-compatible)
+- Memory: `qwen2.5:3b` (2.0GB)
+
+### Testing Rules
+
+**MUST test on BOTH platforms before merge:**
+1. Jetson: GPU usage, TensorRT compatibility
+2. Pi5: CPU usage, memory constraints
+3. Both: Feature parity (where possible)
+4. Both: Health checks pass
+
+### Docker Rules
+
+**Separate docker-compose files**:
+- `docker-compose.jetson.yml` - GPU configs
+- `docker-compose.pi5.yml` - CPU configs
+- `docker-compose.yml` - Base (auto-detect)
+
+**Image selection**:
+- Jetson: Use `dustynv/ollama:r36.2.0` (Jetson-optimized)
+- Pi5: Use `ollama/ollama:latest` (standard ARM)
+
+### Feature Flags
+
+**Use hardware-aware feature flags**:
+```python
+FEATURES = {
+    'tensorrt': HARDWARE == 'jetson',
+    'gpu_acceleration': HARDWARE == 'jetson',
+    'multi_model_concurrent': HARDWARE == 'jetson',
+    'aggressive_unload': HARDWARE == 'pi5',
+}
+```
+
+### Documentation Rules
+
+**When adding features, document**:
+- ✅ Works on Jetson: [feature details]
+- ✅ Works on Pi5: [feature details]
+- ⚠️ Jetson-only: [reason, Pi5 alternative]
+- ⚠️ Pi5-only: [reason, Jetson alternative]
+
+### Performance Targets (by platform)
+
+**Jetson Orin NX**:
+- First token: <2s (with TensorRT)
+- Tokens/sec: 50+
+- Max model: 8GB
+- Concurrent: 5+ requests
+
+**Raspberry Pi 5**:
+- First token: <5s (CPU)
+- Tokens/sec: 8-12
+- Max model: 4GB
+- Concurrent: 2-3 requests
+
+### Critical Files
+
+**Hardware detection**: Check before modifying
+- `services/zoe-core/model_config.py` (model selection)
+- `services/zoe-core/model_prewarm.py` (pre-warming)
+- `docker-compose.yml` (service configs)
+- `.env` (platform settings)
+
+**See**: `HARDWARE_COMPATIBILITY.md` for full details
+
+## 📋 BEFORE EVERY COMMIT
+
+The pre-commit hook will automatically check:
+- Project structure validation (validate_structure.py)
+- Critical files exist (validate_critical_files.py)
+- No junk file patterns (._*, *_backup, *_old)
+
+If pre-commit fails, FIX the issues before committing.
+NEVER bypass hooks with --no-verify.
+
+## 🆘 IF YOU BREAK SOMETHING
+
+1. STOP immediately
+2. Document what was deleted
+3. Run recovery: git show <commit>^:path/to/file > path/to/file
+4. Validate restoration: python3 tools/audit/validate_critical_files.py
+5. Test thoroughly before continuing
+
+## 📖 REFERENCE DOCUMENTATION
+
+- docs/governance/CLEANUP_SAFETY.md - Complete safety procedures
+- docs/governance/CRITICAL_FILES.md - Critical files list
+- docs/governance/MANIFEST_SYSTEM.md - How manifest system works
+- PROJECT_STRUCTURE_RULES.md - File organization rules
+- .zoe/manifest.json - Approved files and patterns
+- .zoe/AI_ASSISTANT_CHECKLIST.md - **MANDATORY PRE-ACTION CHECKLIST** (READ FIRST!)
+
+## ✅ MANDATORY PRE-ACTION CHECKLIST
+
+**BEFORE creating/modifying/deleting ANY files:**
+1. Read `.zoe/AI_ASSISTANT_CHECKLIST.md` (mandatory checklist)
+2. Check root .md count: `ls -1 *.md | wc -l` (must be ≤ 10)
+3. Validate structure: `python3 tools/audit/validate_structure.py`
+4. Check manifest: `.zoe/manifest.json` for approved files
+5. For new documentation: Place in `docs/{category}/`, NEVER in root

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clear Zoe Cache</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .container {
+            text-align: center;
+            padding: 40px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            max-width: 500px;
+        }
+        h1 { margin-bottom: 20px; }
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+            font-size: 14px;
+        }
+        .success { background: rgba(76, 175, 80, 0.3); }
+        .error { background: rgba(244, 67, 54, 0.3); }
+        button {
+            background: white;
+            color: #667eea;
+            border: none;
+            padding: 15px 30px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 10px;
+            cursor: pointer;
+            margin: 10px;
+            transition: all 0.3s ease;
+        }
+        button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+        .spinner {
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid white;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧹 Clear Zoe Cache</h1>
+        <p>This will clear all cached data and reload the latest version of Zoe.</p>
+        
+        <div id="status" class="status">Ready to clear cache...</div>
+        
+        <button onclick="clearEverything()">Clear All Caches</button>
+        <button onclick="window.location.href='/dashboard.html'">Go to Dashboard</button>
+    </div>
+
+    <script>
+        async function clearEverything() {
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerHTML = '<div class="spinner"></div><p>Clearing all caches...</p>';
+            statusDiv.className = 'status';
+            
+            let messages = [];
+            
+            try {
+                // 1. Unregister all service workers
+                if ('serviceWorker' in navigator) {
+                    const registrations = await navigator.serviceWorker.getRegistrations();
+                    for (let registration of registrations) {
+                        await registration.unregister();
+                        messages.push('✓ Service worker unregistered');
+                    }
+                }
+                
+                // 2. Clear all caches
+                if ('caches' in window) {
+                    const cacheNames = await caches.keys();
+                    for (let cacheName of cacheNames) {
+                        await caches.delete(cacheName);
+                        messages.push(`✓ Deleted cache: ${cacheName}`);
+                    }
+                }
+                
+                // 3. Clear localStorage (except session)
+                const session = localStorage.getItem('zoe_session');
+                localStorage.clear();
+                if (session) {
+                    localStorage.setItem('zoe_session', session);
+                    messages.push('✓ Cleared localStorage (kept session)');
+                } else {
+                    messages.push('✓ Cleared localStorage');
+                }
+                
+                // 4. Clear sessionStorage
+                sessionStorage.clear();
+                messages.push('✓ Cleared sessionStorage');
+                
+                // 5. Clear IndexedDB
+                if ('indexedDB' in window) {
+                    const dbs = await indexedDB.databases();
+                    for (let db of dbs) {
+                        indexedDB.deleteDatabase(db.name);
+                        messages.push(`✓ Deleted database: ${db.name}`);
+                    }
+                }
+                
+                statusDiv.className = 'status success';
+                statusDiv.innerHTML = `
+                    <h3>✅ Cache Cleared Successfully!</h3>
+                    <div style="text-align: left; margin-top: 10px;">
+                        ${messages.join('<br>')}
+                    </div>
+                    <p style="margin-top: 20px;">Redirecting to dashboard in 3 seconds...</p>
+                `;
+                
+                setTimeout(() => {
+                    window.location.href = '/dashboard.html?nocache=' + Date.now();
+                }, 3000);
+                
+            } catch (error) {
+                statusDiv.className = 'status error';
+                statusDiv.innerHTML = `
+                    <h3>❌ Error Clearing Cache</h3>
+                    <p>${error.message}</p>
+                    <p>Try manually clearing cache: Ctrl+Shift+Delete (or Cmd+Shift+Delete on Mac)</p>
+                `;
+            }
+        }
+    </script>
+</body>
+</html>
+

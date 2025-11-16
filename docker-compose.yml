@@ -1,0 +1,505 @@
+services:
+  zoe-core:
+    build: ./services/zoe-core
+    container_name: zoe-core
+    restart: unless-stopped
+    ports:
+    - 8000:8000
+    volumes:
+    - ./services/zoe-core:/app
+    - ./data:/app/data
+    - /var/run/docker.sock:/var/run/docker.sock
+    - /home/zoe/assistant:/home/zoe/assistant:rw
+    - /usr/bin/docker:/usr/bin/docker:ro
+    - /proc:/host/proc:ro
+    - /sys:/host/sys:ro
+    environment:
+    - PYTHONUNBUFFERED=1
+    - DOCKER_HOST=unix:///var/run/docker.sock
+    - PROJECT_ROOT=/home/zoe/assistant
+    - FULL_ACCESS=true
+    - ZOE_DEV_MODE=true
+    - DATABASE_PATH=/app/data/zoe.db
+    networks:
+    - zoe-network
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8000/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    env_file:
+    - .env
+  zoe-mcp-server:
+    build: ./services/zoe-mcp-server
+    container_name: zoe-mcp-server
+    restart: unless-stopped
+    ports:
+    - 8003:8003
+    volumes:
+    - ./services/zoe-mcp-server:/app
+    - ./data:/app/data
+    environment:
+    - PYTHONUNBUFFERED=1
+    - ZOE_DB_PATH=/app/data/zoe.db
+    - ZOE_API_URL=http://zoe-core:8000
+    # - PEOPLE_SERVICE_URL=http://people-service:8001
+    # - COLLECTIONS_SERVICE_URL=http://collections-service:8005
+    - HOMEASSISTANT_BRIDGE_URL=http://homeassistant-mcp-bridge:8007
+    - N8N_BRIDGE_URL=http://n8n-mcp-bridge:8009
+    - ZOE_AUTH_TOKEN=${ZOE_AUTH_TOKEN:-}
+    - ZOE_SESSION_ID=${ZOE_SESSION_ID:-}
+    networks:
+    - zoe-network
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - "import sqlite3; conn = sqlite3.connect('/app/data/zoe.db'); conn.close()"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+    - zoe-core
+    env_file:
+    - .env
+  zoe-code-execution:
+    build: ./services/zoe-code-execution
+    container_name: zoe-code-execution
+    restart: unless-stopped
+    ports:
+    - 8010:8010
+    volumes:
+    - ./services/zoe-code-execution:/app
+    - /tmp/zoe-code-workspace:/tmp/zoe-code-workspace
+    environment:
+    - PYTHONUNBUFFERED=1
+    - MCP_SERVER_URL=http://zoe-mcp-server:8003
+    networks:
+    - zoe-network
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8010/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+    - zoe-mcp-server
+    env_file:
+    - .env
+  zoe-mem-agent:
+    build: ./services/mem-agent
+    container_name: zoe-mem-agent
+    restart: unless-stopped
+    ports:
+    - 11435:8000
+    volumes:
+    - ./services/mem-agent:/app
+    - ./data:/app/data
+    - ./data/memory:/app/memory:ro
+    environment:
+    - PYTHONUNBUFFERED=1
+    - MEMORY_DIR=/app/memory
+    - DB_PATH=/app/data/zoe.db
+    - MAX_WORKERS=2
+    - TIMEOUT=2.0
+    networks:
+    - zoe-network
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8000/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+    - zoe-core
+    env_file:
+    - .env
+  # people-service:
+  #   build: ./services/people-service
+  #   container_name: people-service
+  #   restart: unless-stopped
+  #   ports:
+  #   - 8001:8001
+  #   volumes:
+  #   - ./services/people-service:/app
+  #   - ./data:/app/data
+  #   environment:
+  #   - PYTHONUNBUFFERED=1
+  #   - DATABASE_PATH=/app/data/zoe.db
+  #   networks:
+  #   - zoe-network
+  #   healthcheck:
+  #     test:
+  #     - CMD
+  #     - curl
+  #     - -f
+  #     - http://localhost:8001/
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #   depends_on:
+  #   - zoe-core
+  #   env_file:
+  #   - .env
+  # collections-service:
+  #   build: ./services/collections-service
+  #   container_name: collections-service
+  #   restart: unless-stopped
+  #   ports:
+  #   - 8005:8005
+  #   volumes:
+  #   - ./services/collections-service:/app
+  #   - ./data:/app/data
+  #   environment:
+  #   - PYTHONUNBUFFERED=1
+  #   - DATABASE_PATH=/app/data/zoe.db
+  #   networks:
+  #   - zoe-network
+  #   healthcheck:
+  #     test:
+  #     - CMD
+  #     - curl
+  #     - -f
+  #     - http://localhost:8005/
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #   depends_on:
+  #   - zoe-core
+  #   env_file:
+  #   - .env
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    restart: unless-stopped
+    ports:
+    - 8123:8123
+    volumes:
+    - ./homeassistant:/config
+    environment:
+    - TZ=Australia/Perth
+    networks:
+    - zoe-network
+
+  homeassistant-mcp-bridge:
+    build: ./services/homeassistant-mcp-bridge
+    container_name: homeassistant-mcp-bridge
+    restart: unless-stopped
+    ports:
+    - 8007:8007
+    volumes:
+    - ./services/homeassistant-mcp-bridge:/app
+    environment:
+    - PYTHONUNBUFFERED=1
+    - HA_BASE_URL=${HA_BASE_URL:-http://homeassistant:8123}
+    - HA_ACCESS_TOKEN=${HA_ACCESS_TOKEN:-}
+    networks:
+    - zoe-network
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8007/
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    env_file:
+    - .env
+  n8n-mcp-bridge:
+    build: ./services/n8n-mcp-bridge
+    container_name: n8n-mcp-bridge
+    restart: unless-stopped
+    ports:
+    - 8009:8009
+    volumes:
+    - ./services/n8n-mcp-bridge:/app
+    environment:
+    - PYTHONUNBUFFERED=1
+    - N8N_BASE_URL=${N8N_BASE_URL:-http://n8n:5678}
+    - N8N_API_KEY=${N8N_API_KEY:-}
+    networks:
+    - zoe-network
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8009/
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    env_file:
+    - .env
+  # zoe-tensorrt: REMOVED - Not needed with llama.cpp GGUF models
+  # TensorRT-LLM was for model compilation/optimization
+  # llama.cpp uses pre-quantized GGUF models (no compilation needed)
+  
+  # matrix-mcp-server:
+  #   image: ghcr.io/mjknowles/matrix-mcp-server:latest
+  #   container_name: matrix-mcp-server
+  #   restart: unless-stopped
+  #   ports:
+  #   - "3001:3000"
+  #   environment:
+  #   - MATRIX_HOMESERVER_URL=${MATRIX_HOMESERVER:-https://matrix.org}
+  #   - MATRIX_USER_ID=${MATRIX_USER:-}
+  #   - MATRIX_ACCESS_TOKEN=${MATRIX_ACCESS_TOKEN:-}
+  #   networks:
+  #   - zoe-network
+  #   healthcheck:
+  #     test:
+  #     - CMD-SHELL
+  #     - wget --spider -q http://localhost:3000/health || exit 1
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  zoe-ui:
+    image: nginx:alpine
+    container_name: zoe-ui
+    ports:
+    - 80:80
+    - 443:443
+    volumes:
+    - ./services/zoe-ui/dist:/usr/share/nginx/html
+    - ./services/zoe-ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    - ./ssl:/etc/nginx/ssl:ro
+    networks:
+    - zoe-network
+    restart: unless-stopped
+  # vLLM Service REMOVED - Migration blocked by PyTorch CUDA allocator bug
+  # Switched to llama.cpp (see zoe-llamacpp below) - working perfectly
+  # Archive: docs/archive/vllm-migration-2025-11/README.md
+  zoe-llamacpp:
+    build: ./services/zoe-llamacpp
+    container_name: zoe-llamacpp
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./models:/models:ro
+      - ./services/zoe-llamacpp/entrypoint-optimized.sh:/app/entrypoint.sh:ro
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - NVIDIA_VISIBLE_DEVICES=all
+      - MODEL_PATH=/models/gemma-3-4b-gguf/gemma-3-4b-it.Q4_K_M.gguf
+      - MODEL_NAME=gemma-3-4b
+      - CTX_SIZE=2048          # Optimized for voice (reduced from 4096)
+      - N_GPU_LAYERS=99        # All layers on GPU
+      - THREADS=8              # Increased for parallel work
+      - PARALLEL=8             # Increased for concurrent requests
+      - N_BATCH=512            # Larger batch for prompt processing
+      - N_UBATCH=256           # Micro-batch for generation
+      - CUDA_LAUNCH_BLOCKING=0 # Async CUDA (faster)
+    networks:
+      - zoe-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    runtime: nvidia
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    shm_size: '2gb'
+  zoe-redis:
+    image: redis:alpine
+    container_name: zoe-redis
+    volumes:
+    - zoe_redis_data:/data
+    networks:
+    - zoe-network
+    restart: unless-stopped
+  zoe-whisper:
+    build: ./services/zoe-whisper
+    container_name: zoe-whisper
+    ports:
+    - 9001:9001
+    volumes:
+    - zoe_whisper_models:/root/.cache/whisper
+    devices:
+    - /dev/snd:/dev/snd
+    environment:
+    - PULSE_SERVER=unix:/run/user/1000/pulse/native
+    networks:
+    - zoe-network
+    restart: unless-stopped
+  zoe-tts:
+    build: ./services/zoe-tts
+    container_name: zoe-tts
+    ports:
+    - 9002:9002
+    volumes:
+    - zoe_neutts_models:/root/.cache/neutts
+    - ./data/voice_profiles:/app/voice_profiles
+    - ./services/zoe-tts/samples:/app/samples
+    devices:
+    - /dev/snd:/dev/snd
+    environment:
+    - PULSE_SERVER=unix:/run/user/1000/pulse/native
+    - PYTHONUNBUFFERED=1
+    networks:
+    - zoe-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9002/health').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+  zoe-n8n:
+    image: n8nio/n8n
+    container_name: zoe-n8n
+    ports:
+    - 5678:5678
+    volumes:
+    - zoe_n8n_data:/home/node/.n8n
+    - ./scripts/n8n/workflows:/workflows
+    - ./ssl:/ssl:ro
+    environment:
+    - N8N_BASIC_AUTH_ACTIVE=true
+    - N8N_BASIC_AUTH_USER=zoe
+    - N8N_BASIC_AUTH_PASSWORD=zoe2025
+    - N8N_SECURE_COOKIE=true
+    - N8N_PROTOCOL=https
+    - N8N_HOST=zoe.local
+    - N8N_COMMUNITY_PACKAGES_ALLOW_TOOL_USAGE=true
+    - N8N_PORT=5678
+    - WEBHOOK_URL=https://zoe.local:5678/
+    - N8N_SSL_CERT=/ssl/zoe.crt
+    - N8N_SSL_KEY=/ssl/zoe.key
+    networks:
+    - zoe-network
+    restart: unless-stopped
+  zoe-litellm:
+    build: ./services/zoe-litellm
+    container_name: zoe-litellm
+    ports:
+    - 8001:8001
+    environment:
+    - OPENAI_API_KEY=${OPENAI_API_KEY}
+    - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-your-secret-key-change-this}
+    command: ["litellm", "--config", "minimal_config.yaml", "--port", "8001"]
+    networks:
+    - zoe-network
+    restart: unless-stopped
+    depends_on:
+    - zoe-llamacpp  # Updated: vLLM replaced with llama.cpp
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health -H 'Authorization: Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f' || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+  zoe-auth:
+    build: ./services/zoe-auth
+    container_name: zoe-auth
+    ports:
+    - 8002:8002
+    volumes:
+    - ./data:/app/data
+    networks:
+    - zoe-network
+    restart: unless-stopped
+    environment:
+    - PYTHONUNBUFFERED=1
+    - DATABASE_PATH=/app/data/zoe.db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: zoe-cloudflared
+    command: --config /etc/cloudflared/config.yml --no-autoupdate tunnel run
+    restart: unless-stopped
+    volumes:
+    - ./config/cloudflared-config.yml:/etc/cloudflared/config.yml:ro
+    - ./config/d417c04a-babc-48e4-85e6-a9badc20a7a6.json:/etc/cloudflared/d417c04a-babc-48e4-85e6-a9badc20a7a6.json:ro
+    - ./config/cert.pem:/etc/cloudflared/cert.pem:ro
+    networks:
+    - zoe-network
+    extra_hosts:
+    - "host.docker.internal:host-gateway"
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: livekit-server
+    command: --config /etc/livekit.yaml
+    ports:
+    - 7880:7880
+    - 7881:7881
+    - 7882:7882/udp
+    - 50000-50200:50000-50200/udp
+    volumes:
+    - ./services/livekit/config.yaml:/etc/livekit.yaml
+    - ./ssl:/ssl:ro
+    environment:
+    - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-devkey}
+    - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-secretsecretsecretsecretsecretsecret}
+    networks:
+    - zoe-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:7880"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+  zoe-voice-agent:
+    build: ./services/zoe-voice-agent
+    container_name: zoe-voice-agent
+    ports:
+    - 9003:9003
+    volumes:
+    - ./services/zoe-voice-agent:/app
+    - ./data:/app/data
+    environment:
+    - PYTHONUNBUFFERED=1
+    - LIVEKIT_URL=ws://livekit:7880
+    - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-devkey}
+    - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-secretsecretsecretsecretsecretsecret}
+    - ZOE_CORE_URL=http://zoe-core:8000
+    - TTS_SERVICE_URL=http://zoe-tts:9002
+    - WHISPER_SERVICE_URL=http://zoe-whisper:9001
+    - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    networks:
+    - zoe-network
+    restart: unless-stopped
+    depends_on:
+    - livekit
+    - zoe-tts
+    - zoe-whisper
+    - zoe-core
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+networks:
+  zoe-network:
+    name: zoe-network  # ✅ FIXED: Explicit name prevents "assistant_" prefix
+    driver: bridge
+volumes:
+  zoe_redis_data: null
+  zoe_whisper_models: null
+  zoe_neutts_models: null
+  zoe_n8n_data: null
+  zoe_database: null

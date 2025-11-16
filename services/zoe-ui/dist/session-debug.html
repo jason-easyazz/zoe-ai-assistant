@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Session Debug</title>
+    <script src="/js/auth.js"></script>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #1a1a1a; color: #0f0; }
+        .box { border: 1px solid #0f0; padding: 15px; margin: 10px 0; }
+        pre { background: #000; padding: 10px; overflow-x: auto; }
+        button { background: #0f0; color: #000; border: none; padding: 10px 20px; margin: 5px; cursor: pointer; }
+    </style>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
+</head>
+<body>
+    <h1>🔍 Session Debugging Tool</h1>
+    
+    <div class="box">
+        <h2>LocalStorage Content:</h2>
+        <pre id="storage"></pre>
+    </div>
+    
+    <div class="box">
+        <h2>Session Object:</h2>
+        <pre id="sessionObj"></pre>
+    </div>
+    
+    <div class="box">
+        <h2>Validation Check:</h2>
+        <pre id="validation"></pre>
+    </div>
+    
+    <div class="box">
+        <h2>Actions:</h2>
+        <button onclick="testLogin()">Test Login</button>
+        <button onclick="checkSession()">Check Session</button>
+        <button onclick="clearSession()">Clear Session</button>
+        <button onclick="location.href='/dashboard.html'">Go to Dashboard</button>
+    </div>
+    
+    <script>
+        function updateDisplay() {
+            // Show raw localStorage
+            document.getElementById('storage').textContent = localStorage.getItem('zoe_session') || 'No session';
+            
+            // Show parsed object
+            try {
+                const session = JSON.parse(localStorage.getItem('zoe_session'));
+                document.getElementById('sessionObj').textContent = JSON.stringify(session, null, 2);
+                
+                // Show validation details
+                const validation = {
+                    has_session: !!session,
+                    has_session_id: !!session?.session_id,
+                    expires_at: session?.expires_at,
+                    expires_at_date: session?.expires_at ? new Date(session.expires_at).toISOString() : null,
+                    current_time: new Date().toISOString(),
+                    is_expired: session?.expires_at ? new Date() >= new Date(session.expires_at) : null,
+                    is_authenticated: window.zoeAuth ? window.zoeAuth.isAuthenticated() : 'auth.js not loaded'
+                };
+                document.getElementById('validation').textContent = JSON.stringify(validation, null, 2);
+            } catch (e) {
+                document.getElementById('sessionObj').textContent = 'Error: ' + e.message;
+            }
+        }
+        
+        async function testLogin() {
+            const response = await fetch('/api/auth/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    username: 'admin',
+                    password: 'admin',
+                    device_info: {type: 'web'}
+                })
+            });
+            const data = await response.json();
+            localStorage.setItem('zoe_session', JSON.stringify(data));
+            updateDisplay();
+            alert('Login done! Check the data above.');
+        }
+        
+        function checkSession() {
+            updateDisplay();
+        }
+        
+        function clearSession() {
+            localStorage.removeItem('zoe_session');
+            updateDisplay();
+        }
+        
+        // Auto-update on load
+        updateDisplay();
+        setInterval(updateDisplay, 2000);
+    </script>
+</body>
+</html>

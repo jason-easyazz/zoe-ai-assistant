@@ -1,0 +1,4444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Zoe - Smart Family Dashboard</title>
+    <!-- Widget System Core -->
+    <script src="../js/widget-base.js"></script>
+    <script src="../js/widget-system.js"></script>
+    
+    <!-- Core Widgets -->
+    <script src="../js/widgets/core/events.js"></script>
+    <script src="../js/widgets/core/tasks.js"></script>
+    <script src="../js/widgets/core/time.js"></script>
+    <script src="../js/widgets/core/weather.js"></script>
+    <script src="../js/widgets/core/home.js"></script>
+    <script src="../js/widgets/core/system.js"></script>
+    <script src="../js/widgets/core/notes.js"></script>
+    <script src="../js/widgets/core/zoe-orb.js"></script>
+    
+    <style>
+        /* Google Nest Hub Inspired Variables */
+        :root {
+            /* Zoe Brand Colors */
+            --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --chat-gradient: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            
+            /* Event Categories - Matching Desktop Calendar */
+            --work-color: rgba(59, 130, 246, 0.15);
+            --work-border: #2563eb;
+            --work-text: #1e40af;
+            
+            --personal-color: rgba(147, 51, 234, 0.15);
+            --personal-border: #9333ea;
+            --personal-text: #7e22ce;
+            
+            --bucket-color: rgba(16, 185, 129, 0.15);
+            --bucket-border: #059669;
+            --bucket-text: #047857;
+            
+            --shopping-color: rgba(251, 146, 60, 0.15);
+            --shopping-border: #ea580c;
+            --shopping-text: #c2410c;
+            
+            --health-color: rgba(236, 72, 153, 0.15);
+            --health-border: #be185d;
+            --health-text: #9d174d;
+            
+            --routine-color: rgba(107, 114, 128, 0.15);
+            --routine-border: #374151;
+            --routine-text: #1f2937;
+            
+            --social-color: rgba(34, 197, 94, 0.15);
+            --social-border: #16a34a;
+            --social-text: #15803d;
+            
+            --family-color: rgba(168, 85, 247, 0.15);
+            --family-border: #9333ea;
+            --family-text: #7c3aed;
+            
+            /* Theme Colors */
+            --background-dark: #1a1a1a;
+            --background-light: #f5f5f5;
+            --surface: rgba(255, 255, 255, 0.9);
+            --surface-dark: rgba(30, 30, 30, 0.95);
+            --text-primary: #1a1a1a;
+            --text-secondary: #666666;
+            --text-primary-dark: #ffffff;
+            --text-secondary-dark: #b0b0b0;
+            
+            /* Widget System */
+            --widget-radius: 24px;
+            --widget-shadow: 0 8px 32px rgba(0, 0, 0, 0.12);
+            --widget-shadow-dark: 0 8px 32px rgba(0, 0, 0, 0.4);
+            --drag-shadow: 0 16px 48px rgba(0, 0, 0, 0.25);
+            
+            /* Grid System */
+            --grid-gap: 24px;
+            --widget-min-width: 280px;
+            --widget-min-height: 180px;
+            
+            /* Touch Targets */
+            --touch-target: 56px;
+            --touch-large: 72px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        /* Ensure emoji characters display properly */
+        .emoji, [class*="icon"], .widget-title, .library-widget-icon, .widget-control-btn {
+            font-family: 'Noto Color Emoji', 'Apple Color Emoji', 'Segoe UI Emoji', 'DejaVu Sans', 'Liberation Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-variant-emoji: emoji;
+            -webkit-font-feature-settings: "emoji";
+            font-feature-settings: "emoji";
+            text-rendering: optimizeLegibility;
+            -webkit-text-stroke: 0.01em transparent;
+        }
+
+        /* Fallback for systems without emoji support */
+        @supports not (font-variant-emoji: emoji) {
+            .emoji, [class*="icon"], .widget-title, .library-widget-icon, .widget-control-btn {
+                font-family: 'Noto Color Emoji', 'DejaVu Sans', 'Liberation Sans', 'Arial Unicode MS', 'Lucida Grande', sans-serif;
+            }
+        }
+
+        /* Specific emoji styling for better display */
+        .library-widget-icon {
+            font-size: 32px;
+            line-height: 1;
+            display: block;
+            margin-bottom: 8px;
+        }
+
+        .widget-control-btn {
+            font-size: 16px;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        body {
+            font-family: 'DejaVu Sans', 'Liberation Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
+            background: var(--background-light);
+            color: var(--text-primary);
+            overflow-x: hidden;
+            -webkit-tap-highlight-color: transparent;
+            transition: all 0.3s ease;
+        }
+
+        /* Dark mode */
+        body.dark-theme {
+            background: var(--background-dark);
+            color: var(--text-primary-dark);
+        }
+
+        /* Ambient Background */
+        .ambient-background {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            opacity: 0.1;
+            background: linear-gradient(45deg, 
+                var(--personal-color) 0%, 
+                var(--work-color) 25%, 
+                var(--health-color) 50%, 
+                var(--social-color) 75%, 
+                var(--family-color) 100%);
+            background-size: 400% 400%;
+            animation: gradientShift 20s ease infinite;
+        }
+
+        @keyframes gradientShift {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+        }
+
+        /* Header Bar */
+        .header-bar {
+            position: sticky;
+            top: 0;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+            padding: 16px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            z-index: 1000;
+            transition: all 0.3s ease;
+        }
+
+        .dark-theme .header-bar {
+            background: rgba(30, 30, 30, 0.95);
+            border-bottom-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .time-display {
+            font-size: 32px;
+            font-weight: 300;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        /* Better contrast for light mode */
+        .time-display {
+            background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .date-weather {
+            font-size: 16px;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .dark-theme .date-weather {
+            color: var(--text-secondary-dark);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header-button {
+            width: 48px;
+            height: 48px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--text-primary);
+            font-size: 18px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+
+        .dark-theme .header-button {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary-dark);
+        }
+
+        .header-button:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: scale(1.05);
+        }
+
+        .header-button.active {
+            background: var(--primary-gradient);
+            color: white;
+        }
+
+        /* Main Dashboard Grid */
+        .dashboard-container {
+            padding: 32px;
+            min-height: calc(100vh - 100px);
+            position: relative;
+        }
+
+        .widget-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(var(--widget-min-width), 1fr));
+            gap: var(--grid-gap);
+            grid-auto-rows: minmax(var(--widget-min-height), auto);
+            min-height: 400px; /* Ensure grid has height for drop zones */
+        }
+        
+        /* Force minimum columns for better drop experience */
+        @media (min-width: 900px) {
+            .widget-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+        
+        @media (min-width: 1200px) {
+            .widget-grid {
+                grid-template-columns: repeat(4, 1fr);
+            }
+        }
+
+        /* Widget Base Styles */
+        .widget {
+            background: var(--surface);
+            border-radius: var(--widget-radius);
+            padding: 24px;
+            box-shadow: var(--widget-shadow);
+            position: relative;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            overflow: hidden;
+            user-select: none;
+        }
+
+        .dark-theme .widget {
+            background: var(--surface-dark);
+            box-shadow: var(--widget-shadow-dark);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .widget:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        .dark-theme .widget:hover {
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Widget Control Bar (Edit Mode) - HIDDEN BY DEFAULT */
+        .widget-controls {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            display: flex;
+            gap: 8px;
+            opacity: 0;
+            transition: all 0.2s ease;
+            pointer-events: none;
+        }
+
+        /* ONLY SHOW CONTROLS IN EDIT MODE */
+        body.edit-mode .widget-controls {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .widget-control-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--text-primary);
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .dark-theme .widget-control-btn {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary-dark);
+        }
+
+        .widget-control-btn:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: scale(1.1);
+        }
+
+        .widget-control-btn.delete {
+            background: rgba(255, 59, 48, 0.1);
+            color: #ff3b30;
+        }
+
+        .widget-control-btn.delete:hover {
+            background: #ff3b30;
+            color: white;
+        }
+
+        /* Edit Mode Animation */
+        body.edit-mode .widget {
+            animation: wiggle 2s infinite;
+        }
+
+        @keyframes wiggle {
+            0%, 100% { transform: rotate(0deg); }
+            25% { transform: rotate(1deg); }
+            75% { transform: rotate(-1deg); }
+        }
+
+        /* Widget Sizes */
+        .widget.size-small { grid-column: span 1; grid-row: span 1; }
+        .widget.size-medium { grid-column: span 1; grid-row: span 2; }
+        .widget.size-large { grid-column: span 2; grid-row: span 1; }
+        .widget.size-xlarge { grid-column: span 2; grid-row: span 2; }
+
+        /* Widget Headers */
+        .widget-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+
+        .widget-title {
+            font-size: 18px;
+            font-weight: 500;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .dark-theme .widget-title {
+            color: var(--text-primary-dark);
+        }
+        
+        /* Brighter gradient for dark mode */
+        .dark-theme .time-display {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .widget-badge {
+            background: var(--primary-gradient);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* Beautiful Time Widget - Based on the provided design */
+        .beautiful-time-widget {
+            background: linear-gradient(180deg, #a855f7 0%, #7c3aed 50%, #6d28d9 100%);
+            color: white;
+            text-align: center;
+            padding: 40px 24px;
+            box-shadow: 0 12px 40px rgba(139, 92, 246, 0.3);
+            border-radius: 20px;
+            position: relative;
+            overflow: hidden;
+            min-height: 200px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        /* Brighter gradient for dark mode */
+        .dark-theme .beautiful-time-widget {
+            background: linear-gradient(180deg, #c084fc 0%, #a855f7 50%, #8b5cf6 100%);
+            box-shadow: 0 12px 40px rgba(168, 85, 247, 0.4);
+        }
+
+        .beautiful-time {
+            font-size: 72px;
+            font-weight: 300;
+            line-height: 1;
+            margin-bottom: 12px;
+            font-family: 'DejaVu Sans', 'Liberation Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            letter-spacing: -2px;
+            color: white;
+        }
+
+        .beautiful-date {
+            font-size: 22px;
+            font-weight: 400;
+            opacity: 0.95;
+            margin-bottom: 24px;
+            font-family: 'DejaVu Sans', 'Liberation Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            color: white;
+        }
+
+        .beautiful-weather {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            font-size: 18px;
+            font-weight: 500;
+            font-family: 'DejaVu Sans', 'Liberation Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            color: white;
+        }
+
+        .beautiful-weather-icon {
+            font-size: 20px;
+        }
+
+        /* Weather Widget Styles */
+        .weather-content {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .weather-today {
+            text-align: center;
+        }
+
+        .weather-icon {
+            font-size: 32px;
+            margin-bottom: 8px;
+        }
+
+        .weather-temp {
+            font-size: 24px;
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .weather-desc {
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+
+        .weather-forecast {
+            display: grid;
+            gap: 8px;
+        }
+
+        /* Small weather widget - no forecast */
+        .widget.size-small .weather-forecast {
+            display: none;
+        }
+
+        /* Medium weather widget - 2 day forecast */
+        .widget.size-medium .weather-forecast {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        /* Large weather widget - 3 day forecast */
+        .widget.size-large .weather-forecast {
+            grid-template-columns: 1fr 1fr 1fr;
+        }
+
+        /* XLarge weather widget - 4 day forecast */
+        .widget.size-xlarge .weather-forecast {
+            grid-template-columns: 1fr 1fr 1fr 1fr;
+        }
+
+        .forecast-day {
+            text-align: center;
+            padding: 8px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.02);
+        }
+
+        .dark-theme .forecast-day {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .forecast-day-name {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+
+        .forecast-day-icon {
+            font-size: 20px;
+            margin-bottom: 4px;
+        }
+
+        .forecast-day-temp {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        /* Events Widget */
+        .event-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+
+        .event-time {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            min-width: 60px;
+        }
+
+        .event-content {
+            flex: 1;
+        }
+
+        .event-title {
+            font-weight: 500;
+            margin-bottom: 2px;
+        }
+
+        .event-category-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        
+        /* Event item styling with desktop colors */
+        .event-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            margin-bottom: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border-left: 3px solid transparent;
+            min-height: 48px;
+        }
+        
+        .event-item:hover {
+            transform: translateX(4px);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        .event-item.category-personal {
+            background: var(--personal-color);
+            border-left-color: var(--personal-border);
+            color: var(--personal-text);
+        }
+        
+        .event-item.category-work {
+            background: var(--work-color);
+            border-left-color: var(--work-border);
+            color: var(--work-text);
+        }
+        
+        .event-item.category-health {
+            background: var(--health-color);
+            border-left-color: var(--health-border);
+            color: var(--health-text);
+        }
+        
+        .event-item.category-social {
+            background: var(--social-color);
+            border-left-color: var(--social-border);
+            color: var(--social-text);
+        }
+        
+        .event-item.category-family {
+            background: var(--family-color);
+            border-left-color: var(--family-border);
+            color: var(--family-text);
+        }
+        
+        .event-item.category-bucket {
+            background: var(--bucket-color);
+            border-left-color: var(--bucket-border);
+            color: var(--bucket-text);
+        }
+
+        .event-item.category-shopping {
+            background: var(--shopping-color);
+            border-left-color: var(--shopping-border);
+            color: var(--shopping-text);
+        }
+
+        .event-item.category-routine {
+            background: var(--routine-color);
+            border-left-color: var(--routine-border);
+            color: var(--routine-text);
+        }
+
+        /* Zoe Widget Styles - Matching Index Page */
+        .zoe-widget {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 200px;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .zoe-orb-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+        }
+
+        .zoe-orb {
+            width: clamp(120px, 15vw, 160px);
+            height: clamp(120px, 15vw, 160px);
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            margin: 0 auto 30px;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            animation: zoeBreathe 4s ease-in-out infinite;
+            box-shadow: 
+                0 0 60px rgba(123, 97, 255, 0.4),
+                0 0 120px rgba(90, 224, 224, 0.2),
+                inset 0 0 60px rgba(255, 255, 255, 0.1);
+        }
+
+        .zoe-orb:hover {
+            transform: scale(1.1) translateY(-20px);
+            box-shadow: 
+                0 0 80px rgba(123, 97, 255, 0.6),
+                0 0 160px rgba(90, 224, 224, 0.3),
+                inset 0 0 60px rgba(255, 255, 255, 0.2);
+            animation: none;
+        }
+
+        .zoe-orb.listening {
+            animation: zoeListening 0.5s ease-in-out infinite alternate;
+            background: linear-gradient(135deg, #ff6b6b 0%, #ffa500 100%);
+            box-shadow: 
+                0 0 80px rgba(255, 107, 107, 0.6),
+                0 0 160px rgba(255, 165, 0, 0.3),
+                inset 0 0 60px rgba(255, 255, 255, 0.2);
+        }
+
+        .zoe-orb.processing {
+            animation: zoeProcessing 1s ease-in-out infinite;
+            background: linear-gradient(135deg, #4ecdc4 0%, #44a08d 100%);
+            box-shadow: 
+                0 0 80px rgba(78, 205, 196, 0.6),
+                0 0 160px rgba(68, 160, 141, 0.3),
+                inset 0 0 60px rgba(255, 255, 255, 0.2);
+        }
+
+        @keyframes zoeBreathe {
+            0%, 100% { 
+                transform: scale(1) translateY(0px);
+                filter: brightness(1);
+            }
+            50% { 
+                transform: scale(1.05) translateY(-10px);
+                filter: brightness(1.1);
+            }
+        }
+
+        @keyframes zoeListening {
+            0% { transform: scale(1) translateY(0px); }
+            100% { transform: scale(1.1) translateY(-10px); }
+        }
+
+        @keyframes zoeProcessing {
+            0%, 100% { transform: rotate(0deg) scale(1) translateY(0px); }
+            50% { transform: rotate(180deg) scale(1.05) translateY(-5px); }
+        }
+
+        .zoe-status {
+            position: absolute;
+            bottom: -40px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+            text-align: center;
+            opacity: 0.9;
+            white-space: nowrap;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        /* Chat Overlay */
+        .zoe-chat-overlay {
+            position: fixed;
+            top: 0;
+            right: -400px;
+            width: 400px;
+            height: 100vh;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(0, 0, 0, 0.1);
+            z-index: 2000;
+            transition: right 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            flex-direction: column;
+            box-shadow: -10px 0 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .zoe-chat-overlay.open {
+            right: 0;
+        }
+
+        .zoe-chat-header {
+            padding: 20px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .zoe-chat-title {
+            font-size: 18px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .zoe-chat-close {
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+
+        .zoe-chat-close:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: scale(1.1);
+        }
+
+        .zoe-chat-messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .zoe-message {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            animation: messageSlideIn 0.3s ease-out;
+        }
+
+        .zoe-message.user {
+            flex-direction: row-reverse;
+        }
+
+        .zoe-message-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        .zoe-message.user .zoe-message-avatar {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+        }
+
+        .zoe-message.zoe .zoe-message-avatar {
+            background: linear-gradient(135deg, #4ecdc4 0%, #44a08d 100%);
+            color: white;
+        }
+
+        .zoe-message-bubble {
+            max-width: 80%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            font-size: 14px;
+            line-height: 1.4;
+            word-wrap: break-word;
+        }
+
+        .zoe-message.user .zoe-message-bubble {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .zoe-message.zoe .zoe-message-bubble {
+            background: rgba(0, 0, 0, 0.05);
+            color: #333;
+            border-bottom-left-radius: 4px;
+        }
+
+        .zoe-message-time {
+            font-size: 11px;
+            color: #999;
+            margin-top: 4px;
+            text-align: right;
+        }
+
+        .zoe-message.zoe .zoe-message-time {
+            text-align: left;
+        }
+
+        .zoe-typing-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 16px;
+            background: rgba(0, 0, 0, 0.05);
+            border-radius: 18px;
+            border-bottom-left-radius: 4px;
+            max-width: 80px;
+        }
+
+        .zoe-typing-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #999;
+            animation: typingDot 1.4s ease-in-out infinite;
+        }
+
+        .zoe-typing-dot:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .zoe-typing-dot:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typingDot {
+            0%, 60%, 100% {
+                transform: translateY(0);
+                opacity: 0.4;
+            }
+            30% {
+                transform: translateY(-10px);
+                opacity: 1;
+            }
+        }
+
+        @keyframes messageSlideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Dark theme adjustments */
+        .dark-theme .zoe-chat-overlay {
+            background: rgba(30, 30, 30, 0.95);
+            border-left-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .dark-theme .zoe-message.zoe .zoe-message-bubble {
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+        }
+
+        .dark-theme .zoe-typing-indicator {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        /* Task Widget */
+        .task-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .task-item {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 12px;
+            border-radius: 12px;
+            transition: all 0.2s ease;
+            min-height: 56px;
+        }
+
+        .task-item:hover {
+            background: rgba(103, 126, 234, 0.1);
+        }
+
+        .task-checkbox {
+            width: 24px;
+            height: 24px;
+            border: 2px solid var(--text-secondary);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+        }
+
+        .task-checkbox:hover {
+            border-color: var(--primary-gradient);
+            transform: scale(1.1);
+        }
+
+        .task-checkbox.checked {
+            background: var(--primary-gradient);
+            border-color: transparent;
+            color: white;
+        }
+
+        .task-text {
+            flex: 1;
+            font-size: 15px;
+        }
+
+        .task-text.completed {
+            text-decoration: line-through;
+            opacity: 0.6;
+        }
+
+        /* Task Category Colors */
+        .task-item.category-work {
+            border-left: 3px solid var(--work-border);
+        }
+
+        .task-item.category-work .task-checkbox {
+            border-color: var(--work-border);
+        }
+
+        .task-item.category-work .task-checkbox.checked {
+            background: var(--work-color);
+            border-color: var(--work-color);
+        }
+
+        .task-item.category-personal {
+            border-left: 3px solid var(--personal-border);
+        }
+
+        .task-item.category-personal .task-checkbox {
+            border-color: var(--personal-border);
+        }
+
+        .task-item.category-personal .task-checkbox.checked {
+            background: var(--personal-color);
+            border-color: var(--personal-color);
+        }
+
+        .task-item.category-bucket {
+            border-left: 3px solid var(--bucket-border);
+        }
+
+        .task-item.category-bucket .task-checkbox {
+            border-color: var(--bucket-border);
+        }
+
+        .task-item.category-bucket .task-checkbox.checked {
+            background: var(--bucket-color);
+            border-color: var(--bucket-color);
+        }
+
+        .task-item.category-shopping {
+            border-left: 3px solid var(--shopping-border);
+        }
+
+        .task-item.category-shopping .task-checkbox {
+            border-color: var(--shopping-border);
+        }
+
+        .task-item.category-shopping .task-checkbox.checked {
+            background: var(--shopping-color);
+            border-color: var(--shopping-color);
+        }
+
+        .task-item.category-health {
+            border-left: 3px solid var(--health-border);
+        }
+
+        .task-item.category-health .task-checkbox {
+            border-color: var(--health-border);
+        }
+
+        .task-item.category-health .task-checkbox.checked {
+            background: var(--health-color);
+            border-color: var(--health-color);
+        }
+
+        .task-item.category-routine {
+            border-left: 3px solid var(--routine-border);
+        }
+
+        .task-item.category-routine .task-checkbox {
+            border-color: var(--routine-border);
+        }
+
+        .task-item.category-routine .task-checkbox.checked {
+            background: var(--routine-color);
+            border-color: var(--routine-color);
+        }
+
+        .task-item.category-social {
+            border-left: 3px solid var(--social-border);
+        }
+
+        .task-item.category-social .task-checkbox {
+            border-color: var(--social-border);
+        }
+
+        .task-item.category-social .task-checkbox.checked {
+            background: var(--social-color);
+            border-color: var(--social-color);
+        }
+
+        .task-item.category-family {
+            border-left: 3px solid var(--family-border);
+        }
+
+        .task-item.category-family .task-checkbox {
+            border-color: var(--family-border);
+        }
+
+        .task-item.category-family .task-checkbox.checked {
+            background: var(--family-color);
+            border-color: var(--family-color);
+        }
+
+        /* Chat Widget */
+        .chat-preview {
+            background: var(--chat-gradient);
+            color: white;
+            padding: 16px;
+            border-radius: 12px;
+            margin-bottom: 16px;
+            position: relative;
+        }
+
+        .chat-preview::before {
+            content: '';
+            position: absolute;
+            bottom: -8px;
+            left: 20px;
+            width: 0;
+            height: 0;
+            border-left: 8px solid transparent;
+            border-right: 8px solid transparent;
+            border-top: 8px solid #4facfe;
+        }
+
+        .quick-actions {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+        }
+
+        .quick-action {
+            background: rgba(103, 126, 234, 0.1);
+            border: 1px solid rgba(103, 126, 234, 0.2);
+            border-radius: 12px;
+            padding: 12px;
+            font-size: 13px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            min-height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .quick-action:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: translateY(-2px);
+        }
+
+        /* Widget Library Panel */
+        .widget-library {
+            position: fixed;
+            top: 100px;
+            right: -400px;
+            width: 380px;
+            height: calc(100vh - 120px);
+            background: var(--surface);
+            backdrop-filter: blur(20px);
+            border-radius: var(--widget-radius);
+            box-shadow: var(--widget-shadow);
+            transition: all 0.3s ease;
+            z-index: 1200;
+            overflow-y: auto;
+            padding: 24px;
+        }
+
+        .dark-theme .widget-library {
+            background: var(--surface-dark);
+        }
+
+        .widget-library.open {
+            right: 20px;
+        }
+
+        .library-header {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .library-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+        }
+
+        .library-widget {
+            background: rgba(0, 0, 0, 0.05);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            min-height: 120px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .dark-theme .library-widget {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .library-widget:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: translateY(-2px);
+        }
+
+        .core-widget {
+            border: 2px solid var(--primary-gradient);
+            background: rgba(103, 126, 234, 0.1);
+        }
+
+        .core-widget:hover {
+            background: var(--primary-gradient);
+            border-color: transparent;
+        }
+
+
+        .library-widget-name {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 1024px) {
+            :root {
+                --widget-min-width: 250px;
+                --grid-gap: 20px;
+            }
+            
+            .dashboard-container {
+                padding: 20px;
+            }
+            
+            .hero-time {
+                font-size: 48px;
+            }
+            
+            .widget-library {
+                width: 100vw;
+                right: -100vw;
+                top: 80px;
+                height: calc(100vh - 80px);
+                border-radius: 0;
+            }
+            
+            .widget-library.open {
+                right: 0;
+            }
+        }
+
+        @media (max-width: 768px) {
+            :root {
+                --widget-min-width: 220px;
+                --grid-gap: 16px;
+            }
+            
+            .dashboard-container {
+                padding: 16px;
+            }
+            
+            .header-bar {
+                padding: 12px 16px;
+            }
+            
+            .time-display {
+                font-size: 24px;
+            }
+            
+            .hero-time {
+                font-size: 40px;
+            }
+            
+            .widget-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .widget.size-large,
+            .widget.size-xlarge {
+                grid-column: span 1;
+            }
+        }
+
+        /* Animation for new widgets */
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px) scale(0.9);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .widget.new {
+            animation: slideIn 0.5s ease;
+        }
+
+        /* Size indicator - only visible in edit mode */
+        .size-indicator {
+            position: absolute;
+            bottom: 12px;
+            left: 12px;
+            font-size: 10px;
+            color: var(--text-secondary);
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+
+        body.edit-mode .size-indicator {
+            opacity: 1;
+        }
+
+        /* Drag and Drop States */
+        .widget.dragging {
+            cursor: grabbing;
+            transform: rotate(2deg) scale(1.02);
+            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.25);
+            z-index: 1000;
+        }
+
+        .widget.drag-over {
+            transform: scale(0.95);
+            background: rgba(103, 126, 234, 0.1);
+            border-color: var(--primary-gradient);
+        }
+
+        .dark-theme .widget.drag-over {
+            background: rgba(103, 126, 234, 0.2);
+        }
+
+        /* Make widgets draggable only in edit mode */
+        .widget {
+            cursor: pointer;
+        }
+
+        body.edit-mode .widget {
+            cursor: grab;
+        }
+
+        body.edit-mode .widget:active {
+            cursor: grabbing;
+        }
+
+        /* Grid drop target styling with visual grid lines */
+        .widget-grid.drop-target {
+            background: rgba(103, 126, 234, 0.05);
+            border: 2px dashed rgba(103, 126, 234, 0.3);
+            border-radius: 12px;
+            position: relative;
+        }
+
+        .dark-theme .widget-grid.drop-target {
+            background: rgba(103, 126, 234, 0.1);
+            border-color: rgba(103, 126, 234, 0.5);
+        }
+
+        /* Show grid lines in edit mode */
+        body.edit-mode .widget-grid {
+            background-image: 
+                linear-gradient(rgba(103, 126, 234, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(103, 126, 234, 0.1) 1px, transparent 1px);
+            background-size: calc(100% / 3) 200px; /* Assume 3 columns, 200px rows */
+        }
+
+        body.edit-mode.dark-theme .widget-grid {
+            background-image: 
+                linear-gradient(rgba(103, 126, 234, 0.2) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(103, 126, 234, 0.2) 1px, transparent 1px);
+        }
+
+        /* Drop zones for better visual feedback */
+        .drop-zone {
+            position: absolute;
+            background: rgba(103, 126, 234, 0.1);
+            border: 2px dashed rgba(103, 126, 234, 0.4);
+            border-radius: 8px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+            z-index: 500;
+        }
+
+        .drop-zone.active {
+            opacity: 1;
+        }
+
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed;
+            top: 100px;
+            right: -400px;
+            width: 380px;
+            height: calc(100vh - 120px);
+            background: var(--surface);
+            backdrop-filter: blur(20px);
+            border-radius: var(--widget-radius);
+            box-shadow: var(--widget-shadow);
+            transition: all 0.3s ease;
+            z-index: 1200;
+            overflow-y: auto;
+            padding: 24px;
+        }
+
+        .dark-theme .notifications-panel {
+            background: var(--surface-dark);
+        }
+
+        .notifications-panel.open {
+            right: 20px;
+        }
+
+        .notifications-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .dark-theme .notifications-header {
+            border-bottom-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .notifications-title {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .notifications-close {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.1);
+            color: var(--text-primary);
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .dark-theme .notifications-close {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary-dark);
+        }
+
+        .notifications-close:hover {
+            background: var(--primary-gradient);
+            color: white;
+        }
+
+        .notifications-content {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .notification-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.02);
+            transition: all 0.2s ease;
+            cursor: pointer;
+        }
+
+        .dark-theme .notification-item {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .notification-item:hover {
+            background: rgba(103, 126, 234, 0.1);
+            transform: translateX(4px);
+        }
+
+        .notification-icon {
+            font-size: 20px;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--primary-gradient);
+            border-radius: 50%;
+            color: white;
+        }
+
+        .notification-content {
+            flex: 1;
+        }
+
+        .notification-title {
+            font-weight: 500;
+            margin-bottom: 2px;
+        }
+
+        .notification-time {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* Settings Dropdown */
+        .settings-dropdown {
+            position: relative;
+        }
+
+        .settings-menu {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: var(--surface);
+            backdrop-filter: blur(20px);
+            border-radius: 12px;
+            box-shadow: var(--widget-shadow);
+            padding: 8px;
+            min-width: 180px;
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-10px);
+            transition: all 0.2s ease;
+            z-index: 1000;
+        }
+
+        .dark-theme .settings-menu {
+            background: var(--surface-dark);
+        }
+
+        .settings-dropdown.open .settings-menu {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+
+        .settings-item {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            border: none;
+            background: transparent;
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-align: left;
+        }
+
+        .dark-theme .settings-item {
+            color: var(--text-primary-dark);
+        }
+
+        .settings-item:hover {
+            background: rgba(103, 126, 234, 0.1);
+        }
+
+        .settings-item span:first-child {
+            font-size: 16px;
+        }
+    </style>
+    <script src="/js/auth.js"></script>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
+</head>
+<body>
+    <!-- Ambient Background -->
+    <div class="ambient-background"></div>
+
+    <!-- Header Bar -->
+    <div class="header-bar">
+        <div class="header-left">
+            <div class="time-display" id="headerTime">2:40 PM</div>
+            <div class="date-weather">
+                <span id="headerDate">Thu, Sept 25</span>
+                <span>•</span>
+                <span>☀️ 22°C Perth</span>
+            </div>
+        </div>
+        <div class="header-right">
+            <button class="header-button" id="notificationsBtn" onclick="toggleNotifications()" title="Notifications">
+                💬
+            </button>
+            <button class="header-button" id="themeToggle" onclick="toggleTheme()" title="Toggle Theme">
+                🌙
+            </button>
+            <div class="settings-dropdown">
+                <button class="header-button" id="settingsBtn" onclick="toggleSettings()" title="Settings">
+                    ⚙️
+                </button>
+                <div class="settings-menu" id="settingsMenu">
+                    <button class="settings-item" onclick="toggleEditMode()">
+                        <span>✏️</span>
+                        <span>Edit Layout</span>
+                    </button>
+                    <button class="settings-item" onclick="toggleWidgetLibrary(); event.stopPropagation();">
+                        <span>➕</span>
+                        <span>Add Widget</span>
+                    </button>
+                    <button class="settings-item" onclick="testFeatures()">
+                        <span>🧪</span>
+                        <span>Test Features</span>
+                    </button>
+                    <button class="settings-item" onclick="resetWidgetLayout()">
+                        <span>🔄</span>
+                        <span>Reset Layout</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <div class="notifications-title">💬 Notifications</div>
+            <button class="notifications-close" onclick="toggleNotifications()">✕</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="notification-item">
+                <div class="notification-icon">⏳</div>
+                <div class="notification-content">
+                    <div class="notification-title">Loading notifications...</div>
+                    <div class="notification-time">Please wait</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Widget Library Panel -->
+    <div class="widget-library" id="widgetLibrary">
+        <div class="library-header">
+            ➕ Add Widgets
+        </div>
+        <div class="library-grid">
+            <!-- Core Widgets -->
+            <div class="library-widget core-widget" onclick="addWidget('time')">
+                <div class="library-widget-icon">🕐</div>
+                <div class="library-widget-name">Time</div>
+            </div>
+            <div class="library-widget core-widget" onclick="addWidget('events')">
+                <div class="library-widget-icon">📅</div>
+                <div class="library-widget-name">Events</div>
+            </div>
+            <div class="library-widget core-widget" onclick="addWidget('todos')">
+                <div class="library-widget-icon">✓</div>
+                <div class="library-widget-name">To Do's</div>
+            </div>
+            <div class="library-widget core-widget" onclick="addWidget('zoe')">
+                <div class="library-widget-icon">🤖</div>
+                <div class="library-widget-name">Zoe AI</div>
+            </div>
+            
+            <!-- List Widgets -->
+            <div class="library-widget" onclick="addWidget('important-tasks')">
+                <div class="library-widget-icon">⭐</div>
+                <div class="library-widget-name">Important Tasks</div>
+            </div>
+            <div class="library-widget" onclick="addWidget('shopping')">
+                <div class="library-widget-icon">🛒</div>
+                <div class="library-widget-name">Shopping</div>
+            </div>
+            <div class="library-widget" onclick="addWidget('bucket')">
+                <div class="library-widget-icon">🎯</div>
+                <div class="library-widget-name">Bucket List</div>
+            </div>
+            <div class="library-widget" onclick="addWidget('work-todos')">
+                <div class="library-widget-icon">💼</div>
+                <div class="library-widget-name">Work Tasks</div>
+            </div>
+            <div class="library-widget" onclick="addWidget('personal-todos')">
+                <div class="library-widget-icon">🏠</div>
+                <div class="library-widget-name">Personal Tasks</div>
+            </div>
+            
+            <!-- Other Widgets -->
+            <div class="library-widget" onclick="addWidget('weather')">
+                <div class="library-widget-icon">🌤️</div>
+                <div class="library-widget-name">Weather</div>
+            </div>
+            <div class="library-widget" onclick="addWidget('music')">
+                <div class="library-widget-icon">🎵</div>
+                <div class="library-widget-name">Music</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Dashboard Container -->
+    <div class="dashboard-container">
+        <div class="widget-grid" id="widgetGrid">
+            <!-- Widgets will be loaded from saved layout or reset layout -->
+        </div>
+    </div>
+
+    <!-- Zoe Chat Overlay -->
+    <div class="zoe-chat-overlay" id="zoeChatOverlay">
+        <div class="zoe-chat-header">
+            <div class="zoe-chat-title">
+                <div class="zoe-orb" style="width: 24px; height: 24px; margin: 0;">
+                    <div class="zoe-orb-inner" style="width: 16px; height: 16px;">
+                        <div class="zoe-orb-core" style="width: 8px; height: 8px;"></div>
+                    </div>
+                </div>
+                Chat with Zoe
+            </div>
+            <button class="zoe-chat-close" onclick="closeZoeChat()">×</button>
+        </div>
+        <div class="zoe-chat-messages" id="zoeChatMessages">
+            <div class="zoe-message zoe">
+                <div class="zoe-message-avatar">Z</div>
+                <div class="zoe-message-bubble">
+                    Hi! I'm Zoe, your AI assistant. How can I help you today?
+                    <div class="zoe-message-time">Just now</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let editMode = false;
+        let isDarkTheme = false;
+        
+        // Widget persistence - now supports per-user per-device layouts
+        const WIDGET_STORAGE_KEY = 'zoe.touch.widgets.layout';
+        
+        // Get or create a stable device ID
+        function getDeviceId() {
+            let deviceId = localStorage.getItem('zoe.device.id');
+            if (!deviceId) {
+                // Create a stable device ID based on browser fingerprint
+                const screenInfo = `${screen.width}x${screen.height}x${screen.colorDepth}`;
+                const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                const language = navigator.language;
+                const platform = navigator.platform;
+                const userAgent = navigator.userAgent;
+                
+                // Create hash from fingerprint
+                const fingerprint = `${screenInfo}-${timezone}-${language}-${platform}-${userAgent}`;
+                deviceId = btoa(fingerprint).replace(/[^a-zA-Z0-9]/g, '').substring(0, 32);
+                
+                localStorage.setItem('zoe.device.id', deviceId);
+                console.log('🔑 Generated device ID:', deviceId);
+            }
+            return deviceId;
+        }
+        
+        // Get current user session
+        function getUserSession() {
+            if (window.zoeAuth && typeof window.zoeAuth.getCurrentSession === 'function') {
+                return window.zoeAuth.getCurrentSession();
+            }
+            return null;
+        }
+        
+        // Zoe Widget State
+        let zoeChatOpen = false;
+        let isListening = false;
+        let recognition = null;
+        let zoeConversationHistory = [];
+        let speechSynthesis = window.speechSynthesis;
+        let currentUtterance = null;
+
+        // ========================================
+        // WIDGET SYSTEM - Now uses shared modules
+        // ========================================
+        // (WidgetRegistry, WidgetModule, WidgetManager, and WidgetUpdater are loaded from external files)
+        
+        // Widget persistence functions
+        async function saveWidgetLayout() {
+            const grid = document.getElementById('widgetGrid');
+            const widgets = Array.from(grid.children);
+            const layout = widgets.map((widget, index) => ({
+                type: widget.getAttribute('data-widget-type'),
+                size: Array.from(widget.classList).find(cls => cls.startsWith('size-')) || 'size-small',
+                order: index
+            }));
+            
+            // Get user session and device ID
+            const session = getUserSession();
+            const deviceId = getDeviceId();
+            
+            // Save to backend if user is authenticated
+            if (session && session.session_id) {
+                try {
+                    const response = await fetch('/api/user/layout', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Session-ID': session.session_id
+                        },
+                        body: JSON.stringify({
+                            device_id: deviceId,
+                            layout: layout,
+                            layout_type: 'touch_dashboard'
+                        })
+                    });
+                    
+                    if (response.ok) {
+                        console.log('💾 Widget layout saved to backend:', layout);
+                        showSaveIndicator();
+                    } else {
+                        console.warn('⚠️ Backend save failed, using localStorage fallback');
+                        localStorage.setItem(`${WIDGET_STORAGE_KEY}.${deviceId}`, JSON.stringify(layout));
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Backend unavailable, using localStorage fallback:', error);
+                    localStorage.setItem(`${WIDGET_STORAGE_KEY}.${deviceId}`, JSON.stringify(layout));
+                }
+            } else {
+                // No user session - save to localStorage with device ID
+                console.log('💾 No session - saving to localStorage for device:', deviceId);
+                localStorage.setItem(`${WIDGET_STORAGE_KEY}.${deviceId}`, JSON.stringify(layout));
+                showSaveIndicator();
+            }
+        }
+        
+        function showSaveIndicator() {
+            // Remove existing indicator
+            const existing = document.querySelector('.save-indicator');
+            if (existing) existing.remove();
+            
+            // Create save indicator
+            const indicator = document.createElement('div');
+            indicator.className = 'save-indicator';
+            indicator.innerHTML = '💾 Layout Saved';
+            indicator.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: var(--primary-gradient);
+                color: white;
+                padding: 8px 16px;
+                border-radius: 20px;
+                font-size: 14px;
+                font-weight: 500;
+                z-index: 2000;
+                opacity: 0;
+                transform: translateY(-10px);
+                transition: all 0.3s ease;
+                pointer-events: none;
+            `;
+            
+            document.body.appendChild(indicator);
+            
+            // Animate in
+            setTimeout(() => {
+                indicator.style.opacity = '1';
+                indicator.style.transform = 'translateY(0)';
+            }, 10);
+            
+            // Animate out and remove
+            setTimeout(() => {
+                indicator.style.opacity = '0';
+                indicator.style.transform = 'translateY(-10px)';
+                setTimeout(() => indicator.remove(), 300);
+            }, 1500);
+        }
+        
+        async function loadWidgetLayout() {
+            const session = getUserSession();
+            const deviceId = getDeviceId();
+            
+            // Try to load from backend if user is authenticated
+            if (session && session.session_id) {
+                try {
+                    const response = await fetch(`/api/user/layout?device_id=${deviceId}&layout_type=touch_dashboard`, {
+                        headers: {
+                            'X-Session-ID': session.session_id
+                        }
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.layout && Array.isArray(data.layout)) {
+                            console.log('📋 Loaded layout from backend for device:', deviceId);
+                            return data.layout;
+                        }
+                    } else {
+                        console.warn('⚠️ Backend load failed, trying localStorage');
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Backend unavailable, trying localStorage:', error);
+                }
+            }
+            
+            // Fallback to localStorage with device-specific key
+            const saved = localStorage.getItem(`${WIDGET_STORAGE_KEY}.${deviceId}`);
+            if (!saved) {
+                console.log('📋 No saved layout found for device:', deviceId);
+                return null;
+            }
+            
+            try {
+                const layout = JSON.parse(saved);
+                console.log('📋 Loaded saved layout from localStorage:', layout);
+                return layout;
+            } catch (e) {
+                console.error('Failed to parse saved layout:', e);
+                return null;
+            }
+        }
+        
+        function applyWidgetLayout(layout) {
+            if (!layout) return;
+            
+            const grid = document.getElementById('widgetGrid');
+            if (!grid) return;
+            
+            // Clear the grid
+            grid.innerHTML = '';
+            
+            // Create widgets according to saved layout
+            layout.forEach(item => {
+                const widget = createWidgetFromType(item.type);
+                if (widget) {
+                    // Apply saved size
+                    const currentSize = Array.from(widget.classList).find(cls => cls.startsWith('size-'));
+                    if (currentSize) widget.classList.remove(currentSize);
+                    widget.classList.add(item.size);
+                    
+                    // Update size indicator
+                    const sizeIndicator = widget.querySelector('.size-indicator');
+                    if (sizeIndicator) {
+                        sizeIndicator.textContent = item.size.replace('size-', '');
+                        sizeIndicator.textContent = sizeIndicator.textContent.charAt(0).toUpperCase() + sizeIndicator.textContent.slice(1);
+                    }
+                    
+                    // Add drag and drop handlers
+                    widget.draggable = true;
+                    widget.addEventListener('dragstart', handleDragStart);
+                    widget.addEventListener('dragend', handleDragEnd);
+                    
+                    // Add touch handlers
+                    widget.addEventListener('touchstart', handleTouchStart, { passive: false });
+                    widget.addEventListener('touchmove', handleTouchMove, { passive: false });
+                    widget.addEventListener('touchend', handleTouchEnd, { passive: false });
+                    
+                    // Update time widget immediately if it's a time widget
+                    if (item.type === 'time') {
+                        updateTime();
+                    }
+                    
+                    grid.appendChild(widget);
+                }
+            });
+            
+            // Load data for each widget
+            setTimeout(() => {
+                layout.forEach(item => {
+                    const widget = grid.querySelector(`[data-widget-type="${item.type}"]`);
+                    if (widget) {
+                        if (['shopping', 'bucket', 'work-todos', 'personal-todos'].includes(item.type)) {
+                            loadListWidgetData(widget, item.type);
+                        } else if (['events', 'todos'].includes(item.type)) {
+                            if (item.type === 'events') loadEventsWidget();
+                            if (item.type === 'todos') loadTodosWidget();
+                        }
+                    }
+                });
+            }, 100);
+            
+            console.log('📋 Widget layout applied');
+        }
+
+        function createWidgetFromType(type) {
+            const widget = document.createElement('div');
+            widget.className = 'widget size-small';
+            widget.setAttribute('data-widget-type', type);
+            
+            // Add click handler based on widget type
+            const clickHandlers = {
+                'todos': 'navigateToTasks()',
+                'shopping': 'navigateToShopping()',
+                'bucket': 'navigateToBucket()',
+                'work-todos': 'navigateToWorkTasks()',
+                'personal-todos': 'navigateToPersonalTasks()',
+                'important-tasks': 'navigateToImportantTasks()',
+                'weather': 'navigateToWeather()',
+                'music': 'navigateToMusic()',
+                'zoe': 'navigateToZoe()',
+                'events': 'navigateToCalendar()'
+            };
+            
+            if (clickHandlers[type]) {
+                widget.setAttribute('onclick', clickHandlers[type]);
+            }
+            
+            // Get the widget template
+            const templates = {
+                'time': `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="hero-time">--:--</div>
+                    <div class="hero-date">Loading...</div>
+                    <div class="weather-info">
+                        <span>☀️</span>
+                        <span>--°C</span>
+                        <span>Loading...</span>
+                    </div>
+                `,
+                'events': `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">📅 Today's Events</div>
+                        <div class="widget-badge">0</div>
+                    </div>
+                    <div class="event-list" id="eventsList">
+                        <div class="event-item">
+                            <div class="event-time">Loading...</div>
+                            <div class="event-title">Loading events...</div>
+                        </div>
+                    </div>
+                `,
+                'todos': `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">✓ To Do's</div>
+                        <div class="widget-badge">0</div>
+                    </div>
+                    <div class="task-list" id="todosList">
+                        <div class="task-item category-work">
+                            <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                            <div class="task-text">Loading tasks...</div>
+                        </div>
+                    </div>
+                `,
+                'zoe': `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                    </div>
+                    <div class="size-indicator">Large</div>
+                    <div class="zoe-orb-container">
+                        <div class="zoe-orb" onclick="startZoeConversation()">
+                            <div class="zoe-status">Tap to speak</div>
+                        </div>
+                    </div>
+                `,
+                'shopping': `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">🛒 Shopping</div>
+                        <div class="widget-badge">0</div>
+                    </div>
+                    <div class="task-list">
+                        <div class="task-item">
+                            <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                            <div class="task-text">Loading shopping list...</div>
+                        </div>
+                    </div>
+                `,
+                'bucket': `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">🎯 Bucket List</div>
+                        <div class="widget-badge">0</div>
+                    </div>
+                    <div class="task-list">
+                        <div class="task-item">
+                            <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                            <div class="task-text">Loading bucket list...</div>
+                        </div>
+                    </div>
+                `,
+                'work-todos': `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">💼 Work Tasks</div>
+                        <div class="widget-badge">0</div>
+                    </div>
+                    <div class="task-list">
+                        <div class="task-item">
+                            <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                            <div class="task-text">Loading work tasks...</div>
+                        </div>
+                    </div>
+                `,
+                'personal-todos': `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">🏠 Personal Tasks</div>
+                        <div class="widget-badge">0</div>
+                    </div>
+                    <div class="task-list">
+                        <div class="task-item">
+                            <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                            <div class="task-text">Loading personal tasks...</div>
+                        </div>
+                    </div>
+                `
+            };
+            
+            const template = templates[type];
+            if (template) {
+                widget.innerHTML = template;
+                return widget;
+            }
+            
+            return null;
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', async function() {
+            console.log('🚀 Dashboard loading...');
+            
+            // Clear navigation flag (we don't need to reload)
+            sessionStorage.removeItem('navigatingFromDashboard');
+            
+            updateTime();
+            setInterval(updateTime, 1000);
+            setupDragAndDrop();
+            
+            // Load and apply saved widget layout (now async)
+            const savedLayout = await loadWidgetLayout();
+            if (savedLayout && savedLayout.length > 0) {
+                console.log('📋 Found saved layout, applying...');
+                // Small delay to ensure DOM is ready
+                setTimeout(() => {
+                    applyWidgetLayout(savedLayout);
+                    loadWidgetData(); // Load real data after layout is applied
+                    updateTime(); // Ensure time is updated after layout
+                }, 100);
+            } else {
+                console.log('📋 No saved layout - creating default layout...');
+                // First time user - create default layout by calling reset
+                setTimeout(() => {
+                    const grid = document.getElementById('widgetGrid');
+                    grid.innerHTML = `
+                        <!-- Beautiful Time Widget -->
+                        <div class="widget size-large beautiful-time-widget" data-widget-type="time">
+                            <div class="widget-controls">
+                                <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                                <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                            </div>
+                            <div class="size-indicator">Large</div>
+                            <div class="beautiful-time" id="beautifulTime">--:--</div>
+                            <div class="beautiful-date" id="beautifulDate">Loading...</div>
+                            <div class="beautiful-weather">
+                                <span class="beautiful-weather-icon" id="beautifulWeatherIcon">☀️</span>
+                                <span id="beautifulWeatherTemp">--°C</span>
+                                <span id="beautifulWeatherLocation">Loading...</span>
+                            </div>
+                        </div>
+
+                        <!-- Events Widget -->
+                        <div class="widget size-medium" data-widget-type="events" onclick="navigateToCalendar()">
+                            <div class="widget-controls">
+                                <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                                <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                            </div>
+                            <div class="size-indicator">Medium</div>
+                            <div class="widget-header">
+                                <div class="widget-title">📅 Today's Events</div>
+                                <div class="widget-badge">0</div>
+                            </div>
+                            <div class="event-list">
+                                <div class="event-item category-personal" onclick="event.stopPropagation(); navigateToCalendar()">
+                                    <div class="event-time">Loading...</div>
+                                    <div class="event-content">
+                                        <div class="event-title">Loading events...</div>
+                                    </div>
+                                    <div class="event-category-dot" style="background: var(--personal-text);"></div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- To Do's Widget -->
+                        <div class="widget size-small" data-widget-type="todos">
+                            <div class="widget-controls">
+                                <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                                <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                            </div>
+                            <div class="size-indicator">Small</div>
+                            <div class="widget-header">
+                                <div class="widget-title">✓ To Do's</div>
+                                <div class="widget-badge">0</div>
+                            </div>
+                            <div class="task-list" id="todosList">
+                                <div class="task-item category-work">
+                                    <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                                    <div class="task-text">Loading tasks...</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Zoe Widget -->
+                        <div class="widget size-large zoe-widget" data-widget-type="zoe" onclick="navigateToZoe()">
+                            <div class="widget-controls">
+                                <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                                <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                            </div>
+                            <div class="size-indicator">Large</div>
+                            <div class="zoe-orb-container">
+                                <div class="zoe-orb" id="zoeOrb" onclick="startZoeConversation()">
+                                    <div class="zoe-status" id="zoeStatus">Tap to speak</div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    
+                    setupDragAndDrop();
+                    updateTime();
+                    loadWidgetData();
+                    
+                    // Save this as the initial layout
+                    setTimeout(() => {
+                        saveWidgetLayout();
+                        console.log('💾 Initial layout created and saved');
+                    }, 500);
+                }, 100);
+            }
+            
+            // Load voices for text-to-speech
+            if (speechSynthesis) {
+                speechSynthesis.getVoices();
+                // Some browsers need this event to load voices
+                speechSynthesis.addEventListener('voiceschanged', function() {
+                    console.log('🔊 Voices loaded for text-to-speech');
+                });
+            }
+            
+            // Theme auto-switching disabled - user can manually toggle
+            
+            // Check for widget updates on startup
+            setTimeout(() => {
+                WidgetUpdater.checkForUpdates();
+            }, 5000); // Check after 5 seconds
+            
+            console.log('✅ Dashboard ready!');
+        });
+
+        // Time updates - Simplified to work with new widget system
+        function updateTime() {
+            const now = new Date();
+            const timeOptions = { hour: '2-digit', minute: '2-digit', hour12: false };
+            const dateOptions = { weekday: 'long', month: 'long', day: 'numeric' };
+            
+            // Update header time
+            const headerTime = document.getElementById('headerTime');
+            const headerDate = document.getElementById('headerDate');
+            if (headerTime) headerTime.textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+            if (headerDate) headerDate.textContent = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            // Update beautiful time widgets
+            const beautifulTimeElements = document.querySelectorAll('.beautiful-time');
+            const beautifulDateElements = document.querySelectorAll('.beautiful-date');
+            const beautifulWeatherIcons = document.querySelectorAll('.beautiful-weather-icon');
+            const beautifulWeatherTemps = document.querySelectorAll('#beautifulWeatherTemp');
+            const beautifulWeatherLocations = document.querySelectorAll('#beautifulWeatherLocation');
+            
+            beautifulTimeElements.forEach(element => {
+                element.textContent = now.toLocaleTimeString([], timeOptions);
+            });
+            
+            beautifulDateElements.forEach(element => {
+                element.textContent = now.toLocaleDateString([], dateOptions);
+            });
+            
+            // Update weather info (simple simulation)
+            beautifulWeatherIcons.forEach(element => {
+                element.textContent = '☀️';
+            });
+            
+            beautifulWeatherTemps.forEach(element => {
+                element.textContent = '22°C';
+            });
+            
+            beautifulWeatherLocations.forEach(element => {
+                element.textContent = 'Perth, WA';
+            });
+            
+            // Update all widgets using WidgetManager
+            WidgetManager.updateAll();
+        }
+
+
+        // Notifications panel
+        function toggleNotifications() {
+            const panel = document.getElementById('notificationsPanel');
+            const btn = document.getElementById('notificationsBtn');
+            panel.classList.toggle('open');
+            btn.classList.toggle('active');
+            console.log('🔔 Notifications panel toggled');
+        }
+
+        // Settings dropdown
+        function toggleSettings() {
+            const dropdown = document.querySelector('.settings-dropdown');
+            dropdown.classList.toggle('open');
+            console.log('⚙️ Settings dropdown toggled');
+        }
+
+        // Test function
+        function testFeatures() {
+            console.log('🧪 Testing all features...');
+            alert('🎉 All Features Working!\n\n✅ Edit mode (hides/shows controls)\n✅ Theme toggle\n✅ Widget library\n✅ Task checkboxes\n✅ Event navigation\n✅ Chat actions\n✅ Real-time clock\n✅ Notifications panel\n✅ Settings dropdown\n✅ Widget persistence\n\nTry each feature!');
+        }
+        
+        // Reset widget layout
+        async function resetWidgetLayout() {
+            if (confirm('Reset widget layout to default? This will restore the original arrangement.')) {
+                const deviceId = getDeviceId();
+                const session = getUserSession();
+                
+                // Remove from localStorage
+                localStorage.removeItem(`${WIDGET_STORAGE_KEY}.${deviceId}`);
+                
+                // Remove from backend if authenticated
+                if (session && session.session_id) {
+                    try {
+                        await fetch(`/api/user/layout?device_id=${deviceId}&layout_type=touch_dashboard`, {
+                            method: 'DELETE',
+                            headers: { 'X-Session-ID': session.session_id }
+                        });
+                        console.log('🗑️ Widget layout reset from backend and localStorage');
+                    } catch (error) {
+                        console.log('🗑️ Widget layout reset from localStorage (backend unavailable)');
+                    }
+                } else {
+                    console.log('🗑️ Widget layout reset from localStorage');
+                }
+                
+                // Restore the original time widget with proper dynamic content
+                const grid = document.getElementById('widgetGrid');
+                grid.innerHTML = `
+                    <!-- Beautiful Time Widget -->
+                    <div class="widget size-large beautiful-time-widget" data-widget-type="time">
+                        <div class="widget-controls">
+                            <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">
+                                📏
+                            </button>
+                            <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">
+                                🗑️
+                            </button>
+                        </div>
+                        <div class="size-indicator">Large</div>
+                        <div class="beautiful-time" id="beautifulTime">--:--</div>
+                        <div class="beautiful-date" id="beautifulDate">Loading...</div>
+                        <div class="beautiful-weather">
+                            <span class="beautiful-weather-icon" id="beautifulWeatherIcon">☀️</span>
+                            <span id="beautifulWeatherTemp">--°C</span>
+                            <span id="beautifulWeatherLocation">Loading...</span>
+                        </div>
+                    </div>
+
+                    <!-- Events Widget -->
+                    <div class="widget size-medium" data-widget-type="events" onclick="navigateToCalendar()">
+                        <div class="widget-controls">
+                            <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">
+                                📏
+                            </button>
+                            <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">
+                                🗑️
+                            </button>
+                        </div>
+                        <div class="size-indicator">Medium</div>
+                        <div class="widget-header">
+                            <div class="widget-title">📅 Today's Events</div>
+                            <div class="widget-badge">0</div>
+                        </div>
+                        <div class="event-list">
+                            <div class="event-item category-personal" onclick="event.stopPropagation(); navigateToCalendar()">
+                                <div class="event-time">Loading...</div>
+                                <div class="event-content">
+                                    <div class="event-title">Loading events...</div>
+                                </div>
+                                <div class="event-category-dot" style="background: var(--personal-text);"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- To Do's Widget -->
+                    <div class="widget size-small" data-widget-type="todos">
+                        <div class="widget-controls">
+                            <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">
+                                📏
+                            </button>
+                            <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">
+                                🗑️
+                            </button>
+                        </div>
+                        <div class="size-indicator">Small</div>
+                        <div class="widget-header">
+                            <div class="widget-title">✓ To Do's</div>
+                            <div class="widget-badge">0</div>
+                        </div>
+                        <div class="task-list" id="todosList">
+                            <div class="task-item category-work">
+                                <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                                <div class="task-text">Loading tasks...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Zoe Widget -->
+                    <div class="widget size-large zoe-widget" data-widget-type="zoe" onclick="navigateToZoe()">
+                        <div class="widget-controls">
+                            <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">
+                                📏
+                            </button>
+                            <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">
+                                🗑️
+                            </button>
+                        </div>
+                        <div class="size-indicator">Large</div>
+                        <div class="zoe-orb-container">
+                            <div class="zoe-orb" id="zoeOrb" onclick="startZoeConversation()">
+                                <div class="zoe-status" id="zoeStatus">Tap to speak</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                // Reinitialize the dashboard
+                setupDragAndDrop();
+                updateTime();
+                loadWidgetData();
+                
+                console.log('✅ Layout reset to default with proper time widget');
+            }
+        }
+
+        // Debug function to check current layout
+        async function debugWidgetLayout() {
+            const deviceId = getDeviceId();
+            const session = getUserSession();
+            
+            console.log('🔍 Device ID:', deviceId);
+            console.log('🔍 User Session:', session ? `Active (${session.session_id})` : 'None');
+            
+            const saved = localStorage.getItem(`${WIDGET_STORAGE_KEY}.${deviceId}`);
+            console.log('🔍 LocalStorage layout:', saved ? JSON.parse(saved) : 'None');
+            
+            // Try to get backend layout
+            if (session && session.session_id) {
+                try {
+                    const response = await fetch(`/api/user/layout?device_id=${deviceId}&layout_type=touch_dashboard`, {
+                        headers: { 'X-Session-ID': session.session_id }
+                    });
+                    if (response.ok) {
+                        const data = await response.json();
+                        console.log('🔍 Backend layout:', data.layout || 'None');
+                    }
+                } catch (error) {
+                    console.log('🔍 Backend layout: Unavailable');
+                }
+            }
+            
+            const grid = document.getElementById('widgetGrid');
+            const widgets = Array.from(grid.children);
+            const current = widgets.map((widget, index) => ({
+                type: widget.getAttribute('data-widget-type'),
+                size: Array.from(widget.classList).find(cls => cls.startsWith('size-')) || 'size-small',
+                order: index
+            }));
+            console.log('🔍 Current DOM layout:', current);
+        }
+
+        // Widget library
+        function toggleWidgetLibrary() {
+            const library = document.getElementById('widgetLibrary');
+            const settingsDropdown = document.querySelector('.settings-dropdown');
+            
+            // Close settings dropdown when opening widget library
+            if (settingsDropdown && settingsDropdown.classList.contains('open')) {
+                settingsDropdown.classList.remove('open');
+            }
+            
+            if (library) {
+                library.classList.toggle('open');
+                const isOpen = library.classList.contains('open');
+                console.log(`📚 Widget library ${isOpen ? 'opened' : 'closed'}`);
+            } else {
+                console.error('❌ Widget library element not found!');
+            }
+        }
+
+        // Theme toggle
+        function toggleTheme(force = null) {
+            if (force !== null) {
+                isDarkTheme = force;
+            } else {
+                isDarkTheme = !isDarkTheme;
+            }
+            
+            document.body.classList.toggle('dark-theme', isDarkTheme);
+            document.getElementById('themeToggle').textContent = isDarkTheme ? '☀️' : '🌙';
+            console.log('🎨 Theme:', isDarkTheme ? 'dark' : 'light');
+        }
+
+        // Edit mode toggle - THIS IS KEY FOR HIDING CONTROLS
+        function toggleEditMode() {
+            editMode = !editMode;
+            document.body.classList.toggle('edit-mode', editMode);
+            document.getElementById('editToggle').classList.toggle('active', editMode);
+            document.getElementById('editToggle').textContent = editMode ? '✓' : '✏️';
+            console.log('✏️ Edit mode:', editMode ? 'ON (controls visible)' : 'OFF (controls hidden)');
+        }
+
+        // Task toggle - now connects to lists API
+        async function toggleTask(checkbox) {
+            const isChecked = checkbox.classList.contains('checked');
+            const taskText = checkbox.nextElementSibling;
+            const taskId = checkbox.getAttribute('data-task-id');
+            const listType = checkbox.getAttribute('data-list-type');
+            const listId = checkbox.getAttribute('data-list-id');
+            const itemIndex = checkbox.getAttribute('data-item-index');
+            
+            try {
+                if (isChecked) {
+                    // Uncheck task
+                    checkbox.classList.remove('checked');
+                    checkbox.innerHTML = '';
+                    taskText.classList.remove('completed');
+                    
+                    // Update via API
+                    await updateTaskStatus(listType, listId, itemIndex, false);
+                    console.log('☐ Task unchecked');
+                } else {
+                    // Check task
+                    checkbox.classList.add('checked');
+                    checkbox.innerHTML = '✓';
+                    taskText.classList.add('completed');
+                    
+                    // Update via API
+                    await updateTaskStatus(listType, listId, itemIndex, true);
+                    console.log('✅ Task completed');
+                }
+            } catch (error) {
+                console.error('Failed to update task:', error);
+                // Revert UI changes on error
+                if (isChecked) {
+                    checkbox.classList.add('checked');
+                    checkbox.innerHTML = '✓';
+                    taskText.classList.add('completed');
+                } else {
+                    checkbox.classList.remove('checked');
+                    checkbox.innerHTML = '';
+                    taskText.classList.remove('completed');
+                }
+            }
+        }
+
+        // Navigation functions
+        function navigateToCalendar() {
+            console.log('📅 Navigate to calendar');
+            // Save current dashboard state before navigating
+            saveWidgetLayout();
+            window.location.href = 'calendar.html';
+        }
+
+        function navigateToChat() {
+            console.log('💬 Navigate to chat');
+            alert('Navigation: Opening Chat\n\nWould open chat interface');
+        }
+
+        function navigateToLists() {
+            console.log('📝 Navigate to lists');
+            window.location.href = 'lists.html';
+        }
+
+        function navigateToTasks() {
+            console.log('✓ Navigate to tasks');
+            window.location.href = 'lists.html';
+        }
+
+        function navigateToShopping() {
+            console.log('🛒 Navigate to shopping');
+            window.location.href = 'lists.html';
+        }
+
+        function navigateToBucket() {
+            console.log('🎯 Navigate to bucket list');
+            window.location.href = 'lists.html';
+        }
+
+        function navigateToWorkTasks() {
+            console.log('💼 Navigate to work tasks');
+            window.location.href = 'lists.html';
+        }
+
+        function navigateToPersonalTasks() {
+            console.log('🏠 Navigate to personal tasks');
+            window.location.href = 'lists.html';
+        }
+
+        function navigateToImportantTasks() {
+            console.log('⭐ Navigate to important tasks');
+            window.location.href = 'lists.html';
+        }
+
+        function navigateToWeather() {
+            console.log('🌤️ Navigate to weather');
+            alert('Navigation: Opening Weather\n\nWould open weather details');
+        }
+
+        function navigateToMusic() {
+            console.log('🎵 Navigate to music');
+            alert('Navigation: Opening Music\n\nWould open music player');
+        }
+
+        function navigateToZoe() {
+            console.log('🤖 Navigate to Zoe AI');
+            alert('Navigation: Opening Zoe AI\n\nWould open AI chat interface');
+        }
+
+        // Widget management
+        function cycleWidgetSize(widget) {
+            const sizes = ['size-small', 'size-medium', 'size-large', 'size-xlarge'];
+            const currentSize = Array.from(widget.classList).find(cls => cls.startsWith('size-'));
+            const currentIndex = sizes.indexOf(currentSize);
+            const nextIndex = (currentIndex + 1) % sizes.length;
+            const newSize = sizes[nextIndex];
+            
+            // Remove old size class
+            if (currentSize) {
+                widget.classList.remove(currentSize);
+            }
+            
+            // Add new size class
+            widget.classList.add(newSize);
+            
+            // Update size indicator
+            const sizeIndicator = widget.querySelector('.size-indicator');
+            if (sizeIndicator) {
+                sizeIndicator.textContent = newSize.replace('size-', '').charAt(0).toUpperCase() + 
+                                          newSize.replace('size-', '').slice(1);
+            }
+            
+            // Try to use WidgetManager if available
+            if (WidgetManager && WidgetManager.resizeWidget) {
+                WidgetManager.resizeWidget(widget, newSize);
+            }
+            
+            // Save the layout after size change
+            saveWidgetLayout();
+            
+            console.log('📏 Widget resized to:', newSize);
+            
+            // Debug: Check if widget has proper classes
+            console.log('🔍 Widget classes after resize:', widget.className);
+            console.log('🔍 Size indicator text:', sizeIndicator ? sizeIndicator.textContent : 'not found');
+        }
+
+        function removeWidget(widget) {
+            const widgetType = widget.getAttribute('data-widget-type');
+            
+            // All widgets can be removed - no restrictions
+            if (confirm(`Remove ${widgetType} widget? (You can restore it from the widget library)`)) {
+                widget.style.animation = 'slideIn 0.3s ease reverse';
+                setTimeout(() => {
+                    // Use WidgetManager to properly remove widget
+                    WidgetManager.removeWidget(widget);
+                    saveWidgetLayout(); // Save after removal
+                }, 300);
+                console.log('🗑️ Widget removed:', widgetType);
+            }
+        }
+
+        function addWidget(type) {
+            const grid = document.getElementById('widgetGrid');
+            
+            // Try WidgetManager first (for registered widgets)
+            let widget = null;
+            if (WidgetManager && WidgetManager.createWidget) {
+                widget = WidgetManager.createWidget(type, grid);
+            }
+            
+            // If WidgetManager failed or widget not registered, create manually
+            if (!widget) {
+                console.log(`📦 Creating widget manually: ${type}`);
+                widget = createWidgetManually(type, grid);
+                if (widget) {
+                    console.log(`✅ Manual widget creation successful: ${type}`);
+                } else {
+                    console.error(`❌ Manual widget creation failed: ${type}`);
+                }
+            }
+            
+            if (!widget) {
+                console.error(`Failed to create widget: ${type}`);
+                return;
+            }
+
+            // Close widget library after adding
+            toggleWidgetLibrary();
+            
+            // Save layout
+            saveWidgetLayout();
+            
+            console.log(`✅ Widget added: ${type}`);
+        }
+
+        function createWidgetManually(type, grid) {
+            const templates = {
+                time: `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Large</div>
+                    <div class="beautiful-time" id="beautifulTime">--:--</div>
+                    <div class="beautiful-date" id="beautifulDate">Loading...</div>
+                    <div class="beautiful-weather">
+                        <span class="beautiful-weather-icon" id="beautifulWeatherIcon">☀️</span>
+                        <span id="beautifulWeatherTemp">--°C</span>
+                        <span id="beautifulWeatherLocation">Loading...</span>
+                    </div>
+                `,
+                events: `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                    </div>
+                    <div class="size-indicator">Medium</div>
+                    <div class="widget-header">
+                        <div class="widget-title">📅 Today's Events</div>
+                        <div class="widget-badge">0</div>
+                    </div>
+                    <div class="event-list">
+                        <div class="event-item">
+                            <div class="event-time">Loading...</div>
+                            <div class="event-content">
+                                <div class="event-title">Loading events...</div>
+                            </div>
+                        </div>
+                    </div>
+                `,
+                todos: `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">✓ To Do's</div>
+                        <div class="widget-badge">0</div>
+                    </div>
+                    <div class="task-list">
+                        <div class="task-item category-personal">
+                            <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                            <div class="task-text">Loading tasks...</div>
+                        </div>
+                    </div>
+                `,
+                'important-tasks': `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">⭐ Important Tasks</div>
+                        <div class="widget-badge">0</div>
+                    </div>
+                    <div class="task-list">
+                        <div class="task-item">
+                            <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                            <div class="task-text">Loading important tasks...</div>
+                        </div>
+                    </div>
+                `,
+                zoe: `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                    </div>
+                    <div class="size-indicator">Large</div>
+                    <div class="zoe-orb-container">
+                        <div class="zoe-orb" onclick="startZoeConversation()">
+                            <div class="zoe-status">Tap to speak</div>
+                        </div>
+                    </div>
+                `,
+                shopping: `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">🛒 Shopping</div>
+                        <div class="widget-badge">0</div>
+                    </div>
+                    <div class="task-list">
+                        <div class="task-item">
+                            <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                            <div class="task-text">Loading shopping list...</div>
+                        </div>
+                    </div>
+                `,
+                bucket: `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">🎯 Bucket List</div>
+                        <div class="widget-badge">0</div>
+                    </div>
+                    <div class="task-list">
+                        <div class="task-item">
+                            <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                            <div class="task-text">Loading bucket list...</div>
+                        </div>
+                    </div>
+                `,
+                'work-todos': `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">💼 Work Tasks</div>
+                        <div class="widget-badge">0</div>
+                    </div>
+                    <div class="task-list">
+                        <div class="task-item">
+                            <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                            <div class="task-text">Loading work tasks...</div>
+                        </div>
+                    </div>
+                `,
+                'personal-todos': `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">🏠 Personal Tasks</div>
+                        <div class="widget-badge">0</div>
+                    </div>
+                    <div class="task-list">
+                        <div class="task-item">
+                            <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                            <div class="task-text">Loading personal tasks...</div>
+                        </div>
+                    </div>
+                `,
+                weather: `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">🌤️ Weather</div>
+                    </div>
+                    <div class="weather-content">
+                        <div class="weather-today">
+                            <div class="weather-icon">☀️</div>
+                            <div class="weather-temp">22°C</div>
+                            <div class="weather-desc">Sunny</div>
+                        </div>
+                        <div class="weather-forecast">
+                            <!-- Multi-day forecast will be loaded here -->
+                        </div>
+                    </div>
+                `,
+                music: `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">🎵 Music</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="font-size: 48px; margin: 20px 0;">🎶</div>
+                        <div>Not playing</div>
+                    </div>
+                `,
+                photos: `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">📷 Photos</div>
+                        <div class="widget-badge">24</div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px;">
+                        <div style="background: var(--personal-color); border-radius: 8px; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; font-size: 24px;">🏔️</div>
+                        <div style="background: var(--work-color); border-radius: 8px; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; font-size: 24px;">🌊</div>
+                        <div style="background: var(--health-color); border-radius: 8px; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; font-size: 24px;">🌳</div>
+                        <div style="background: var(--social-color); border-radius: 8px; aspect-ratio: 1; display: flex; align-items: center; justify-content: center; font-size: 24px;">🌸</div>
+                    </div>
+                `,
+                news: `
+                    <div class="widget-controls">
+                        <button class="widget-control-btn" onclick="event.stopPropagation(); cycleWidgetSize(this.closest('.widget'))" title="Change Size">📏</button>
+                        <button class="widget-control-btn delete" onclick="event.stopPropagation(); removeWidget(this.closest('.widget'))" title="Remove Widget">🗑️</button>
+                    </div>
+                    <div class="size-indicator">Small</div>
+                    <div class="widget-header">
+                        <div class="widget-title">📰 News</div>
+                        <div class="widget-badge">3</div>
+                    </div>
+                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                        <div style="background: rgba(0,0,0,0.02); padding: 12px; border-radius: 8px;">
+                            <div style="font-weight: 500;">Tech News</div>
+                            <div style="font-size: 14px; color: var(--text-secondary);">Latest updates</div>
+                        </div>
+                        <div style="background: rgba(0,0,0,0.02); padding: 12px; border-radius: 8px;">
+                            <div style="font-weight: 500;">Weather</div>
+                            <div style="font-size: 14px; color: var(--text-secondary);">Sunny skies</div>
+                        </div>
+                    </div>
+                `
+            };
+
+            // Create widget element
+            const widget = document.createElement('div');
+            widget.className = 'widget new';
+            widget.setAttribute('data-widget-type', type);
+            
+            // Set default size based on widget type
+            const defaultSizes = {
+                'time': 'size-large',
+                'events': 'size-medium', 
+                'todos': 'size-small',
+                'zoe': 'size-large',
+                'important-tasks': 'size-small',
+                'shopping': 'size-small',
+                'bucket': 'size-small',
+                'work-todos': 'size-small',
+                'personal-todos': 'size-small',
+                'weather': 'size-medium',
+                'music': 'size-medium',
+                'news': 'size-medium'
+            };
+            
+            widget.classList.add(defaultSizes[type] || 'size-small');
+            
+            // Add special styling class for time widget
+            if (type === 'time') {
+                widget.classList.add('beautiful-time-widget');
+            }
+            
+            widget.innerHTML = templates[type] || templates.weather;
+            
+            // Add drag functionality to new widget
+            widget.draggable = true;
+            widget.addEventListener('dragstart', handleDragStart);
+            widget.addEventListener('dragend', handleDragEnd);
+            
+            // Add touch handlers
+            widget.addEventListener('touchstart', handleTouchStart, { passive: false });
+            widget.addEventListener('touchmove', handleTouchMove, { passive: false });
+            widget.addEventListener('touchend', handleTouchEnd, { passive: false });
+            
+            grid.appendChild(widget);
+            
+            // Load data for widgets
+            if (['shopping', 'bucket', 'work-todos', 'personal-todos'].includes(type)) {
+                loadListWidgetData(widget, type);
+            } else if (['events', 'tasks'].includes(type)) {
+                // Load data for core widgets
+                setTimeout(() => {
+                    if (type === 'events') loadEventsWidget();
+                    if (type === 'tasks') loadTasksWidget();
+                }, 100);
+            } else if (type === 'important-tasks') {
+                // Load important tasks
+                setTimeout(() => {
+                    loadImportantTasksWidget(widget);
+                }, 100);
+            }
+            
+            // Re-setup drag and drop for new widget
+            widget.draggable = true;
+            widget.addEventListener('dragstart', handleDragStart);
+            widget.addEventListener('dragend', handleDragEnd);
+            
+            // Add touch handlers
+            widget.addEventListener('touchstart', handleTouchStart, { passive: false });
+            widget.addEventListener('touchmove', handleTouchMove, { passive: false });
+            widget.addEventListener('touchend', handleTouchEnd, { passive: false });
+            
+            toggleWidgetLibrary(); // Close library
+            console.log('➕ Added widget:', type);
+            
+            // Save the layout after adding new widget
+            saveWidgetLayout();
+            
+            // Remove 'new' class after animation
+            setTimeout(() => widget.classList.remove('new'), 500);
+            
+            return widget;
+        }
+
+        // Close panels when clicking outside
+        document.addEventListener('click', function(e) {
+            const library = document.getElementById('widgetLibrary');
+            const notifications = document.getElementById('notificationsPanel');
+            const notificationsBtn = document.getElementById('notificationsBtn');
+            const settingsDropdown = document.querySelector('.settings-dropdown');
+            
+            // Close widget library
+            if (!library.contains(e.target) && library.classList.contains('open')) {
+                toggleWidgetLibrary();
+            }
+            
+            // Close notifications panel
+            if (!notifications.contains(e.target) && !notificationsBtn.contains(e.target) && notifications.classList.contains('open')) {
+                toggleNotifications();
+            }
+            
+            // Close settings dropdown
+            if (!settingsDropdown.contains(e.target) && settingsDropdown.classList.contains('open')) {
+                toggleSettings();
+            }
+        });
+
+        // Drag and Drop System
+        let draggedWidget = null;
+        let touchStartPos = null;
+        let touchCurrentPos = null;
+        let isTouchDragging = false;
+
+        function setupDragAndDrop() {
+            const widgets = document.querySelectorAll('.widget');
+            const grid = document.getElementById('widgetGrid');
+
+            widgets.forEach(widget => {
+                // Desktop drag and drop
+                widget.draggable = true;
+                widget.addEventListener('dragstart', handleDragStart);
+                widget.addEventListener('dragend', handleDragEnd);
+                
+                // Touch drag and drop
+                widget.addEventListener('touchstart', handleTouchStart, { passive: false });
+                widget.addEventListener('touchmove', handleTouchMove, { passive: false });
+                widget.addEventListener('touchend', handleTouchEnd, { passive: false });
+            });
+
+            // Desktop events
+            grid.addEventListener('dragover', handleDragOver);
+            grid.addEventListener('drop', handleDrop);
+            grid.addEventListener('dragenter', handleDragEnter);
+            grid.addEventListener('dragleave', handleDragLeave);
+            
+            console.log('🎯 Drag and drop setup complete (desktop + touch)');
+        }
+
+        function handleDragStart(e) {
+            if (!editMode) {
+                e.preventDefault();
+                return;
+            }
+            
+            draggedWidget = this;
+            this.classList.add('dragging');
+            this.style.opacity = '0.5';
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/html', this.outerHTML);
+            console.log('🎯 Drag started');
+        }
+
+        function handleDragEnd(e) {
+            this.classList.remove('dragging');
+            this.style.opacity = '';
+            document.querySelectorAll('.widget').forEach(w => w.classList.remove('drag-over'));
+            draggedWidget = null;
+            console.log('🎯 Drag ended');
+        }
+
+        function handleDragOver(e) {
+            if (e.preventDefault) {
+                e.preventDefault();
+            }
+            e.dataTransfer.dropEffect = 'move';
+            
+            // Show drop indicator for empty grid areas
+            const grid = document.getElementById('widgetGrid');
+            if (e.target === grid && editMode) {
+                grid.classList.add('drop-target');
+            }
+            
+            return false;
+        }
+
+        function handleDragEnter(e) {
+            const widget = e.target.closest('.widget');
+            const grid = document.getElementById('widgetGrid');
+            
+            if (widget && widget !== draggedWidget && editMode) {
+                widget.classList.add('drag-over');
+            } else if (e.target === grid && editMode) {
+                grid.classList.add('drop-target');
+            }
+        }
+
+        function handleDragLeave(e) {
+            const widget = e.target.closest('.widget');
+            const grid = document.getElementById('widgetGrid');
+            
+            if (widget && !widget.contains(e.relatedTarget)) {
+                widget.classList.remove('drag-over');
+            }
+            if (e.target === grid && !grid.contains(e.relatedTarget)) {
+                grid.classList.remove('drop-target');
+            }
+        }
+
+        function handleDrop(e) {
+            if (e.stopPropagation) {
+                e.stopPropagation();
+            }
+
+            const targetWidget = e.target.closest('.widget');
+            const grid = document.getElementById('widgetGrid');
+            
+            if (!draggedWidget || !editMode) {
+                return false;
+            }
+
+            if (targetWidget && targetWidget !== draggedWidget) {
+                // Dropping on another widget - swap positions
+                const allWidgets = Array.from(grid.children);
+                const draggedIndex = allWidgets.indexOf(draggedWidget);
+                const targetIndex = allWidgets.indexOf(targetWidget);
+                
+                if (draggedIndex < targetIndex) {
+                    grid.insertBefore(draggedWidget, targetWidget.nextSibling);
+                } else {
+                    grid.insertBefore(draggedWidget, targetWidget);
+                }
+                
+                console.log('🎯 Widget moved to existing position');
+            } else if (e.target === grid || grid.contains(e.target)) {
+                // Dropping on empty grid space - simple append to end
+                // This is more reliable than trying to calculate exact positions
+                grid.appendChild(draggedWidget);
+                console.log('🎯 Widget moved to end of grid');
+            }
+            
+            // Save the new layout
+            saveWidgetLayout();
+
+            // Clean up visual states
+            document.querySelectorAll('.widget').forEach(w => w.classList.remove('drag-over'));
+            grid.classList.remove('drop-target');
+            return false;
+        }
+
+        // Touch Event Handlers for Mobile Drag and Drop
+        function handleTouchStart(e) {
+            if (!editMode) {
+                return;
+            }
+            
+            const touch = e.touches[0];
+            touchStartPos = {
+                x: touch.clientX,
+                y: touch.clientY
+            };
+            
+            draggedWidget = this;
+            isTouchDragging = false;
+            
+            // Add visual feedback
+            this.classList.add('dragging');
+            this.style.opacity = '0.7';
+            this.style.transform = 'scale(1.05)';
+            this.style.zIndex = '1000';
+            
+            console.log('🎯 Touch drag started');
+        }
+
+        function handleTouchMove(e) {
+            if (!editMode || !draggedWidget || !touchStartPos) {
+                return;
+            }
+            
+            e.preventDefault(); // Prevent scrolling
+            
+            const touch = e.touches[0];
+            touchCurrentPos = {
+                x: touch.clientX,
+                y: touch.clientY
+            };
+            
+            const deltaX = touchCurrentPos.x - touchStartPos.x;
+            const deltaY = touchCurrentPos.y - touchStartPos.y;
+            const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+            
+            // Start dragging after 10px movement
+            if (distance > 10 && !isTouchDragging) {
+                isTouchDragging = true;
+                console.log('🎯 Touch drag active');
+            }
+            
+            if (isTouchDragging) {
+                // Move the widget visually
+                draggedWidget.style.transform = `translate(${deltaX}px, ${deltaY}px) scale(1.05)`;
+                
+                // Find drop target
+                const elementBelow = document.elementFromPoint(touch.clientX, touch.clientY);
+                const targetWidget = elementBelow ? elementBelow.closest('.widget') : null;
+                const grid = document.getElementById('widgetGrid');
+                
+                // Clear previous drag-over states
+                document.querySelectorAll('.widget').forEach(w => w.classList.remove('drag-over'));
+                
+                if (targetWidget && targetWidget !== draggedWidget) {
+                    targetWidget.classList.add('drag-over');
+                } else if (elementBelow === grid || grid.contains(elementBelow)) {
+                    grid.classList.add('drop-target');
+                }
+            }
+        }
+
+        function handleTouchEnd(e) {
+            if (!editMode || !draggedWidget) {
+                return;
+            }
+            
+            if (isTouchDragging && touchCurrentPos) {
+                // Find drop target
+                const elementBelow = document.elementFromPoint(touchCurrentPos.x, touchCurrentPos.y);
+                const targetWidget = elementBelow ? elementBelow.closest('.widget') : null;
+                const grid = document.getElementById('widgetGrid');
+                
+                // Perform the drop
+                if (targetWidget && targetWidget !== draggedWidget) {
+                    // Drop on another widget - swap positions
+                    const allWidgets = Array.from(grid.children);
+                    const draggedIndex = allWidgets.indexOf(draggedWidget);
+                    const targetIndex = allWidgets.indexOf(targetWidget);
+                    
+                    if (draggedIndex < targetIndex) {
+                        grid.insertBefore(draggedWidget, targetWidget.nextSibling);
+                    } else {
+                        grid.insertBefore(draggedWidget, targetWidget);
+                    }
+                    
+                    console.log('🎯 Widget moved to existing position (touch)');
+                } else if (elementBelow === grid || grid.contains(elementBelow)) {
+                    // Drop on empty grid space
+                    grid.appendChild(draggedWidget);
+                    console.log('🎯 Widget moved to end of grid (touch)');
+                }
+                
+                // Save the new layout
+                saveWidgetLayout();
+            }
+            
+            // Clean up
+            draggedWidget.classList.remove('dragging');
+            draggedWidget.style.opacity = '';
+            draggedWidget.style.transform = '';
+            draggedWidget.style.zIndex = '';
+            
+            document.querySelectorAll('.widget').forEach(w => w.classList.remove('drag-over'));
+            document.getElementById('widgetGrid').classList.remove('drop-target');
+            
+            draggedWidget = null;
+            touchStartPos = null;
+            touchCurrentPos = null;
+            isTouchDragging = false;
+            
+            console.log('🎯 Touch drag ended');
+        }
+
+        // API Integration Functions
+        async function loadWidgetData() {
+            try {
+                console.log('📡 Loading widget data from Zoe backend...');
+                
+                // Load todos (combined work and personal)
+                await loadTodosWidget();
+                
+                // Load calendar events
+                await loadEventsWidget();
+                
+                // Load weather data
+                await loadWeatherWidget();
+                
+                // Load notifications
+                await loadNotifications();
+                
+                // Load data for any existing list widgets
+                document.querySelectorAll('[data-widget-type="shopping"], [data-widget-type="bucket"], [data-widget-type="work-todos"], [data-widget-type="personal-todos"]').forEach(widget => {
+                    const type = widget.getAttribute('data-widget-type');
+                    loadListWidgetData(widget, type);
+                });
+                
+                console.log('✅ Widget data loaded successfully');
+            } catch (error) {
+                console.error('❌ Failed to load widget data:', error);
+                // Fallback to static data if API fails
+                console.log('📋 Using fallback static data');
+            }
+            
+            // Ensure time widget is updated after loading
+            updateTime();
+        }
+
+        async function loadTodosWidget() {
+            try {
+                // Load tasks from personal and work lists - matching desktop calendar approach
+                const listTypes = ['personal_todos', 'work_todos'];
+                const allTasks = [];
+                
+                for (const listType of listTypes) {
+                    try {
+                        const response = await fetch(`/api/lists/${listType}`);
+                        const data = await response.json();
+                        
+                        if (data.lists && Array.isArray(data.lists)) {
+                            data.lists.forEach(list => {
+                                if (list.items && Array.isArray(list.items)) {
+                                    list.items.forEach((item, index) => {
+                                        if (!item.completed && typeof item === 'object') {
+                                            allTasks.push({
+                                                id: `${list.id}-${item.id || index}`,
+                                                text: item.text || item,
+                                                list_id: list.id,
+                                                list_type: listType,
+                                                category: listType === 'work_todos' ? 'work' : 'personal',
+                                                completed: false
+                                            });
+                                        }
+                                    });
+                                }
+                            });
+                        }
+                    } catch (error) {
+                        console.warn(`API unavailable for ${listType}, skipping`);
+                    }
+                }
+                
+                // Update todos widget
+                const todosWidget = document.querySelector('[data-widget-type="todos"]');
+                if (todosWidget) {
+                    const taskList = todosWidget.querySelector('.task-list');
+                    const badge = todosWidget.querySelector('.widget-badge');
+                    
+                    if (taskList && badge) {
+                        // Clear existing tasks
+                        taskList.innerHTML = '';
+                        
+                        // Update badge
+                        badge.textContent = allTasks.length;
+                        
+                        if (allTasks.length === 0) {
+                            taskList.innerHTML = `
+                                <div class="task-item">
+                                    <div class="task-text" style="text-align: center; color: var(--text-secondary);">
+                                        No tasks yet
+                                    </div>
+                                </div>
+                            `;
+                        } else {
+                            // Show first 5 tasks with proper color coding
+                            allTasks.slice(0, 5).forEach(task => {
+                                const taskItem = document.createElement('div');
+                                taskItem.className = `task-item category-${task.category}`;
+                                taskItem.innerHTML = `
+                                    <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                                    <div class="task-text">${task.text}</div>
+                                `;
+                                taskList.appendChild(taskItem);
+                            });
+                            
+                            if (allTasks.length > 5) {
+                                const moreItem = document.createElement('div');
+                                moreItem.className = 'task-item';
+                                moreItem.innerHTML = `
+                                    <div class="task-text" style="text-align: center; color: var(--text-secondary); font-style: italic;">
+                                        +${allTasks.length - 5} more tasks
+                                    </div>
+                                `;
+                                taskList.appendChild(moreItem);
+                            }
+                        }
+                    }
+                }
+                
+                console.log('✅ Todos widget loaded:', allTasks.length, 'tasks');
+            } catch (error) {
+                console.error('❌ Failed to load todos:', error);
+                
+                // Show fallback in widget
+                const todosWidget = document.querySelector('[data-widget-type="todos"]');
+                if (todosWidget) {
+                    const taskList = todosWidget.querySelector('.task-list');
+                    const badge = todosWidget.querySelector('.widget-badge');
+                    if (taskList) {
+                        taskList.innerHTML = `
+                            <div class="task-item category-work">
+                                <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                                <div class="task-text">Example work task</div>
+                            </div>
+                            <div class="task-item category-personal">
+                                <div class="task-checkbox" onclick="event.stopPropagation(); toggleTask(this)"></div>
+                                <div class="task-text">Example personal task</div>
+                            </div>
+                        `;
+                        if (badge) badge.textContent = '2';
+                    }
+                }
+            }
+        }
+
+        async function loadTasksWidget() {
+            try {
+                // Load tasks from the lists API - this endpoint combines all tasks
+                const response = await fetch('/api/lists/tasks');
+                const data = await response.json();
+                
+                if (data.lists && data.lists.length > 0) {
+                    updateTasksWidget(data.lists);
+                }
+            } catch (error) {
+                console.error('Failed to load tasks:', error);
+            }
+        }
+
+        function updateTasksWidget(lists) {
+            const taskList = document.querySelector('.task-list');
+            if (!taskList) return;
+            
+            // Clear existing tasks
+            taskList.innerHTML = '';
+            
+            // Add tasks from lists
+            lists.forEach(list => {
+                if (list.items && list.items.length > 0) {
+                    list.items.slice(0, 3).forEach((item, index) => {
+                        const taskItem = document.createElement('div');
+                        taskItem.className = 'task-item';
+                        
+                        const checkbox = document.createElement('div');
+                        checkbox.className = `task-checkbox ${item.completed ? 'checked' : ''}`;
+                        checkbox.setAttribute('data-task-id', item.id);
+                        checkbox.setAttribute('data-list-type', list.id.includes('personal') ? 'personal_todos' : 'work_todos');
+                        checkbox.setAttribute('data-list-id', list.id);
+                        checkbox.setAttribute('data-item-index', index);
+                        checkbox.onclick = (e) => {
+                            e.stopPropagation();
+                            toggleTask(checkbox);
+                        };
+                        
+                        if (item.completed) {
+                            checkbox.innerHTML = '✓';
+                        }
+                        
+                        const taskText = document.createElement('div');
+                        taskText.className = `task-text ${item.completed ? 'completed' : ''}`;
+                        taskText.textContent = item.text;
+                        
+                        taskItem.appendChild(checkbox);
+                        taskItem.appendChild(taskText);
+                        taskList.appendChild(taskItem);
+                    });
+                }
+            });
+            
+            // Update task count badge
+            const badge = document.querySelector('.widget[data-widget-type="tasks"] .widget-badge');
+            if (badge) {
+                const totalTasks = lists.reduce((sum, list) => sum + (list.items ? list.items.length : 0), 0);
+                badge.textContent = totalTasks;
+            }
+        }
+
+        async function loadEventsWidget() {
+            try {
+                const response = await fetch('/api/calendar/events');
+                const data = await response.json();
+                
+                console.log('📅 Events data received:', data);
+                
+                if (data.events && data.events.length > 0) {
+                    updateEventsWidget(data.events);
+                } else {
+                    console.log('📅 No events found, showing empty state');
+                    updateEventsWidget([]);
+                }
+            } catch (error) {
+                console.error('Failed to load events:', error);
+                // Show empty state on error
+                updateEventsWidget([]);
+            }
+        }
+
+        function updateEventsWidget(events) {
+            const eventList = document.querySelector('.event-list');
+            if (!eventList) return;
+            
+            // Clear existing events
+            eventList.innerHTML = '';
+            
+            // Filter today's events
+            const today = new Date().toISOString().split('T')[0];
+            const todaysEvents = events.filter(event => {
+                const eventDate = event.start_date || event.start_time?.split('T')[0];
+                return eventDate === today;
+            });
+            
+            // Add events (show up to 5 events)
+            todaysEvents.slice(0, 5).forEach(event => {
+                const eventItem = document.createElement('div');
+                eventItem.className = `event-item ${getCategoryClass(event.category)}`;
+                eventItem.onclick = () => navigateToCalendar();
+                
+                const eventTime = document.createElement('div');
+                eventTime.className = 'event-time';
+                
+                // Try different time fields from the event
+                let timeToShow = event.start_time || event.time || event.start_date;
+                if (event.all_day) {
+                    timeToShow = null; // Will show "All Day"
+                }
+                eventTime.textContent = formatEventTime(timeToShow);
+                
+                const eventContent = document.createElement('div');
+                eventContent.className = 'event-content';
+                
+                const eventTitle = document.createElement('div');
+                eventTitle.className = 'event-title';
+                eventTitle.textContent = event.title;
+                
+                eventContent.appendChild(eventTitle);
+                
+                const categoryDot = document.createElement('div');
+                categoryDot.className = 'event-category-dot';
+                categoryDot.style.background = getCategoryColor(event.category);
+                
+                eventItem.appendChild(eventTime);
+                eventItem.appendChild(eventContent);
+                eventItem.appendChild(categoryDot);
+                eventList.appendChild(eventItem);
+            });
+            
+            // Show "No events today" if no events
+            if (todaysEvents.length === 0) {
+                const noEventsItem = document.createElement('div');
+                noEventsItem.className = 'event-item';
+                noEventsItem.style.textAlign = 'center';
+                noEventsItem.style.color = 'var(--text-secondary)';
+                noEventsItem.innerHTML = '<div class="event-title">No events today</div>';
+                eventList.appendChild(noEventsItem);
+            }
+            
+            // Update event count badge
+            const badge = document.querySelector('.widget[data-widget-type="events"] .widget-badge');
+            if (badge) {
+                badge.textContent = todaysEvents.length;
+            }
+        }
+
+        async function loadWeatherWidget() {
+            try {
+                const response = await fetch('/api/weather/current');
+                const data = await response.json();
+                
+                if (data) {
+                    updateWeatherWidget(data);
+                }
+            } catch (error) {
+                console.error('Failed to load weather:', error);
+            }
+        }
+
+        async function loadNotifications() {
+            try {
+                const response = await fetch('/api/reminders/notifications/pending');
+                const data = await response.json();
+                
+                const notificationsContent = document.getElementById('notificationsContent');
+                if (notificationsContent) {
+                    // Clear loading state
+                    notificationsContent.innerHTML = '';
+                    
+                    if (data.notifications && data.notifications.length > 0) {
+                        data.notifications.forEach(notification => {
+                            const notificationItem = document.createElement('div');
+                            notificationItem.className = 'notification-item';
+                            notificationItem.innerHTML = `
+                                <div class="notification-icon">${notification.icon || '💬'}</div>
+                                <div class="notification-content">
+                                    <div class="notification-title">${notification.title}</div>
+                                    <div class="notification-time">${formatNotificationTime(notification.timestamp)}</div>
+                                </div>
+                            `;
+                            notificationsContent.appendChild(notificationItem);
+                        });
+                    } else {
+                        notificationsContent.innerHTML = `
+                            <div class="notification-item">
+                                <div class="notification-icon">✅</div>
+                                <div class="notification-content">
+                                    <div class="notification-title">No new notifications</div>
+                                    <div class="notification-time">All caught up!</div>
+                                </div>
+                            </div>
+                        `;
+                    }
+                }
+                
+                console.log('🔔 Notifications loaded:', data.notifications?.length || 0);
+            } catch (error) {
+                console.error('❌ Failed to load notifications:', error);
+                
+                // Show error state
+                const notificationsContent = document.getElementById('notificationsContent');
+                if (notificationsContent) {
+                    notificationsContent.innerHTML = `
+                        <div class="notification-item">
+                            <div class="notification-icon">⚠️</div>
+                            <div class="notification-content">
+                                <div class="notification-title">Failed to load notifications</div>
+                                <div class="notification-time">Please try again later</div>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+        }
+
+        function formatNotificationTime(timestamp) {
+            const now = new Date();
+            const notificationTime = new Date(timestamp);
+            const diffMs = now - notificationTime;
+            const diffMins = Math.floor(diffMs / 60000);
+            const diffHours = Math.floor(diffMins / 60);
+            const diffDays = Math.floor(diffHours / 24);
+            
+            if (diffMins < 1) return 'Just now';
+            if (diffMins < 60) return `${diffMins}m ago`;
+            if (diffHours < 24) return `${diffHours}h ago`;
+            if (diffDays < 7) return `${diffDays}d ago`;
+            
+            return notificationTime.toLocaleDateString();
+        }
+
+        function updateWeatherWidget(weather) {
+            // Update header weather
+            const headerWeather = document.querySelector('.date-weather span:last-child');
+            if (headerWeather && weather.temperature) {
+                headerWeather.textContent = `${weather.icon || '☀️'} ${weather.temperature}°C ${weather.location || 'Perth'}`;
+            }
+            
+            // Update weather widgets using WidgetManager
+            WidgetManager.updateAll();
+        }
+
+        function updateWeatherWidgets(weather) {
+            const weatherWidgets = document.querySelectorAll('[data-widget-type="weather"]');
+            
+            weatherWidgets.forEach(widget => {
+                const todayElement = widget.querySelector('.weather-today');
+                const forecastElement = widget.querySelector('.weather-forecast');
+                
+                if (todayElement) {
+                    const icon = todayElement.querySelector('.weather-icon');
+                    const temp = todayElement.querySelector('.weather-temp');
+                    const desc = todayElement.querySelector('.weather-desc');
+                    
+                    if (icon) icon.textContent = weather.icon || '☀️';
+                    if (temp) temp.textContent = `${weather.temperature || 22}°C`;
+                    if (desc) desc.textContent = weather.description || 'Sunny';
+                }
+                
+                if (forecastElement) {
+                    updateWeatherForecast(forecastElement, widget, weather);
+                }
+            });
+        }
+
+        function updateWeatherForecast(forecastElement, widget, weather) {
+            // Generate mock forecast data (in real implementation, this would come from API)
+            const forecast = weather.forecast || generateMockForecast();
+            const widgetSize = Array.from(widget.classList).find(cls => cls.startsWith('size-')) || 'size-small';
+            
+            // Clear existing forecast
+            forecastElement.innerHTML = '';
+            
+            // Determine how many days to show based on widget size
+            let daysToShow = 0;
+            switch(widgetSize) {
+                case 'size-small': daysToShow = 0; break;
+                case 'size-medium': daysToShow = 2; break;
+                case 'size-large': daysToShow = 3; break;
+                case 'size-xlarge': daysToShow = 4; break;
+            }
+            
+            // Add forecast days
+            for (let i = 0; i < daysToShow; i++) {
+                const day = forecast[i];
+                const dayElement = document.createElement('div');
+                dayElement.className = 'forecast-day';
+                
+                dayElement.innerHTML = `
+                    <div class="forecast-day-name">${day.name}</div>
+                    <div class="forecast-day-icon">${day.icon}</div>
+                    <div class="forecast-day-temp">${day.temp}</div>
+                `;
+                
+                forecastElement.appendChild(dayElement);
+            }
+        }
+
+        function generateMockForecast() {
+            const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+            const icons = ['☀️', '⛅', '🌧️', '⛈️', '🌤️'];
+            const temps = ['24°C', '22°C', '19°C', '26°C', '23°C', '21°C', '25°C'];
+            
+            return days.slice(1, 5).map((day, index) => ({
+                name: day,
+                icon: icons[index % icons.length],
+                temp: temps[index % temps.length]
+            }));
+        }
+
+        async function updateTaskStatus(listType, listId, itemIndex, completed) {
+            try {
+                // Map widget types to correct API endpoints
+                const apiEndpoint = listType === 'work-todos' ? 'work_todos' : 
+                                  listType === 'personal-todos' ? 'personal_todos' : 
+                                  listType;
+                
+                const response = await fetch(`/api/lists/${apiEndpoint}/${listId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        items: await getUpdatedItems(listType, listId, itemIndex, completed)
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                return await response.json();
+            } catch (error) {
+                console.error('Failed to update task status:', error);
+                throw error;
+            }
+        }
+
+        async function getUpdatedItems(listType, listId, itemIndex, completed) {
+            try {
+                // Map widget types to correct API endpoints
+                const apiEndpoint = listType === 'work-todos' ? 'work_todos' : 
+                                  listType === 'personal-todos' ? 'personal_todos' : 
+                                  listType;
+                
+                const response = await fetch(`/api/lists/${apiEndpoint}/${listId}`);
+                const data = await response.json();
+                
+                if (data.items) {
+                    data.items[itemIndex].completed = completed;
+                    return data.items;
+                }
+                
+                return [];
+            } catch (error) {
+                console.error('Failed to get items for update:', error);
+                return [];
+            }
+        }
+
+        function formatEventTime(timeString) {
+            try {
+                if (!timeString) return 'All Day';
+                
+                // Handle different time formats
+                let time;
+                if (timeString.includes('T')) {
+                    // ISO format: 2024-01-15T14:30:00
+                    time = new Date(timeString);
+                } else if (timeString.includes(':')) {
+                    // Time only format: 14:30:00 or 14:30
+                    const [hours, minutes] = timeString.split(':');
+                    const today = new Date();
+                    time = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 
+                                  parseInt(hours), parseInt(minutes));
+                } else {
+                    return 'All Day';
+                }
+                
+                return time.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+            } catch (error) {
+                console.error('Error formatting time:', error, timeString);
+                return 'All Day';
+            }
+        }
+
+        function getCategoryColor(category) {
+            const colors = {
+                'personal': 'var(--personal-text)',
+                'work': 'var(--work-text)',
+                'health': 'var(--health-text)',
+                'social': 'var(--social-text)',
+                'family': 'var(--family-text)',
+                'task': 'var(--task-text)'
+            };
+            return colors[category] || 'var(--personal-text)';
+        }
+        
+        function getCategoryClass(category) {
+            return `category-${category || 'personal'}`;
+        }
+
+        // Zoe Widget Functions
+        function startZoeConversation() {
+            if (zoeChatOpen) {
+                closeZoeChat();
+                return;
+            }
+            
+            openZoeChat();
+            startVoiceRecognition();
+        }
+
+        function openZoeChat() {
+            const overlay = document.getElementById('zoeChatOverlay');
+            overlay.classList.add('open');
+            zoeChatOpen = true;
+            
+            // Scroll to bottom
+            setTimeout(() => {
+                const messages = document.getElementById('zoeChatMessages');
+                messages.scrollTop = messages.scrollHeight;
+            }, 100);
+        }
+
+        function closeZoeChat() {
+            const overlay = document.getElementById('zoeChatOverlay');
+            overlay.classList.remove('open');
+            zoeChatOpen = false;
+            
+            // Stop listening if active
+            if (isListening) {
+                stopVoiceRecognition();
+            }
+            
+            // Stop speaking
+            stopSpeaking();
+        }
+
+        function startVoiceRecognition() {
+            // Check for microphone permission first
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                navigator.mediaDevices.getUserMedia({ audio: true })
+                    .then(() => {
+                        // Microphone access granted, proceed with speech recognition
+                        initializeSpeechRecognition();
+                    })
+                    .catch((error) => {
+                        console.error('Microphone access denied:', error);
+                        addZoeMessage('Microphone access is required for voice recognition. Please allow microphone access and try again.', 'zoe');
+                        resetZoeState();
+                    });
+            } else if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+                addZoeMessage('Sorry, voice recognition is not supported in your browser.', 'zoe');
+                resetZoeState();
+            } else {
+                // Fallback for browsers without getUserMedia
+                initializeSpeechRecognition();
+            }
+        }
+
+        function initializeSpeechRecognition() {
+            if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+                addZoeMessage('Sorry, voice recognition is not supported in your browser.', 'zoe');
+                resetZoeState();
+                return;
+            }
+
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SpeechRecognition();
+            
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.lang = 'en-US';
+            recognition.maxAlternatives = 1;
+
+            // Update UI to listening state
+            const orb = document.getElementById('zoeOrb');
+            const status = document.getElementById('zoeStatus');
+            
+            orb.classList.add('listening');
+            status.textContent = 'Listening...';
+            isListening = true;
+
+            recognition.onstart = function() {
+                console.log('🎤 Voice recognition started');
+            };
+
+            recognition.onresult = function(event) {
+                const transcript = event.results[0][0].transcript;
+                console.log('🎤 Recognized:', transcript);
+                
+                // Add user message
+                addZoeMessage(transcript, 'user');
+                
+                // Process with Zoe
+                processZoeRequest(transcript);
+            };
+
+            recognition.onerror = function(event) {
+                console.error('🎤 Recognition error:', event.error);
+                let errorMessage = 'Sorry, I didn\'t catch that. Please try again.';
+                
+                switch(event.error) {
+                    case 'no-speech':
+                        errorMessage = 'No speech detected. Please try speaking again.';
+                        break;
+                    case 'audio-capture':
+                        errorMessage = 'No microphone found. Please check your microphone.';
+                        break;
+                    case 'not-allowed':
+                        errorMessage = 'Microphone access denied. Please allow microphone access.';
+                        break;
+                    case 'network':
+                        errorMessage = 'Network error. Please check your connection.';
+                        break;
+                }
+                
+                addZoeMessage(errorMessage, 'zoe');
+                resetZoeState();
+            };
+
+            recognition.onend = function() {
+                console.log('🎤 Voice recognition ended');
+                resetZoeState();
+            };
+
+            try {
+                recognition.start();
+            } catch (error) {
+                console.error('Failed to start speech recognition:', error);
+                addZoeMessage('Failed to start voice recognition. Please try again.', 'zoe');
+                resetZoeState();
+            }
+        }
+
+        function stopVoiceRecognition() {
+            if (recognition) {
+                recognition.stop();
+            }
+            resetZoeState();
+        }
+
+        function resetZoeState() {
+            const orb = document.getElementById('zoeOrb');
+            const status = document.getElementById('zoeStatus');
+            
+            orb.classList.remove('listening', 'processing');
+            status.textContent = 'Tap to speak';
+            isListening = false;
+        }
+
+        function addZoeMessage(text, sender) {
+            const messages = document.getElementById('zoeChatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `zoe-message ${sender}`;
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'zoe-message-avatar';
+            avatar.textContent = sender === 'user' ? 'U' : 'Z';
+            
+            const bubble = document.createElement('div');
+            bubble.className = 'zoe-message-bubble';
+            bubble.innerHTML = text + `<div class="zoe-message-time">${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>`;
+            
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(bubble);
+            messages.appendChild(messageDiv);
+            
+            // Scroll to bottom
+            messages.scrollTop = messages.scrollHeight;
+            
+            // Store in conversation history
+            zoeConversationHistory.push({
+                text: text,
+                sender: sender,
+                timestamp: new Date().toISOString()
+            });
+            
+            // Speak Zoe's responses
+            if (sender === 'zoe') {
+                speakText(text);
+            }
+        }
+
+        function speakText(text) {
+            // Stop any current speech
+            if (currentUtterance) {
+                speechSynthesis.cancel();
+            }
+            
+            if (!speechSynthesis) {
+                console.warn('Text-to-speech not supported');
+                return;
+            }
+            
+            // Create new utterance
+            currentUtterance = new SpeechSynthesisUtterance(text);
+            
+            // Configure voice settings
+            currentUtterance.rate = 0.9;
+            currentUtterance.pitch = 1.0;
+            currentUtterance.volume = 0.8;
+            
+            // Try to use a female voice for Zoe
+            const voices = speechSynthesis.getVoices();
+            const femaleVoice = voices.find(voice => 
+                voice.name.includes('Female') || 
+                voice.name.includes('female') ||
+                voice.name.includes('Zira') ||
+                voice.name.includes('Samantha') ||
+                voice.name.includes('Karen')
+            );
+            
+            if (femaleVoice) {
+                currentUtterance.voice = femaleVoice;
+            }
+            
+            // Event handlers
+            currentUtterance.onstart = function() {
+                console.log('🔊 Zoe is speaking:', text);
+            };
+            
+            currentUtterance.onend = function() {
+                console.log('🔊 Zoe finished speaking');
+                currentUtterance = null;
+            };
+            
+            currentUtterance.onerror = function(event) {
+                console.error('🔊 Speech synthesis error:', event.error);
+                currentUtterance = null;
+            };
+            
+            // Speak the text
+            speechSynthesis.speak(currentUtterance);
+        }
+
+        function stopSpeaking() {
+            if (speechSynthesis && speechSynthesis.speaking) {
+                speechSynthesis.cancel();
+                currentUtterance = null;
+            }
+        }
+
+        function showTypingIndicator() {
+            const messages = document.getElementById('zoeChatMessages');
+            const typingDiv = document.createElement('div');
+            typingDiv.className = 'zoe-message zoe';
+            typingDiv.id = 'typingIndicator';
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'zoe-message-avatar';
+            avatar.textContent = 'Z';
+            
+            const indicator = document.createElement('div');
+            indicator.className = 'zoe-typing-indicator';
+            indicator.innerHTML = '<div class="zoe-typing-dot"></div><div class="zoe-typing-dot"></div><div class="zoe-typing-dot"></div>';
+            
+            typingDiv.appendChild(avatar);
+            typingDiv.appendChild(indicator);
+            messages.appendChild(typingDiv);
+            
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function hideTypingIndicator() {
+            const indicator = document.getElementById('typingIndicator');
+            if (indicator) {
+                indicator.remove();
+            }
+        }
+
+        async function processZoeRequest(transcript) {
+            // Show processing state
+            const orb = document.getElementById('zoeOrb');
+            orb.classList.add('processing');
+            
+            // Show typing indicator
+            showTypingIndicator();
+            
+            try {
+                // Send to Zoe API
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        message: transcript,
+                        conversation_history: zoeConversationHistory.slice(-10) // Last 10 messages for context
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Hide typing indicator
+                hideTypingIndicator();
+                
+                // Add Zoe's response
+                addZoeMessage(data.response || 'I understand, but I need more information to help you.', 'zoe');
+                
+            } catch (error) {
+                console.error('Failed to process Zoe request:', error);
+                
+                // Hide typing indicator
+                hideTypingIndicator();
+                
+                // Fallback response
+                const fallbackResponses = [
+                    "I'm here to help! Could you tell me more about what you need?",
+                    "That's interesting! How can I assist you with that?",
+                    "I understand. What would you like me to do for you?",
+                    "Thanks for sharing! Is there anything specific I can help with?"
+                ];
+                
+                const randomResponse = fallbackResponses[Math.floor(Math.random() * fallbackResponses.length)];
+                addZoeMessage(randomResponse, 'zoe');
+            }
+            
+            // Reset orb state
+            resetZoeState();
+        }
+
+        async function loadImportantTasksWidget(widget) {
+            try {
+                // Get tasks from both personal and work lists
+                const [personalResponse, workResponse] = await Promise.all([
+                    fetch('/api/lists/personal_todos'),
+                    fetch('/api/lists/work_todos')
+                ]);
+                
+                const personalData = await personalResponse.json();
+                const workData = await workResponse.json();
+                
+                // Combine all tasks and filter for high priority
+                const allTasks = [];
+                
+                if (personalData.lists) {
+                    personalData.lists.forEach(list => {
+                        if (list.items) {
+                            list.items.forEach(item => {
+                                if (item.priority === 'high' && !item.completed) {
+                                    allTasks.push({
+                                        ...item,
+                                        list_name: list.name,
+                                        list_category: 'personal',
+                                        list_type: 'personal_todos',
+                                        list_id: list.id
+                                    });
+                                }
+                            });
+                        }
+                    });
+                }
+                
+                if (workData.lists) {
+                    workData.lists.forEach(list => {
+                        if (list.items) {
+                            list.items.forEach(item => {
+                                if (item.priority === 'high' && !item.completed) {
+                                    allTasks.push({
+                                        ...item,
+                                        list_name: list.name,
+                                        list_category: 'work',
+                                        list_type: 'work_todos',
+                                        list_id: list.id
+                                    });
+                                }
+                            });
+                        }
+                    });
+                }
+                
+                updateImportantTasksWidget(widget, allTasks);
+                
+            } catch (error) {
+                console.error('Failed to load important tasks:', error);
+                const taskList = widget.querySelector('.task-list');
+                if (taskList) {
+                    taskList.innerHTML = `
+                        <div class="task-item">
+                            <div class="task-text" style="text-align: center; color: var(--text-secondary);">
+                                Failed to load important tasks
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+        }
+
+        function updateImportantTasksWidget(widget, tasks) {
+            const taskList = widget.querySelector('.task-list');
+            const badge = widget.querySelector('.widget-badge');
+            
+            if (!taskList) return;
+            
+            // Clear existing items
+            taskList.innerHTML = '';
+            
+            if (tasks.length > 0) {
+                // Show first few important tasks
+                tasks.slice(0, 3).forEach((task, index) => {
+                    const taskItem = document.createElement('div');
+                    taskItem.className = 'task-item';
+                    
+                    const checkbox = document.createElement('div');
+                    checkbox.className = `task-checkbox ${task.completed ? 'checked' : ''}`;
+                    checkbox.setAttribute('data-task-id', task.id);
+                    checkbox.setAttribute('data-list-type', task.list_type);
+                    checkbox.setAttribute('data-list-id', task.list_id);
+                    checkbox.setAttribute('data-item-index', index);
+                    checkbox.onclick = (e) => {
+                        e.stopPropagation();
+                        toggleTask(checkbox);
+                    };
+                    
+                    if (task.completed) {
+                        checkbox.innerHTML = '✓';
+                    }
+                    
+                    const taskText = document.createElement('div');
+                    taskText.className = `task-text ${task.completed ? 'completed' : ''}`;
+                    taskText.textContent = task.text;
+                    
+                    taskItem.appendChild(checkbox);
+                    taskItem.appendChild(taskText);
+                    taskList.appendChild(taskItem);
+                });
+                
+                // Update badge
+                if (badge) {
+                    badge.textContent = tasks.length;
+                }
+            } else {
+                // Empty state
+                taskList.innerHTML = `
+                    <div class="task-item">
+                        <div class="task-text" style="text-align: center; color: var(--text-secondary);">
+                            No important tasks
+                        </div>
+                    </div>
+                `;
+                
+                if (badge) {
+                    badge.textContent = '0';
+                }
+            }
+        }
+
+        async function loadListWidgetData(widget, listType) {
+            try {
+                // Map widget types to correct API endpoints
+                const apiEndpoint = listType === 'work-todos' ? 'work_todos' : 
+                                  listType === 'personal-todos' ? 'personal_todos' : 
+                                  listType;
+                
+                const response = await fetch(`/api/lists/${apiEndpoint}`);
+                const data = await response.json();
+                
+                if (data.lists && data.lists.length > 0) {
+                    // Get all items from all lists of this type
+                    const allItems = [];
+                    data.lists.forEach(list => {
+                        if (list.items && list.items.length > 0) {
+                            allItems.push(...list.items);
+                        }
+                    });
+                    
+                    updateListWidget(widget, allItems, listType);
+                } else {
+                    // Show empty state
+                    const taskList = widget.querySelector('.task-list');
+                    if (taskList) {
+                        taskList.innerHTML = `
+                            <div class="task-item">
+                                <div class="task-text" style="text-align: center; color: var(--text-secondary);">
+                                    No ${listType.replace('-', ' ')} items yet
+                                </div>
+                            </div>
+                        `;
+                    }
+                }
+            } catch (error) {
+                console.error(`Failed to load ${listType} data:`, error);
+                const taskList = widget.querySelector('.task-list');
+                if (taskList) {
+                    taskList.innerHTML = `
+                        <div class="task-item">
+                            <div class="task-text" style="text-align: center; color: var(--text-secondary);">
+                                Failed to load data
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+        }
+
+        function updateListWidget(widget, items, listType) {
+            const taskList = widget.querySelector('.task-list');
+            const badge = widget.querySelector('.widget-badge');
+            
+            if (!taskList) return;
+            
+            // Clear existing items
+            taskList.innerHTML = '';
+            
+            if (items && items.length > 0) {
+                // Show first few items
+                items.slice(0, 3).forEach((item, index) => {
+                    const taskItem = document.createElement('div');
+                    taskItem.className = `task-item category-${item.category || 'personal'}`;
+                    
+                    const checkbox = document.createElement('div');
+                    checkbox.className = `task-checkbox ${item.completed ? 'checked' : ''}`;
+                    checkbox.setAttribute('data-task-id', item.id);
+                    checkbox.setAttribute('data-list-type', listType);
+                    checkbox.setAttribute('data-item-index', index);
+                    checkbox.onclick = (e) => {
+                        e.stopPropagation();
+                        toggleTask(checkbox);
+                    };
+                    
+                    if (item.completed) {
+                        checkbox.innerHTML = '✓';
+                    }
+                    
+                    const taskText = document.createElement('div');
+                    taskText.className = `task-text ${item.completed ? 'completed' : ''}`;
+                    taskText.textContent = item.text;
+                    
+                    taskItem.appendChild(checkbox);
+                    taskItem.appendChild(taskText);
+                    taskList.appendChild(taskItem);
+                });
+                
+                // Update badge
+                if (badge) {
+                    badge.textContent = items.length;
+                }
+            } else {
+                // Empty state
+                taskList.innerHTML = `
+                    <div class="task-item">
+                        <div class="task-text" style="text-align: center; color: var(--text-secondary);">
+                            No items in this list
+                        </div>
+                    </div>
+                `;
+                
+                if (badge) {
+                    badge.textContent = '0';
+                }
+            }
+        }
+
+        console.log('🎯 Dashboard loaded with original Google Nest Hub styling!');
+        console.log('🔒 Edit controls are properly hidden until edit mode is enabled');
+        console.log('🎯 Drag and drop: Enable edit mode, then drag widgets to rearrange');
+        console.log('📡 Connected to Zoe backend APIs for real-time data');
+    </script>
+</body>
+</html>

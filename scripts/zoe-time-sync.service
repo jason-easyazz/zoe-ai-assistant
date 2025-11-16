@@ -1,0 +1,30 @@
+[Unit]
+Description=Zoe Time Synchronization Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/zoe/assistant
+ExecStart=/usr/bin/python3 /home/zoe/assistant/scripts/time_sync_service.py start
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables
+Environment=PYTHONPATH=/home/zoe/assistant/services/zoe-core
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/zoe/assistant/data /home/zoe/assistant/logs
+
+[Install]
+WantedBy=multi-user.target
+
+
+

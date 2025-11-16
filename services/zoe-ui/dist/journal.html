@@ -1,0 +1,3070 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Journal</title>
+    
+    <!-- FilePond CSS -->
+    <link href="https://unpkg.com/filepond/dist/filepond.min.css" rel="stylesheet">
+    <link href="https://unpkg.com/filepond-plugin-image-preview/dist/filepond-plugin-image-preview.min.css" rel="stylesheet">
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        :root {
+            --primary-purple: #7B61FF;
+            --primary-teal: #5AE0E0;
+            --gradient: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            --glass-bg: rgba(255, 255, 255, 0.6);
+            --glass-border: rgba(255, 255, 255, 0.4);
+            --text-primary: #333;
+            --text-secondary: #666;
+            --text-tertiary: #999;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh;
+            color: var(--text-primary);
+        }
+        
+        /* Navigation Bar - matching chat.html */
+        .nav-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px;
+            height: 60px;
+            z-index: 100;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        
+        .mini-orb {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-width: 44px;
+            min-height: 44px;
+        }
+        
+        .mini-orb:hover { transform: scale(1.1); }
+        
+        .nav-menu { display: flex; gap: 20px; }
+        
+        .nav-item {
+            color: #666;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 400;
+            padding: 8px 12px;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+        }
+        
+        .nav-item:hover, .nav-item.active {
+            color: #7B61FF;
+            background: rgba(123, 97, 255, 0.1);
+        }
+        
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold; position: relative;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        
+        .api-indicator {
+            font-size: 12px;
+            font-weight: 500;
+            padding: 4px 8px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .api-indicator.online {
+            background: rgba(34, 197, 94, 0.1);
+            color: #22c55e;
+        }
+        
+        .api-indicator.offline {
+            background: rgba(239, 68, 68, 0.1);
+            color: #ef4444;
+        }
+        
+        .api-indicator.connecting {
+            background: rgba(251, 146, 60, 0.1);
+            color: #ea580c;
+        }
+        
+        .api-indicator::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.connecting::before { background: #ea580c; }
+
+        .time-date-display {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+        }
+        
+        .current-time {
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        
+        .current-date {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.2;
+        }
+
+        /* Main Container */
+        .main-container { 
+            padding: 70px 20px 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        /* View Controls */
+        .view-controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+        
+        .add-entry-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            background: var(--gradient);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .add-entry-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.3);
+        }
+        
+        .view-tabs {
+            display: flex;
+            gap: 8px;
+            background: var(--glass-bg);
+            backdrop-filter: blur(15px);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 4px;
+        }
+        
+        .view-tab {
+            padding: 10px 20px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+        
+        .view-tab.active {
+            background: white;
+            color: var(--primary-purple);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        .search-bar {
+            position: relative;
+            flex: 1;
+            max-width: 300px;
+        }
+        
+        .search-input {
+            width: 100%;
+            padding: 10px 40px 10px 16px;
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            background: var(--glass-bg);
+            backdrop-filter: blur(15px);
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        
+        .search-input:focus {
+            outline: none;
+            border-color: var(--primary-purple);
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+        
+        .search-icon {
+            position: absolute;
+            right: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-tertiary);
+        }
+        
+        /* Timeline View */
+        .timeline-view {
+            position: relative;
+            padding: 20px 0;
+            display: none;
+        }
+        
+        .timeline-view.active { display: block; }
+        
+        .timeline-line {
+            position: absolute;
+            left: 50%;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            background: linear-gradient(180deg, var(--primary-purple) 0%, var(--primary-teal) 100%);
+            transform: translateX(-50%);
+            opacity: 0.3;
+        }
+        
+        .timeline-month-separator {
+            text-align: center;
+            padding: 40px 0 20px;
+            position: relative;
+        }
+        
+        .month-label {
+            display: inline-block;
+            padding: 8px 24px;
+            background: var(--glass-bg);
+            backdrop-filter: blur(40px);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .timeline-entry {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            gap: 30px;
+            margin-bottom: 40px;
+            align-items: center;
+        }
+        
+        .timeline-entry:nth-child(even) .entry-card { grid-column: 1; }
+        .timeline-entry:nth-child(even) .timeline-dot-container { grid-column: 2; }
+        .timeline-entry:nth-child(even) .entry-spacer { grid-column: 3; }
+        .timeline-entry:nth-child(odd) .entry-spacer { grid-column: 1; }
+        .timeline-entry:nth-child(odd) .timeline-dot-container { grid-column: 2; }
+        .timeline-entry:nth-child(odd) .entry-card { grid-column: 3; }
+        
+        .timeline-dot-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        .timeline-dot {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: white;
+            border: 3px solid var(--primary-purple);
+            box-shadow: 0 0 0 4px rgba(123, 97, 255, 0.1);
+            transition: all 0.3s;
+        }
+        
+        .timeline-entry:hover .timeline-dot {
+            transform: scale(1.3);
+            box-shadow: 0 0 0 8px rgba(123, 97, 255, 0.2);
+        }
+        
+        .timeline-date {
+            margin-top: 12px;
+            font-size: 11px;
+            color: var(--text-tertiary);
+            font-weight: 500;
+            text-align: center;
+            white-space: nowrap;
+        }
+        
+        .entry-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(40px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column; /* Default: stacked layout */
+        }
+        
+        .entry-card:hover {
+            transform: translateY(-4px);
+            background: rgba(255, 255, 255, 0.75);
+            box-shadow: 0 12px 40px rgba(123, 97, 255, 0.15);
+        }
+        
+        /* Default landscape layout: photo on top, text below */
+        .entry-card.landscape-layout {
+            flex-direction: column;
+        }
+        
+        .entry-card.landscape-layout .entry-image {
+            width: 100%;
+            height: 220px;
+            object-fit: cover;
+            display: block;
+        }
+        
+        .entry-card.landscape-layout .entry-content {
+            padding: 20px;
+        }
+        
+        /* Portrait layout: photo on left, text on right */
+        .entry-card.portrait-layout {
+            flex-direction: row;
+            min-height: 300px;
+        }
+        
+        .entry-card.portrait-layout .entry-image {
+            width: 45%;
+            min-width: 280px;
+            max-width: 400px;
+            height: auto;
+            min-height: 300px;
+            object-fit: cover;
+            display: block;
+            flex-shrink: 0;
+        }
+        
+        .entry-card.portrait-layout .entry-content {
+            flex: 1;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        
+        /* Square layout: compact side-by-side */
+        .entry-card.square-layout {
+            flex-direction: row;
+        }
+        
+        .entry-card.square-layout .entry-image {
+            width: 300px;
+            height: 300px;
+            object-fit: cover;
+            display: block;
+            flex-shrink: 0;
+        }
+        
+        .entry-card.square-layout .entry-content {
+            flex: 1;
+            padding: 20px;
+        }
+        
+        /* Text-only entries (no photo) */
+        .entry-card.text-only .entry-content {
+            padding: 24px;
+        }
+        
+        /* Legacy support for entries without orientation class */
+        .entry-image {
+            width: 100%;
+            height: 220px;
+            object-fit: cover;
+            display: block;
+        }
+        
+        .entry-content { padding: 20px; }
+        
+        .entry-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 12px;
+        }
+        
+        .entry-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+        
+        .entry-time {
+            font-size: 12px;
+            color: var(--text-tertiary);
+        }
+        
+        .entry-text {
+            font-size: 14px;
+            line-height: 1.7;
+            color: var(--text-secondary);
+            margin-bottom: 16px;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        
+        .entry-footer {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .entry-tags {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            flex: 1;
+        }
+        
+        .tag {
+            padding: 4px 12px;
+            background: rgba(123, 97, 255, 0.1);
+            border: 1px solid rgba(123, 97, 255, 0.2);
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--primary-purple);
+        }
+        
+        .person-tag {
+            background: rgba(255, 107, 107, 0.1);
+            border-color: rgba(255, 107, 107, 0.2);
+            color: #FF6B6B;
+        }
+        
+        .place-tag {
+            background: rgba(90, 224, 224, 0.1);
+            border-color: rgba(90, 224, 224, 0.2);
+            color: var(--primary-teal);
+        }
+        
+        /* Privacy Badges */
+        .privacy-badge {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            background: rgba(0, 0, 0, 0.03);
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            border-radius: 12px;
+            font-size: 10px;
+            color: var(--text-tertiary);
+        }
+        
+        .privacy-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .privacy-private {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: var(--text-tertiary);
+        }
+        
+        .privacy-inner-circle {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 2px solid #FF6B6B;
+        }
+        
+        .privacy-circle {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: 2px solid var(--primary-purple);
+        }
+        
+        .privacy-public {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            border: 2px solid var(--primary-teal);
+        }
+        
+        /* Journeys View */
+        .journeys-view { display: none; }
+        .journeys-view.active { display: block; }
+        
+        .current-journey {
+            background: var(--glass-bg);
+            backdrop-filter: blur(40px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 30px;
+        }
+        
+        .current-journey-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 24px;
+        }
+        
+        .journey-title {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 4px;
+            background: var(--gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .journey-subtitle { font-size: 13px; color: var(--text-secondary); }
+        
+        .check-in-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            background: var(--gradient);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .check-in-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.3);
+        }
+        
+        .journey-stops-horizontal {
+            display: flex;
+            gap: 20px;
+            overflow-x: auto;
+            padding: 20px 0;
+            position: relative;
+        }
+        
+        .journey-stops-horizontal::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--primary-purple) 0%, var(--primary-teal) 100%);
+            opacity: 0.3;
+            z-index: 0;
+        }
+        
+        .journey-stop-h {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            min-width: 150px;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .stop-marker-h {
+            width: 60px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: white;
+            border-radius: 50%;
+            font-size: 28px;
+            flex-shrink: 0;
+            border: 3px solid rgba(0, 0, 0, 0.1);
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+        
+        .journey-stop-h:hover .stop-marker-h { transform: scale(1.1); }
+        
+        .journey-stop-h.completed .stop-marker-h {
+            background: var(--gradient);
+            color: white;
+            border: none;
+        }
+        
+        .journey-stop-h.current .stop-marker-h {
+            background: var(--primary-purple);
+            animation: pulse 2s infinite;
+            border: none;
+        }
+        
+        .journey-stop-h.upcoming .stop-marker-h { opacity: 0.5; }
+        
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(123, 97, 255, 0.4); }
+            50% { box-shadow: 0 0 0 12px rgba(123, 97, 255, 0); }
+        }
+        
+        .stop-info-h { text-align: center; }
+        
+        .stop-name-h {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+        
+        .stop-dates-h { font-size: 12px; color: var(--text-secondary); }
+        
+        .section-header {
+            font-size: 18px;
+            font-weight: 600;
+            margin: 40px 0 20px;
+            color: var(--text-primary);
+        }
+        
+        .past-journeys-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        
+        .journey-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(40px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .journey-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 40px rgba(123, 97, 255, 0.15);
+        }
+        
+        .journey-image { width: 100%; height: 180px; object-fit: cover; }
+        .journey-content { padding: 16px; }
+        
+        .journey-location {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--primary-purple);
+            margin-bottom: 8px;
+        }
+        
+        .journey-dates { font-size: 12px; color: var(--text-tertiary); margin-bottom: 12px; }
+        .journey-entries { font-size: 13px; color: var(--text-secondary); }
+        
+        /* Entry Modals */
+        .entry-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(8px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+        
+        .entry-modal.active { display: flex; }
+        
+        .entry-modal-content {
+            width: 100%;
+            max-width: 900px;
+            max-height: 90vh;
+            background: rgba(255, 255, 255, 0.98);
+            backdrop-filter: blur(60px);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .entry-modal-close {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 40px;
+            height: 40px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(10px);
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--text-secondary);
+            transition: all 0.2s;
+            z-index: 10;
+        }
+        
+        .entry-modal-close:hover {
+            background: white;
+            transform: rotate(90deg);
+        }
+        
+        /* Read Entry Modal */
+        .read-modal-header {
+            position: relative;
+            height: 300px;
+            overflow: hidden;
+        }
+        
+        .read-modal-image {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        
+        .read-modal-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 40px;
+        }
+        
+        .read-modal-title {
+            font-size: 32px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            background: var(--gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .read-modal-meta {
+            display: flex;
+            gap: 20px;
+            font-size: 13px;
+            color: var(--text-tertiary);
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+            flex-wrap: wrap;
+        }
+        
+        .read-modal-text {
+            font-size: 16px;
+            line-height: 1.8;
+            color: var(--text-secondary);
+            margin-bottom: 30px;
+        }
+        
+        .read-modal-text p {
+            margin-bottom: 16px;
+        }
+        
+        .read-modal-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 1px solid var(--glass-border);
+        }
+        
+        .read-modal-actions button {
+            flex: 1;
+            padding: 12px 20px;
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(10px);
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .read-modal-actions button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        
+        .read-modal-actions .btn-edit {
+            color: var(--primary-purple);
+            border-color: var(--primary-purple);
+        }
+        
+        .read-modal-actions .btn-edit:hover {
+            background: var(--primary-purple);
+            color: white;
+        }
+        
+        .read-modal-actions .btn-delete {
+            color: #ef4444;
+            border-color: #ef4444;
+        }
+        
+        .read-modal-actions .btn-delete:hover {
+            background: #ef4444;
+            color: white;
+        }
+        
+        .read-modal-actions .btn-share {
+            color: #3b82f6;
+            border-color: #3b82f6;
+        }
+        
+        .read-modal-actions .btn-share:hover {
+            background: #3b82f6;
+            color: white;
+        }
+        
+        /* New Entry Form */
+        .entry-form-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 24px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+        }
+        
+        .entry-form-title {
+            font-size: 20px;
+            font-weight: 600;
+            background: var(--gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .auto-save-indicator {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-tertiary);
+        }
+        
+        .save-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #4CAF50;
+            animation: pulse-save 2s infinite;
+        }
+        
+        @keyframes pulse-save {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+        
+        .entry-form-close {
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.05);
+            font-size: 20px;
+            cursor: pointer;
+            color: var(--text-secondary);
+            transition: all 0.2s;
+        }
+        
+        .entry-form-close:hover {
+            background: rgba(0, 0, 0, 0.1);
+            transform: rotate(90deg);
+        }
+        
+        .entry-form-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+        }
+        
+        .form-field { margin-bottom: 20px; }
+        
+        .form-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .form-input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.8);
+            font-size: 16px;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+        
+        .form-input:focus {
+            outline: none;
+            border-color: var(--primary-purple);
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+        
+        .form-textarea {
+            width: 100%;
+            min-height: 300px;
+            padding: 16px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.8);
+            font-size: 16px;
+            line-height: 1.8;
+            font-family: inherit;
+            resize: vertical;
+            transition: all 0.2s;
+        }
+        
+        .form-textarea:focus {
+            outline: none;
+            border-color: var(--primary-purple);
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+        
+        /* Tiptap Editor Styles */
+        .tiptap-container {
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.8);
+            overflow: hidden;
+            transition: all 0.2s;
+        }
+        
+        .tiptap-container:focus-within {
+            border-color: var(--primary-purple);
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+        
+        .tiptap-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            padding: 12px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+            background: rgba(255, 255, 255, 0.5);
+        }
+        
+        .tiptap-toolbar button {
+            padding: 8px 12px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 6px;
+            background: white;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--text-secondary);
+        }
+        
+        .tiptap-toolbar button:hover {
+            background: rgba(123, 97, 255, 0.1);
+            border-color: var(--primary-purple);
+            color: var(--primary-purple);
+        }
+        
+        .tiptap-toolbar button.is-active {
+            background: var(--primary-purple);
+            color: white;
+            border-color: var(--primary-purple);
+        }
+        
+        .ProseMirror {
+            min-height: 300px;
+            padding: 16px;
+            outline: none;
+            font-size: 16px;
+            line-height: 1.8;
+        }
+        
+        .ProseMirror p {
+            margin-bottom: 16px;
+        }
+        
+        .ProseMirror h1 {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            margin-top: 24px;
+        }
+        
+        .ProseMirror h2 {
+            font-size: 22px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            margin-top: 20px;
+        }
+        
+        .ProseMirror ul,
+        .ProseMirror ol {
+            padding-left: 24px;
+            margin-bottom: 16px;
+        }
+        
+        .ProseMirror blockquote {
+            border-left: 3px solid var(--primary-purple);
+            padding-left: 16px;
+            margin-left: 0;
+            margin-bottom: 16px;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+        
+        .ProseMirror code {
+            background: rgba(0, 0, 0, 0.05);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 14px;
+        }
+        
+        .ProseMirror pre {
+            background: rgba(0, 0, 0, 0.05);
+            padding: 12px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin-bottom: 16px;
+        }
+        
+        .ProseMirror pre code {
+            background: none;
+            padding: 0;
+        }
+        
+        /* FilePond Customization */
+        .filepond--root {
+            font-family: inherit;
+        }
+        
+        .filepond--drop-label {
+            color: var(--text-secondary);
+        }
+        
+        .filepond--panel-root {
+            background-color: rgba(123, 97, 255, 0.02);
+            border: 2px dashed rgba(123, 97, 255, 0.3);
+        }
+        
+        .filepond--item-panel {
+            background-color: rgba(123, 97, 255, 0.05);
+        }
+        
+        .filepond--drip-blob {
+            background-color: var(--primary-purple);
+        }
+        
+        .image-upload-area {
+            border: 2px dashed rgba(123, 97, 255, 0.3);
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: rgba(123, 97, 255, 0.02);
+        }
+        
+        .image-upload-area:hover {
+            border-color: var(--primary-purple);
+            background: rgba(123, 97, 255, 0.05);
+        }
+        
+        .upload-icon { font-size: 48px; margin-bottom: 12px; }
+        .upload-text { font-size: 14px; color: var(--text-secondary); margin-bottom: 8px; }
+        .upload-hint { font-size: 12px; color: var(--text-tertiary); }
+        
+        .tag-input-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 12px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.8);
+            min-height: 48px;
+        }
+        
+        .tag-chip {
+            padding: 6px 12px;
+            background: rgba(123, 97, 255, 0.1);
+            border: 1px solid rgba(123, 97, 255, 0.2);
+            border-radius: 12px;
+            font-size: 13px;
+            color: var(--primary-purple);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .tag-chip.person-tag {
+            background: rgba(255, 107, 107, 0.1);
+            border-color: rgba(255, 107, 107, 0.2);
+            color: #FF6B6B;
+        }
+        
+        .tag-chip.place-tag {
+            background: rgba(90, 224, 224, 0.1);
+            border-color: rgba(90, 224, 224, 0.2);
+            color: var(--primary-teal);
+        }
+        
+        .tag-remove {
+            cursor: pointer;
+            font-weight: bold;
+        }
+        
+        .tag-input {
+            flex: 1;
+            min-width: 120px;
+            border: none;
+            background: transparent;
+            font-size: 14px;
+            padding: 6px;
+        }
+        
+        .tag-input:focus { outline: none; }
+        
+        .privacy-selector {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+        }
+        
+        .privacy-option {
+            padding: 16px;
+            border: 2px solid transparent;
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.03);
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .privacy-option:hover { background: rgba(123, 97, 255, 0.05); }
+        
+        .privacy-option.selected {
+            background: rgba(123, 97, 255, 0.1);
+            border-color: var(--primary-purple);
+        }
+        
+        .privacy-option-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 24px;
+            margin-bottom: 8px;
+        }
+        
+        .privacy-option-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .privacy-option-desc {
+            font-size: 10px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+        
+        .entry-form-actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 24px;
+            border-top: 1px solid rgba(0, 0, 0, 0.05);
+        }
+        
+        .action-buttons { display: flex; gap: 12px; }
+        
+        .btn-secondary {
+            padding: 10px 20px;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+            background: white;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .btn-secondary:hover { background: rgba(0, 0, 0, 0.05); }
+        
+        .btn-primary {
+            padding: 12px 32px;
+            border: none;
+            border-radius: 12px;
+            background: var(--gradient);
+            color: white;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(123, 97, 255, 0.3);
+        }
+
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center; 
+        }
+        .notifications-title {
+            font-size: 18px; font-weight: 600; color: #333; margin: 0;
+        }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content {
+            padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title {
+            font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px;
+        }
+        .notification-meta {
+            font-size: 12px; color: #666; display: flex; gap: 10px;
+        }
+        .notification-time {
+            color: #7B61FF; font-weight: 500;
+        }
+        .no-notifications {
+            text-align: center; color: #666; font-size: 14px; padding: 40px 20px;
+        }
+        
+        /* Zoe Orb Styles */
+        .zoe-orb {
+            position: fixed; bottom: 24px; right: 24px; width: 70px; height: 70px;
+            border-radius: 50%; cursor: pointer; transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            z-index: 1200; display: flex; align-items: center; justify-content: center;
+            overflow: hidden;
+            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
+            background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 50%, #A855F7 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
+        }
+        .zoe-orb::before {
+            content: ""; position: absolute; top: 50%; left: 50%; width: 20px; height: 20px;
+            background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+            border-radius: 50%; transform: translate(-50%, -50%);
+            animation: orb-inner-glow 2s ease-in-out infinite alternate;
+        }
+        .zoe-orb:hover {
+            transform: scale(1.12);
+            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.5), 0 0 50px rgba(123, 97, 255, 0.3);
+            animation-duration: 8s, 3s;
+        }
+        .zoe-orb:active { transform: scale(0.95); }
+        .zoe-orb.connecting {
+            background: linear-gradient(135deg, #7B61FF 0%, #6366F1 50%, #8B5CF6 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
+        }
+        .zoe-orb.connected {
+            background: linear-gradient(135deg, #7B61FF 0%, #10B981 50%, #34D399 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(16, 185, 129, 0.2);
+        }
+        .zoe-orb.thinking {
+            background: linear-gradient(135deg, #7B61FF 0%, #F59E0B 50%, #FBBF24 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(245, 158, 11, 0.2);
+            animation: orb-thinking-gentle 3s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
+        }
+        .zoe-orb.proactive {
+            background: linear-gradient(135deg, #7B61FF 0%, #EC4899 50%, #F472B6 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(236, 72, 153, 0.2);
+            animation: orb-proactive-gentle 4s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
+        }
+        .zoe-orb.error {
+            background: linear-gradient(135deg, #7B61FF 0%, #EF4444 50%, #F87171 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(239, 68, 68, 0.2);
+            animation: orb-error-shake 0.5s ease-in-out infinite, orb-liquid-swirl 3s ease-in-out infinite;
+        }
+        .zoe-orb.chatting {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 50%, #06B6D4 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.6), 0 0 60px rgba(123, 97, 255, 0.4);
+            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
+        }
+        .zoe-orb.badge::after {
+            content: ""; position: absolute; top: 8px; right: 8px; width: 12px; height: 12px;
+            background: #F59E0B; border-radius: 50%; border: 2px solid white;
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.8);
+            animation: badge-pulse 2s ease-in-out infinite;
+        }
+        @keyframes orb-liquid-swirl {
+            0%, 100% { background-position: 0% 50%; border-radius: 50% 45% 55% 50%; }
+            25% { background-position: 100% 50%; border-radius: 55% 50% 45% 55%; }
+            50% { background-position: 100% 100%; border-radius: 45% 55% 50% 45%; }
+            75% { background-position: 0% 100%; border-radius: 50% 45% 55% 50%; }
+        }
+        @keyframes orb-breathe {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        @keyframes orb-inner-glow {
+            0% { opacity: 0.3; transform: translate(-50%, -50%) scale(1); }
+            100% { opacity: 0.6; transform: translate(-50%, -50%) scale(1.1); }
+        }
+        @keyframes orb-thinking-gentle {
+            0%, 100% { transform: rotate(0deg); }
+            25% { transform: rotate(5deg); }
+            75% { transform: rotate(-5deg); }
+        }
+        @keyframes orb-proactive-gentle {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.08); }
+        }
+        @keyframes orb-error-shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-2px); }
+            75% { transform: translateX(2px); }
+        }
+        @keyframes badge-pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.2); }
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .timeline-entry {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+            
+            .timeline-entry .entry-card,
+            .timeline-entry .timeline-dot-container,
+            .timeline-entry .entry-spacer {
+                grid-column: 1 !important;
+            }
+            
+            .timeline-line { left: 20px; }
+            
+            .privacy-selector {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            /* Mobile: always stack photos vertically */
+            .entry-card.portrait-layout,
+            .entry-card.square-layout {
+                flex-direction: column !important;
+            }
+            
+            .entry-card.portrait-layout .entry-image,
+            .entry-card.square-layout .entry-image {
+                width: 100% !important;
+                height: 200px !important;
+                max-width: none !important;
+                min-width: 0 !important;
+                min-height: 0 !important;
+            }
+        }
+        
+
+        /* Navigation Bar - Standardized */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400;
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications { animation: notificationPulse 2s ease-in-out infinite; }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        
+        .api-indicator { 
+            font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 8px; 
+            display: flex; align-items: center; gap: 6px; 
+        }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.connecting { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.connecting::before { background: #ea580c; }
+        
+        /* Time/Date Display */
+        .time-date-display {
+            display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time { font-size: 16px; font-weight: 500; color: #333; line-height: 1.2; }
+        .current-date { font-size: 11px; color: #666; line-height: 1.2; }
+
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center; 
+        }
+        .notifications-title { font-size: 18px; font-weight: 600; color: #333; margin: 0; }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content { padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title { font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px; }
+        .notification-meta { font-size: 12px; color: #666; display: flex; gap: 10px; }
+        .notification-time { color: #7B61FF; font-weight: 500; }
+        .no-notifications { text-align: center; color: #666; font-size: 14px; padding: 40px 20px; }
+
+
+        /* Mobile Navigation Menu */
+        .mobile-nav-menu {
+            position: fixed; top: 0; left: -280px; width: 280px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.3); z-index: 2000;
+            transition: left 0.3s ease; display: flex; flex-direction: column;
+        }
+        .mobile-nav-menu.open { left: 0; }
+        .mobile-nav-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .mobile-nav-header h3 { margin: 0; font-size: 20px; font-weight: 600; color: #333; }
+        .mobile-nav-close {
+            width: 40px; height: 40px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 24px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: all 0.3s ease;
+        }
+        .mobile-nav-close:active { background: rgba(255, 255, 255, 0.5); }
+        .mobile-nav-content { flex: 1; overflow-y: auto; padding: 10px; }
+        .mobile-nav-item {
+            display: flex; align-items: center; gap: 12px; padding: 16px; margin: 4px 0;
+            color: #666; text-decoration: none; font-size: 16px; font-weight: 500;
+            border-radius: 12px; transition: all 0.3s ease;
+        }
+        .mobile-nav-item:active { background: rgba(123, 97, 255, 0.1); color: #7B61FF; }
+        .mobile-nav-item.active { background: rgba(123, 97, 255, 0.15); color: #7B61FF; font-weight: 600; }
+        .mobile-nav-item.logout { color: #ff4444; }
+        .mobile-nav-divider { height: 1px; background: rgba(255, 255, 255, 0.3); margin: 10px 0; }
+        .mobile-nav-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.3); z-index: 1999; opacity: 0;
+            pointer-events: none; transition: opacity 0.3s ease;
+        }
+        .mobile-nav-overlay.open { opacity: 1; pointer-events: auto; }
+        
+        /* Responsive: hide nav-menu on mobile, show mini-orb */
+        @media (max-width: 768px) {
+            .nav-menu { display: none !important; }
+            .mini-orb { display: flex !important; }
+        }
+        @media (min-width: 769px) {
+            .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
+        }
+    </style>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
+</head>
+<body>
+    <!-- Navigation -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="toggleMobileMenu()"></div>
+            <div class="nav-menu">
+                <a href="chat.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="lists.html" class="nav-item">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item active">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- Time/Date Display -->
+            <div class="time-date-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('people.html')">
+                    <div class="more-item-icon">👥</div>
+                    <div class="more-item-label">People</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Navigation Menu -->
+    <div class="mobile-nav-menu" id="mobileNavMenu">
+        <div class="mobile-nav-header">
+            <h3>Navigation</h3>
+            <button class="mobile-nav-close" onclick="toggleMobileMenu()">✕</button>
+        </div>
+        <div class="mobile-nav-content">
+            <a href="chat.html" class="mobile-nav-item">💬 Chat</a>
+            <a href="dashboard.html" class="mobile-nav-item">📊 Dashboard</a>
+            <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
+            <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
+            <a href="journal.html" class="mobile-nav-item active">📔 Journal</a>
+            <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
+            <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
+            <div class="mobile-nav-divider"></div>
+            <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
+        </div>
+    </div>
+    <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+            </div>
+            
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+                </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- View Controls -->
+        <div class="view-controls">
+            <button class="add-entry-btn" onclick="openNewEntry()">
+                <span style="font-size: 18px;">+</span>
+                <span>New Entry</span>
+            </button>
+            
+            <div style="flex: 1;"></div>
+            
+            <div class="search-bar">
+                <input type="text" class="search-input" placeholder="Search entries...">
+                <span class="search-icon">🔍</span>
+        </div>
+
+            <div class="view-tabs">
+                <button class="view-tab active" data-view="timeline">Timeline</button>
+                <button class="view-tab" data-view="journeys">Journeys</button>
+            </div>
+            </div>
+
+        <!-- Timeline View -->
+        <div class="timeline-view active" id="timelineView">
+            <div class="timeline-line"></div>
+            
+            <div class="timeline-month-separator">
+                <div class="month-label">October 2025</div>
+                </div>
+            
+            <div class="timeline-entry">
+                <div class="entry-spacer"></div>
+                <div class="timeline-dot-container">
+                    <div class="timeline-dot"></div>
+                    <div class="timeline-date">Oct 9<br>Today</div>
+            </div>
+                <div class="entry-card" onclick="openReadEntry()">
+                    <img src="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&h=400&fit=crop" alt="Mountain" class="entry-image">
+                    <div class="entry-content">
+                        <div class="entry-header">
+                            <div>
+                                <div class="entry-title">Summit Views</div>
+                                <div class="entry-time">7:30 AM · 8 min read</div>
+        </div>
+                </div>
+                        <div class="entry-text">
+                            Reached the peak at sunrise this morning. The climb was challenging, but standing above the clouds watching the world wake up made every step worth it.
+            </div>
+                        <div class="entry-footer">
+                            <div class="entry-tags">
+                                <span class="tag">Adventure</span>
+                                <span class="tag person-tag">👤 Alex</span>
+                                <span class="tag place-tag">📍 Eagle Peak</span>
+                    </div>
+                            <div class="privacy-badge">
+                                <div class="privacy-icon">
+                                    <div class="privacy-inner-circle"></div>
+                </div>
+                                <span>Inner Circle</span>
+            </div>
+        </div>
+                    </div>
+                    </div>
+                </div>
+                
+            <div class="timeline-entry">
+                <div class="entry-card">
+                    <img src="https://images.unsplash.com/photo-1495521821757-a1efb6729352?w=800&h=400&fit=crop" alt="Books" class="entry-image">
+                    <div class="entry-content">
+                        <div class="entry-header">
+                            <div>
+                                <div class="entry-title">Sunday Reading</div>
+                                <div class="entry-time">Oct 6 · 5 min read</div>
+                        </div>
+                    </div>
+                        <div class="entry-text">
+                            Rainy Sunday = perfect reading weather. Finished "Atomic Habits" today. The 1% improvement philosophy really resonates.
+                </div>
+                        <div class="entry-footer">
+                            <div class="entry-tags">
+                                <span class="tag">Books</span>
+                                <span class="tag">Self-Improvement</span>
+                                <span class="tag place-tag">📍 Home</span>
+            </div>
+                            <div class="privacy-badge">
+                                <div class="privacy-icon">
+                                    <div class="privacy-private"></div>
+        </div>
+                                <span>Private</span>
+    </div>
+            </div>
+                </div>
+                </div>
+                <div class="timeline-dot-container">
+                    <div class="timeline-dot"></div>
+                    <div class="timeline-date">Oct 6</div>
+                </div>
+                <div class="entry-spacer"></div>
+                </div>
+            </div>
+
+        <!-- Journeys View -->
+        <div class="journeys-view" id="journeysView">
+            <div class="current-journey">
+                <div class="current-journey-header">
+                    <div>
+                        <h2 class="journey-title">🧳 Current Journey</h2>
+                        <p class="journey-subtitle">Southeast Asia Adventure · Started Sep 1, 2025</p>
+        </div>
+                    <button class="check-in-btn">
+                        <span>📍</span>
+                        <span>Check In</span>
+                    </button>
+    </div>
+
+                <div class="journey-stops-horizontal">
+                    <div class="journey-stop-h completed">
+                        <div class="stop-marker-h">✓</div>
+                        <div class="stop-info-h">
+                            <div class="stop-name-h">Bangkok</div>
+                            <div class="stop-dates-h">Sep 1-5</div>
+        </div>
+    </div>
+                    <div class="journey-stop-h completed">
+                        <div class="stop-marker-h">✓</div>
+                        <div class="stop-info-h">
+                            <div class="stop-name-h">Chiang Mai</div>
+                            <div class="stop-dates-h">Sep 6-10</div>
+                </div>
+            </div>
+                    <div class="journey-stop-h current">
+                        <div class="stop-marker-h">📍</div>
+                        <div class="stop-info-h">
+                            <div class="stop-name-h">Hanoi</div>
+                            <div class="stop-dates-h">Present</div>
+        </div>
+    </div>
+                    <div class="journey-stop-h upcoming">
+                        <div class="stop-marker-h">○</div>
+                        <div class="stop-info-h">
+                            <div class="stop-name-h">Ho Chi Minh</div>
+                            <div class="stop-dates-h">Upcoming</div>
+            </div>
+        </div>
+    </div>
+            </div>
+            
+            <h3 class="section-header">Past Journeys</h3>
+            
+            <div class="past-journeys-grid">
+                <div class="journey-card">
+                    <img src="https://images.unsplash.com/photo-1540959733332-eab4deabeeaf?w=400&fit=crop" alt="Tokyo" class="journey-image">
+                    <div class="journey-content">
+                        <div class="journey-location">📍 Tokyo, Japan</div>
+                        <div class="journey-dates">Aug 15-22, 2025</div>
+                        <div class="journey-entries">8 entries · 2,341 words</div>
+                    </div>
+                    </div>
+                
+                <div class="journey-card">
+                    <img src="https://images.unsplash.com/photo-1502602898657-3e91760cbb34?w=400&fit=crop" alt="Paris" class="journey-image">
+                    <div class="journey-content">
+                        <div class="journey-location">📍 Paris, France</div>
+                        <div class="journey-dates">Jul 1-10, 2025</div>
+                        <div class="journey-entries">12 entries · 3,892 words</div>
+                    </div>
+                        </div>
+                
+                <div class="journey-card">
+                    <img src="https://images.unsplash.com/photo-1537996194471-e657df975ab4?w=400&fit=crop" alt="Bali" class="journey-image">
+                    <div class="journey-content">
+                        <div class="journey-location">📍 Bali, Indonesia</div>
+                        <div class="journey-dates">Jun 5-18, 2025</div>
+                        <div class="journey-entries">15 entries · 4,521 words</div>
+                        </div>
+                    </div>
+                    </div>
+                            </div>
+                            </div>
+
+    <!-- Read Entry Modal -->
+    <div class="entry-modal" id="readEntryModal">
+        <div class="entry-modal-content">
+            <div class="read-modal-header">
+                <img src="https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=1200&h=600&fit=crop" alt="Mountain" class="read-modal-image">
+                <button class="entry-modal-close" onclick="closeReadEntry()">×</button>
+                        </div>
+            <div class="read-modal-body">
+                <div class="read-modal-title">Summit Views</div>
+                <div class="read-modal-meta">
+                    <span>📅 October 9, 2025</span>
+                    <span>🕐 7:30 AM</span>
+                    <span>📍 Eagle Peak</span>
+                    <span>📖 8 min read</span>
+                    </div>
+                <div class="read-modal-text">
+                    <p>Reached the peak at sunrise this morning. The climb was challenging, but standing above the clouds watching the world wake up made every step worth it. There's something profound about being this high up—it puts everything into perspective.</p>
+                    
+                    <p>Started the climb at 4:30 AM with headlamps cutting through the darkness. The trail was steep, and my legs were burning by mile two. But then, slowly, the sky started to lightening. First just a hint of blue, then streaks of orange and pink painting the horizon.</p>
+                    
+                    <p>When we finally broke through the tree line and saw the summit, that's when it hit me—all the training, the early mornings, the sore muscles—it was all for this moment.</p>
+                    </div>
+                <div class="read-modal-tags"></div>
+                
+                <div class="read-modal-actions">
+                    <button class="btn-edit" onclick="editCurrentEntry()">
+                        <span>✏️</span>
+                        <span>Edit</span>
+                    </button>
+                    <button class="btn-delete" onclick="deleteCurrentEntry()">
+                        <span>🗑️</span>
+                        <span>Delete</span>
+                    </button>
+                    <button class="btn-share" onclick="shareCurrentEntry()">
+                        <span>↗️</span>
+                        <span>Share</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Entry Modal -->
+    <div class="entry-modal" id="newEntryModal">
+        <div class="entry-modal-content">
+            <div class="entry-form-header">
+                <div class="entry-form-title">✍️ New Entry</div>
+                <div class="auto-save-indicator">
+                    <div class="save-dot"></div>
+                    <span>Auto-saved</span>
+                </div>
+                <button class="entry-form-close" onclick="closeNewEntry()">×</button>
+            </div>
+            
+            <div class="entry-form-body">
+                <div class="form-field">
+                    <label class="form-label">Title</label>
+                    <input type="text" class="form-input" placeholder="Give your entry a title...">
+            </div>
+                
+                <div class="form-field">
+                    <label class="form-label">Your Thoughts</label>
+                    <textarea class="form-textarea" id="entryContent" placeholder="Start writing your thoughts..."></textarea>
+        </div>
+
+                <div class="form-field">
+                    <label class="form-label">Photos</label>
+                    <input type="file" class="filepond" name="photos" multiple 
+                           data-allow-reorder="true"
+                           data-max-file-size="10MB"
+                           data-max-files="10">
+    </div>
+
+                <div class="form-field">
+                    <label class="form-label">People</label>
+                    <div class="tag-input-container">
+                        <input type="text" class="tag-input" placeholder="Tag people...">
+                    </div>
+                </div>
+                
+                <div class="form-field">
+                    <label class="form-label">Location</label>
+                    <div class="tag-input-container">
+                        <input type="text" class="tag-input" placeholder="Where are you?">
+                    </div>
+                    </div>
+                
+                <div class="form-field">
+                    <label class="form-label">Tags</label>
+                    <div class="tag-input-container">
+                        <input type="text" class="tag-input" placeholder="Add tags...">
+                        </div>
+                    </div>
+                
+                <div class="form-field">
+                    <label class="form-label">Privacy (AT Protocol)</label>
+                    <div class="privacy-selector">
+                        <div class="privacy-option" data-privacy="private">
+                            <div class="privacy-option-icon">
+                                <div class="privacy-private"></div>
+                </div>
+                            <div class="privacy-option-label">Private</div>
+                            <div class="privacy-option-desc">Just you</div>
+                    </div>
+                        <div class="privacy-option selected" data-privacy="inner-circle">
+                            <div class="privacy-option-icon">
+                                <div class="privacy-inner-circle"></div>
+                </div>
+                            <div class="privacy-option-label">Inner Circle</div>
+                            <div class="privacy-option-desc">5-10 people</div>
+                    </div>
+                        <div class="privacy-option" data-privacy="circle">
+                            <div class="privacy-option-icon">
+                                <div class="privacy-circle"></div>
+                            </div>
+                            <div class="privacy-option-label">Circle</div>
+                            <div class="privacy-option-desc">Trusted network</div>
+                    </div>
+                        <div class="privacy-option" data-privacy="public">
+                            <div class="privacy-option-icon">
+                                <div class="privacy-public"></div>
+                    </div>
+                            <div class="privacy-option-label">Public</div>
+                            <div class="privacy-option-desc">Everyone</div>
+                </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="entry-form-actions">
+                <div class="action-buttons">
+                    <button class="btn-secondary" onclick="saveDraft()">Save Draft</button>
+                    </div>
+                <button class="btn-primary" onclick="publishEntry()">Publish Entry</button>
+                </div>
+        </div>
+    </div>
+
+    <!-- FilePond Scripts -->
+    <script src="https://unpkg.com/filepond-plugin-image-preview/dist/filepond-plugin-image-preview.min.js"></script>
+    <script src="https://unpkg.com/filepond-plugin-image-resize/dist/filepond-plugin-image-resize.min.js"></script>
+    <script src="https://unpkg.com/filepond-plugin-image-transform/dist/filepond-plugin-image-transform.min.js"></script>
+    <script src="https://unpkg.com/filepond-plugin-file-validate-size/dist/filepond-plugin-file-validate-size.min.js"></script>
+    <script src="https://unpkg.com/filepond-plugin-file-validate-type/dist/filepond-plugin-file-validate-type.min.js"></script>
+    <script src="https://unpkg.com/filepond/dist/filepond.min.js"></script>
+    
+    <!-- Browser Image Compression -->
+    <script src="https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.2/dist/browser-image-compression.js"></script>
+    
+    <!-- Zoe Auth (must load first) -->
+    <script src="/js/auth.js"></script>
+    <!-- Journal API Integration -->
+    <script src="/js/journal-api.js"></script>
+    <script src="/js/journal-ui-enhancements.js"></script>
+
+    <script>
+        // Initialize FilePond
+        function initializeFilePond() {
+            // Register FilePond plugins
+            FilePond.registerPlugin(
+                FilePondPluginImagePreview,
+                FilePondPluginImageResize,
+                FilePondPluginImageTransform,
+                FilePondPluginFileValidateSize,
+                FilePondPluginFileValidateType
+            );
+            
+            // Create FilePond instance
+            const inputElement = document.querySelector('input[type="file"].filepond');
+            const pond = FilePond.create(inputElement, {
+                labelIdle: '📷 Drop images here or <span class="filepond--label-action">Browse</span><br><small>Supports iPhone HEIC, JPG, PNG, GIF, WEBP (up to 50MB)</small>',
+                acceptedFileTypes: ['image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp', 'image/heic', 'image/heif'],
+                maxFileSize: '50MB',
+                maxFiles: 10,
+                credits: false,
+                allowReorder: true,
+                allowMultiple: true,
+                server: {
+                    process: async (fieldName, file, metadata, load, error, progress, abort) => {
+                        const formData = new FormData();
+                        formData.append('files', file, file.name);  // Explicitly set filename
+                        // Enforce authenticated user_id for user isolation
+                        const session = window.zoeAuth?.getCurrentSession?.();
+                        const userId = session?.user_info?.user_id || session?.user_id;
+                        if (!userId) {
+                            console.error('❌ Upload blocked: missing user_id/session');
+                            if (typeof window.zoeAuth?.enforceAuth === 'function') {
+                                window.zoeAuth.enforceAuth();
+                            }
+                            alert('Authentication required. Please log in again.');
+                            error('Authentication required');
+                            abort();
+                            return;
+                        }
+                        formData.append('user_id', userId);
+                        
+                        console.log('📤 Uploading file:', file.name, 'Size:', (file.size / 1024 / 1024).toFixed(2), 'MB');
+                        
+                        try {
+                            const xhr = new XMLHttpRequest();
+                            xhr.open('POST', '/api/media/upload');
+                            // Include session header; XHR bypasses fetch interceptor
+                            try {
+                                const sessionId = window.zoeAuth?.getSession?.();
+                                if (sessionId) {
+                                    xhr.setRequestHeader('X-Session-ID', sessionId);
+                                }
+                            } catch (_e) {}
+                            
+                            xhr.upload.onprogress = (e) => {
+                                if (e.lengthComputable) {
+                                    progress(e.lengthComputable, e.loaded, e.total);
+                                }
+                            };
+                            
+                            xhr.onload = () => {
+                                if (xhr.status >= 200 && xhr.status < 300) {
+                                    const response = JSON.parse(xhr.responseText);
+                                    // Store uploaded photos globally
+                                    if (window.uploadedPhotos) {
+                                        window.uploadedPhotos.push(...response);
+                                    } else {
+                                        window.uploadedPhotos = response;
+                                    }
+                                    load(response[0].photo_id);
+                                } else {
+                                    // Show detailed error message
+                                    try {
+                                        const errorData = JSON.parse(xhr.responseText);
+                                        const errorMsg = errorData.detail || errorData.message || 'Upload failed';
+                                        console.error('Upload error:', errorMsg);
+                                        error(errorMsg);
+                                    } catch (e) {
+                                        console.error('Upload failed with status:', xhr.status, xhr.responseText);
+                                        error(`Upload failed (${xhr.status})`);
+                                    }
+                                }
+                            };
+                            
+                            xhr.onerror = () => {
+                                console.error('Network error during upload');
+                                error('Network error - upload failed');
+                            };
+                            
+                            xhr.send(formData);
+                            
+                            return {
+                                abort: () => {
+                                    xhr.abort();
+                                    abort();
+                                }
+                            };
+                        } catch (err) {
+                            console.error('Upload error:', err);
+                            error('Upload failed');
+                        }
+                    }
+                },
+                onaddfile: (error, file) => {
+                    if (!error) {
+                        console.log('File added:', file.filename);
+                    }
+                },
+                onremovefile: (error, file) => {
+                    console.log('File removed:', file.filename);
+                }
+            });
+        }
+        
+        // Initialize global state
+        window.uploadedPhotos = [];
+        
+        // Initialize when modal opens
+        const newEntryModal = document.getElementById('newEntryModal');
+        let initialized = false;
+        
+        window.openNewEntry = function() {
+            newEntryModal.classList.add('active');
+            if (!initialized) {
+                setTimeout(() => {
+                    initializeFilePond();
+                    initialized = true;
+                }, 100);
+            }
+            // Reset uploaded photos for new entry
+            window.uploadedPhotos = [];
+        }
+        
+        window.closeNewEntry = function() {
+            newEntryModal.classList.remove('active');
+        }
+        
+        // Update time/date display
+        function updateTimeDate() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            const timeElement = document.getElementById('currentTime');
+            const dateElement = document.getElementById('currentDate');
+            
+            if (timeElement) timeElement.textContent = timeString;
+            if (dateElement) dateElement.textContent = dateString;
+        }
+        
+        // Check API status
+        async function checkApiStatus() {
+            try {
+                const response = await fetch('/api/health', {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' }
+                });
+                
+                const indicator = document.getElementById('apiStatus');
+                if (response.ok) {
+                    indicator.classList.remove('offline', 'connecting');
+                    indicator.classList.add('online');
+                    indicator.textContent = 'Online';
+            } else {
+                    indicator.classList.remove('online', 'connecting');
+                    indicator.classList.add('offline');
+                    indicator.textContent = 'API Offline';
+                }
+                } catch (error) {
+                const indicator = document.getElementById('apiStatus');
+                indicator.classList.remove('online', 'connecting');
+                indicator.classList.add('offline');
+                indicator.textContent = 'API Offline';
+            }
+        }
+        
+        /**
+         * Detect photo orientation and apply appropriate layout class
+         */
+        function applyOrientationLayout(entryCard, photoUrl) {
+            const img = new Image();
+            
+            img.onload = function() {
+                const aspectRatio = this.width / this.height;
+                
+                // Remove any existing layout classes
+                entryCard.classList.remove('portrait-layout', 'landscape-layout', 'square-layout');
+                
+                if (aspectRatio < 0.85) {
+                    // Portrait (taller than wide)
+                    entryCard.classList.add('portrait-layout');
+                    console.log('📱 Portrait layout:', this.width, 'x', this.height, 'aspect:', aspectRatio.toFixed(2));
+                } else if (aspectRatio > 1.15) {
+                    // Landscape (wider than tall)
+                    entryCard.classList.add('landscape-layout');
+                    console.log('🖼️ Landscape layout:', this.width, 'x', this.height, 'aspect:', aspectRatio.toFixed(2));
+                } else {
+                    // Square-ish (ratio ~1:1)
+                    entryCard.classList.add('square-layout');
+                    console.log('⬜ Square layout:', this.width, 'x', this.height, 'aspect:', aspectRatio.toFixed(2));
+                }
+            };
+            
+            img.onerror = function() {
+                // Default to landscape if can't load
+                entryCard.classList.add('landscape-layout');
+                console.warn('Failed to load image for orientation detection, using landscape layout');
+            };
+            
+            img.src = photoUrl;
+        }
+        
+        /**
+         * Format date for display
+         */
+        function formatEntryDate(dateString) {
+            const date = new Date(dateString);
+            const now = new Date();
+            const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));
+            
+            if (diffDays === 0) return 'Today';
+            if (diffDays === 1) return 'Yesterday';
+            if (diffDays < 7) return date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            return date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+        }
+        
+        /**
+         * Format time for display
+         */
+        function formatEntryTime(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        }
+        
+        /**
+         * Truncate text to specified length
+         */
+        function truncateText(text, maxLength) {
+            if (!text) return '';
+            if (text.length <= maxLength) return text;
+            return text.substring(0, maxLength).trim() + '...';
+        }
+        
+        /**
+         * Render a single journal entry with adaptive layout
+         */
+        function renderJournalEntry(entry) {
+            const entryCard = document.createElement('div');
+            entryCard.className = 'entry-card';
+            entryCard.onclick = () => openReadEntry(entry);
+            
+            // Parse photos if it's a JSON string
+            let photos = [];
+            if (entry.photos) {
+                if (typeof entry.photos === 'string') {
+                    try {
+                        photos = JSON.parse(entry.photos);
+                    } catch (e) {
+                        console.warn('Failed to parse photos JSON:', entry.photos);
+                    }
+                } else if (Array.isArray(entry.photos)) {
+                    photos = entry.photos;
+                }
+            }
+            
+            // Build HTML
+            let html = '';
+            
+            // Add photo if available
+            if (photos && photos.length > 0) {
+                const photoUrl = photos[0]; // Use first photo
+                html += `<img src="${photoUrl}" alt="${entry.title || 'Journal entry'}" class="entry-image" loading="lazy">`;
+            }
+            
+            // Add content
+            html += `
+                <div class="entry-content">
+                    <div class="entry-header">
+                        <div>
+                            <div class="entry-title">${entry.title || 'Untitled'}</div>
+                            <div class="entry-time">${formatEntryTime(entry.created_at)} · ${estimateReadTime(entry.content)} min read</div>
+                        </div>
+                    </div>
+                    <div class="entry-text">${truncateText(entry.content, 150)}</div>
+                    ${renderEntryFooter(entry)}
+                </div>
+            `;
+            
+            entryCard.innerHTML = html;
+            
+            // Apply orientation-based layout if photo exists
+            if (photos && photos.length > 0) {
+                applyOrientationLayout(entryCard, photos[0]);
+            } else {
+                entryCard.classList.add('text-only');
+            }
+            
+            return entryCard;
+        }
+        
+        /**
+         * Estimate reading time
+         */
+        function estimateReadTime(text) {
+            if (!text) return 1;
+            const wordsPerMinute = 200;
+            const words = text.trim().split(/\s+/).length;
+            return Math.max(1, Math.ceil(words / wordsPerMinute));
+        }
+        
+        /**
+         * Render entry footer (tags, privacy)
+         */
+        function renderEntryFooter(entry) {
+            let html = '<div class="entry-footer">';
+            
+            // Tags
+            html += '<div class="entry-tags">';
+            if (entry.tags && entry.tags.length > 0) {
+                entry.tags.forEach(tag => {
+                    html += `<span class="tag">${tag}</span>`;
+                });
+            }
+            if (entry.place_tags && entry.place_tags.length > 0) {
+                entry.place_tags.forEach(place => {
+                    html += `<span class="tag place-tag">📍 ${place}</span>`;
+                });
+            }
+            html += '</div>';
+            
+            // Privacy badge
+            const privacyLabels = {
+                'private': 'Private',
+                'inner_circle': 'Inner Circle',
+                'family': 'Family',
+                'public': 'Public'
+            };
+            html += `
+                <div class="privacy-badge">
+                    <div class="privacy-icon">
+                        <div class="privacy-inner-circle"></div>
+                    </div>
+                    <span>${privacyLabels[entry.privacy_level] || 'Private'}</span>
+                </div>
+            `;
+            
+            html += '</div>';
+            return html;
+        }
+        
+        /**
+         * Legacy inline loader (kept for compatibility but not used)
+         */
+        async function loadJournalEntriesInline() {
+            try {
+                // Deprecated: use journal-api.js loader instead
+                const session = window.zoeAuth?.getCurrentSession?.();
+                const userId = session?.user_info?.user_id || session?.user_id;
+                const qs = userId ? `?user_id=${encodeURIComponent(userId)}` : '';
+                const response = await fetch(`/api/journal/entries${qs}`, {
+                    method: 'GET',
+                    headers: { 'Accept': 'application/json' }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to load entries: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                const entries = data.entries || data; // Handle both {entries: []} and direct array
+                
+                if (!entries || entries.length === 0) {
+                    console.log('No entries found - showing demo content');
+                    return; // Keep demo entries if no real entries
+                }
+                
+                // Find the timeline view container
+                const timelineView = document.getElementById('timelineView');
+                if (!timelineView) {
+                    console.warn('Timeline view element not found');
+                    return;
+                }
+                
+                // Clear existing entries (keep timeline-line)
+                const timelineLine = timelineView.querySelector('.timeline-line');
+                timelineView.innerHTML = '';
+                if (timelineLine) {
+                    timelineView.appendChild(timelineLine);
+                }
+                
+                // Sort entries by date (newest first)
+                entries.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+                
+                // Group entries by date for display
+                const entriesByDate = {};
+                entries.forEach(entry => {
+                    const dateKey = formatEntryDate(entry.created_at);
+                    if (!entriesByDate[dateKey]) {
+                        entriesByDate[dateKey] = [];
+                    }
+                    entriesByDate[dateKey].push(entry);
+                });
+                
+                // Render entries
+                Object.keys(entriesByDate).forEach((dateLabel, index) => {
+                    // Add month separator if first entry of the day
+                    if (index === 0 || dateLabel.includes('Today') || dateLabel.includes('Yesterday')) {
+                        const monthSeparator = document.createElement('div');
+                        monthSeparator.className = 'timeline-month-separator';
+                        const date = new Date(entriesByDate[dateLabel][0].created_at);
+                        const monthLabel = date.toLocaleDateString([], { month: 'long', year: 'numeric' });
+                        monthSeparator.innerHTML = `<div class="month-label">${monthLabel}</div>`;
+                        timelineView.appendChild(monthSeparator);
+                    }
+                    
+                    const dateEntries = entriesByDate[dateLabel];
+                    
+                    dateEntries.forEach(entry => {
+                        const timelineEntry = document.createElement('div');
+                        timelineEntry.className = 'timeline-entry';
+                        
+                        timelineEntry.innerHTML = `
+                            <div class="entry-spacer"></div>
+                            <div class="timeline-dot-container">
+                                <div class="timeline-dot"></div>
+                            </div>
+                            <div id="entry-card-${entry.id}"></div>
+                        `;
+                        
+                        timelineView.appendChild(timelineEntry);
+                        
+                        // Render the entry card
+                        const entryCardContainer = timelineEntry.querySelector(`#entry-card-${entry.id}`);
+                        const entryCard = renderJournalEntry(entry);
+                        entryCardContainer.replaceWith(entryCard);
+                    });
+                });
+                
+                // Done
+                
+            } catch (error) {
+                // Keep demo entries on error
+            }
+        }
+
+        // Allow journal-api.js to handle loading entries
+        // window.loadJournalEntries is defined in journal-api.js
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            updateTimeDate();
+            setInterval(updateTimeDate, 60000); // Update every minute
+            
+            checkApiStatus();
+            setInterval(checkApiStatus, 30000); // Check every 30 seconds
+            
+            // Load notifications only when authenticated
+            if (window.zoeAuth?.isAuthenticated?.()) {
+                loadNotifications();
+            }
+            
+            // Defer journal loading to gated logic in journal-api.js
+        });
+
+        // View switching
+        const viewTabs = document.querySelectorAll('.view-tab');
+        const views = {
+            timeline: document.getElementById('timelineView'),
+            journeys: document.getElementById('journeysView')
+        };
+
+        viewTabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                const viewName = tab.dataset.view;
+                viewTabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                Object.values(views).forEach(v => v.classList.remove('active'));
+                views[viewName].classList.add('active');
+            });
+        });
+
+        // Entry modals - use window.currentEntry for global access
+        window.currentEntry = null;
+        
+        function openReadEntry(entry) {
+            window.currentEntry = entry;
+            const modal = document.getElementById('readEntryModal');
+            
+            // Parse photos
+            let photos = [];
+            if (entry.photos) {
+                if (typeof entry.photos === 'string') {
+                    try {
+                        photos = JSON.parse(entry.photos);
+                    } catch (e) {
+                        console.warn('Failed to parse photos JSON:', entry.photos);
+                    }
+                } else if (Array.isArray(entry.photos)) {
+                    photos = entry.photos;
+                }
+            }
+            
+            // Update modal header image
+            const headerImg = modal.querySelector('.read-modal-image');
+            if (photos && photos.length > 0) {
+                headerImg.src = photos[0];
+                headerImg.alt = entry.title || 'Journal entry';
+                headerImg.style.display = 'block';
+            } else {
+                headerImg.style.display = 'none';
+            }
+            
+            // Update title
+            const titleEl = modal.querySelector('.read-modal-title');
+            titleEl.textContent = entry.title || 'Untitled';
+            
+            // Update metadata
+            const metaEl = modal.querySelector('.read-modal-meta');
+            const date = new Date(entry.created_at);
+            const dateStr = date.toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' });
+            const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            const readTime = estimateReadTime(entry.content);
+            
+            let metaHTML = `<span>📅 ${dateStr}</span>`;
+            metaHTML += `<span>🕐 ${timeStr}</span>`;
+            if (entry.location) metaHTML += `<span>📍 ${entry.location}</span>`;
+            if (entry.place_tags && entry.place_tags.length > 0) {
+                metaHTML += `<span>📍 ${entry.place_tags.join(', ')}</span>`;
+            }
+            metaHTML += `<span>📖 ${readTime} min read</span>`;
+            metaEl.innerHTML = metaHTML;
+            
+            // Update content
+            const textEl = modal.querySelector('.read-modal-text');
+            textEl.textContent = entry.content || '';
+            
+            // Update tags
+            const tagsEl = modal.querySelector('.read-modal-tags');
+            tagsEl.innerHTML = '';
+            if (entry.tags && entry.tags.length > 0) {
+                entry.tags.forEach(tag => {
+                    const tagSpan = document.createElement('span');
+                    tagSpan.className = 'tag';
+                    tagSpan.textContent = tag;
+                    tagsEl.appendChild(tagSpan);
+                });
+            }
+            if (entry.place_tags && entry.place_tags.length > 0) {
+                entry.place_tags.forEach(place => {
+                    const tagSpan = document.createElement('span');
+                    tagSpan.className = 'tag place-tag';
+                    tagSpan.textContent = `📍 ${place}`;
+                    tagsEl.appendChild(tagSpan);
+                });
+            }
+            
+            // Add people if available
+            if (entry.people && entry.people.length > 0) {
+                entry.people.forEach(person => {
+                    const tagSpan = document.createElement('span');
+                    tagSpan.className = 'tag person-tag';
+                    tagSpan.textContent = `👤 ${person.name || person}`;
+                    tagsEl.appendChild(tagSpan);
+                });
+            }
+            
+            modal.classList.add('active');
+        }
+
+        function closeReadEntry() {
+            document.getElementById('readEntryModal').classList.remove('active');
+            window.currentEntry = null;
+        }
+        
+        function editCurrentEntry() {
+            if (!window.currentEntry) return;
+            
+            // Close read modal
+            closeReadEntry();
+            
+            // TODO: Implement edit functionality
+            // For now, just show alert
+            alert(`Edit functionality coming soon!\n\nEntry ID: ${window.currentEntry.id}\nTitle: ${window.currentEntry.title}`);
+            
+            // Later: Open edit modal with pre-filled data
+            // openEditEntry(currentEntry);
+        }
+        
+        async function deleteCurrentEntry() {
+            if (!window.currentEntry) return;
+            
+            const confirmed = confirm(`Are you sure you want to delete "${window.currentEntry.title}"?\n\nThis action cannot be undone.`);
+            if (!confirmed) return;
+            
+            try {
+                const session = window.zoeAuth?.getCurrentSession?.();
+                const userId = session?.user_info?.user_id || session?.user_id;
+                const qs = userId ? `?user_id=${encodeURIComponent(userId)}` : '';
+                const response = await fetch(`/api/journal/${window.currentEntry.id}${qs}`, {
+                    method: 'DELETE'
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Failed to delete entry: ${response.status}`);
+                }
+                
+                console.log('✅ Entry deleted:', window.currentEntry.id);
+                
+                // Close modal
+                closeReadEntry();
+                
+                // Reload entries via main API module if present
+                if (typeof window.loadJournalEntries === 'function') {
+                    window.loadJournalEntries();
+                }
+                
+                // Show success message
+                alert('✅ Entry deleted successfully');
+                
+            } catch (error) {
+                console.error('Failed to delete entry:', error);
+                alert('❌ Failed to delete entry. Please try again.');
+            }
+        }
+        
+        function shareCurrentEntry() {
+            if (!window.currentEntry) return;
+            
+            // Create shareable text
+            const shareText = `${window.currentEntry.title}\n\n${window.currentEntry.content}`;
+            
+            // Try Web Share API first
+            if (navigator.share) {
+                navigator.share({
+                    title: window.currentEntry.title,
+                    text: shareText,
+                }).then(() => {
+                    console.log('✅ Entry shared successfully');
+                }).catch((error) => {
+                    console.log('Share cancelled or failed:', error);
+                });
+            } else {
+                // Fallback: Copy to clipboard
+                navigator.clipboard.writeText(shareText).then(() => {
+                    alert('✅ Entry copied to clipboard!');
+                }).catch((error) => {
+                    console.error('Failed to copy:', error);
+                    alert('❌ Failed to copy entry');
+                });
+            }
+        }
+
+        // Close modals on background click
+        document.getElementById('readEntryModal').addEventListener('click', (e) => {
+            if (e.target.id === 'readEntryModal') closeReadEntry();
+        });
+
+        document.getElementById('newEntryModal').addEventListener('click', (e) => {
+            if (e.target.id === 'newEntryModal') closeNewEntry();
+        });
+
+        // Privacy selector
+        document.querySelectorAll('.privacy-option').forEach(option => {
+            option.addEventListener('click', () => {
+                document.querySelectorAll('.privacy-option').forEach(o => o.classList.remove('selected'));
+                option.classList.add('selected');
+            });
+        });
+
+        // Search functionality (placeholder)
+        document.querySelector('.search-input').addEventListener('input', (e) => {
+            const searchTerm = e.target.value.toLowerCase();
+            // TODO: Implement search filtering
+            console.log('Searching for:', searchTerm);
+        });
+        
+        // More overlay functions
+        function openMoreOverlay() {
+            document.getElementById('moreOverlay').classList.add('active');
+        }
+        
+        function closeMoreOverlay() {
+            document.getElementById('moreOverlay').classList.remove('active');
+        }
+        
+        // Notifications functions
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+        }
+
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+
+        // Mobile menu toggle
+        function toggleMobileMenu() {
+            if (window.innerWidth > 768) { window.location.href = 'index.html'; return; }
+            const menu = document.getElementById('mobileNavMenu');
+            const overlay = document.getElementById('mobileNavOverlay');
+            if (menu && overlay) {
+                menu.classList.toggle('open');
+                overlay.classList.toggle('open');
+            }
+        }
+
+        function handleLogout() {
+            if (window.innerWidth <= 768) {
+                toggleMobileMenu();
+            }
+            logout();
+        }
+
+        async function loadNotifications() {
+            try {
+                const response = await fetch('/api/reminders/notifications/pending');
+                const data = await response.json();
+                const notifications = data.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            // Update notification button indicator
+            if (notifications.length > 0 && notificationBtn) {
+                notificationBtn.classList.add('has-notifications');
+            } else if (notificationBtn) {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${formatNotificationTime(notification.notification_time)}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function formatNotificationTime(timeStr) {
+            const date = new Date(timeStr);
+            const now = new Date();
+            const diff = now - date;
+            const minutes = Math.floor(diff / 60000);
+            const hours = Math.floor(minutes / 60);
+            const days = Math.floor(hours / 24);
+            
+            if (minutes < 1) return 'Just now';
+            if (minutes < 60) return `${minutes}m ago`;
+            if (hours < 24) return `${hours}h ago`;
+            return `${days}d ago`;
+        }
+        
+        // Helper function for navigation
+        function navigateToPage(page) {
+            window.location.href = page;
+        }
+        
+        // Auto-save functionality
+        let autoSaveTimeout;
+        function triggerAutoSave() {
+            clearTimeout(autoSaveTimeout);
+            autoSaveTimeout = setTimeout(() => {
+                const content = document.getElementById('entryContent')?.value;
+                const title = document.querySelector('#newEntryModal .form-input')?.value;
+                
+                if (content || title) {
+                    // Save to localStorage for now
+                    const draft = {
+                        title: title || '',
+                        content: content || '',
+                        timestamp: new Date().toISOString()
+                    };
+                    
+                    localStorage.setItem('journal_draft', JSON.stringify(draft));
+                    console.log('Auto-saved draft');
+                }
+            }, 2000);
+        }
+        
+        // Load draft on open
+        function loadDraft() {
+            const draft = localStorage.getItem('journal_draft');
+            if (draft) {
+                try {
+                    const data = JSON.parse(draft);
+                    const titleInput = document.querySelector('#newEntryModal .form-input');
+                    const contentArea = document.getElementById('entryContent');
+                    
+                    if (titleInput) titleInput.value = data.title || '';
+                    if (contentArea) contentArea.value = data.content || '';
+                } catch (error) {
+                    console.error('Error loading draft:', error);
+                }
+            }
+        }
+        
+        // Save draft function
+        window.saveDraft = function() {
+            const title = document.querySelector('#newEntryModal .form-input')?.value;
+            const content = document.getElementById('entryContent')?.value;
+            
+            if (content || title) {
+                const draft = {
+                    title: title || '',
+                    content: content || '',
+                    timestamp: new Date().toISOString()
+                };
+                
+                localStorage.setItem('journal_draft', JSON.stringify(draft));
+                alert('Draft saved!');
+            }
+        };
+        
+        
+        // Auto-save on content change
+        const entryContent = document.getElementById('entryContent');
+        if (entryContent) {
+            entryContent.addEventListener('input', triggerAutoSave);
+        }
+        
+        const entryTitle = document.querySelector('#newEntryModal .form-input');
+        if (entryTitle) {
+            entryTitle.addEventListener('input', triggerAutoSave);
+        }
+        
+        // Tag input functionality
+        document.querySelectorAll('.tag-input').forEach(input => {
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && input.value.trim()) {
+                    e.preventDefault();
+                    
+                    const container = input.parentElement;
+                    const tag = document.createElement('span');
+                    tag.className = 'tag-chip';
+                    tag.innerHTML = `${input.value.trim()} <span class="tag-remove">×</span>`;
+                    
+                    // Remove tag on click
+                    tag.querySelector('.tag-remove').addEventListener('click', () => {
+                        tag.remove();
+                    });
+                    
+                    container.insertBefore(tag, input);
+                    input.value = '';
+                }
+            });
+        });
+    </script>
+        
+        <!-- Load Zoe Orb Component -->
+    <script>
+        // Load the JavaScript first
+        const orbScript = document.createElement('script');
+        orbScript.src = '/js/zoe-orb.js';
+        orbScript.onload = function() {
+            // Then load the HTML component
+            fetch('/components/zoe-orb-complete.html')
+                .then(r => r.text())
+                .then(html => {
+                    const div = document.createElement('div');
+                    div.innerHTML = html;
+                    // Remove the script tag from the HTML (we already loaded it)
+                    const scripts = div.querySelectorAll('script');
+                    scripts.forEach(s => s.remove());
+                    // Append all elements
+                    while (div.firstChild) {
+                        document.body.appendChild(div.firstChild);
+                    }
+                    // Initialize
+                    if (typeof initOrbChat === 'function') {
+                        initOrbChat();
+                    }
+                })
+                .catch(err => console.error('Failed to load Zoe orb:', err));
+        };
+        document.head.appendChild(orbScript);
+    </script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+# Jetson Orin NX GPU Override Configuration
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.jetson.yml up
+
+services:
+  zoe-core:
+    environment:
+      - HARDWARE_PLATFORM=jetson
+  
+  zoe-llamacpp:
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - HARDWARE_PLATFORM=jetson
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+
+  zoe-whisper:
+    runtime: nvidia
+    environment:
+      - WHISPER_DEVICE=cuda
+
+  zoe-tts:
+    runtime: nvidia
+
+  zoe-litellm:
+    runtime: nvidia
+
+  # zoe-tensorrt: Service removed - not currently used
+  # If needed, uncomment and add build context or image
+  # zoe-tensorrt:
+  #   runtime: nvidia
+  #   environment:
+  #     - NVIDIA_VISIBLE_DEVICES=all
+  #     - HARDWARE_PLATFORM=jetson
+  
+  zoe-mcp-server:
+    environment:
+      - HARDWARE_PLATFORM=jetson
+

@@ -1,0 +1,2482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Memories Intelligence</title>
+    <style>
+        :root {
+            --font-display: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
+            --font-text: 'SF Pro Text', -apple-system, BlinkMacSystemFont, sans-serif;
+            --bg-primary: #fafbfc;
+            --bg-secondary: #f1f3f6;
+            --glass-bg: rgba(255, 255, 255, 0.7);
+            --glass-border: rgba(255, 255, 255, 0.5);
+            --text-primary: #1f2937;
+            --text-secondary: #6b7280;
+            --text-tertiary: #9ca3af;
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+            --purple: #7c3aed;
+            --rose: #ec4899;
+            --teal: #14b8a6;
+            --amber: #f59e0b;
+            --green: #10b981;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: var(--font-text);
+            background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+            color: var(--text-primary);
+            overflow: hidden;
+            height: 100vh;
+        }
+        @keyframes breathe {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.02); opacity: 0.95; }
+        }
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0;
+            background: var(--glass-bg); backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--glass-border);
+            padding: 12px 24px; z-index: 100;
+            display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 20px; }
+        .mini-orb {
+            width: 36px; height: 36px; border-radius: 50%;
+            background: linear-gradient(135deg, #7c3aed 0%, #0891b2 100%);
+            cursor: pointer; transition: transform 0.2s;
+            animation: breathe 4s ease-in-out infinite;
+        }
+        .mini-orb:hover { transform: scale(1.1); animation: none; }
+        .nav-menu { display: flex; gap: 8px; }
+        .nav-item {
+            color: var(--text-secondary); text-decoration: none;
+            font-size: 14px; font-weight: 500; padding: 8px 16px;
+            border-radius: 8px; transition: all 0.2s;
+            background: none; border: none; cursor: pointer;
+        }
+        .nav-item:hover { color: var(--purple); background: rgba(124, 58, 237, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: var(--text-secondary); text-decoration: none;
+            font-size: 14px; font-weight: 500; padding: 8px 16px;
+            border-radius: 8px; transition: all 0.2s;
+            background: none; border: none; cursor: pointer;
+        }
+        .more-nav-btn:hover { color: var(--purple); background: rgba(124, 58, 237, 0.1); }
+        
+        /* Authentication Integration */
+        .user-menu {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .user-menu:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+        
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--purple), #0891b2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .user-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .user-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-primary);
+            line-height: 1.2;
+        }
+        
+        .user-role {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.2;
+        }
+        
+        .user-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            padding: 8px 0;
+            min-width: 200px;
+            z-index: 1000;
+            display: none;
+            border: 1px solid #e1e5e9;
+        }
+        
+        .user-dropdown.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 8px 16px;
+            color: var(--text-primary);
+            text-decoration: none;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .dropdown-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .dropdown-divider {
+            height: 1px;
+            background: #e1e5e9;
+            margin: 4px 0;
+        }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: var(--text-secondary);
+            font-size: 16px; font-weight: bold; position: relative;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: var(--text-primary); }
+        .notifications-btn.has-notifications {
+            animation: notificationPulse 2s ease-in-out infinite;
+        }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+            animation: notificationDotPulse 1.5s ease-in-out infinite;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.4);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 0 8px rgba(124, 58, 237, 0);
+            }
+        }
+        
+        @keyframes notificationDotPulse {
+            0%, 100% { 
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% { 
+                transform: scale(1.2);
+                opacity: 0.7;
+            }
+        }
+        
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: var(--glass-bg); backdrop-filter: blur(20px);
+            border-left: 1px solid var(--glass-border); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid var(--glass-border);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .notifications-title {
+            font-size: 18px; font-weight: 600; color: var(--text-primary); margin: 0;
+        }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: var(--text-secondary); font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content {
+            padding: 20px; display: flex; flex-direction: column; gap: 15px;
+        }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+        .notification-item.unread { border-left: 4px solid var(--purple); }
+        .notification-title {
+            font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 5px;
+        }
+        .notification-meta {
+            font-size: 12px; color: var(--text-secondary); display: flex; gap: 10px;
+        }
+        .notification-time {
+            color: var(--purple); font-weight: 500;
+        }
+        .notification-priority {
+            padding: 2px 8px; border-radius: 12px; font-size: 10px; font-weight: 600;
+        }
+        .no-notifications {
+            text-align: center; color: var(--text-secondary); font-size: 14px; padding: 40px 20px;
+        }
+        
+        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator.connecting { background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.warning::before { background: #ea580c; }
+
+        /* Time/Date Display in Top Right */
+        .time-date-display {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time {
+            font-size: 16px;
+            font-weight: 500;
+            color: #333;
+            line-height: 1.2;
+        }
+        .current-date {
+            font-size: 11px;
+            color: #666;
+            line-height: 1.2;
+        }
+
+        /* Floating Add Button */
+        .floating-add-btn { 
+            position: fixed; bottom: 30px; right: 30px; width: 72px; height: 72px; 
+            border-radius: 50%; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            border: none; color: white; cursor: pointer; display: flex; align-items: center; 
+            justify-content: center; font-size: 32px; transition: all 0.3s ease; 
+            z-index: 1000; box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
+        }
+        .floating-add-btn:hover { transform: scale(1.1); box-shadow: 0 6px 16px rgba(123, 97, 255, 0.4); }
+        .api-indicator.connecting::before { background: #3b82f6; }
+        .main-layout { display: flex; height: calc(100vh - 60px); margin-top: 60px; }
+        .insights-sidebar {
+            width: 360px; background: var(--glass-bg);
+            backdrop-filter: blur(40px);
+            border-right: 1px solid var(--glass-border);
+            padding: 24px; overflow-y: auto;
+        }
+        .insights-header {
+            display: flex; justify-content: space-between;
+            align-items: center; margin-bottom: 24px;
+        }
+        .insights-title { font-size: 18px; font-weight: 600; font-family: var(--font-display); }
+        .view-toggle {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid var(--glass-border);
+            border-radius: 8px; padding: 3px; display: flex; gap: 3px;
+        }
+        .view-btn {
+            padding: 6px 12px; border: none; background: transparent;
+            border-radius: 6px; font-size: 12px; font-weight: 500;
+            cursor: pointer; transition: all 0.2s; color: var(--text-secondary);
+        }
+        .view-btn.active {
+            background: linear-gradient(135deg, var(--purple), #0891b2);
+            color: white; box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3);
+        }
+        .search-box {
+            margin-bottom: 16px; position: relative;
+        }
+        .search-input {
+            width: 100%; padding: 12px 40px 12px 16px;
+            border: 1px solid var(--glass-border);
+            border-radius: 10px; background: rgba(255, 255, 255, 0.9);
+            font-size: 14px; outline: none; transition: all 0.2s;
+        }
+        .search-input:focus {
+            border-color: var(--purple);
+            box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+        }
+        .search-icon {
+            position: absolute; right: 12px; top: 50%;
+            transform: translateY(-50%); color: var(--text-tertiary);
+            pointer-events: none; font-size: 16px;
+        }
+        .filter-chips {
+            display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px;
+        }
+        .filter-chip {
+            padding: 6px 12px; border-radius: 16px;
+            font-size: 12px; font-weight: 500;
+            cursor: pointer; transition: all 0.2s;
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid var(--glass-border);
+            color: var(--text-secondary);
+        }
+        .filter-chip.active {
+            background: var(--purple);
+            color: white; border-color: var(--purple);
+        }
+        .breadcrumb {
+            display: flex; align-items: center; gap: 8px;
+            margin-bottom: 16px; font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .breadcrumb-link {
+            cursor: pointer; transition: color 0.2s;
+        }
+        .breadcrumb-link:hover { color: var(--purple); }
+        .breadcrumb-separator { color: var(--text-tertiary); }
+        .insight-card {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px; padding: 16px;
+            margin-bottom: 12px; transition: all 0.2s; cursor: pointer;
+        }
+        .insight-card:hover { transform: translateX(4px); box-shadow: var(--shadow-md); }
+        .insight-card.urgent { border-left: 3px solid var(--amber); }
+        .insight-card.positive { border-left: 3px solid var(--green); }
+        .insight-label {
+            font-size: 11px; text-transform: uppercase;
+            letter-spacing: 0.5px; color: var(--text-tertiary); margin-bottom: 6px;
+        }
+        .insight-text { font-size: 14px; color: var(--text-primary); line-height: 1.5; }
+        .insight-action { margin-top: 8px; font-size: 13px; color: var(--purple); font-weight: 500; }
+        .canvas-container { flex: 1; position: relative; overflow: hidden; }
+        #memoryCanvas { width: 100%; height: 100%; cursor: grab; }
+        #memoryCanvas.dragging { cursor: grabbing; }
+        .canvas-legend {
+            position: absolute; bottom: 24px; left: 24px;
+            background: var(--glass-bg); backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border); border-radius: 12px;
+            padding: 16px; box-shadow: var(--shadow-md);
+        }
+        .legend-title {
+            font-size: 12px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.5px; color: var(--text-tertiary); margin-bottom: 12px;
+        }
+        .legend-item { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; font-size: 13px; }
+        .legend-circle { width: 16px; height: 16px; border-radius: 50%; border: 2px solid; }
+        .canvas-controls { position: absolute; top: 24px; right: 24px; display: flex; gap: 8px; }
+        .control-btn {
+            width: 40px; height: 40px; background: var(--glass-bg);
+            backdrop-filter: blur(20px); border: 1px solid var(--glass-border);
+            border-radius: 10px; display: flex; align-items: center;
+            justify-content: center; cursor: pointer; transition: all 0.2s;
+            font-size: 18px; color: var(--text-primary);
+        }
+        .control-btn:hover {
+            background: rgba(255, 255, 255, 0.9);
+            transform: translateY(-2px); box-shadow: var(--shadow-md);
+        }
+        
+        .tile {
+            position: absolute;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+            border: 1px solid rgba(0,0,0,0.06);
+            overflow: hidden;
+            transition: all 0.2s;
+            display: none;
+            z-index: 95;
+            min-width: 280px;
+            max-width: 800px;
+        }
+        .tile.show { display: block; }
+        .tile.dragging { cursor: move; }
+        .tile:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.12); }
+        .tile.photo-tile {
+            min-width: 400px;
+        }
+        .tile-header {
+            padding: 16px;
+            border-bottom: 1px solid rgba(0,0,0,0.06);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            cursor: move;
+        }
+        .tile-header.photo-header {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(to bottom, rgba(0,0,0,0.6), transparent);
+            border-bottom: none;
+            z-index: 1;
+        }
+        .tile-title {
+            flex: 1;
+            font-size: 16px;
+            font-weight: 600;
+            border: none;
+            background: none;
+            outline: none;
+            color: var(--text-primary);
+        }
+        .tile-header.photo-header .tile-title {
+            color: white;
+        }
+        .tile-header.photo-header .tile-title::placeholder {
+            color: rgba(255,255,255,0.7);
+        }
+        .tile-title::placeholder { color: var(--text-tertiary); }
+        .tile-close {
+            width: 24px; height: 24px;
+            border: none; background: rgba(0,0,0,0.05);
+            border-radius: 6px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: all 0.2s;
+            font-size: 16px;
+            color: var(--text-secondary);
+        }
+        .tile-header.photo-header .tile-close {
+            background: rgba(255,255,255,0.2);
+            color: white;
+        }
+        .tile-close:hover { background: rgba(0,0,0,0.1); }
+        .tile-header.photo-header .tile-close:hover { background: rgba(255,255,255,0.3); }
+        .tile-content {
+            padding: 16px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .tile-content.photo-content {
+            padding: 0;
+            max-height: none;
+        }
+        .tile-editor {
+            min-height: 120px;
+            border: none;
+            outline: none;
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--text-secondary);
+            resize: none;
+            font-family: var(--font-text);
+            width: 100%;
+        }
+        .tile-editor::placeholder { color: var(--text-tertiary); }
+        .tile-editor.photo-notes {
+            min-height: 20px;
+            max-height: 200px;
+            padding: 12px 16px;
+            background: rgba(0,0,0,0.02);
+            border-top: 1px solid rgba(0,0,0,0.06);
+            overflow-y: auto;
+            resize: none;
+        }
+        .tile-preview {
+            margin-top: 12px;
+            padding: 12px;
+            background: rgba(0,0,0,0.02);
+            border-radius: 8px;
+            border: 1px solid rgba(0,0,0,0.06);
+        }
+        .tile-preview-image {
+            width: 100%;
+            height: 160px;
+            background: linear-gradient(135deg, #f3f4f6, #e5e7eb);
+            border-radius: 6px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 48px;
+            position: relative;
+        }
+        .tile-preview-image img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 6px;
+        }
+        .tile-photo-main {
+            width: 100%;
+            position: relative;
+            background: #000;
+        }
+        .tile-photo-main img {
+            width: 100%;
+            height: auto;
+            display: block;
+            max-height: 600px;
+            object-fit: contain;
+        }
+        .tile-resize-handle {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            width: 28px;
+            height: 28px;
+            cursor: nwse-resize;
+            background: rgba(124, 58, 237, 0.9);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 14px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+        .tile-resize-handle:hover {
+            background: rgba(124, 58, 237, 1);
+            transform: scale(1.1);
+        }
+        .tile-preview-title {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 6px;
+            color: var(--text-primary);
+        }
+        .tile-preview-description {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+        .tile-preview-url {
+            font-size: 11px;
+            color: var(--text-tertiary);
+            margin-top: 6px;
+        }
+        .tile-toolbar {
+            padding: 8px 16px;
+            border-top: 1px solid rgba(0,0,0,0.06);
+            display: flex;
+            gap: 8px;
+        }
+        .tile-tool-btn {
+            padding: 6px 12px;
+            border: 1px solid var(--glass-border);
+            background: white;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--text-secondary);
+        }
+        .tile-tool-btn:hover {
+            background: rgba(124, 58, 237, 0.1);
+            border-color: var(--purple);
+            color: var(--purple);
+        }
+        .tile-tool-btn.delete:hover {
+            background: rgba(239, 68, 68, 0.1);
+            border-color: #ef4444;
+            color: #ef4444;
+        }
+        
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(4px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        .modal-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+        .modal-field {
+            margin-bottom: 16px;
+        }
+        .modal-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            display: block;
+        }
+        .modal-input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--glass-border);
+            border-radius: 8px;
+            font-size: 14px;
+            outline: none;
+            transition: all 0.2s;
+        }
+        .modal-input:focus {
+            border-color: var(--purple);
+            box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+        }
+        .color-picker {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
+        }
+        .color-option {
+            width: 48px;
+            height: 48px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 2px solid transparent;
+        }
+        .color-option:hover { transform: scale(1.1); }
+        .color-option.selected {
+            border-color: var(--text-primary);
+            transform: scale(1.1);
+        }
+        .modal-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+        }
+        .modal-btn {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .modal-btn-primary {
+            background: linear-gradient(135deg, var(--purple), #0891b2);
+            color: white;
+        }
+        .modal-btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
+        }
+        .modal-btn-secondary {
+            background: rgba(0,0,0,0.05);
+            color: var(--text-secondary);
+        }
+        .modal-btn-secondary:hover { background: rgba(0,0,0,0.1); }
+        
+        .detail-panel {
+            position: fixed; top: 60px; right: -600px; width: 600px;
+            height: calc(100vh - 60px); background: var(--glass-bg);
+            backdrop-filter: blur(40px); border-left: 1px solid var(--glass-border);
+            z-index: 90; transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            overflow-y: auto; box-shadow: -4px 0 24px rgba(0, 0, 0, 0.1);
+        }
+        .detail-panel.open { right: 0; }
+        .detail-header {
+            background: linear-gradient(135deg, var(--purple) 0%, #0891b2 100%);
+            padding: 24px; color: white; position: relative;
+        }
+        .detail-close {
+            position: absolute; top: 12px; right: 12px;
+            width: 32px; height: 32px; border: none;
+            background: rgba(255, 255, 255, 0.2); border-radius: 50%;
+            color: white; font-size: 18px; cursor: pointer; transition: all 0.2s;
+        }
+        .detail-close:hover { background: rgba(255, 255, 255, 0.3); transform: rotate(90deg); }
+        .detail-avatar {
+            width: 64px; height: 64px; border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            border: 3px solid rgba(255, 255, 255, 0.5);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 28px; margin-bottom: 12px;
+        }
+        .detail-name {
+            font-size: 24px; font-weight: 300;
+            margin-bottom: 4px; font-family: var(--font-display);
+        }
+        .detail-subtitle { font-size: 13px; opacity: 0.9; }
+        .detail-content { padding: 20px; }
+        .detail-section { margin-bottom: 24px; }
+        .section-title {
+            font-size: 12px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.5px; color: var(--text-tertiary); margin-bottom: 10px;
+        }
+        .connection-health, .memory-details, .info-grid {
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid var(--glass-border);
+            border-radius: 10px; padding: 14px;
+        }
+        .health-bar {
+            height: 6px; background: #e5e7eb;
+            border-radius: 3px; overflow: hidden; margin: 10px 0;
+        }
+        .health-fill {
+            height: 100%; background: linear-gradient(90deg, var(--purple), #0891b2);
+            transition: width 0.3s;
+        }
+        .health-stats {
+            display: grid; grid-template-columns: repeat(3, 1fr);
+            gap: 10px; margin-top: 10px;
+        }
+        .stat-box { background: rgba(0, 0, 0, 0.02); padding: 10px; border-radius: 6px; }
+        .stat-label { font-size: 10px; color: var(--text-tertiary); margin-bottom: 3px; }
+        .stat-value { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+        .tags-container { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+        .tag {
+            padding: 3px 10px; background: rgba(124, 58, 237, 0.1);
+            color: var(--purple); border-radius: 10px;
+            font-size: 11px; font-weight: 500;
+        }
+        .quick-actions {
+            display: grid; grid-template-columns: repeat(4, 1fr);
+            gap: 8px; margin-top: 12px;
+        }
+        .quick-action-btn {
+            padding: 10px; background: rgba(255,255,255,0.9);
+            border: 1px solid var(--glass-border); border-radius: 8px;
+            text-align: center; cursor: pointer; transition: all 0.2s;
+        }
+        .quick-action-btn:hover {
+            background: rgba(124, 58, 237, 0.1);
+            border-color: var(--purple);
+        }
+        .quick-action-icon { font-size: 18px; margin-bottom: 3px; }
+        .quick-action-label { font-size: 10px; font-weight: 500; color: var(--text-secondary); }
+        
+        /* Edit mode styles */
+        .detail-panel.editing .quick-action-btn:not([onclick*="editPerson"]) {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+        .edit-field {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--glass-border);
+            border-radius: 6px;
+            background: rgba(255,255,255,0.9);
+            font-size: 14px;
+            color: var(--text-primary);
+            transition: all 0.2s ease;
+        }
+        .edit-field:focus {
+            outline: none;
+            border-color: var(--purple);
+            background: white;
+            box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
+        }
+        .edit-field::placeholder {
+            color: var(--text-secondary);
+            opacity: 0.7;
+        }
+        .notes-textarea {
+            min-height: 80px;
+            resize: vertical;
+            font-family: inherit;
+        }
+        .info-item .edit-field {
+            margin-top: 4px;
+        }
+        .timeline-item, .activity-item, .note-item, .gift-item {
+            padding: 10px; background: rgba(255,255,255,0.9);
+            border-radius: 8px; margin-bottom: 6px;
+            display: flex; gap: 10px; align-items: start;
+        }
+        .timeline-icon {
+            width: 28px; height: 28px; border-radius: 50%;
+            background: rgba(124, 58, 237, 0.1);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px; flex-shrink: 0;
+        }
+        .timeline-content { flex: 1; }
+        .timeline-title { font-size: 13px; font-weight: 500; margin-bottom: 3px; }
+        .timeline-meta { font-size: 11px; color: var(--text-tertiary); }
+        .info-grid {
+            display: grid; grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+        .info-item {
+            padding: 10px; background: rgba(0,0,0,0.02); border-radius: 6px;
+        }
+        .info-label { font-size: 10px; color: var(--text-tertiary); margin-bottom: 4px; }
+        .info-value { font-size: 13px; font-weight: 500; }
+        .shared-goals {
+            display: flex; flex-direction: column; gap: 8px;
+        }
+        .goal-item {
+            padding: 10px; background: rgba(255,255,255,0.9);
+            border-radius: 8px; display: flex; justify-content: space-between;
+            align-items: center;
+        }
+        .goal-text { font-size: 13px; }
+        .goal-status {
+            padding: 3px 8px; border-radius: 6px;
+            font-size: 10px; font-weight: 500;
+        }
+        .goal-status.planned { background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
+        .tooltip {
+            position: absolute; background: rgba(0, 0, 0, 0.9);
+            color: white; padding: 8px 12px; border-radius: 6px;
+            font-size: 12px; pointer-events: none; z-index: 1000;
+            white-space: nowrap; opacity: 0; transition: opacity 0.2s;
+        }
+        .tooltip.show { opacity: 1; }
+        .fab {
+            position: fixed; bottom: 40px; right: 40px;
+            width: 56px; height: 56px; border-radius: 50%;
+            background: linear-gradient(135deg, var(--purple), #0891b2);
+            display: none; align-items: center; justify-content: center;
+            font-size: 28px; color: white; cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 4px 16px rgba(124, 58, 237, 0.3);
+            z-index: 80;
+        }
+        .fab.show { display: flex; }
+        .fab:hover {
+            transform: scale(1.1);
+            box-shadow: 0 8px 24px rgba(124, 58, 237, 0.5);
+        }
+        
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid var(--glass-border); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: var(--text-primary); margin-bottom: 10px;
+            background: linear-gradient(135deg, var(--purple), #0891b2);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: var(--text-secondary);
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid var(--glass-border);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, var(--purple), #0891b2);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+
+        /* Mobile Navigation Menu */
+        .mobile-nav-menu {
+            position: fixed; top: 0; left: -280px; width: 280px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-right: 1px solid rgba(255, 255, 255, 0.3); z-index: 2000;
+            transition: left 0.3s ease; display: flex; flex-direction: column;
+        }
+        .mobile-nav-menu.open { left: 0; }
+        .mobile-nav-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .mobile-nav-header h3 { margin: 0; font-size: 20px; font-weight: 600; color: #333; }
+        .mobile-nav-close {
+            width: 40px; height: 40px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 24px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: all 0.3s ease;
+        }
+        .mobile-nav-close:active { background: rgba(255, 255, 255, 0.5); }
+        .mobile-nav-content { flex: 1; overflow-y: auto; padding: 10px; }
+        .mobile-nav-item {
+            display: flex; align-items: center; gap: 12px; padding: 16px; margin: 4px 0;
+            color: #666; text-decoration: none; font-size: 16px; font-weight: 500;
+            border-radius: 12px; transition: all 0.3s ease;
+        }
+        .mobile-nav-item:active { background: rgba(123, 97, 255, 0.1); color: #7B61FF; }
+        .mobile-nav-item.active { background: rgba(123, 97, 255, 0.15); color: #7B61FF; font-weight: 600; }
+        .mobile-nav-item.logout { color: #ff4444; }
+        .mobile-nav-divider { height: 1px; background: rgba(255, 255, 255, 0.3); margin: 10px 0; }
+        .mobile-nav-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.3); z-index: 1999; opacity: 0;
+            pointer-events: none; transition: opacity 0.3s ease;
+        }
+        .mobile-nav-overlay.open { opacity: 1; pointer-events: auto; }
+        
+        /* Responsive: hide nav-menu on mobile, show mini-orb */
+        @media (max-width: 768px) {
+            .nav-menu { display: none !important; }
+            .mini-orb { display: flex !important; }
+        }
+        @media (min-width: 769px) {
+            .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
+        }
+    </style>
+        <!-- Zoe Orb Styles -->
+        <style>
+        .zoe-orb {
+            position: fixed; bottom: 24px; right: 24px; width: 70px; height: 70px;
+            border-radius: 50%; cursor: pointer; transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            z-index: 1200; display: flex; align-items: center; justify-content: center;
+            overflow: hidden;
+            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
+            background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 50%, #A855F7 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
+        }
+        .zoe-orb::before {
+            content: ""; position: absolute; top: 50%; left: 50%; width: 20px; height: 20px;
+            background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+            border-radius: 50%; transform: translate(-50%, -50%);
+            animation: orb-inner-glow 2s ease-in-out infinite alternate;
+        }
+        .zoe-orb:hover {
+            transform: scale(1.12);
+            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.5), 0 0 50px rgba(123, 97, 255, 0.3);
+            animation-duration: 8s, 3s;
+        }
+        .zoe-orb:active { transform: scale(0.95); }
+        .zoe-orb.connecting {
+            background: linear-gradient(135deg, #7B61FF 0%, #6366F1 50%, #8B5CF6 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
+        }
+        .zoe-orb.connected {
+            background: linear-gradient(135deg, #7B61FF 0%, #10B981 50%, #34D399 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(16, 185, 129, 0.2);
+        }
+        .zoe-orb.thinking {
+            background: linear-gradient(135deg, #7B61FF 0%, #F59E0B 50%, #FBBF24 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(245, 158, 11, 0.2);
+            animation: orb-thinking-gentle 3s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
+        }
+        .zoe-orb.proactive {
+            background: linear-gradient(135deg, #7B61FF 0%, #EC4899 50%, #F472B6 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(236, 72, 153, 0.2);
+            animation: orb-proactive-gentle 4s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
+        }
+        .zoe-orb.error {
+            background: linear-gradient(135deg, #7B61FF 0%, #EF4444 50%, #F87171 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(239, 68, 68, 0.2);
+            animation: orb-error-shake 0.5s ease-in-out infinite, orb-liquid-swirl 3s ease-in-out infinite;
+        }
+        .zoe-orb.chatting {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 50%, #06B6D4 100%);
+            background-size: 200% 200%;
+            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.6), 0 0 60px rgba(123, 97, 255, 0.4);
+            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
+        }
+        .zoe-orb.badge::after {
+            content: ""; position: absolute; top: 8px; right: 8px; width: 12px; height: 12px;
+            background: #F59E0B; border-radius: 50%; border: 2px solid white;
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.8);
+            animation: badge-pulse 2s ease-in-out infinite;
+        }
+        @keyframes orb-liquid-swirl {
+            0%, 100% { background-position: 0% 50%; border-radius: 50% 45% 55% 50%; }
+            25% { background-position: 100% 50%; border-radius: 55% 50% 45% 55%; }
+            50% { background-position: 100% 100%; border-radius: 45% 55% 50% 45%; }
+            75% { background-position: 0% 100%; border-radius: 50% 45% 55% 50%; }
+        }
+        @keyframes orb-breathe {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        @keyframes orb-inner-glow {
+            0% { opacity: 0.3; transform: translate(-50%, -50%) scale(1); }
+            100% { opacity: 0.6; transform: translate(-50%, -50%) scale(1.1); }
+        }
+        @keyframes orb-thinking-gentle {
+            0%, 100% { transform: rotate(0deg); }
+            25% { transform: rotate(5deg); }
+            75% { transform: rotate(-5deg); }
+        }
+        @keyframes orb-proactive-gentle {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.08); }
+        }
+        @keyframes orb-error-shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-2px); }
+            75% { transform: translateX(2px); }
+        }
+        @keyframes badge-pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.2); }
+        }
+        
+
+        /* Navigation Bar - Standardized */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
+            align-items: center; height: 60px;
+        }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb { 
+            width: 32px; height: 32px; border-radius: 50%; 
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400;
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        
+        .more-nav-btn { 
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
+            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center; cursor: pointer;
+            background: none; border: none;
+        }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        
+        .notifications-btn { 
+            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
+            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
+            font-size: 16px; font-weight: bold;
+        }
+        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
+        .notifications-btn.has-notifications { animation: notificationPulse 2s ease-in-out infinite; }
+        .notifications-btn.has-notifications::after {
+            content: ''; position: absolute; top: 6px; right: 6px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+        }
+        
+        @keyframes notificationPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        
+        .api-indicator { 
+            font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 8px; 
+            display: flex; align-items: center; gap: 6px; 
+        }
+        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+        .api-indicator.connecting { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
+        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.connecting::before { background: #ea580c; }
+        
+        /* Time/Date Display */
+        .time-date-display {
+            display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+        }
+        .current-time { font-size: 16px; font-weight: 500; color: #333; line-height: 1.2; }
+        .current-date { font-size: 11px; color: #666; line-height: 1.2; }
+
+        /* More Overlay */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px; 
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
+
+        /* Notifications Panel */
+        .notifications-panel {
+            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
+            transition: right 0.3s ease; overflow-y: auto;
+        }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            display: flex; justify-content: space-between; align-items: center; 
+        }
+        .notifications-title { font-size: 18px; font-weight: 600; color: #333; margin: 0; }
+        .notifications-close {
+            width: 32px; height: 32px; border-radius: 50%; border: none;
+            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
+            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        }
+        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
+        .notifications-content { padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .notification-item {
+            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
+            padding: 15px; transition: all 0.3s ease; cursor: pointer;
+        }
+        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
+        .notification-item.unread { border-left: 4px solid #7B61FF; }
+        .notification-title { font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px; }
+        .notification-meta { font-size: 12px; color: #666; display: flex; gap: 10px; }
+        .notification-time { color: #7B61FF; font-weight: 500; }
+        .no-notifications { text-align: center; color: #666; font-size: 14px; padding: 40px 20px; }
+
+    </style>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
+</head>
+<body>
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="toggleMobileMenu()"></div>
+            <div class="nav-menu">
+                <a href="index.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="lists.html" class="nav-item">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </div>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            
+            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
+            
+            <!-- Time/Date Display -->
+            <div class="time-date-display">
+                <div class="current-time" id="currentTime">Loading...</div>
+                <div class="current-date" id="currentDate">Loading...</div>
+            </div>
+        </div>
+    </div>
+    <div class="main-layout">
+        <div class="insights-sidebar">
+            <div class="insights-header">
+                <h2 class="insights-title">Memory Collections</h2>
+            </div>
+            
+            <div class="search-box">
+                <input type="text" class="search-input" placeholder="Search memories..." oninput="searchMemories(this.value)">
+                <span class="search-icon">🔍</span>
+            </div>
+            
+            <div id="filterChips" class="filter-chips"></div>
+            <div id="breadcrumb" class="breadcrumb" style="display: none;"></div>
+            <div id="insightsList"></div>
+        </div>
+        <div class="canvas-container">
+            <canvas id="memoryCanvas"></canvas>
+            
+            <div class="canvas-controls">
+                <div class="control-btn" id="backBtn" onclick="navigateBack()" style="display: none;" title="Back">←</div>
+                <div class="control-btn" onclick="resetView()" title="Reset View">⟲</div>
+                <div class="control-btn" onclick="zoomIn()" title="Zoom In">+</div>
+                <div class="control-btn" onclick="zoomOut()" title="Zoom Out">−</div>
+            </div>
+            <div class="canvas-legend" id="canvasLegend"></div>
+            <button class="fab" id="fabButton" onclick="showNewItemDialog()">+</button>
+        </div>
+    </div>
+    
+    <div id="tilesContainer"></div>
+    
+    <div class="modal-overlay" id="newCollectionModal">
+        <div class="modal">
+            <div class="modal-title">New Collection</div>
+            <div class="modal-field">
+                <label class="modal-label">Name</label>
+                <input type="text" class="modal-input" id="collectionName" placeholder="Enter collection name">
+            </div>
+            <div class="modal-field">
+                <label class="modal-label">Color</label>
+                <div class="color-picker">
+                    <div class="color-option selected" style="background: #3b82f6;" onclick="selectColor('#3b82f6')"></div>
+                    <div class="color-option" style="background: #10b981;" onclick="selectColor('#10b981')"></div>
+                    <div class="color-option" style="background: #8b5cf6;" onclick="selectColor('#8b5cf6')"></div>
+                    <div class="color-option" style="background: #06b6d4;" onclick="selectColor('#06b6d4')"></div>
+                    <div class="color-option" style="background: #f59e0b;" onclick="selectColor('#f59e0b')"></div>
+                    <div class="color-option" style="background: #ef4444;" onclick="selectColor('#ef4444')"></div>
+                    <div class="color-option" style="background: #ec4899;" onclick="selectColor('#ec4899')"></div>
+                    <div class="color-option" style="background: #6366f1;" onclick="selectColor('#6366f1')"></div>
+                    <div class="color-option" style="background: #14b8a6;" onclick="selectColor('#14b8a6')"></div>
+                    <div class="color-option" style="background: #a855f7;" onclick="selectColor('#a855f7')"></div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="modal-btn modal-btn-secondary" onclick="closeNewCollectionModal()">Cancel</button>
+                <button class="modal-btn modal-btn-primary" onclick="createCollection()">Create</button>
+            </div>
+        </div>
+    </div>
+
+    
+    <div class="detail-panel" id="detailPanel">
+        <div class="detail-header">
+            <button class="detail-close" onclick="closeDetail()">×</button>
+            <div class="detail-avatar" id="detailIcon"></div>
+            <h1 class="detail-name" id="detailName"></h1>
+            <div class="detail-subtitle" id="detailSubtitle"></div>
+        </div>
+        <div class="detail-content" id="detailContent"></div>
+    </div>
+    
+    <!-- Mobile Navigation Menu -->
+    <div class="mobile-nav-menu" id="mobileNavMenu">
+        <div class="mobile-nav-header">
+            <h3>Navigation</h3>
+            <button class="mobile-nav-close" onclick="toggleMobileMenu()">✕</button>
+        </div>
+        <div class="mobile-nav-content">
+            <a href="chat.html" class="mobile-nav-item">💬 Chat</a>
+            <a href="dashboard.html" class="mobile-nav-item">📊 Dashboard</a>
+            <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
+            <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
+            <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
+            <a href="people.html" class="mobile-nav-item">👥 People</a>
+            <a href="memories.html" class="mobile-nav-item active">🧠 Memories</a>
+            <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
+            <div class="mobile-nav-divider"></div>
+            <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
+        </div>
+    </div>
+    <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('people.html')">
+                    <div class="more-item-icon">👥</div>
+                    <div class="more-item-label">People</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('workflows.html')">
+                    <div class="more-item-icon">⚡</div>
+                    <div class="more-item-label">Workflows</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="tooltip" id="tooltip"></div>
+    
+    <script src="js/auth.js"></script>
+    <script src="js/common.js"></script>
+    <script src="js/ai-processor.js"></script>
+    <script>
+        const canvas = document.getElementById('memoryCanvas');
+        const ctx = canvas.getContext('2d');
+        let width, height, centerX, centerY;
+        let scale = 1, offsetX = 0, offsetY = 0;
+        let isDragging = false, dragStartX = 0, dragStartY = 0;
+        let draggedItem = null, hoveredItem = null;
+        let currentCollection = null;
+        let navigationPath = [];
+        let animationFrame;
+        let breathePhase = 0;
+        let mouseDownTime = 0;
+        let mouseDownItem = null;
+        let selectedColor = '#3b82f6';
+        let openTiles = [];
+        const DRAG_THRESHOLD = 200;
+        
+        let collections = [];
+        let currentUser = null;
+        
+        // Paste event listener
+        document.addEventListener('paste', async (e) => {
+            console.log('Paste event triggered, currentCollection:', currentCollection);
+            if (!currentCollection) {
+                console.log('No current collection, paste ignored');
+                return;
+            }
+            
+            e.preventDefault();
+            
+            // Check for images first
+            const items = e.clipboardData.items;
+            let imageHandled = false;
+            
+            console.log('Clipboard items:', items.length);
+            for (let i = 0; i < items.length; i++) {
+                console.log('Item type:', items[i].type);
+                if (items[i].type.indexOf('image') !== -1) {
+                    console.log('Image detected, processing...');
+                    const blob = items[i].getAsFile();
+                    const reader = new FileReader();
+                    
+                    reader.onload = async (event) => {
+                        try {
+                            const col = collections.find(c => c.id === currentCollection);
+                            if (!col) return;
+                            
+                            const collectionId = col.id.replace('c', '');
+                            console.log("Creating tile in collection via nginx proxy:", collectionId);
+                const response = await fetch(`/api/collections/${collectionId}/tiles`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                                },
+                                body: JSON.stringify({
+                                    collection_id: parseInt(collectionId),
+                                    name: "",
+                                    x: Math.random() * 300 - 150,
+                                    y: Math.random() * 300 - 150,
+                                    size: 50,
+                                    content: "",
+                                    preview_type: 'image',
+                                    preview_data: {
+                                        type: 'image',
+                                        image: event.target.result,
+                                        title: "Pasted Image",
+                                        description: "Image from clipboard"
+                                    }
+                                })
+                            });
+                            
+                            const newTile = {
+                                id: `t${response.tile.id}`,
+                                type: 'tile',
+                                name: "",
+                                x: Math.random() * 300 - 150,
+                                y: Math.random() * 300 - 150,
+                                size: 50,
+                                content: "",
+                                preview: {
+                                    type: 'image',
+                                    image: event.target.result,
+                                    title: "Pasted Image",
+                                    description: "Image from clipboard"
+                                },
+                                dbId: response.tile.id // Store the actual database ID
+                            };
+                            
+                            col.items.push(newTile);
+                            setTimeout(() => openTile(newTile), 100);
+                        } catch (error) {
+                console.error("Error loading people:", error);
+                            console.error('Failed to create tile from image paste:', error);
+                        }
+                    };
+                    
+                    reader.readAsDataURL(blob);
+                    imageHandled = true;
+                    break;
+                }
+            }
+            
+            // If no image, handle text
+            if (!imageHandled) {
+                console.log('No image found, checking for text...');
+                const text = e.clipboardData.getData('text');
+                console.log('Text data:', text);
+                
+                if (text.trim()) {
+                    console.log('Text paste detected, creating tile...');
+                    // Create tile in database first
+                    try {
+                        const col = collections.find(c => c.id === currentCollection);
+                        if (!col) return;
+                        
+                        const collectionId = col.id.replace('c', '');
+                        console.log("Adding tile to collection via nginx proxy:", collectionId);
+                const response = await fetch(`/api/collections/${collectionId}/tiles`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                            },
+                            body: JSON.stringify({
+                                collection_id: parseInt(collectionId),
+                                name: "",
+                                x: Math.random() * 300 - 150,
+                                y: Math.random() * 300 - 150,
+                                size: 50,
+                                content: text
+                            })
+                        });
+                        
+                        const newTile = {
+                            id: `t${response.tile.id}`,
+                            type: 'tile',
+                            name: "",
+                            x: Math.random() * 300 - 150,
+                            y: Math.random() * 300 - 150,
+                            size: 50,
+                            content: text,
+                            preview: null,
+                            dbId: response.tile.id // Store the actual database ID
+                        };
+                        
+                        // Auto-detect URLs and fetch preview
+                        const urlRegex = /(https?:\/\/[^\s]+)/g;
+                        const urls = text.match(urlRegex);
+                        if (urls && urls.length > 0) {
+                            newTile.preview = await fetchLinkPreview(urls[0]);
+                        }
+                        
+                        col.items.push(newTile);
+                        setTimeout(() => openTile(newTile), 100);
+                    } catch (error) {
+                console.error("Error loading people:", error);
+                        console.error('Failed to create tile from paste:', error);
+                    }
+                }
+            }
+        });
+        
+        async function fetchLinkPreview(url) {
+            try {
+                console.log("Fetching link preview via nginx proxy");
+                const response = await fetch('/api/memories/link-preview', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                    },
+                    body: JSON.stringify({ url: url })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                return await response.json();
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to fetch link preview:', error);
+                const urlObj = new URL(url);
+                return {
+                    url: url,
+                    title: `${urlObj.hostname.replace('www.', '')} Preview`,
+                    description: "This is a preview of the pasted link. In production, this would fetch real metadata.",
+                    image: "🔗"
+                };
+            }
+        }
+        
+        
+        async function loadCollections() {
+            try {
+                // Use relative URL through nginx proxy to collections service
+                console.log("Making API request to collections-service via nginx proxy");
+                const data = await apiRequest('/collections');
+                collections = data.collections.map(collection => ({
+                    id: `c${collection.id}`,
+                    type: 'collection',
+                    name: collection.name,
+                    icon: collection.icon,
+                    x: collection.x,
+                    y: collection.y,
+                    size: collection.size,
+                    color: collection.color,
+                    items: []
+                }));
+                
+                // Load tiles for each collection
+                for (let collection of collections) {
+                    const collectionId = collection.id.replace('c', '');
+                    try {
+                        // Use nginx proxy for tiles
+                        const tilesData = await apiRequest(`/collections/${collectionId}/tiles`);
+                        
+                        collection.items = tilesData.tiles.map(tile => ({
+                            id: `t${tile.id}`,
+                            type: 'tile',
+                            name: tile.name,
+                            x: tile.x,
+                            y: tile.y,
+                            size: tile.size,
+                            content: tile.content,
+                            preview: tile.preview_data,
+                            tileX: tile.tile_x,
+                            tileY: tile.tile_y,
+                            tileWidth: tile.tile_width,
+                            dbId: tile.id // Store the actual database ID
+                        }));
+                    } catch (error) {
+                        console.error("Error loading tiles for collection:", collectionId, error);
+                        console.error(`Failed to load tiles for collection ${collectionId}:`, error);
+                        collection.items = [];
+                    }
+                }
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to load collections:', error);
+                collections = [];
+            }
+        }
+        
+        
+        function resizeCanvas() {
+            width = canvas.parentElement.clientWidth;
+            height = canvas.parentElement.clientHeight;
+            canvas.width = width * window.devicePixelRatio;
+            canvas.height = height * window.devicePixelRatio;
+            canvas.style.width = width + 'px';
+            canvas.style.height = height + 'px';
+            ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+            centerX = width / 2;
+            centerY = height / 2;
+            updateFabVisibility();
+        }
+        
+        function updateFabVisibility() {
+            const fab = document.getElementById('fabButton');
+            if (currentCollection) {
+                fab.classList.add('show');
+            } else {
+                fab.classList.remove('show');
+            }
+        }
+        
+        function showNewItemDialog() {
+            if (currentCollection) {
+                createNewTile();
+            } else {
+                document.getElementById('newCollectionModal').classList.add('show');
+            }
+        }
+        
+        function selectColor(color) {
+            selectedColor = color;
+            document.querySelectorAll('.color-option').forEach(opt => {
+                opt.classList.remove('selected');
+            });
+            event.target.classList.add('selected');
+        }
+        
+        function closeNewCollectionModal() {
+            document.getElementById('newCollectionModal').classList.remove('show');
+            document.getElementById('collectionName').value = '';
+        }
+
+        function openAddPersonModal() {
+            document.getElementById('addPersonModal').classList.add('show');
+        }
+
+        function closeAddPersonModal() {
+            document.getElementById('addPersonModal').classList.remove('show');
+            document.getElementById('personName').value = '';
+            document.getElementById('personCategory').value = 'inner';
+            document.getElementById('personNotes').value = '';
+        }
+        
+        async function createCollection() {
+            const name = document.getElementById('collectionName').value.trim();
+            if (!name) return;
+            
+            try {
+                console.log("Creating collection via nginx proxy");
+                const response = await fetch('/api/collections', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                    },
+                    body: JSON.stringify({
+                        name: name,
+                        icon: "📁",
+                        x: Math.random() * 400 - 200,
+                        y: Math.random() * 400 - 200,
+                        size: 60,
+                        color: selectedColor
+                    })
+                });
+                
+                const newCol = {
+                    id: `c${response.collection.id}`,
+                    type: 'collection',
+                    name: name,
+                    icon: "📁",
+                    x: Math.random() * 400 - 200,
+                    y: Math.random() * 400 - 200,
+                    size: 60,
+                    color: selectedColor,
+                    items: []
+                };
+                collections.push(newCol);
+                closeNewCollectionModal();
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to create collection:', error);
+                alert('Failed to create collection');
+            }
+        }
+
+        
+        async function createNewTile() {
+            const col = collections.find(c => c.id === currentCollection);
+            if (!col) return;
+            
+            try {
+                const collectionId = col.id.replace('c', '');
+                console.log("Creating tile in collection via nginx proxy:", collectionId);
+                const response = await fetch(`/api/collections/${collectionId}/tiles`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                    },
+                    body: JSON.stringify({
+                        collection_id: parseInt(collectionId),
+                        name: "",
+                        x: Math.random() * 300 - 150,
+                        y: Math.random() * 300 - 150,
+                        size: 50,
+                        content: ""
+                    })
+                });
+                
+                const newTile = {
+                    id: `t${response.tile.id}`,
+                    type: 'tile',
+                    name: "",
+                    x: Math.random() * 300 - 150,
+                    y: Math.random() * 300 - 150,
+                    size: 50,
+                    content: "",
+                    preview: null,
+                    dbId: response.tile.id // Store the actual database ID
+                };
+                col.items.push(newTile);
+                setTimeout(() => openTile(newTile), 100);
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to create tile:', error);
+                alert('Failed to create tile');
+            }
+        }
+        
+        function openTile(item) {
+            if (openTiles.includes(item.id)) return;
+            
+            openTiles.push(item.id);
+            
+            const tile = document.createElement('div');
+            tile.className = 'tile show';
+            tile.id = `tile-${item.id}`;
+            
+            const isPhotoTile = item.preview?.type === 'image';
+            if (isPhotoTile) {
+                tile.classList.add('photo-tile');
+            }
+            
+            // Use saved position if exists, otherwise center
+            if (item.tileX && item.tileY) {
+                tile.style.left = item.tileX + 'px';
+                tile.style.top = item.tileY + 'px';
+                tile.style.transform = 'none';
+            } else {
+                tile.style.left = '50%';
+                tile.style.top = '50%';
+                tile.style.transform = 'translate(-50%, -50%)';
+            }
+            
+            // Use saved width if exists
+            if (item.tileWidth) {
+                tile.style.width = item.tileWidth + 'px';
+            }
+            
+            let contentHtml = '';
+            
+            if (isPhotoTile) {
+                // Photo-centric layout
+                contentHtml = `
+                    <div class="tile-header photo-header" onmousedown="startTileDrag(event, '${item.id}')">
+                        <input type="text" class="tile-title" placeholder="Add a title..." value="${item.name || ''}" 
+                               oninput="updateTileName('${item.id}', this.value)">
+                        <button class="tile-close" onclick="closeTile('${item.id}')">×</button>
+                    </div>
+                    <div class="tile-content photo-content">
+                        <div class="tile-photo-main">
+                            <img src="${item.preview.image}" alt="Photo">
+                            <div class="tile-resize-handle" onmousedown="startImageResize(event, '${item.id}')">⇲</div>
+                        </div>
+                        <textarea class="tile-editor photo-notes" placeholder="Add notes (optional)..." 
+                                  oninput="updateTileContent('${item.id}', this.value)">${item.content || ''}</textarea>
+                    </div>
+                    <div class="tile-toolbar">
+                        <button class="tile-tool-btn" onclick="editTile('${item.id}')">✏️ Edit</button>
+                        <button class="tile-tool-btn delete" onclick="deleteTile('${item.id}')">🗑️ Delete</button>
+                    </div>
+                `;
+            } else {
+                // Standard text/link layout
+                const previewHtml = item.preview ? `
+                    <div class="tile-preview">
+                        <div class="tile-preview-image">${item.preview.image}</div>
+                        <div class="tile-preview-title">${item.preview.title}</div>
+                        <div class="tile-preview-description">${item.preview.description}</div>
+                        <div class="tile-preview-url">${item.preview.url}</div>
+                    </div>
+                ` : '';
+                
+                contentHtml = `
+                    <div class="tile-header" onmousedown="startTileDrag(event, '${item.id}')">
+                        <input type="text" class="tile-title" placeholder="Untitled" value="${item.name || ''}" 
+                               oninput="updateTileName('${item.id}', this.value)">
+                        <button class="tile-close" onclick="closeTile('${item.id}')">×</button>
+                    </div>
+                    <div class="tile-content">
+                        <textarea class="tile-editor" placeholder="Type notes or paste a link..." 
+                                  oninput="updateTileContent('${item.id}', this.value)">${item.content || ''}</textarea>
+                        ${previewHtml}
+                    </div>
+                    <div class="tile-toolbar">
+                        <button class="tile-tool-btn" onclick="editTile('${item.id}')">✏️ Edit</button>
+                        <button class="tile-tool-btn delete" onclick="deleteTile('${item.id}')">🗑️ Delete</button>
+                    </div>
+                `;
+            }
+            
+            tile.innerHTML = contentHtml;
+            document.getElementById('tilesContainer').appendChild(tile);
+        }
+        
+        let draggedTile = null, tileDragStartX = 0, tileDragStartY = 0;
+        let resizingTile = null, resizeStartWidth = 0, resizeStartX = 0;
+        
+        function startTileDrag(e, tileId) {
+            draggedTile = document.getElementById(`tile-${tileId}`);
+            const rect = draggedTile.getBoundingClientRect();
+            tileDragStartX = e.clientX - rect.left;
+            tileDragStartY = e.clientY - rect.top;
+            draggedTile.classList.add('dragging');
+            
+            document.addEventListener('mousemove', moveTile);
+            document.addEventListener('mouseup', stopTileDrag);
+        }
+        
+        function moveTile(e) {
+            if (!draggedTile) return;
+            const newX = e.clientX - tileDragStartX;
+            const newY = e.clientY - tileDragStartY;
+            draggedTile.style.left = newX + 'px';
+            draggedTile.style.top = newY + 'px';
+            draggedTile.style.transform = 'none';
+        }
+        
+        function stopTileDrag() {
+            if (draggedTile) {
+                // Save position to item
+                const tileId = draggedTile.id.replace('tile-', '');
+                const col = collections.find(c => c.id === currentCollection);
+                const item = col?.items.find(i => i.id === tileId);
+                if (item) {
+                    item.tileX = parseInt(draggedTile.style.left);
+                    item.tileY = parseInt(draggedTile.style.top);
+                }
+                
+                draggedTile.classList.remove('dragging');
+                draggedTile = null;
+            }
+            document.removeEventListener('mousemove', moveTile);
+            document.removeEventListener('mouseup', stopTileDrag);
+        }
+        
+        function startImageResize(e, tileId) {
+            e.stopPropagation();
+            resizingTile = document.getElementById(`tile-${tileId}`);
+            resizeStartWidth = resizingTile.offsetWidth;
+            resizeStartX = e.clientX;
+            
+            document.addEventListener('mousemove', resizeImage);
+            document.addEventListener('mouseup', stopImageResize);
+        }
+        
+        function resizeImage(e) {
+            if (!resizingTile) return;
+            const delta = e.clientX - resizeStartX;
+            const newWidth = Math.max(320, Math.min(800, resizeStartWidth + delta));
+            resizingTile.style.width = newWidth + 'px';
+        }
+        
+        function stopImageResize() {
+            if (resizingTile) {
+                // Save width to item
+                const tileId = resizingTile.id.replace('tile-', '');
+                const col = collections.find(c => c.id === currentCollection);
+                const item = col?.items.find(i => i.id === tileId);
+                if (item) {
+                    item.tileWidth = resizingTile.offsetWidth;
+                }
+                
+                resizingTile = null;
+            }
+            document.removeEventListener('mousemove', resizeImage);
+            document.removeEventListener('mouseup', stopImageResize);
+        }
+        
+        async function updateTileName(itemId, name) {
+            const col = collections.find(c => c.id === currentCollection);
+            const item = col?.items.find(i => i.id === itemId);
+            if (item) {
+                item.name = name;
+                await saveTile(item);
+            }
+        }
+        
+        async function updateTileContent(itemId, content) {
+            const col = collections.find(c => c.id === currentCollection);
+            const item = col?.items.find(i => i.id === itemId);
+            if (item) {
+                item.content = content;
+                
+                const urlRegex = /(https?:\/\/[^\s]+)/g;
+                const urls = content.match(urlRegex);
+                if (urls && urls.length > 0 && !item.preview) {
+                    item.preview = await fetchLinkPreview(urls[0]);
+                    closeTile(itemId);
+                    setTimeout(() => openTile(item), 50);
+                }
+                
+                await saveTile(item);
+            }
+        }
+        
+        async function saveTile(item) {
+            try {
+                const tileId = item.dbId || item.id.replace('t', '');
+                await fetch(`/api/tiles/${tileId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                    },
+                    body: JSON.stringify({
+                        collection_id: parseInt(currentCollection.replace('c', '')),
+                        name: item.name,
+                        content: item.content,
+                        preview_type: item.preview?.type || null,
+                        preview_data: item.preview || null,
+                        x: item.x,
+                        y: item.y,
+                        size: item.size,
+                        tile_x: item.tileX,
+                        tile_y: item.tileY,
+                        tile_width: item.tileWidth
+                    })
+                });
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to save tile:', error);
+            }
+        }
+        
+        function findItemById(itemId) {
+            for (const col of collections) {
+                const item = col.items.find(i => i.id === itemId);
+                if (item) return item;
+            }
+            return null;
+        }
+        
+        function editTile(itemId) {
+            const tile = document.getElementById(`tile-${itemId}`);
+            tile.querySelector('.tile-editor').focus();
+        }
+        
+        async function deleteTile(itemId) {
+            if (!confirm('Delete this tile?')) return;
+            
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const item = findItemById(itemId);
+                const tileId = item?.dbId || itemId.replace('t', '');
+                await fetch(`/api/tiles/${tileId}`, {
+                    method: 'DELETE'
+                });
+                
+                const col = collections.find(c => c.id === currentCollection);
+                if (col) {
+                    col.items = col.items.filter(i => i.id !== itemId);
+                }
+                closeTile(itemId);
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to delete tile:', error);
+                alert('Failed to delete tile');
+            }
+        }
+        
+        function closeTile(itemId) {
+            const tile = document.getElementById(`tile-${itemId}`);
+            if (tile) tile.remove();
+            openTiles = openTiles.filter(id => id !== itemId);
+        }
+        
+        function animate() {
+            breathePhase += 0.02;
+            draw();
+            animationFrame = requestAnimationFrame(animate);
+        }
+        
+        function draw() {
+            const bgGradient = ctx.createLinearGradient(0, 0, width, height);
+            bgGradient.addColorStop(0, '#fafbfc');
+            bgGradient.addColorStop(1, '#f1f3f6');
+            ctx.fillStyle = bgGradient;
+            ctx.fillRect(0, 0, width, height);
+            
+            ctx.save();
+            ctx.translate(centerX + offsetX, centerY + offsetY);
+            ctx.scale(scale, scale);
+            
+            if (currentCollection) {
+                drawCollectionCanvas();
+            } else {
+                drawCollectionsCanvas();
+            }
+            
+            ctx.restore();
+        }
+        
+        
+        function drawCollectionsCanvas() {
+            collections.forEach((col, index) => {
+                const floatOffset = !isDragging && !draggedItem ? Math.sin(breathePhase + index) * 5 : 0;
+                const floatingCol = {...col, y: col.y + floatOffset};
+                drawCanvasItem(floatingCol, draggedItem?.id === col.id, hoveredItem?.id === col.id);
+            });
+        }
+        
+        function drawCollectionCanvas() {
+            const col = collections.find(c => c.id === currentCollection);
+            if (!col) return;
+            col.items.forEach((item, index) => {
+                if (openTiles.includes(item.id)) return;
+                
+                const floatOffset = !isDragging && !draggedItem ? Math.sin(breathePhase + index * 0.5) * 3 : 0;
+                const floatingItem = {...item, y: item.y + floatOffset};
+                drawCanvasItem(floatingItem, draggedItem?.id === item.id, hoveredItem?.id === item.id);
+            });
+        }
+        
+        function drawCanvasItem(item, isDragged, isHovered) {
+            const color = item.color || '#7c3aed';
+            const r = (item.size || 50) / 2;
+            const scale = isDragged ? 1.1 : isHovered ? 1.05 : 1;
+            
+            ctx.save();
+            ctx.translate(item.x, item.y);
+            ctx.scale(scale, scale);
+            ctx.globalAlpha = isDragged ? 0.7 : 1;
+            
+            ctx.fillStyle = 'white';
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(0, 0, r, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            
+            ctx.fillStyle = color;
+            ctx.font = `${r * 0.8}px var(--font-text)`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(item.icon || '📝', 0, 0);
+            
+            ctx.restore();
+            
+            ctx.fillStyle = '#1f2937';
+            ctx.font = '600 12px var(--font-text)';
+            ctx.textAlign = 'center';
+            ctx.shadowColor = 'rgba(255, 255, 255, 0.9)';
+            ctx.shadowBlur = 4;
+            ctx.fillText(item.name || 'Untitled', item.x, item.y + r * scale + 16);
+            ctx.shadowBlur = 0;
+        }
+        
+        
+        canvas.addEventListener('mousedown', e => {
+            const rect = canvas.getBoundingClientRect();
+            const mx = (e.clientX - rect.left - centerX - offsetX) / scale;
+            const my = (e.clientY - rect.top - centerY - offsetY) / scale;
+            const item = getItemAtPosition(mx, my);
+            
+            mouseDownTime = Date.now();
+            mouseDownItem = item;
+            
+            if (item && currentCollection) {
+                // Wait to see if drag
+            } else {
+                isDragging = true;
+                dragStartX = e.clientX - offsetX;
+                dragStartY = e.clientY - offsetY;
+            }
+        });
+        
+        canvas.addEventListener('mousemove', e => {
+            const rect = canvas.getBoundingClientRect();
+            const mx = (e.clientX - rect.left - centerX - offsetX) / scale;
+            const my = (e.clientY - rect.top - centerY - offsetY) / scale;
+            
+            if (mouseDownItem && !draggedItem && (Date.now() - mouseDownTime > DRAG_THRESHOLD)) {
+                draggedItem = mouseDownItem;
+                isDragging = false;
+            }
+            
+            if (draggedItem && currentCollection) {
+                draggedItem.x = mx;
+                draggedItem.y = my;
+            } else if (isDragging) {
+                offsetX = e.clientX - dragStartX;
+                offsetY = e.clientY - dragStartY;
+            } else {
+                const item = getItemAtPosition(mx, my);
+                if (item !== hoveredItem) {
+                    hoveredItem = item;
+                    if (item) {
+                        showTooltip(e.clientX, e.clientY, item.name);
+                    } else hideTooltip();
+                }
+            }
+        });
+        
+        canvas.addEventListener('mouseup', e => {
+            const clickDuration = Date.now() - mouseDownTime;
+            
+            if (mouseDownItem && clickDuration < DRAG_THRESHOLD && !draggedItem) {
+                if (mouseDownItem.type === 'collection') {
+                    openCollection(mouseDownItem.id);
+                } else if (mouseDownItem.type === 'tile') {
+                    openTile(mouseDownItem);
+                }
+            } else if (!mouseDownItem && clickDuration < DRAG_THRESHOLD) {
+                // Click on blank space
+                const panel = document.getElementById('detailPanel');
+                if (panel.classList.contains('open')) {
+                    // Close detail panel if open
+                    closeDetail();
+                } else if (currentCollection) {
+                    // Navigate back
+                    navigateBack();
+                }
+            }
+            
+            isDragging = false;
+            draggedItem = null;
+            mouseDownItem = null;
+        });
+        
+        canvas.addEventListener('mouseleave', () => {
+            isDragging = false;
+            draggedItem = null;
+            hoveredItem = null;
+            mouseDownItem = null;
+            hideTooltip();
+        });
+        
+        function getItemAtPosition(mx, my) {
+            if (currentCollection) {
+                const col = collections.find(c => c.id === currentCollection);
+                if (col?.items) {
+                    for (const item of col.items) {
+                        if (openTiles.includes(item.id)) continue;
+                        const r = (item.size || 50) / 2;
+                        if (Math.sqrt(Math.pow(mx - item.x, 2) + Math.pow(my - item.y, 2)) < r) return item;
+                    }
+                }
+            } else {
+                for (const col of collections) {
+                    const r = (col.size || 60) / 2;
+                    if (Math.sqrt(Math.pow(mx - col.x, 2) + Math.pow(my - col.y, 2)) < r) return col;
+                }
+            }
+            return null;
+        }
+        
+        function openCollection(id) {
+            navigationPath.push(currentCollection);
+            currentCollection = id;
+            updateBreadcrumb();
+            document.getElementById('backBtn').style.display = 'flex';
+            updateSidebar();
+            updateLegend();
+            updateFabVisibility();
+        }
+        
+        function navigateBack() {
+            if (navigationPath.length > 0) {
+                currentCollection = navigationPath.pop();
+            } else {
+                currentCollection = null;
+            }
+            updateBreadcrumb();
+            if (!currentCollection) {
+                document.getElementById('breadcrumb').style.display = 'none';
+                document.getElementById('backBtn').style.display = 'none';
+            }
+            updateSidebar();
+            updateLegend();
+            updateFabVisibility();
+        }
+        
+        function updateBreadcrumb() {
+            const breadcrumb = document.getElementById('breadcrumb');
+            if (currentCollection) {
+                breadcrumb.style.display = 'flex';
+                const col = collections.find(c => c.id === currentCollection);
+                breadcrumb.innerHTML = `
+                    <span class="breadcrumb-link" onclick="navigateBack()">Collections</span>
+                    <span class="breadcrumb-separator">›</span>
+                    <span>${col ? col.name : ''}</span>
+                `;
+            } else {
+                breadcrumb.style.display = 'none';
+            }
+        }
+        
+        
+        function updateSidebar() {
+            const list = document.getElementById('insightsList');
+            const filters = document.getElementById('filterChips');
+            
+            filters.innerHTML = '';
+            list.innerHTML = '';
+        }
+        
+        
+        function updateLegend() {
+            const legend = document.getElementById('canvasLegend');
+            legend.innerHTML = `
+                <div class="legend-title">Canvas</div>
+                <div class="legend-item">
+                    <span>Paste to add content</span>
+                </div>
+                <div class="legend-item">
+                    <span>Click blank to go back</span>
+                </div>
+            `;
+        }
+        
+        function closeDetail() { document.getElementById('detailPanel').classList.remove('open'); }
+        function showTooltip(x, y, t) { 
+            const el = document.getElementById('tooltip'); 
+            el.textContent = t; 
+            el.style.left = x + 'px'; 
+            el.style.top = (y - 40) + 'px'; 
+            el.classList.add('show'); 
+        }
+        function hideTooltip() { document.getElementById('tooltip').classList.remove('show'); }
+        function resetView() { scale = 1; offsetX = 0; offsetY = 0; }
+        function zoomIn() { scale = Math.min(2, scale * 1.2); }
+        function zoomOut() { scale = Math.max(0.5, scale / 1.2); }
+        function searchMemories(q) { console.log('Search:', q); }
+        
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+        updateSidebar();
+        updateLegend();
+        animate();
+        
+        // Authentication and notification functions
+
+        // Notifications system
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+            
+            // Clear notification indicator when panel is opened
+            const notificationBtn = document.querySelector('.notifications-btn');
+            notificationBtn.classList.remove('has-notifications');
+        }
+
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+
+        // Mobile menu toggle
+        function toggleMobileMenu() {
+            if (window.innerWidth > 768) { window.location.href = 'index.html'; return; }
+            const menu = document.getElementById('mobileNavMenu');
+            const overlay = document.getElementById('mobileNavOverlay');
+            if (menu && overlay) {
+                menu.classList.toggle('open');
+                overlay.classList.toggle('open');
+            }
+        }
+
+        function handleLogout() {
+            if (window.innerWidth <= 768) {
+                toggleMobileMenu();
+            }
+            logout();
+        }
+
+        async function loadNotifications() {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                console.log("Making API request to:", "/public-memories/?type=people");
+                const response = await apiRequest('/reminders/notifications/pending', {
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                const notifications = response.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            // Update notification button indicator
+            if (notifications.length > 0) {
+                notificationBtn.classList.add('has-notifications');
+            } else {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
+                     onclick="handleNotificationClick(${notification.id})">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${new Date(notification.created_at).toLocaleTimeString()}</span>
+                        ${notification.priority ? `<span class="notification-priority" style="background: ${getPriorityColor(notification.priority)}; color: white;">${notification.priority}</span>` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function getPriorityColor(priority) {
+            switch(priority.toLowerCase()) {
+                case 'high': return '#ef4444';
+                case 'medium': return '#f59e0b';
+                case 'low': return '#10b981';
+                default: return '#6b7280';
+            }
+        }
+
+        function handleNotificationClick(notificationId) {
+            // Mark notification as acknowledged
+            acknowledgeNotification(notificationId);
+            closeNotifications();
+        }
+
+        async function acknowledgeNotification(notificationId) {
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
+                    method: 'POST',
+                    headers: session ? { 'X-Session-ID': session.session_id } : {}
+                });
+                // Reload notifications
+                loadNotifications();
+            } catch (error) {
+                console.error("Error loading people:", error);
+                console.error('Failed to acknowledge notification:', error);
+            }
+        }
+
+        // More overlay functions
+        function openMoreOverlay() {
+            document.getElementById('moreOverlay').classList.add('active');
+        }
+
+        function closeMoreOverlay() {
+            document.getElementById('moreOverlay').classList.remove('active');
+        }
+
+        function navigateToPage(page) {
+            window.location.href = page;
+        }
+
+
+        // Time/Date Update Functions
+        function updateTimeDate() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            const timeElement = document.getElementById('currentTime');
+            const dateElement = document.getElementById('currentDate');
+            
+            if (timeElement) timeElement.textContent = timeString;
+            if (dateElement) dateElement.textContent = dateString;
+        }
+
+        // Initialize authentication and notifications on page load
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Load notifications on page load
+            loadNotifications();
+            
+            // Update API status
+            updateAPIStatus();
+            
+            // Load initial data
+            await loadCollections();
+            
+            // Update UI
+            updateSidebar();
+            updateLegend();
+            
+            // Update time/date immediately and every minute
+            updateTimeDate();
+            setInterval(updateTimeDate, 60000);
+        });
+
+        async function updateAPIStatus() {
+            const statusEl = document.getElementById('apiStatus');
+            try {
+                await apiRequest('/health');
+                statusEl.textContent = 'Online';
+                statusEl.className = 'api-indicator online';
+            } catch (error) {
+                console.error("Error loading people:", error);
+                statusEl.textContent = 'Offline';
+                statusEl.className = 'api-indicator offline';
+            }
+        }
+    </script>
+
+        
+        <!-- Load Zoe Orb Component -->
+    <script>
+        // Load the JavaScript first
+        const orbScript = document.createElement('script');
+        orbScript.src = '/js/zoe-orb.js';
+        orbScript.onload = function() {
+            // Then load the HTML component
+            fetch('/components/zoe-orb-complete.html')
+                .then(r => r.text())
+                .then(html => {
+                    const div = document.createElement('div');
+                    div.innerHTML = html;
+                    // Remove the script tag from the HTML (we already loaded it)
+                    const scripts = div.querySelectorAll('script');
+                    scripts.forEach(s => s.remove());
+                    // Append all elements
+                    while (div.firstChild) {
+                        document.body.appendChild(div.firstChild);
+                    }
+                    // Initialize
+                    if (typeof initOrbChat === 'function') {
+                        initOrbChat();
+                    }
+                })
+                .catch(err => console.error('Failed to load Zoe orb:', err));
+        };
+        document.head.appendChild(orbScript);
+    </script>
+</body>
+</html>

@@ -1,0 +1,138 @@
+# Zoe AI Assistant - Docker Ignore File
+# Excludes unnecessary files from Docker build context
+# Reduces image size and build time
+
+# Virtual environments (NEVER include in Docker)
+venv/
+env/
+mcp_test_env/
+aider_env/
+tools/aider_env/
+tools/aider-env/
+**/venv/
+**/.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Data and databases (use volumes instead)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.sqlite
+data/backup/
+data/billing/
+data/logs/
+data/uploads/
+data/user_backups/
+
+# Git directory
+.git/
+.gitignore
+.gitattributes
+
+# Documentation (not needed in container)
+docs/
+*.md
+!README.md
+
+# Tests (not needed in production)
+tests/
+test_*.py
+*_test.py
+pytest.ini
+
+# Backup directories
+backups/
+**/backups/
+checkpoints/
+
+# Temporary files
+*.tmp
+*.log
+*.cache
+*.bak
+*.backup
+*_backup_*
+*.old
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# CI/CD
+.github/
+
+# Models (use volumes)
+models/blobs/
+models/manifests/
+models/.ollama/
+models/*.bin
+models/*.safetensors
+
+# Config files (use environment or volumes)
+.env
+.env.*
+*.key
+*.pem
+config/.env
+cloudflared-config.yml
+cloudflared-credentials.json
+
+# Security
+.ssh/
+.config/
+credentials/
+secrets/
+ssh_keys/
+
+# Shell scripts (usually for host system)
+scripts/maintenance/
+scripts/setup/
+scripts/utilities/
+verify_updates.sh
+
+# Archives and compression
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# Logs
+logs/
+*.log
+
+# Home Assistant (if separate container)
+homeassistant/
+
+# Analysis files
+database_analysis.json
+database_audit_report.json
+database_violations.json
+database_consolidation.log
+
+# Templates (if not needed at runtime)
+templates/
+
+# Config directory (use volumes)
+configs/
+
+
+

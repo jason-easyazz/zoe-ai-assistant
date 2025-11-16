@@ -1,0 +1,182 @@
+INFO:__main__:🧪 Starting comprehensive test suite...
+INFO:__main__:📊 Testing 105 prompts across 10 categories
+INFO:__main__:Using dev-localhost session for testing
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST http://localhost:8000/api/chat?stream=true "HTTP/1.1 200 OK"
+INFO:__main__:✅ Test suite completed. Results saved to /tmp/zoe_test_results.json
+WARNING:__main__:⚠️ Tests failed. Pass rate: 10.5% (required: 95%)
+================================================================================
+ZOE PERFORMANCE TEST REPORT
+================================================================================
+Test Date: 2025-11-10T08:11:50.956921
+Total Tests: 105
+Passed: 11
+Failed: 94
+Pass Rate: 10.5%
+
+PERFORMANCE METRICS:
+  Average First Token Latency: 30.581s
+  Average Total Latency: 28.633s
+  Average Tokens/Second: 2.34
+  Min First Token Latency: 29.345s
+  Max First Token Latency: 33.061s
+
+FAILURES:
+  - [simple_queries] What's the weather?
+    Error: [Errno -2] Name or service not known
+  - [simple_queries] Tell me a joke
+    Error: [Errno -2] Name or service not known
+  - [simple_queries] What time is it?
+    Error: [Errno -2] Name or service not known
+  - [simple_queries] Hello
+    Error: [Errno -2] Name or service not known
+  - [simple_queries] Hi there
+    Error: [Errno -2] Name or service not known
+  - [simple_queries] How are you?
+    Error: [Errno -2] Name or service not known
+  - [simple_queries] What can you do?
+    Error: [Errno -2] Name or service not known
+  - [simple_queries] Help me
+    Error: [Errno -2] Name or service not known
+  - [simple_queries] Thanks
+    Error: [Errno -2] Name or service not known
+  - [simple_queries] Good morning
+    Error: [Errno -2] Name or service not known
+  - [action_requests] Add bread to shopping list
+    Error: [Errno -2] Name or service not known
+  - [action_requests] Add milk to my shopping list
+    Error: [Errno -2] Name or service not known
+  - [action_requests] Create a calendar event for tomorrow at 2pm
+    Error: [Errno -2] Name or service not known
+  - [action_requests] Schedule a meeting next Monday at 10am
+    Error: [Errno -2] Name or service not known
+  - [action_requests] Add eggs to shopping list
+    Error: [Errno -2] Name or service not known
+  - [action_requests] Remind me to call John tomorrow
+    Error: [Errno -2] Name or service not known
+  - [action_requests] Add apples to shopping list
+    Error: [Errno -2] Name or service not known
+  - [action_requests] Create event: Doctor appointment on Friday
+    Error: [Errno -2] Name or service not known
+  - [action_requests] Add bananas to shopping list
+    Error: [Errno -2] Name or service not known
+  - [action_requests] Schedule lunch meeting next week
+    Error: [Errno -2] Name or service not known
+  ... and 74 more failures
+
+CATEGORY BREAKDOWN:
+  simple_queries: 0/10 (0.0%)
+  action_requests: 0/15 (0.0%)
+  memory_queries: 0/10 (0.0%)
+  complex_multi_step: 4/10 (40.0%)
+  edge_cases: 0/10 (0.0%)
+  natural_conversation: 1/10 (10.0%)
+  capability_questions: 0/10 (0.0%)
+  shopping_list_operations: 0/10 (0.0%)
+  calendar_operations: 0/10 (0.0%)
+  mixed_operations: 6/10 (60.0%)
+
+================================================================================

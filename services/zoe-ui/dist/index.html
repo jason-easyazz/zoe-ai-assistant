@@ -1,0 +1,1241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zoe - Welcome</title>
+    <style>
+        * { 
+            margin: 0; padding: 0; box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
+            min-height: 100vh;
+            color: #333;
+            font-size: 16px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Welcome Container */
+        .container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            position: relative;
+            z-index: 10;
+        }
+
+        .welcome-stage {
+            text-align: center;
+            transition: all 1s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        /* Main Orb */
+        .main-orb {
+            width: clamp(200px, 30vw, 280px);
+            height: clamp(200px, 30vw, 280px);
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            margin: 0 auto 30px;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            animation: breathe 4s ease-in-out infinite;
+            box-shadow: 
+                0 8px 32px rgba(123, 97, 255, 0.3),
+                0 4px 16px rgba(90, 224, 224, 0.2);
+        }
+
+        @keyframes breathe {
+            0%, 100% { 
+                transform: scale(1) translateY(0px);
+            }
+            50% { 
+                transform: scale(1.03) translateY(-8px);
+            }
+        }
+
+        .main-orb:hover {
+            transform: scale(1.08) translateY(-15px);
+            box-shadow: 
+                0 12px 48px rgba(123, 97, 255, 0.4),
+                0 6px 24px rgba(90, 224, 224, 0.3);
+            animation: none;
+        }
+
+        /* Welcome Text */
+        .welcome-text {
+            margin-bottom: 30px;
+            opacity: 0;
+            animation: fadeInUp 1s ease-out 0.5s forwards;
+        }
+
+        .welcome-title {
+            font-size: clamp(36px, 6vw, 56px);
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #333;
+        }
+
+        .welcome-subtitle {
+            font-size: clamp(16px, 2.5vw, 20px);
+            color: #666;
+            font-weight: 400;
+            margin-bottom: 16px;
+        }
+
+        .welcome-hint {
+            font-size: clamp(14px, 2vw, 16px);
+            color: #999;
+            animation: glow 2s ease-in-out infinite alternate;
+        }
+
+        @keyframes glow {
+            from { opacity: 0.5; }
+            to { opacity: 1; }
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(30px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Login Form Overlay */
+        .login-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 100;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .login-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .login-container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(40px);
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+            width: 100%;
+            max-width: 440px;
+            max-height: 90vh;
+            overflow-y: auto;
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            transform: scale(0.9);
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .login-container.profile-mode {
+            max-width: 600px;
+        }
+
+        .login-overlay.active .login-container {
+            transform: scale(1);
+        }
+
+        .login-header {
+            text-align: center;
+            margin-bottom: 30px;
+            transition: all 0.3s ease;
+        }
+        
+        .login-header.compact {
+            margin-bottom: 0;
+        }
+        
+        .login-header.compact .login-orb,
+        .login-header.compact .login-title,
+        .login-header.compact .login-subtitle {
+            display: none;
+        }
+
+        .login-orb {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            margin: 0 auto 15px;
+            animation: mini-breathe 3s ease-in-out infinite;
+        }
+
+        @keyframes mini-breathe {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        .login-title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        .login-subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+
+        /* Profile Selection */
+        .profile-selection {
+            display: block;
+        }
+
+        .profile-selection.hidden {
+            display: none;
+        }
+
+        .profile-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .profile-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 15px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: #f8f9fa;
+            border: 2px solid transparent;
+        }
+
+        .profile-card:hover {
+            background: #e9ecef;
+            transform: translateY(-4px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .profile-card.selected {
+            border-color: #7B61FF;
+            background: rgba(123, 97, 255, 0.1);
+        }
+
+        .profile-avatar {
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            font-weight: 600;
+            color: white;
+            margin-bottom: 10px;
+            transition: all 0.3s ease;
+        }
+
+        .profile-card:hover .profile-avatar {
+            transform: scale(1.1);
+        }
+
+        .profile-name {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+            text-align: center;
+        }
+
+        .profile-guest {
+            grid-column: 1 / -1;
+            background: rgba(108, 117, 125, 0.1);
+            border: 2px dashed #6c757d;
+        }
+
+        .profile-guest:hover {
+            background: rgba(108, 117, 125, 0.15);
+            border-color: #495057;
+        }
+
+        .profile-guest .profile-avatar {
+            background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
+        }
+
+        /* Auth Section */
+        .auth-section {
+            display: none;
+        }
+
+        .auth-section.active {
+            display: block;
+        }
+
+        .selected-user-info {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 15px;
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .selected-user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: 600;
+            color: white;
+        }
+
+        .selected-user-text {
+            flex: 1;
+        }
+
+        .selected-user-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .change-user-btn {
+            background: transparent;
+            border: 1px solid #e1e5e9;
+            color: #666;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }
+
+        .change-user-btn:hover {
+            background: #f8f9fa;
+            color: #333;
+        }
+
+        /* Auth Tabs */
+        .auth-tabs {
+            display: flex;
+            margin-bottom: 25px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 4px;
+        }
+
+        .auth-tab {
+            flex: 1;
+            text-align: center;
+            padding: 10px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            font-size: 14px;
+            background: transparent;
+            border: none;
+            color: #666;
+        }
+
+        .auth-tab.active {
+            background: white;
+            color: #7B61FF;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+        }
+
+        /* Forms */
+        .auth-form {
+            display: none;
+        }
+
+        .auth-form.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #444;
+            font-size: 14px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e1e5e9;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            background: white;
+            color: #333;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #7B61FF;
+            box-shadow: 0 0 0 3px rgba(123, 97, 255, 0.1);
+        }
+
+        .form-input::placeholder {
+            color: #aaa;
+        }
+
+        /* PIN Input */
+        .pin-input {
+            text-align: center;
+            font-size: 24px;
+            letter-spacing: 8px;
+            font-family: 'SF Mono', Monaco, monospace;
+        }
+
+        .pin-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 15px;
+            margin-bottom: 15px;
+            max-width: 280px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .pin-btn {
+            aspect-ratio: 1;
+            border: none;
+            border-radius: 10px;
+            background: #f8f9fa;
+            font-size: 20px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: #333;
+            min-height: 50px;
+            max-height: 70px;
+        }
+
+        .pin-btn:hover {
+            background: #e9ecef;
+            transform: scale(1.05);
+        }
+
+        .pin-btn:active {
+            transform: scale(0.95);
+        }
+
+        .pin-btn.zero {
+            grid-column: 2;
+        }
+
+        .pin-btn.backspace {
+            grid-column: 3;
+            background: #ffebee;
+            color: #d32f2f;
+            font-size: 18px;
+        }
+
+        .pin-btn.backspace:hover {
+            background: #ffcdd2;
+        }
+
+        /* Buttons */
+        .auth-button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 10px;
+        }
+
+        .auth-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(123, 97, 255, 0.3);
+        }
+
+        .auth-button:active {
+            transform: translateY(0);
+        }
+
+        .auth-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .guest-link {
+            text-align: center;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e1e5e9;
+        }
+
+        .guest-link a {
+            color: #7B61FF;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .guest-link a:hover {
+            text-decoration: underline;
+        }
+
+        .back-btn {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.8);
+            border: 1px solid #e1e5e9;
+            color: #666;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .back-btn:hover {
+            background: white;
+            color: #333;
+            transform: translateX(-2px);
+        }
+
+        /* Messages */
+        .message {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: none;
+        }
+
+        .message.error {
+            background: #ffebee;
+            color: #c62828;
+            border: 1px solid #ef9a9a;
+        }
+
+        .message.success {
+            background: #e8f5e9;
+            color: #2e7d32;
+            border: 1px solid #a5d6a7;
+        }
+
+        .message.show {
+            display: block;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 0.8s ease-in-out infinite;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Responsive */
+        @media (max-width: 480px) {
+            .login-overlay {
+                padding: 10px;
+            }
+            
+            .login-container {
+                padding: 25px 20px;
+                max-height: 95vh;
+            }
+            
+            .login-header {
+                margin-bottom: 20px;
+            }
+            
+            .login-orb {
+                width: 50px;
+                height: 50px;
+                margin-bottom: 12px;
+            }
+            
+            .login-title {
+                font-size: 20px;
+            }
+            
+            .login-subtitle {
+                font-size: 13px;
+            }
+            
+            .profile-grid {
+                gap: 15px;
+            }
+            
+            .profile-avatar {
+                width: 60px;
+                height: 60px;
+                font-size: 28px;
+            }
+            
+            .selected-user-info {
+                padding: 10px;
+                margin-bottom: 12px;
+                margin-top: 5px;
+            }
+            
+            .auth-tabs {
+                margin-bottom: 12px;
+            }
+            
+            .pin-grid {
+                gap: 8px;
+                margin-top: 12px;
+                margin-bottom: 12px;
+                max-width: 240px;
+            }
+            
+            .pin-btn {
+                min-height: 45px;
+                max-height: 60px;
+                font-size: 18px;
+                border-radius: 8px;
+            }
+            
+            .pin-input {
+                font-size: 20px;
+                letter-spacing: 6px;
+            }
+            
+            .form-group {
+                margin-bottom: 15px;
+            }
+
+            .back-btn {
+                top: 10px;
+                left: 10px;
+                padding: 6px 12px;
+                font-size: 13px;
+            }
+        }
+        
+        @media (max-width: 360px) {
+            .login-overlay {
+                padding: 5px;
+            }
+            
+            .login-container {
+                padding: 20px 15px;
+                max-height: 98vh;
+            }
+            
+            .login-header {
+                margin-bottom: 15px;
+            }
+            
+            .login-orb {
+                width: 45px;
+                height: 45px;
+            }
+            
+            .selected-user-info {
+                padding: 8px;
+                margin-bottom: 10px;
+                margin-top: 0;
+            }
+            
+            .auth-tabs {
+                margin-bottom: 10px;
+            }
+            
+            .pin-grid {
+                gap: 6px;
+                max-width: 200px;
+            }
+            
+            .pin-btn {
+                min-height: 40px;
+                max-height: 50px;
+                font-size: 16px;
+            }
+            
+            .form-group {
+                margin-bottom: 12px;
+            }
+            
+            .auth-button {
+                padding: 12px;
+                font-size: 15px;
+            }
+        }
+    </style>
+    <script src="/js/auth.js"></script>
+<!-- PWA Meta Tags -->
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <meta name="msapplication-TileColor" content="#7B61FF">
+    <meta name="msapplication-tap-highlight" content="no">
+    
+    <!-- Icons & Manifest -->
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
+    
+    <!-- iOS Splash Screens -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512.png">
+    
+    <!-- Service Worker Registration -->
+    <script src="/js/sw-registration.js" defer></script>
+</head>
+<body>
+    <!-- Main Welcome Container -->
+    <div class="container">
+        <div class="welcome-stage" id="welcomeStage">
+            <!-- Main Orb -->
+            <div class="main-orb" id="mainOrb" onclick="showLoginForm()"></div>
+
+            <!-- Welcome Text -->
+            <div class="welcome-text">
+                <h1 class="welcome-title">Zoe</h1>
+                <p class="welcome-subtitle">Your Personal AI Assistant</p>
+                <p class="welcome-hint">Touch the orb to begin</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Login Form Overlay -->
+    <div class="login-overlay" id="loginOverlay">
+        <button class="back-btn" onclick="hideLoginForm()">← Back</button>
+        
+        <div class="login-container" id="loginContainer">
+            <div class="login-header">
+                <div class="login-orb"></div>
+                <h2 class="login-title" id="loginTitle">Who's using Zoe?</h2>
+                <p class="login-subtitle" id="loginSubtitle">Select your profile</p>
+            </div>
+
+            <div id="messageBox" class="message"></div>
+
+            <!-- Profile Selection -->
+            <div class="profile-selection" id="profileSelection">
+                <div class="profile-grid" id="profileGrid">
+                    <!-- Profiles will be loaded here -->
+                </div>
+            </div>
+
+            <!-- Auth Section (hidden initially) -->
+            <div class="auth-section" id="authSection">
+                <!-- Selected User Info -->
+                <div class="selected-user-info" id="selectedUserInfo">
+                    <div class="selected-user-avatar" id="selectedAvatar"></div>
+                    <div class="selected-user-text">
+                        <div class="selected-user-name" id="selectedName"></div>
+                    </div>
+                    <button class="change-user-btn" onclick="changeUser()">Change</button>
+                </div>
+
+                <div class="auth-tabs">
+                    <button class="auth-tab active" id="passwordTab" onclick="switchAuthMode('password')">Password</button>
+                    <button class="auth-tab" id="pinTab" onclick="switchAuthMode('pin')">PIN</button>
+                </div>
+
+                <!-- Password Form -->
+                <form id="passwordForm" class="auth-form active" onsubmit="handlePasswordLogin(event)">
+                    <!-- Username field (hidden by default, shown on profile load failure) -->
+                    <div class="form-group" id="usernameGroup" style="display: none;">
+                        <label class="form-label">Username</label>
+                        <input type="text" class="form-input" id="username" placeholder="Enter your username" autocomplete="username">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Password</label>
+                        <input type="password" class="form-input" id="password" placeholder="Enter your password" autocomplete="current-password" required>
+                    </div>
+                    
+                    <button type="submit" class="auth-button" id="passwordBtn">
+                        <span class="btn-text">Sign In</span>
+                    </button>
+                </form>
+
+                <!-- PIN Form -->
+                <form id="pinForm" class="auth-form" onsubmit="handlePinLogin(event)">
+                    <div class="form-group" id="pinUsernameGroup" style="display: none;">
+                        <label class="form-label">Username</label>
+                        <input type="text" class="form-input" id="pinUsername" placeholder="Enter your username">
+                    </div>
+                
+                <div class="form-group">
+                    <label class="form-label">PIN Code</label>
+                    <input type="password" class="form-input pin-input" id="pinInput" placeholder="••••" maxlength="8" readonly>
+                </div>
+
+                <div class="pin-grid">
+                    <button type="button" class="pin-btn" onclick="addPinDigit('1')">1</button>
+                    <button type="button" class="pin-btn" onclick="addPinDigit('2')">2</button>
+                    <button type="button" class="pin-btn" onclick="addPinDigit('3')">3</button>
+                    <button type="button" class="pin-btn" onclick="addPinDigit('4')">4</button>
+                    <button type="button" class="pin-btn" onclick="addPinDigit('5')">5</button>
+                    <button type="button" class="pin-btn" onclick="addPinDigit('6')">6</button>
+                    <button type="button" class="pin-btn" onclick="addPinDigit('7')">7</button>
+                    <button type="button" class="pin-btn" onclick="addPinDigit('8')">8</button>
+                    <button type="button" class="pin-btn" onclick="addPinDigit('9')">9</button>
+                    <button type="button" class="pin-btn zero" onclick="addPinDigit('0')">0</button>
+                    <button type="button" class="pin-btn backspace" onclick="removePinDigit()">⌫</button>
+                </div>
+                
+                <button type="submit" class="auth-button" id="pinBtn">
+                    <span class="btn-text">Sign In with PIN</span>
+                </button>
+            </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentPin = '';
+        let selectedUser = null;
+        let userProfiles = [];
+
+        async function showLoginForm() {
+            document.getElementById('loginOverlay').classList.add('active');
+            document.getElementById('loginContainer').classList.add('profile-mode');
+            await loadProfiles();
+        }
+
+        function hideLoginForm() {
+            document.getElementById('loginOverlay').classList.remove('active');
+            hideMessage();
+            resetToProfileSelection();
+        }
+
+        async function loadProfiles() {
+            try {
+                const response = await fetch('/api/auth/profiles');
+                if (response.ok) {
+                    userProfiles = await response.json();
+                    localStorage.setItem('zoe_user_profiles', JSON.stringify(userProfiles));
+                } else {
+                    throw new Error('API returned error');
+                }
+            } catch (error) {
+                console.warn('Could not load profiles from API, using cached/demo profiles');
+                
+                // Try cached profiles
+                const cached = localStorage.getItem('zoe_user_profiles');
+                if (cached) {
+                    userProfiles = JSON.parse(cached);
+                } else {
+                    // Fallback to demo profiles
+                    userProfiles = [
+                        {
+                            user_id: 'admin',
+                            username: 'Admin',
+                            role: 'Administrator',
+                            avatar: 'A'
+                        },
+                        {
+                            user_id: 'user',
+                            username: 'User',
+                            role: 'User',
+                            avatar: 'U'
+                        }
+                    ];
+                    // Show username field since profiles failed to load
+                    document.getElementById('usernameGroup').style.display = 'block';
+                    document.getElementById('pinUsernameGroup').style.display = 'block';
+                }
+            }
+            
+            renderProfiles();
+        }
+
+        function renderProfiles() {
+            const grid = document.getElementById('profileGrid');
+            
+            // Add user profiles
+            const profileCards = userProfiles.map(profile => `
+                <div class="profile-card" onclick="selectProfile('${profile.user_id}', '${profile.username}', '${profile.avatar || profile.username.charAt(0).toUpperCase()}')">
+                    <div class="profile-avatar">${profile.avatar || profile.username.charAt(0).toUpperCase()}</div>
+                    <div class="profile-name">${profile.username}</div>
+                </div>
+            `).join('');
+            
+            // Add guest profile
+            const guestCard = `
+                <div class="profile-card profile-guest" onclick="handleGuestLogin(event)">
+                    <div class="profile-avatar">👤</div>
+                    <div class="profile-name">Guest</div>
+                </div>
+            `;
+            
+            grid.innerHTML = profileCards + guestCard;
+        }
+
+        function selectProfile(userId, username, avatar) {
+            selectedUser = { userId, username, avatar };
+            
+            // Update selected user display
+            document.getElementById('selectedAvatar').textContent = avatar;
+            document.getElementById('selectedName').textContent = username;
+            
+            // Hide profile selection, show auth section
+            document.getElementById('profileSelection').classList.add('hidden');
+            document.getElementById('authSection').classList.add('active');
+            document.getElementById('loginContainer').classList.remove('profile-mode');
+            
+            // Make header compact (hide title/subtitle)
+            document.querySelector('.login-header').classList.add('compact');
+            
+            // Focus password field
+            setTimeout(() => {
+                document.getElementById('password').focus();
+            }, 300);
+        }
+
+        function changeUser() {
+            resetToProfileSelection();
+        }
+
+        function resetToProfileSelection() {
+            selectedUser = null;
+            
+            // Clear forms
+            document.getElementById('password').value = '';
+            document.getElementById('pinInput').value = '';
+            currentPin = '';
+            
+            // Hide auth section, show profile selection
+            document.getElementById('authSection').classList.remove('active');
+            document.getElementById('profileSelection').classList.remove('hidden');
+            document.getElementById('loginContainer').classList.add('profile-mode');
+            
+            // Restore full header (show title/subtitle)
+            document.querySelector('.login-header').classList.remove('compact');
+            document.getElementById('loginTitle').textContent = "Who's using Zoe?";
+            document.getElementById('loginSubtitle').textContent = 'Select your profile';
+            
+            hideMessage();
+        }
+
+        function switchAuthMode(mode) {
+            // Update tabs
+            document.querySelectorAll('.auth-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.getElementById(mode + 'Tab').classList.add('active');
+
+            // Update forms
+            document.querySelectorAll('.auth-form').forEach(form => {
+                form.classList.remove('active');
+            });
+            document.getElementById(mode + 'Form').classList.add('active');
+
+            hideMessage();
+        }
+
+        function addPinDigit(digit) {
+            if (currentPin.length < 8) {
+                currentPin += digit;
+                document.getElementById('pinInput').value = '•'.repeat(currentPin.length);
+            }
+        }
+
+        function removePinDigit() {
+            currentPin = currentPin.slice(0, -1);
+            document.getElementById('pinInput').value = '•'.repeat(currentPin.length);
+        }
+
+        async function handlePasswordLogin(event) {
+            event.preventDefault();
+            
+            // Get username from selected user or fallback to input field
+            const username = selectedUser ? selectedUser.username : document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const btn = document.getElementById('passwordBtn');
+
+            if (!username || !password) {
+                showMessage('Please enter password', 'error');
+                return;
+            }
+
+            setLoading(btn, true);
+
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username,
+                        password,
+                        device_info: {
+                            type: 'web',
+                            device_id: getDeviceId(),
+                            user_agent: navigator.userAgent
+                        }
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    handleSuccessfulLogin(data);
+                } else if (data.error_message === 'PASSWORD_SETUP_REQUIRED') {
+                    // Redirect to auth.html for password setup
+                    window.location.href = '/auth.html?setup=' + encodeURIComponent(username);
+                } else {
+                    showMessage(data.error_message || 'Login failed', 'error');
+                }
+            } catch (error) {
+                console.warn('Auth service unavailable, trying demo mode');
+                // Demo fallback
+                if ((username.toLowerCase() === 'admin' && password === 'admin') || 
+                    (username.toLowerCase() === 'user' && password === 'user')) {
+                    
+                    const demoSession = {
+                        success: true,
+                        user_id: username.toLowerCase(),
+                        username: username,
+                        role: username.toLowerCase(),
+                        session_id: 'demo_' + Date.now(),
+                        session_type: 'password',
+                        expires_at: new Date(Date.now() + 24*60*60*1000).toISOString(),
+                        demo_mode: true
+                    };
+                    
+                    handleSuccessfulLogin(demoSession);
+                } else {
+                    showMessage('Auth service offline. Try admin/admin or user/user', 'error');
+                }
+            } finally {
+                setLoading(btn, false);
+            }
+        }
+
+        async function handlePinLogin(event) {
+            event.preventDefault();
+            
+            // Get username from selected user or fallback to input field
+            const username = selectedUser ? selectedUser.username : document.getElementById('pinUsername').value;
+            const btn = document.getElementById('pinBtn');
+
+            if (!username || currentPin.length < 4) {
+                showMessage('Please enter PIN (at least 4 digits)', 'error');
+                return;
+            }
+
+            setLoading(btn, true);
+
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username,
+                        password: currentPin,
+                        device_info: {
+                            type: 'web',
+                            device_id: getDeviceId()
+                        }
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    handleSuccessfulLogin(data);
+                } else {
+                    showMessage(data.error_message || 'Invalid PIN', 'error');
+                    currentPin = '';
+                    document.getElementById('pinInput').value = '';
+                }
+            } catch (error) {
+                // Demo fallback
+                if ((username.toLowerCase() === 'admin' && currentPin === 'admin') || 
+                    (username.toLowerCase() === 'user' && currentPin === 'user')) {
+                    
+                    const demoSession = {
+                        success: true,
+                        user_id: username.toLowerCase(),
+                        username: username,
+                        role: username.toLowerCase(),
+                        session_id: 'demo_' + Date.now(),
+                        session_type: 'passcode',
+                        expires_at: new Date(Date.now() + 24*60*60*1000).toISOString(),
+                        demo_mode: true
+                    };
+                    
+                    handleSuccessfulLogin(demoSession);
+                } else {
+                    showMessage('Auth service offline. Try admin/admin or user/user', 'error');
+                    currentPin = '';
+                    document.getElementById('pinInput').value = '';
+                }
+            } finally {
+                setLoading(btn, false);
+            }
+        }
+
+        async function handleGuestLogin(event) {
+            event.preventDefault();
+
+            try {
+                const response = await fetch('/api/auth/guest', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        device_info: {
+                            type: 'web',
+                            device_id: getDeviceId()
+                        }
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    handleSuccessfulLogin(data);
+                } else {
+                    showMessage('Guest access failed', 'error');
+                }
+            } catch (error) {
+                // Demo guest mode
+                const guestSession = {
+                    success: true,
+                    user_id: 'guest',
+                    username: 'Guest',
+                    role: 'guest',
+                    session_id: 'demo_guest_' + Date.now(),
+                    session_type: 'guest',
+                    expires_at: new Date(Date.now() + 24*60*60*1000).toISOString(),
+                    demo_mode: true
+                };
+                handleSuccessfulLogin(guestSession);
+            }
+        }
+
+        function handleSuccessfulLogin(data) {
+            if (!data || !data.success || !data.session_id) {
+                console.error('Invalid session data:', data);
+                showMessage('Login failed - invalid session', 'error');
+                return;
+            }
+            
+            localStorage.setItem('zoe_session', JSON.stringify(data));
+            showMessage('Welcome, ' + data.username + '!', 'success');
+            
+            setTimeout(() => {
+                // Always use standard dashboard; touch panels reach /touch directly
+                window.location.href = '/dashboard.html';
+            }, 1000);
+        }
+
+        function getDeviceId() {
+            let deviceId = localStorage.getItem('zoe_device_id');
+            if (!deviceId) {
+                deviceId = 'web_' + Math.random().toString(36).substr(2, 9);
+                localStorage.setItem('zoe_device_id', deviceId);
+            }
+            return deviceId;
+        }
+
+        function setLoading(button, loading) {
+            const btnText = button.querySelector('.btn-text');
+            if (loading) {
+                button.disabled = true;
+                btnText.innerHTML = '<span class="loading"></span>Signing In...';
+            } else {
+                button.disabled = false;
+                const isPinBtn = button.id === 'pinBtn';
+                btnText.textContent = isPinBtn ? 'Sign In with PIN' : 'Sign In';
+            }
+        }
+
+        function showMessage(message, type) {
+            const messageBox = document.getElementById('messageBox');
+            messageBox.textContent = message;
+            messageBox.className = 'message ' + type + ' show';
+        }
+
+        function hideMessage() {
+            const messageBox = document.getElementById('messageBox');
+            messageBox.className = 'message';
+        }
+
+        // Check for existing session on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            const session = localStorage.getItem('zoe_session');
+            if (session) {
+                try {
+                    const sessionData = JSON.parse(session);
+                    if (sessionData.user_id && sessionData.expires_at) {
+                        const expiresAt = new Date(sessionData.expires_at);
+                        const now = new Date();
+                        
+                        if (now < expiresAt) {
+                            // Valid session, redirect
+                            // Always use standard dashboard; touch panels reach /touch directly
+                            window.location.href = '/dashboard.html';
+                            return;
+                        } else {
+                            // Session expired
+                            localStorage.removeItem('zoe_session');
+                        }
+                    }
+                } catch (error) {
+                    localStorage.removeItem('zoe_session');
+                }
+            }
+        });
+
+        // Keyboard support for PIN entry
+        document.addEventListener('keydown', function(e) {
+            if (document.getElementById('pinForm').classList.contains('active')) {
+                if (e.key >= '0' && e.key <= '9') {
+                    addPinDigit(e.key);
+                } else if (e.key === 'Backspace') {
+                    e.preventDefault();
+                    removePinDigit();
+                }
+            }
+        });
+    </script>
+</body>
+</html>
+
