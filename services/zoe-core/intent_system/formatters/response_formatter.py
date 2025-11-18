@@ -1,240 +1,126 @@
 """
-Response Formatter
-==================
-
-Formats intent execution results as natural language responses.
-
-Provides:
-- Template-based response generation
-- Multiple response variations (for naturalness)
-- Slot interpolation
-- Error message formatting
+Response Formatter for P0-2
+Add confidence-aware language to LLM responses
+Target: User trust +20%
 """
-
 import logging
-import random
-from typing import Dict, List, Any, Optional
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
 
-# Response templates for each intent
-RESPONSE_TEMPLATES = {
-    # List intents
-    "ListAdd": [
-        "✅ Added {item} to your {list} list!",
-        "Done! {item} is on the {list} list.",
-        "Got it, added {item}.",
-        "✓ {item} added to {list}.",
-    ],
-    "ListRemove": [
-        "✅ Removed {item} from your {list} list!",
-        "Done! Took {item} off the list.",
-        "✓ {item} removed.",
-    ],
-    "ListShow": [
-        "Here's your {list} list:\n{items}",
-        "Your {list} list:\n{items}",
-    ],
-    "ListClear": [
-        "✅ Cleared your {list} list!",
-        "Done! Your {list} list is now empty.",
-        "✓ All items removed from {list}.",
-    ],
-    "ListComplete": [
-        "✅ Marked {item} as complete!",
-        "Done! {item} is complete.",
-        "✓ {item} checked off.",
-    ],
-    
-    # Home Assistant intents
-    "HassTurnOn": [
-        "✅ Turned on {device}!",
-        "{device} is now on.",
-        "Done, {device} is on.",
-    ],
-    "HassTurnOff": [
-        "✅ Turned off {device}!",
-        "{device} is now off.",
-        "Done, {device} is off.",
-    ],
-    "HassToggle": [
-        "✅ Toggled {device}!",
-        "Done! {device} toggled.",
-    ],
-    "HassSetBrightness": [
-        "✅ Set {device} to {brightness}%!",
-        "Done! {device} brightness is now {brightness}%.",
-    ],
-    "HassSetColor": [
-        "✅ Changed {device} to {color}!",
-        "Done! {device} is now {color}.",
-    ],
-    
-    # Time & weather intents
-    "TimeNow": [
-        "It's {time}.",
-        "The time is {time}.",
-        "Currently {time}.",
-    ],
-    "WeatherCurrent": [
-        "It's {temperature}° and {condition} right now.",
-        "Currently {temperature}° with {condition}.",
-    ],
-    
-    # Calendar intents
-    "CalendarCreate": [
-        "✅ Created event: {event}!",
-        "Done! Added {event} to your calendar.",
-        "✓ Event created: {event}.",
-    ],
-    "CalendarShow": [
-        "Here are your upcoming events:\n{events}",
-        "Your calendar:\n{events}",
-    ],
-    
-    # Error templates
-    "error_no_handler": [
-        "I don't know how to do that yet.",
-        "Sorry, I'm not sure how to handle that.",
-        "I can't help with that right now.",
-    ],
-    "error_execution": [
-        "Sorry, I encountered an error while processing that.",
-        "I had trouble doing that. Can you try again?",
-        "Something went wrong. Please try again.",
-    ],
-    "error_missing_param": [
-        "I didn't catch all the details. Can you repeat that?",
-        "Sorry, what did you want me to do?",
-        "Can you provide more information?",
-    ],
-}
-
-
 class ResponseFormatter:
-    """
-    Formats intent execution results as natural language.
-    """
+    """Formats LLM responses with confidence-aware language"""
     
-    def __init__(self, templates: Optional[Dict[str, List[str]]] = None):
-        """
-        Initialize response formatter.
-        
-        Args:
-            templates: Custom response templates (optional)
-        """
-        self.templates = templates or RESPONSE_TEMPLATES
-        logger.info("Initialized ResponseFormatter")
+    # Confidence thresholds
+    CONFIDENCE_THRESHOLDS = {
+        "high": 0.85,
+        "medium": 0.70,
+        "low": 0.50,
+        "very_low": 0.30
+    }
     
-    def format_response(
-        self,
-        intent_name: str,
-        slots: Dict[str, Any],
-        success: bool = True,
-        custom_message: Optional[str] = None
+    @staticmethod
+    def format_with_confidence(
+        response: str,
+        confidence: float,
+        sources: Optional[List[str]] = None,
+        uncertainty_reason: Optional[str] = None
     ) -> str:
         """
-        Format a response for an intent execution.
+        Format response with confidence-aware language
         
         Args:
-            intent_name: Name of the intent
-            slots: Intent slots (parameters)
-            success: Whether execution succeeded
-            custom_message: Override template with custom message
+            response: Original LLM response
+            confidence: Confidence score 0.0-1.0
+            sources: Optional list of source references
+            uncertainty_reason: Optional reason for low confidence
             
         Returns:
-            Formatted natural language response
+            Formatted response with appropriate qualifiers
         """
-        # Use custom message if provided
-        if custom_message:
-            return custom_message
+        response = response.strip()
         
-        # Get templates for this intent
-        templates = self.templates.get(intent_name)
-        
-        if not templates:
-            logger.warning(f"No template found for intent: {intent_name}")
-            return self._format_default(intent_name, slots, success)
-        
-        # Choose random template for variation
-        template = random.choice(templates)
-        
-        # Interpolate slots into template
-        try:
-            response = template.format(**slots)
+        # High confidence (≥ 0.85): No qualifier needed
+        if confidence >= ResponseFormatter.CONFIDENCE_THRESHOLDS["high"]:
+            logger.debug(f"[Confidence] HIGH ({confidence:.2f}) - no qualifier")
             return response
-        except KeyError as e:
-            logger.warning(f"Missing slot in template: {e}")
-            return self._format_default(intent_name, slots, success)
-    
-    def _format_default(
-        self,
-        intent_name: str,
-        slots: Dict[str, Any],
-        success: bool
-    ) -> str:
-        """
-        Format a default response when no template exists.
         
-        Args:
-            intent_name: Name of the intent
-            slots: Intent slots
-            success: Whether execution succeeded
-            
-        Returns:
-            Generic formatted response
-        """
-        if success:
-            return f"✅ {intent_name} completed successfully."
+        # Medium confidence (≥ 0.70): Soft qualifier
+        if confidence >= ResponseFormatter.CONFIDENCE_THRESHOLDS["medium"]:
+            logger.info(f"[Confidence] MEDIUM ({confidence:.2f}) - soft qualifier")
+            # Don't double-qualify if already has a qualifier (case-insensitive)
+            response_lower = response.lower()
+            if any(phrase in response_lower for phrase in ["based on", "from what", "i think", "i believe", "from my understanding"]):
+                logger.debug(f"[Confidence] Already qualified, skipping")
+                return response
+            return f"Based on what I know, {response[0].lower()}{response[1:]}"
+        
+        # Low confidence (≥ 0.50): Clear qualifier
+        if confidence >= ResponseFormatter.CONFIDENCE_THRESHOLDS["low"]:
+            logger.info(f"[Confidence] LOW ({confidence:.2f}) - clear qualifier")
+            if any(phrase in response.lower() for phrase in ["i'm not sure", "not entirely sure", "uncertain"]):
+                return response
+            return f"I'm not entirely sure, but {response[0].lower()}{response[1:]}"
+        
+        # Very low confidence (< 0.50): Admit limitation
+        logger.warning(f"[Confidence] VERY LOW ({confidence:.2f}) - admit limitation")
+        if uncertainty_reason:
+            return f"I don't have enough information about that. {uncertainty_reason}"
+        return "I don't have enough information to answer that confidently."
+    
+    @staticmethod
+    def should_add_qualifier(confidence: float) -> bool:
+        """Check if response needs a confidence qualifier"""
+        return confidence < ResponseFormatter.CONFIDENCE_THRESHOLDS["high"]
+    
+    @staticmethod
+    def get_confidence_level(confidence: float) -> str:
+        """Get confidence level name"""
+        if confidence >= ResponseFormatter.CONFIDENCE_THRESHOLDS["high"]:
+            return "high"
+        elif confidence >= ResponseFormatter.CONFIDENCE_THRESHOLDS["medium"]:
+            return "medium"
+        elif confidence >= ResponseFormatter.CONFIDENCE_THRESHOLDS["low"]:
+            return "low"
         else:
-            return f"❌ {intent_name} failed."
+            return "very_low"
     
-    def format_error(
-        self,
-        error_type: str = "execution",
-        details: Optional[str] = None
-    ) -> str:
+    @staticmethod
+    def estimate_response_confidence(response: str, intent=None, context_present: bool = True) -> float:
         """
-        Format an error message.
+        Estimate confidence based on response and context
         
         Args:
-            error_type: Type of error (no_handler, execution, missing_param)
-            details: Additional error details
+            response: LLM response
+            intent: ZoeIntent object
+            context_present: Whether context was available
             
         Returns:
-            Formatted error message
+            Estimated confidence 0.0-1.0
         """
-        template_key = f"error_{error_type}"
-        templates = self.templates.get(template_key, ["An error occurred."])
+        confidence = 0.85  # Default high
         
-        message = random.choice(templates)
+        # Tier 0 intents are highly confident
+        if intent and intent.tier == 0:
+            confidence = 0.95
         
-        if details:
-            message += f" ({details})"
+        # Response has uncertainty markers
+        uncertainty_markers = ["i don't know", "i'm not sure", "i don't have", "unclear", "uncertain"]
+        if any(marker in response.lower() for marker in uncertainty_markers):
+            confidence = max(0.3, confidence - 0.4)
         
-        return message
-    
-    def add_template(self, intent_name: str, templates: List[str]):
-        """
-        Add or update templates for an intent.
+        # No context when expected
+        if not context_present and intent and intent.tier >= 2:
+            confidence = max(0.5, confidence - 0.3)
         
-        Args:
-            intent_name: Name of the intent
-            templates: List of template strings
-        """
-        self.templates[intent_name] = templates
-        logger.debug(f"Added {len(templates)} templates for {intent_name}")
-
-
-# Global singleton
-_formatter: Optional[ResponseFormatter] = None
-
-
-def get_response_formatter() -> ResponseFormatter:
-    """Get global ResponseFormatter singleton."""
-    global _formatter
-    if _formatter is None:
-        _formatter = ResponseFormatter()
-    return _formatter
-
+        # Short, direct answers are confident
+        if len(response.split()) < 5 and intent and intent.tier == 0:
+            confidence = 0.95
+        
+        # Hedging language
+        hedging = ["might", "maybe", "possibly", "could be", "perhaps"]
+        if any(hedge in response.lower() for hedge in hedging):
+            confidence = max(0.6, confidence - 0.2)
+        
+        return confidence

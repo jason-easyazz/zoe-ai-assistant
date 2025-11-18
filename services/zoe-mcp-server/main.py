@@ -2430,7 +2430,8 @@ class ZoeMCPServer:
         """Store a fact about the user themselves"""
         fact_key = args.get("fact_key", "")
         fact_value = args.get("fact_value", "")
-        user_id = user_context.get("user_id", "default")
+        # Fix: user_context might be an object, extract user_id properly
+        user_id = getattr(user_context, 'user_id', None) or user_context.get("user_id", "default") if isinstance(user_context, dict) else "default"
         
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -2476,7 +2477,8 @@ class ZoeMCPServer:
     async def _get_self_info(self, args: Dict[str, Any], user_context) -> CallToolResult:
         """Get information about the user themselves"""
         fact_key = args.get("fact_key")
-        user_id = user_context.get("user_id", "default")
+        # Fix: user_context might be an object, extract user_id properly
+        user_id = getattr(user_context, 'user_id', None) or user_context.get("user_id", "default") if isinstance(user_context, dict) else "default"
         
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()

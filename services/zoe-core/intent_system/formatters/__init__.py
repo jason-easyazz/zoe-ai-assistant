@@ -1,11 +1,4 @@
-"""
-Response Formatters
-===================
+"""Response Formatter Module"""
+from .response_formatter import ResponseFormatter
 
-Natural language response formatting.
-"""
-
-from .response_formatter import ResponseFormatter, get_response_formatter
-
-__all__ = ["ResponseFormatter", "get_response_formatter"]
-
+__all__ = ["ResponseFormatter"]

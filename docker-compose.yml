@@ -20,6 +20,11 @@ services:
     - FULL_ACCESS=true
     - ZOE_DEV_MODE=true
     - DATABASE_PATH=/app/data/zoe.db
+    - USE_CONTEXT_VALIDATION=${USE_CONTEXT_VALIDATION:-false}
+    - USE_CONFIDENCE_FORMATTING=${USE_CONFIDENCE_FORMATTING:-false}
+    - USE_DYNAMIC_TEMPERATURE=${USE_DYNAMIC_TEMPERATURE:-false}
+    - USE_GROUNDING_CHECKS=${USE_GROUNDING_CHECKS:-false}
+    - USE_BEHAVIORAL_MEMORY=${USE_BEHAVIORAL_MEMORY:-false}
     networks:
     - zoe-network
     healthcheck:
@@ -295,12 +300,12 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - MODEL_PATH=/models/llama-3.2-3b-gguf/Llama-3.2-3B-Instruct-Q4_K_M.gguf
       - MODEL_NAME=llama3.2-3b
-      - CTX_SIZE=2048          # Optimized for voice (reduced from 4096)
-      - N_GPU_LAYERS=99        # All layers on GPU
+      - CTX_SIZE=512           # 🎙️ VOICE: Reduced from 1024 for real-time voice (faster prompt processing)
+      - N_GPU_LAYERS=33        # ⚡ FIXED: Reduced from 99 to fit in GPU memory (~1.2GB vs 1.9GB)
       - THREADS=8              # Increased for parallel work
-      - PARALLEL=8             # Increased for concurrent requests
-      - N_BATCH=512            # Larger batch for prompt processing
-      - N_UBATCH=256           # Micro-batch for generation
+      - PARALLEL=4             # 🎙️ VOICE: Reduced from 8 for lower latency
+      - N_BATCH=128            # 🎙️ VOICE: Reduced from 256 for real-time responsiveness
+      - N_UBATCH=64            # 🎙️ VOICE: Reduced from 128 for faster first token
       - CUDA_LAUNCH_BLOCKING=0 # Async CUDA (faster)
     networks:
       - zoe-network

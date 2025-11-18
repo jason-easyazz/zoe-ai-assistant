@@ -82,13 +82,25 @@ temporal_memory = TemporalMemoryIntegration()
 from intent_system.classifiers import UnifiedIntentClassifier, get_context_manager
 from intent_system.executors import IntentExecutor
 
+# Import P0 & P1 features
+from config import FeatureFlags
+from intent_system.validation import ContextValidator
+from intent_system.formatters.response_formatter import ResponseFormatter
+from intent_system.temperature_manager import TemperatureManager
+from grounding_validator import GroundingValidator, FastGroundingValidator
+from behavioral_memory import behavioral_memory
+
 # Initialize intent system
 USE_INTENT_SYSTEM = os.getenv("USE_INTENT_CHAT", "true").lower() == "true"
 intent_classifier = UnifiedIntentClassifier(intents_dir="intent_system/intents/en") if USE_INTENT_SYSTEM else None
 intent_executor = IntentExecutor() if USE_INTENT_SYSTEM else None
 context_manager = get_context_manager() if USE_INTENT_SYSTEM else None
 
+# Initialize P0/P1 validators
+grounding_validator = GroundingValidator() if FeatureFlags.PLATFORM == "jetson" else FastGroundingValidator()
+
 logger.info(f"Intent system enabled: {USE_INTENT_SYSTEM}")
+FeatureFlags.log_feature_status()
 
 # Wrapper functions for backward compatibility
 async def start_chat_episode(user_id: str, context_type: str = "chat") -> Optional[int]:
@@ -377,6 +389,29 @@ async def search_memories(query: str, user_id: str, time_range: str = "all") -> 
         """, (user_id, f"%{query}%", f"%{query}%"))
         memories["notes"] = [{"title": r[0], "content": r[1][:200]} for r in cursor.fetchall()]
         
+        # ✅ CRITICAL FIX: Search self facts stored in people table (is_self=1)
+        try:
+            cursor.execute("""
+                SELECT facts FROM people 
+                WHERE user_id = ? AND is_self = 1
+            """, (user_id,))
+            result = cursor.fetchone()
+            if result and result[0]:
+                facts = json.loads(result[0])
+                # Search through facts JSON for matches
+                for fact_key, fact_value in facts.items():
+                    if query.lower() in fact_key.lower() or query.lower() in str(fact_value).lower():
+                        memories["semantic_results"].append({
+                            "type": "self_fact",
+                            "fact_key": fact_key,
+                            "fact_value": fact_value,
+                            "content": f"{fact_key}: {fact_value}",
+                            "score": 0.95  # Very high score for user's own facts
+                        })
+                logger.info(f"✅ Found {len([m for m in memories['semantic_results'] if m.get('type') == 'self_fact'])} self facts")
+        except Exception as e:
+            logger.warning(f"self facts search failed: {e}")
+        
         conn.close()
     except Exception as e:
         logger.error(f"SQLite search error: {e}")
@@ -398,6 +433,18 @@ async def search_memories(query: str, user_id: str, time_range: str = "all") -> 
         logger.warning(f"Reranking failed: {e}")
     
     return memories
+
+async def get_user_context_with_validation(user_id: str, query: str = "", intent=None) -> Dict:
+    """Get user context with P0-1 validation (skip if not needed)"""
+    # P0-1: Context Validation
+    if FeatureFlags.USE_CONTEXT_VALIDATION and intent:
+        should_fetch = ContextValidator.should_retrieve_context(intent, query)
+        if not should_fetch:
+            logger.info(f"[P0-1] Context SKIPPED for {intent.name}")
+            return {}
+    
+    # Fetch context normally
+    return await get_user_context(user_id, query)
 
 async def get_user_context(user_id: str, query: str = "") -> Dict:
     """Get comprehensive user context with smart selection and caching"""
@@ -497,6 +544,17 @@ async def get_user_context(user_id: str, query: str = "") -> Dict:
         conn.close()
     except Exception as e:
         logger.error(f"Context fetch error: {e}")
+    
+    # ✅ CRITICAL FIX: Add Light RAG semantic search for memory retrieval
+    if query:
+        try:
+            memories = await search_memories(query, user_id)
+            context["semantic_results"] = memories.get("semantic_results", [])
+            context["temporal_results"] = memories.get("temporal_results", [])
+            context["conversations"] = memories.get("conversations", [])
+            logger.info(f"✅ Light RAG: {len(context.get('semantic_results', []))} semantic results")
+        except Exception as e:
+            logger.warning(f"Light RAG search failed: {e}")
     
     # ✅ NEW: Apply smart context selection if query provided
     if query:
@@ -847,12 +905,15 @@ async def generate_streaming_response(message: str, context: Dict, memories: Dic
             logger.info(f"🚀 Selected model: {selected_model} for query type: {query_type}")
             model_config = model_selector.get_model_config(selected_model)
             
-            # ✅ FIX: Increase response length for capability questions to prevent truncation
+            # ✅ VOICE FIX: Only increase for capability questions, keep voice responses concise
+            # Voice mode should stay at 128 tokens, but capability questions need more detail
             if any(phrase in message.lower() for phrase in ["what can you", "what are your", "tell me what", "capabilities", "what things"]):
-                # Temporarily increase num_predict for capability questions
-                original_num_predict = model_config.num_predict
-                model_config.num_predict = max(512, model_config.num_predict * 2)  # At least 512 tokens
-                logger.info(f"📏 Increased response length to {model_config.num_predict} for capability question")
+                # Temporarily increase num_predict for capability questions (NOT for voice mode)
+                is_voice_mode = hasattr(msg, 'voice_mode') and msg.voice_mode
+                if not is_voice_mode:
+                    original_num_predict = model_config.num_predict
+                    model_config.num_predict = max(256, model_config.num_predict * 2)  # Reduced from 512 for faster responses
+                    logger.info(f"📏 Increased response length to {model_config.num_predict} for capability question")
             
             logger.info(f"🤖 Streaming with model: {selected_model} (using /api/chat for KV cache)")
             
@@ -1203,6 +1264,17 @@ async def generate_response(message: str, context: Dict, memories: Dict, user_co
             logger.info(f"✅ Executed auto-injected tool call: {injected_response[:100]}")
             # Store the execution result to include in final response
             injected_execution_result = injected_response
+            
+            # ✅ FIX: If tool executed successfully, return result immediately (skip LLM)
+            if injected_execution_result and "Error" not in injected_execution_result and "❌" not in injected_execution_result:
+                logger.info(f"🎯 Returning auto-injected tool result immediately (skipping LLM)")
+                return {
+                    "response": injected_execution_result,
+                    "response_time": time.time() - start_time,
+                    "routing": "action_auto_injected",
+                    "memories_used": 0,
+                    "episode_id": episode_id
+                }
         except Exception as e:
             logger.warning(f"❌ Failed to execute auto-injected tool call: {e}")
             injected_execution_result = None
@@ -2126,11 +2198,24 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                         f"confidence: {intent.confidence:.2f}, "
                         f"latency: {intent_latency_ms:.2f}ms"
                     )
+                    
+                    # P0-3: Get appropriate temperature for this intent
+                    if FeatureFlags.USE_DYNAMIC_TEMPERATURE:
+                        temperature = TemperatureManager.get_temperature_for_intent(intent)
+                        logger.info(f"[P0-3] Temperature for {intent.name}: {temperature}")
+                    
                     result = await intent_executor.execute(intent, actual_user_id, context.get("session_id", "default"))
+                    
+                    # P0-2: Add confidence formatting if enabled
+                    response_text = result.message
+                    if FeatureFlags.USE_CONFIDENCE_FORMATTING:
+                        confidence = ResponseFormatter.estimate_response_confidence(response_text, intent, context_present=True)
+                        response_text = ResponseFormatter.format_with_confidence(response_text, confidence)
+                        logger.info(f"[P0-2] Confidence formatting applied: {confidence:.2f}")
                     
                     # Return non-streaming response
                     return {
-                        "response": result.message,
+                        "response": response_text,
                         "routing": "intent_system",
                         "intent": intent.name,
                         "tier": intent.tier,

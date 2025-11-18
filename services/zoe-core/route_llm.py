@@ -17,6 +17,10 @@ class ZoeRouter:
         self.enabled = LiteRouter is not None
         self.router = None
         if self.enabled:
+            # Set dummy API key if not provided (required by LiteLLM even for custom api_base)
+            if not os.getenv("OPENAI_API_KEY"):
+                os.environ["OPENAI_API_KEY"] = "sk-dummy-key-for-local-llm"
+            
             # ✅ UPDATED 2025-11-18: Using TESTED OPTIMIZED models (see MODEL_TEST_ANALYSIS.md)
             # NOW using llama.cpp server (zoe-llamacpp) with tested winning models
             self.router = LiteRouter(
@@ -26,8 +30,9 @@ class ZoeRouter:
                         "litellm_params": {
                             "model": "openai/qwen2.5:7b",  # 🥈 Tested: 90/100 tool score, 3.26s avg
                             "api_base": os.getenv("LLAMACPP_BASE", "http://zoe-llamacpp:11434/v1"),
+                            "api_key": "sk-dummy",  # Required by litellm but not used for llama.cpp
                             "temperature": 0.7,
-                            "num_predict": 512,
+                            "num_predict": 256,  # ⚡ OPTIMIZED: Reduced from 512 for faster responses
                             "num_ctx": 4096,
                             "repeat_penalty": 1.1,
                             "stop": ["\n\n", "User:", "Human:", "<tool_call>"],
@@ -40,9 +45,10 @@ class ZoeRouter:
                         "litellm_params": {
                             "model": "openai/llama3.2:3b",  # 🏆 Tested winner: 75/100, 3.19s avg, 0 hallucinations
                             "api_base": os.getenv("LLAMACPP_BASE", "http://zoe-llamacpp:11434/v1"),
+                            "api_key": "sk-dummy",  # Required by litellm but not used for llama.cpp
                             "temperature": 0.7,
-                            "num_predict": 512,  # Increased for complete responses
-                            "num_ctx": 4096,  # Increased for better context
+                            "num_predict": 128,  # 🎙️ VOICE: Reduced from 256 for real-time voice (<2s responses)
+                            "num_ctx": 512,  # 🎙️ VOICE: Reduced for faster prompt processing
                             "repeat_penalty": 1.1,
                             "stop": ["\n\n", "User:", "Human:", "<tool_call>"],
                             "keep_alive": "30m",
@@ -54,6 +60,7 @@ class ZoeRouter:
                         "litellm_params": {
                             "model": "openai/llama3.2-vision:11b",  # Vision capability (when available)
                             "api_base": os.getenv("LLAMACPP_BASE", "http://zoe-llamacpp:11434/v1"),
+                            "api_key": "sk-dummy",  # Required by litellm but not used for llama.cpp
                             "temperature": 0.7,
                             "num_predict": 512,
                             "num_ctx": 4096,
@@ -68,8 +75,9 @@ class ZoeRouter:
                         "litellm_params": {
                             "model": "openai/qwen2.5:7b",  # Same as action (excellent at both)
                             "api_base": os.getenv("LLAMACPP_BASE", "http://zoe-llamacpp:11434/v1"),
+                            "api_key": "sk-dummy",  # Required by litellm but not used for llama.cpp
                             "temperature": 0.7,
-                            "num_predict": 512,
+                            "num_predict": 256,  # ⚡ OPTIMIZED: Reduced from 512 for faster responses
                             "num_ctx": 4096,
                             "repeat_penalty": 1.1,
                             "stop": ["\n\n", "User:", "Human:", "<tool_call>"],
