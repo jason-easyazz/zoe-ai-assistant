@@ -1,0 +1,38 @@
+language: "en"
+
+intents:
+  TimeNow:
+    data:
+      - sentences:
+          - "what time is it"
+          - "what's the time"
+          - "current time"
+          - "time"
+          - "tell me the time"
+
+  DateToday:
+    data:
+      - sentences:
+          - "what's today's date"
+          - "what's the date"
+          - "what day is it"
+          - "today's date"
+          - "date"
+          - "what's today"
+
+  TimerSet:
+    data:
+      - sentences:
+          - "set [a] timer for {duration}"
+          - "timer [for] {duration}"
+          - "start [a] timer for {duration}"
+          - "set [a] {duration} timer"
+
+  TimerCancel:
+    data:
+      - sentences:
+          - "cancel [the] timer"
+          - "stop [the] timer"
+          - "clear [the] timer"
+          - "delete [the] timer"
+

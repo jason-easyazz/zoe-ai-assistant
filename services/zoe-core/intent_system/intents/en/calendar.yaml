@@ -1,0 +1,44 @@
+language: "en"
+
+intents:
+  CalendarCreate:
+    data:
+      - sentences:
+          - "remind me to {task} [at] {time}"
+          - "reminder [to] {task} [at] {time}"
+          - "set [a] reminder [for] {task} [at] {time}"
+          - "create [an] event [for] {task} [at] {time}"
+          - "add event {task} [at] {time}"
+          - "schedule {task} [at] {time}"
+          - "I need to {task} [at] {time}"
+
+  CalendarShow:
+    data:
+      - sentences:
+          - "what's on my calendar [today]"
+          - "show my calendar [for] [today]"
+          - "what [events] do I have [today]"
+          - "what's on my schedule [today]"
+          - "show my schedule [for] [today]"
+          - "my calendar"
+          - "my schedule"
+          - "my events"
+          - "what do I have scheduled"
+
+  CalendarDelete:
+    data:
+      - sentences:
+          - "delete [the] event {event}"
+          - "remove [the] event {event}"
+          - "cancel [the] event {event}"
+          - "cancel my {event} event"
+          - "delete my {event} reminder"
+
+  CalendarComplete:
+    data:
+      - sentences:
+          - "complete [the] event {event}"
+          - "done with {event}"
+          - "mark {event} as done"
+          - "{event} is done"
+

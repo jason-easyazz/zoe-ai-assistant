@@ -1,0 +1,24 @@
+language: "en"
+
+intents:
+  WeatherCurrent:
+    data:
+      - sentences:
+          - "what's the weather [like] [today]"
+          - "how's the weather [today]"
+          - "weather [today]"
+          - "what's it like outside"
+          - "how hot is it"
+          - "how cold is it"
+          - "what's the temperature"
+          - "temperature [outside]"
+
+  WeatherForecast:
+    data:
+      - sentences:
+          - "weather [forecast] [for] [tomorrow]"
+          - "what's the weather [going to be] tomorrow"
+          - "how's the weather tomorrow"
+          - "weather this week"
+          - "weekly forecast"
+

@@ -1,0 +1,208 @@
+# Secure Docker Compose Configuration
+# This file demonstrates security best practices for the zoe-core service
+# Review and merge these changes into docker-compose.yml after testing
+
+services:
+  # ============================================================
+  # OPTION 1: Secure API Container (Recommended Architecture)
+  # Split privileged operations into separate worker
+  # ============================================================
+  zoe-core:
+    build: ./services/zoe-core
+    container_name: zoe-core
+    restart: unless-stopped
+    ports:
+      - 8000:8000
+    
+    # SECURE VOLUMES: Minimal, scoped access only
+    volumes:
+      - ./services/zoe-core:/app
+      - ./data:/app/data
+      # REMOVED: /var/run/docker.sock (moved to zoe-worker)
+      # REMOVED: /home/zoe/assistant (use ./services/zoe-core instead)
+      # REMOVED: /usr/bin/docker
+      # REMOVED: /proc and /sys mounts
+    
+    # SECURE ENVIRONMENT
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_PATH=/app/data/zoe.db
+      - FULL_ACCESS=false  # CHANGED: Disabled full access
+      - ZOE_DEV_MODE=false  # CHANGED: Production mode
+      - WORKER_SERVICE_URL=http://zoe-worker:8100
+      - REDIS_HOST=zoe-redis
+      - REDIS_PORT=6379
+    
+    # SECURITY HARDENING
+    security_opt:
+      - no-new-privileges:true  # Prevent privilege escalation
+    cap_drop:
+      - ALL  # Drop all capabilities
+    cap_add:
+      - NET_BIND_SERVICE  # Only allow binding to ports
+    read_only: false  # Set to true if possible (need to test)
+    tmpfs:
+      - /tmp  # Writable temp directory
+    user: "1000:1000"  # Run as non-root user
+    
+    networks:
+      - zoe-network
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    
+    env_file:
+      - .env
+
+  # ============================================================
+  # NEW: Privileged Worker Container (Isolated)
+  # Handles Docker operations, system monitoring, etc.
+  # ============================================================
+  zoe-worker:
+    build: ./services/zoe-worker  # Create this service
+    container_name: zoe-worker
+    restart: unless-stopped
+    ports:
+      - 8100:8100  # Internal only, not exposed externally
+    
+    # MINIMAL PRIVILEGED ACCESS
+    volumes:
+      - ./services/zoe-worker:/app
+      - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # READ-ONLY
+      - ./services/zoe-core:/workspace/zoe-core:ro  # Read-only project access
+    
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_PATH=/app/data/zoe.db
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    
+    # SECURITY HARDENING (even for privileged container)
+    security_opt:
+      - no-new-privileges:true
+      - apparmor=docker-default
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+      # Add only specific capabilities needed for Docker operations
+    
+    networks:
+      - zoe-network
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8100/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================================
+  # OPTION 2: Minimal Privilege zoe-core (If worker not viable)
+  # Only use if splitting services is not feasible
+  # ============================================================
+  # zoe-core-minimal:
+  #   build: ./services/zoe-core
+  #   container_name: zoe-core
+  #   restart: unless-stopped
+  #   ports:
+  #     - 8000:8000
+  #   
+  #   # MINIMAL REQUIRED VOLUMES
+  #   volumes:
+  #     - ./services/zoe-core:/app
+  #     - ./data:/app/data
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro  # READ-ONLY if needed
+  #     # REMOVED: Full home directory access
+  #     # REMOVED: /proc, /sys unless specifically needed
+  #   
+  #   environment:
+  #     - PYTHONUNBUFFERED=1
+  #     - DATABASE_PATH=/app/data/zoe.db
+  #     - FULL_ACCESS=false
+  #     - DOCKER_HOST=unix:///var/run/docker.sock
+  #   
+  #   # SECURITY HARDENING
+  #   security_opt:
+  #     - no-new-privileges:true
+  #     - apparmor=docker-default
+  #   cap_drop:
+  #     - ALL
+  #   cap_add:
+  #     - NET_BIND_SERVICE
+  #   user: "1000:1000"  # Non-root
+  #   
+  #   networks:
+  #     - zoe-network
+
+networks:
+  zoe-network:
+    name: zoe-network
+    driver: bridge
+
+# ============================================================
+# SECURITY NOTES
+# ============================================================
+# 
+# 1. DOCKER SOCKET ACCESS
+#    - Only zoe-worker has socket access, and it's read-only
+#    - If write access is needed, audit all Docker API calls
+#    - Consider implementing approval workflow for destructive operations
+#    - Log all Docker operations for security monitoring
+# 
+# 2. FILE SYSTEM ISOLATION
+#    - Each service only has access to its own directory
+#    - Shared data through /app/data only
+#    - No direct access to host home directory
+#    - Use bind mounts for specific files if needed
+# 
+# 3. CAPABILITY REDUCTION
+#    - All capabilities dropped by default
+#    - Only NET_BIND_SERVICE added back (required for port binding)
+#    - If other capabilities needed, document WHY
+# 
+# 4. USER NAMESPACES
+#    - Run containers as non-root user (1000:1000)
+#    - Enable user namespace remapping in Docker daemon if possible
+# 
+# 5. NETWORK ISOLATION
+#    - All services on zoe-network (already configured)
+#    - Worker is not exposed externally (port 8100 internal only)
+#    - Consider adding network policies for additional isolation
+# 
+# 6. MONITORING & AUDITING
+#    - Enable Docker events logging
+#    - Monitor for unexpected container creation/modification
+#    - Alert on authentication failures
+#    - Track API key access patterns
+# 
+# ============================================================
+# IMPLEMENTATION CHECKLIST
+# ============================================================
+# 
+# [ ] 1. Review what requires Docker socket access in zoe-core
+# [ ] 2. Create zoe-worker service for privileged operations
+# [ ] 3. Update zoe-core to call worker for Docker operations
+# [ ] 4. Test all functionality with new configuration
+# [ ] 5. Remove old privileged mounts from zoe-core
+# [ ] 6. Set FULL_ACCESS=false in zoe-core
+# [ ] 7. Enable security options (no-new-privileges, apparmor)
+# [ ] 8. Drop unnecessary capabilities
+# [ ] 9. Run as non-root user where possible
+# [ ] 10. Add monitoring for security events
+# [ ] 11. Document any exceptions to security policy
+# [ ] 12. Schedule regular security reviews
+# 
+# ============================================================
+# ROLLBACK PLAN
+# ============================================================
+# 
+# If issues arise with secure configuration:
+# 1. Keep original docker-compose.yml as docker-compose.legacy.yml
+# 2. Test each security change incrementally
+# 3. Document any functionality that breaks with hardening
+# 4. Create exemptions only where absolutely necessary
+# 5. Set timeline to fix root causes of exemptions
+

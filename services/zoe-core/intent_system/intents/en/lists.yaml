@@ -1,0 +1,137 @@
+language: "en"
+
+intents:
+  ListAdd:
+    data:
+      # Basic add patterns
+      - sentences:
+          - "add {item} to [the] {list} [list]"
+          - "put {item} on [the] {list} [list]"
+          - "{list} colon {item}"
+          - "add {item}"
+          - "put {item}"
+        slots:
+          list: "shopping"
+      
+      # Natural language variations
+      - sentences:
+          - "I need to buy {item}"
+          - "don't forget to get {item}"
+          - "don't forget {item}"
+          - "remember to buy {item}"
+          - "remember to get {item}"
+          - "we're out of {item}"
+          - "we need {item}"
+          - "get {item}"
+          - "buy {item}"
+        slots:
+          list: "shopping"
+      
+      # With explicit "shopping" mention
+      - sentences:
+          - "add {item} to shopping"
+          - "shopping {item}"
+        slots:
+          list: "shopping"
+      
+      # Todo list
+      - sentences:
+          - "add {item} to [the] todo [list]"
+          - "add {item} to [the] to do [list]"
+          - "todo {item}"
+          - "to do {item}"
+          - "I need to {item}"
+        slots:
+          list: "todo"
+      
+      # Work list
+      - sentences:
+          - "add {item} to [the] work [list]"
+          - "add {item} to my work [list]"
+          - "work task {item}"
+          - "work {item}"
+        slots:
+          list: "work_todos"
+      
+      # Personal/todo list
+      - sentences:
+          - "add {item} to [the] personal [list]"
+          - "add {item} to my personal [list]"
+          - "add {item} to [the] personal todo [list]"
+          - "add {item} to my todo [list]"
+          - "personal task {item}"
+        slots:
+          list: "personal_todos"
+      
+      # Bucket list (explicit patterns)
+      - sentences:
+          - "add {item} to the bucket list"
+          - "add {item} to my bucket list"
+          - "add {item} to bucket list"
+          - "bucket list {item}"
+        slots:
+          list: "bucket"
+
+  ListRemove:
+    data:
+      - sentences:
+          - "remove {item} from [the] {list} [list]"
+          - "delete {item} from [the] {list}"
+          - "take {item} off [the] {list}"
+          - "cross off {item}"
+          - "we got {item}"
+          - "got {item}"
+          - "we have {item}"
+          - "remove {item}"
+          - "delete {item}"
+
+  ListShow:
+    data:
+      - sentences:
+          - "show [me] [the] {list} [list]"
+          - "what's on [the] {list} [list]"
+          - "read [the] {list} [list]"
+          - "list {list}"
+          - "show {list}"
+          - "what do I need to (buy|get)"
+          - "what's on my list"
+          - "show my list"
+          - "read my list"
+        slots:
+          list: "shopping"
+
+  ListClear:
+    data:
+      - sentences:
+          - "clear [the] {list} [list]"
+          - "empty [the] {list} [list]"
+          - "delete everything from {list}"
+          - "remove all from {list}"
+          - "clear my list"
+          - "empty my list"
+        slots:
+          list: "shopping"
+
+  ListComplete:
+    data:
+      - sentences:
+          - "mark {item} as (done|complete|finished)"
+          - "done with {item}"
+          - "{item} is done"
+          - "check off {item}"
+          - "complete {item}"
+          - "finished {item}"
+
+lists:
+  list:
+    values:
+      - "shopping"
+      - "todo"
+      - "work"
+      - "work_todos"
+      - "personal"
+      - "personal_todos"
+      - "grocery"
+      - "groceries"
+      - "bucket"
+

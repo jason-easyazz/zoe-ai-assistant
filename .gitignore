@@ -207,3 +207,17 @@ data/archive/*.db
 data/archive/*/*.db
 data/snapshot_key.key
 /services/zoe-vllm/
+
+# Database files (generated at runtime)
+services/zoe-core/temporal_memory.db
+services/zoe-core/user_data.db
+services/zoe-core/*.db
+services/zoe-core/*.db-shm
+services/zoe-core/*.db-wal
+
+# Encryption keys (NEVER commit)
+data/.encryption_key
+data/**/*.key
+
+# Vendor/Library files (large, versioned separately)
+services/zoe-ui/dist/lib/livekit/

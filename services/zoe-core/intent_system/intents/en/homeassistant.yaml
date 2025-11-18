@@ -1,0 +1,121 @@
+language: "en"
+
+intents:
+  HassTurnOn:
+    data:
+      - sentences:
+          - "turn on [the] {name}"
+          - "switch on [the] {name}"
+          - "{name} on"
+          - "turn [the] {name} on"
+          - "switch [the] {name} on"
+          - "enable [the] {name}"
+          - "activate [the] {name}"
+
+  HassTurnOff:
+    data:
+      - sentences:
+          - "turn off [the] {name}"
+          - "switch off [the] {name}"
+          - "{name} off"
+          - "turn [the] {name} off"
+          - "switch [the] {name} off"
+          - "disable [the] {name}"
+          - "deactivate [the] {name}"
+          - "shut off [the] {name}"
+
+  HassToggle:
+    data:
+      - sentences:
+          - "toggle [the] {name}"
+          - "flip [the] {name}"
+          - "switch [the] {name}"
+
+  HassSetBrightness:
+    data:
+      - sentences:
+          - "set [the] {name} to {brightness} percent"
+          - "set [the] {name} brightness to {brightness}"
+          - "dim [the] {name} to {brightness}"
+          - "brighten [the] {name} to {brightness}"
+          - "{name} brightness {brightness}"
+          - "make [the] {name} {brightness} percent"
+
+  HassSetColor:
+    data:
+      - sentences:
+          - "set [the] {name} to {color}"
+          - "make [the] {name} {color}"
+          - "change [the] {name} to {color}"
+          - "{name} {color}"
+          - "turn [the] {name} {color}"
+
+  HassClimateSetTemperature:
+    data:
+      - sentences:
+          - "set temperature to {temperature}"
+          - "set thermostat to {temperature}"
+          - "make it {temperature} degrees"
+          - "set [the] {name} to {temperature}"
+
+  HassCoverOpen:
+    data:
+      - sentences:
+          - "open [the] {name}"
+          - "raise [the] {name}"
+          - "open [the] blinds"
+          - "open [the] curtains"
+          - "raise [the] blinds"
+
+  HassCoverClose:
+    data:
+      - sentences:
+          - "close [the] {name}"
+          - "lower [the] {name}"
+          - "close [the] blinds"
+          - "close [the] curtains"
+          - "lower [the] blinds"
+
+  HassLockDoor:
+    data:
+      - sentences:
+          - "lock [the] {name}"
+          - "lock [the] door"
+          - "secure [the] {name}"
+
+  HassUnlockDoor:
+    data:
+      - sentences:
+          - "unlock [the] {name}"
+          - "unlock [the] door"
+          - "open [the] lock"
+
+lists:
+  brightness:
+    range:
+      from: 0
+      to: 100
+  
+  temperature:
+    range:
+      from: 50
+      to: 90
+  
+  color:
+    values:
+      - in: ["red", "crimson", "scarlet"]
+        out: "red"
+      - in: ["blue", "navy", "azure"]
+        out: "blue"
+      - in: ["green", "lime", "emerald"]
+        out: "green"
+      - in: ["yellow", "golden"]
+        out: "yellow"
+      - in: ["orange", "amber"]
+        out: "orange"
+      - in: ["purple", "violet"]
+        out: "purple"
+      - "white"
+      - "pink"
+      - "cyan"
+

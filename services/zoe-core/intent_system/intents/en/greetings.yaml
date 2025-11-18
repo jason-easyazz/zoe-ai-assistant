@@ -1,0 +1,51 @@
+language: "en"
+
+intents:
+  Greeting:
+    data:
+      - sentences:
+          - "hi"
+          - "hello"
+          - "hey"
+          - "hi there"
+          - "hello there"
+          - "hey there"
+          - "good morning"
+          - "good afternoon"
+          - "good evening"
+          - "hi zoe"
+          - "hey zoe"
+          - "hello zoe"
+
+  Goodbye:
+    data:
+      - sentences:
+          - "bye"
+          - "goodbye"
+          - "see you"
+          - "bye bye"
+          - "talk to you later"
+          - "later"
+          - "goodnight"
+          - "good night"
+
+  Thanks:
+    data:
+      - sentences:
+          - "thanks"
+          - "thank you"
+          - "thanks a lot"
+          - "thank you very much"
+          - "thanks zoe"
+          - "thank you zoe"
+          - "appreciate it"
+
+  Help:
+    data:
+      - sentences:
+          - "help"
+          - "help me"
+          - "what can you do"
+          - "what are your commands"
+          - "list commands"
+
