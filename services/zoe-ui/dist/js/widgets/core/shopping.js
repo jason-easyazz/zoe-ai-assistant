@@ -77,11 +77,15 @@ class ShoppingWidget extends WidgetModule {
     
     update() {
         // Reload items from backend
+        console.log('🛒 Shopping widget update() called');
+        console.log('  - this.element:', this.element);
+        console.log('  - this.userId:', this.userId);
         this.loadItems();
     }
     
     async loadItems() {
         try {
+            console.log('🛒 Loading items from API...');
             const response = await apiRequest(`/lists/shopping?user_id=${this.userId}`);
             const lists = response.lists || [];
             
@@ -91,6 +95,7 @@ class ShoppingWidget extends WidgetModule {
                 this.items = [];
             }
             
+            console.log(`🛒 Loaded ${this.items.length} items, rendering...`);
             this.render();
         } catch (error) {
             console.error('Failed to load shopping list:', error);
@@ -100,8 +105,11 @@ class ShoppingWidget extends WidgetModule {
     }
     
     render() {
+        console.log('🛒 render() called');
         const container = this.element.querySelector('#shopping-items');
         const countBadge = this.element.querySelector('#shopping-count');
+        console.log('  - container:', container);
+        console.log('  - countBadge:', countBadge);
         
         // Sort items: incomplete first, then completed
         const sortedItems = [...this.items].sort((a, b) => {
@@ -118,9 +126,13 @@ class ShoppingWidget extends WidgetModule {
         
         if (countBadge) {
             countBadge.textContent = incompleteCount;
+            console.log(`  - Updated badge to: ${incompleteCount}`);
         }
         
-        if (!container) return;
+        if (!container) {
+            console.warn('⚠️ Container #shopping-items not found!');
+            return;
+        }
         
         if (this.items.length === 0) {
             container.innerHTML = '<div style="text-align: center; color: #666; font-size: 12px; padding: 20px;">No items yet</div>';
@@ -141,6 +153,8 @@ class ShoppingWidget extends WidgetModule {
                         style="width: 24px; height: 24px; border: none; background: rgba(244, 67, 54, 0.1); color: #f44336; border-radius: 4px; cursor: pointer; font-size: 12px; opacity: 0; transition: opacity 0.2s;">×</button>
             </div>
         `).join('');
+        
+        console.log(`✅ Rendered ${sortedItems.length} items to DOM`);
         
         // Store instance reference for event handlers
         this.element.widgetInstance = this;

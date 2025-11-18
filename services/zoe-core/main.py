@@ -93,8 +93,8 @@ app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
 import httpx
 
 @app.get("/api/homeassistant/entities")
-async def proxy_homeassistant_entities():
-    """Proxy Home Assistant entities request"""
+async def proxy_homeassistant_entities(session = Depends(validate_session)):
+    """Proxy Home Assistant entities request - Requires authentication"""
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get("http://homeassistant-mcp-bridge:8007/entities")
@@ -107,8 +107,8 @@ async def proxy_homeassistant_entities():
         return {"entities": [], "count": 0, "error": str(e), "status": 500}
 
 @app.get("/api/homeassistant/services")
-async def proxy_homeassistant_services():
-    """Proxy Home Assistant services request"""
+async def proxy_homeassistant_services(session = Depends(validate_session)):
+    """Proxy Home Assistant services request - Requires authentication"""
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get("http://homeassistant-mcp-bridge:8007/services")

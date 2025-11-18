@@ -3,7 +3,7 @@ Push Notification API Endpoints
 Handles subscription management and notification sending
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional
 import logging
 
@@ -15,6 +15,7 @@ from models.push_subscription import (
     PushTestRequest
 )
 from services.push_notification_service import get_push_service
+from auth_integration import validate_session, AuthenticatedSession
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,9 @@ async def get_vapid_public_key():
 async def subscribe_to_push(
     subscription: PushSubscriptionRequest,
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Subscribe user to push notifications"""
+    user_id = session.user_id
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
@@ -91,7 +94,9 @@ async def unsubscribe_from_push(
 @router.get("/preferences")
 async def get_notification_preferences(
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Get user's notification preferences"""
+    user_id = session.user_id
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
@@ -138,7 +143,9 @@ async def send_notification(
     payload: NotificationPayload,
     target_user_id: str,
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Send a notification to a specific user (admin/system use)"""
+    user_id = session.user_id
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
@@ -200,6 +207,7 @@ async def get_user_subscriptions(
     session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get all active subscriptions for the current user"""
+    user_id = session.user_id
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
     

@@ -64,21 +64,43 @@ async def validate_session(
     # Check if request is from localhost or Docker network
     client_host = request.client.host if request.client else None
     
-    # Development mode: Allow localhost/Docker network access
-    if is_dev:
-        # Allow localhost/Docker network requests
-        if (client_host in ["127.0.0.1", "localhost", "::1", None] or
-            (client_host and (client_host.startswith("172.") or 
-                              client_host.startswith("192.168.") or 
-                              client_host.startswith("10.")))):
-            auth_logger.info(f"✅ DEV MODE: Allowing request from {client_host}")
-            return AuthenticatedSession(
-                session_id="dev-localhost",
-                user_id="developer",
-                permissions=["*"],
-                role="admin",
-                dev_bypass=True
-            )
+    # Development mode: Try to read real session first, then allow localhost fallback
+    if is_dev and (client_host in ["127.0.0.1", "localhost", "::1", None] or
+        (client_host and (client_host.startswith("172.") or 
+                          client_host.startswith("192.168.") or 
+                          client_host.startswith("10.")))):
+        
+        # 🔍 TRY TO READ REAL SESSION FIRST (from zoe-auth)
+        if x_session_id and x_session_id != "dev-localhost":
+            try:
+                # Attempt to validate real session
+                validate_url = f"{ZOE_AUTH_URL}/api/auth/user"
+                headers = {"X-Session-ID": x_session_id}
+                
+                async with httpx.AsyncClient(timeout=2.0) as client:
+                    resp = await client.get(validate_url, headers=headers)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        auth_logger.info(f"✅ DEV MODE: Using real session for user {data.get('user_id')}")
+                        return AuthenticatedSession(
+                            session_id=x_session_id,
+                            user_id=data.get("user_id"),
+                            permissions=data.get("permissions", []),
+                            role=data.get("role", "user"),
+                            dev_bypass=False
+                        )
+            except Exception as e:
+                auth_logger.debug(f"Could not validate session (fallback to dev): {e}")
+        
+        # FALLBACK: No valid session, use dev bypass
+        auth_logger.info(f"✅ DEV MODE: Allowing request from {client_host} (using developer fallback)")
+        return AuthenticatedSession(
+            session_id="dev-localhost",
+            user_id="developer",
+            permissions=["*"],
+            role="admin",
+            dev_bypass=True
+        )
     
     # Production mode: Require authentication
     if not x_session_id:

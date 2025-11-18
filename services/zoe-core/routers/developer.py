@@ -899,8 +899,8 @@ async def get_system_metrics():
         }
 
 @router.post("/restart-all")
-async def restart_all_containers():
-    """Restart all Docker containers"""
+async def restart_all_containers(session = Depends(require_permission("admin"))):
+    """Restart all Docker containers - Admin only"""
     try:
         import subprocess
         import asyncio
@@ -928,8 +928,8 @@ async def restart_all_containers():
         return {"status": "error", "message": f"Error restarting containers: {str(e)}"}
 
 @router.post("/clear-cache")
-async def clear_redis_cache():
-    """Clear Redis cache"""
+async def clear_redis_cache(session = Depends(require_permission("admin"))):
+    """Clear Redis cache - Admin only"""
     try:
         import subprocess
         # Command execution disabled by security policy
@@ -983,8 +983,8 @@ async def create_pre_task_backup(task_id: str, description: str = "Pre-task back
         return {"error": f"Pre-task backup failed: {str(e)}"}
 
 @router.post("/backup/restore")
-async def restore_backup(backup_path: str, restore_location: str = None):
-    """Restore from backup"""
+async def restore_backup(backup_path: str, restore_location: str = None, session = Depends(require_permission("admin"))):
+    """Restore from backup - Admin only"""
     
     if not HAS_BACKUP:
         return {"error": "Backup system not available"}
@@ -1012,8 +1012,8 @@ async def list_backups():
         return {"error": f"Failed to list backups: {str(e)}"}
 
 @router.post("/backup/cleanup")
-async def cleanup_backups(keep_count: int = 10):
-    """Clean up old backups"""
+async def cleanup_backups(keep_count: int = 10, session = Depends(require_permission("admin"))):
+    """Clean up old backups - Admin only"""
     
     if not HAS_BACKUP:
         return {"error": "Backup system not available"}
@@ -1131,7 +1131,7 @@ def _service_catalog() -> Dict[str, Dict[str, any]]:
     return {
         "zoe-core":   {"type": "self", "url": "http://localhost:8000/health"},
         "zoe-ui":     {"type": "http", "url": "http://zoe-ui:80/"},
-        "zoe-ollama": {"type": "http", "url": "http://zoe-ollama:11434/api/version"},
+        "zoe-ollama": {"type": "http", "url": "http://zoe-llamacpp:11434/api/version"},
         "zoe-redis":  {"type": "tcp",  "host": "zoe-redis", "port": 6379},
         "zoe-whisper": {"type": "tcp",  "host": "zoe-whisper", "port": 9001},
         "zoe-tts":    {"type": "tcp",  "host": "zoe-tts", "port": 9002},
@@ -1589,8 +1589,8 @@ async def check_task_throttle(task_id: str, estimated_memory_mb: float = 100):
         return {"error": f"Failed to check throttle: {str(e)}"}
 
 @router.post("/resources/cleanup")
-async def cleanup_old_metrics(days: int = 7):
-    """Clean up old metrics data"""
+async def cleanup_old_metrics(days: int = 7, session = Depends(require_permission("admin"))):
+    """Clean up old metrics data - Admin only"""
     
     if not HAS_RESOURCE_MONITOR:
         return {"error": "Resource monitor not available"}
@@ -2291,8 +2291,8 @@ async def get_all_users():
         return {"error": f"Failed to get users: {str(e)}"}
 
 @router.post("/users/migrate-data")
-async def migrate_existing_data():
-    """Migrate existing data to use user context"""
+async def migrate_existing_data(session = Depends(require_permission("admin"))):
+    """Migrate existing data to use user context - Admin only"""
     
     if not HAS_USER_CONTEXT:
         return {"error": "User Context not available"}
@@ -2304,8 +2304,8 @@ async def migrate_existing_data():
         return {"error": f"Failed to migrate data: {str(e)}"}
 
 @router.post("/users/cleanup-sessions")
-async def cleanup_expired_sessions():
-    """Clean up expired sessions"""
+async def cleanup_expired_sessions(session = Depends(require_permission("admin"))):
+    """Clean up expired sessions - Admin only"""
     
     if not HAS_USER_CONTEXT:
         return {"error": "User Context not available"}

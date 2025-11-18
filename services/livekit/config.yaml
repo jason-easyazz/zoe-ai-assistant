@@ -2,7 +2,9 @@ port: 7880
 rtc:
   port_range_start: 50000
   port_range_end: 50200
-  use_external_ip: true
+  use_external_ip: false
+  # For local network access, we need to announce the local IP
+  # LiveKit will auto-detect it from the host
 keys:
   devkey: secretsecretsecretsecretsecretsecret
 logging:

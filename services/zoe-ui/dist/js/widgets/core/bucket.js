@@ -52,6 +52,8 @@ class BucketWidget extends WidgetModule {
         const session = window.zoeAuth?.getCurrentSession();
         this.userId = session?.user_info?.user_id || session?.user_id || 'default';
         
+        console.log('🎯 Bucket widget init - userId:', this.userId);
+        
         const input = element.querySelector('#bucket-input');
         if (input) {
             input.addEventListener('keypress', (e) => {
@@ -73,13 +75,19 @@ class BucketWidget extends WidgetModule {
     }
     
     update() {
+        // Re-fetch user ID in case session loaded after init
+        const session = window.zoeAuth?.getCurrentSession();
+        this.userId = session?.user_info?.user_id || session?.user_id || 'default';
+        console.log('🎯 Bucket widget update - userId:', this.userId);
         this.loadItems();
     }
     
     async loadItems() {
         try {
+            console.log('🎯 Loading bucket items for user:', this.userId);
             const response = await apiRequest(`/lists/bucket?user_id=${this.userId}`);
             const lists = response.lists || [];
+            console.log('🎯 Bucket API returned', lists.length, 'lists');
             
             if (lists.length > 0) {
                 this.items = lists[0].items || [];

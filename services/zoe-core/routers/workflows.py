@@ -1,15 +1,16 @@
-from auth_integration import validate_session
 """
 Workflows Management System
 Handles automation workflows, triggers, and execution
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import sqlite3
 import json
 import os
+
+from auth_integration import validate_session, AuthenticatedSession
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
@@ -115,12 +116,13 @@ class WorkflowResponse(BaseModel):
 async def get_workflows(
     active_only: bool = Query(False, description="Show only active workflows"),
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Get all workflows"""
+    user_id = session.user_id
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     query = """
-        user_id = session.user_id
         SELECT id, name, description, trigger_type, trigger_config, actions, conditions,
                active, last_run, next_run, run_count, success_count, error_count,
                metadata, created_at, updated_at
@@ -164,11 +166,11 @@ async def get_workflows(
 @router.post("/")
 async def create_workflow(workflow: WorkflowCreate, session: AuthenticatedSession = Depends(validate_session)):
     """Create a new workflow"""
+    user_id = session.user_id
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     cursor.execute("""
-        user_id = session.user_id
         INSERT INTO workflows (user_id, name, description, trigger_type, trigger_config,
                              actions, conditions, active, metadata)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -189,11 +191,11 @@ async def create_workflow(workflow: WorkflowCreate, session: AuthenticatedSessio
 
 @router.get("/{workflow_id}")
 async def get_workflow(workflow_id: int, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     cursor.execute("""
-        user_id = session.user_id
         SELECT id, name, description, trigger_type, trigger_config, actions, conditions,
                active, last_run, next_run, run_count, success_count, error_count,
                metadata, created_at, updated_at
@@ -228,6 +230,7 @@ async def get_workflow(workflow_id: int, session: AuthenticatedSession = Depends
 
 @router.put("/{workflow_id}")
 async def update_workflow(workflow_id: int, workflow_update: WorkflowUpdate, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
@@ -281,11 +284,11 @@ async def delete_workflow(workflow_id: int, session: AuthenticatedSession = Depe
 
 @router.post("/{workflow_id}/toggle")
 async def toggle_workflow(workflow_id: int, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     cursor.execute("""
-        user_id = session.user_id
         UPDATE workflows 
         SET active = NOT active, updated_at = CURRENT_TIMESTAMP
         WHERE id = ? AND user_id = ?
@@ -302,12 +305,12 @@ async def toggle_workflow(workflow_id: int, session: AuthenticatedSession = Depe
 
 @router.post("/{workflow_id}/run")
 async def run_workflow(workflow_id: int, session: AuthenticatedSession = Depends(validate_session)):
+    user_id = session.user_id
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     # Get workflow details
     cursor.execute("""
-        user_id = session.user_id
         SELECT id, name, actions, conditions, active
         FROM workflows 
         WHERE id = ? AND user_id = ?
@@ -395,12 +398,13 @@ async def get_workflow_runs(
     workflow_id: int,
     limit: int = Query(20, description="Number of runs to return"),
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Get workflow execution history"""
+    user_id = session.user_id
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     cursor.execute("""
-        user_id = session.user_id
         SELECT wr.id, wr.status, wr.started_at, wr.completed_at, wr.error_message, wr.result_data
         FROM workflow_runs wr
         JOIN workflows w ON wr.workflow_id = w.id

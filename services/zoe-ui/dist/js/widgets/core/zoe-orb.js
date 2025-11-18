@@ -15,9 +15,17 @@ class ZoeOrbWidget extends WidgetModule {
         
         this.chatOpen = false;
         this.isListening = false;
-        this.recognition = null;
         this.conversationHistory = [];
         this.currentUtterance = null;
+        
+        // HTTP Voice (remote)
+        this.mediaRecorder = null;
+        this.mediaStream = null;
+        this.audioChunks = [];
+        
+        // LiveKit Voice (local)
+        this.room = null;
+        this.liveKitSDKLoaded = false;
     }
     
     getTemplate() {
@@ -44,7 +52,7 @@ class ZoeOrbWidget extends WidgetModule {
                 </div>
                 <div class="zoe-chat-input-area" style="padding: 12px; border-top: 1px solid rgba(226, 232, 240, 0.3); display: flex; gap: 8px; align-items: center; background: rgba(248, 250, 252, 0.5);">
                     <textarea class="zoe-chat-input" id="zoeInput-${this.type}" placeholder="Type a message or use voice..." style="flex: 1; border: 1px solid rgba(226, 232, 240, 0.8); border-radius: 24px; padding: 10px 16px; font-size: 12px; resize: none; min-height: 36px; max-height: 120px; background: rgba(255,255,255,0.95); font-family: inherit;"></textarea>
-                    <button class="zoe-voice-btn" onclick="window.zoeWidgets?.get('${this.type}')?.startVoiceRecognition()" style="background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 100%); border: none; border-radius: 50%; width: 36px; height: 36px; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px;">🎤</button>
+                    <button class="zoe-voice-btn" onclick="window.zoeWidgets?.get('${this.type}')?.toggleVoice()" style="background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 100%); border: none; border-radius: 50%; width: 36px; height: 36px; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px;">🎤</button>
                     <button class="zoe-send-btn" onclick="window.zoeWidgets?.get('${this.type}')?.sendMessage()" style="background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 100%); border: none; border-radius: 50%; width: 36px; height: 36px; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 16px;">➤</button>
                 </div>
             </div>
@@ -73,15 +81,68 @@ class ZoeOrbWidget extends WidgetModule {
         }
     }
     
-    startConversation() {
-        if (this.chatOpen) {
+    async startConversation() {
+        // Open chat if not already open
+        if (!this.chatOpen) {
+            this.openChat();
+            await this.activateVoice();
+        } else {
+            // If chat is open, close it
             this.closeChat();
-            return;
+        }
+    }
+    
+    async toggleVoice() {
+        // Toggle voice without closing chat
+        if (this.isListening) {
+            console.log('🔇 Stopping voice...');
+            this.stopVoice();
+        } else {
+            console.log('🎤 Starting voice...');
+            if (!this.chatOpen) {
+                this.openChat();
+            }
+            await this.activateVoice();
+        }
+    }
+    
+    async activateVoice() {
+        // 🎯 ADAPTIVE VOICE SYSTEM: Detect local vs remote access
+        const isLocal = this.isLocalAccess();
+        
+        if (isLocal) {
+            console.log('🏠 Local network detected - using LiveKit (offline Whisper STT + Zoe TTS)');
+            setTimeout(() => this.startLiveKitVoice(), 300);
+        } else {
+            console.log('🌐 Remote access detected - using HTTP audio (Whisper via HTTPS + Zoe TTS)');
+            setTimeout(() => this.startHTTPVoice(), 300);
+        }
+    }
+    
+    stopVoice() {
+        // Stop audio recording (HTTP method)
+        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+            this.mediaRecorder.stop();
+        }
+        if (this.mediaStream) {
+            this.mediaStream.getTracks().forEach(track => track.stop());
+            this.mediaStream = null;
         }
         
-        this.openChat();
-        // Auto-start voice recognition
-        setTimeout(() => this.startVoiceRecognition(), 300);
+        // Stop LiveKit (local method)
+        if (this.room) {
+            this.room.disconnect();
+            this.room = null;
+        }
+        
+        this.isListening = false;
+        this.resetState();
+    }
+    
+    isLocalAccess() {
+        const hostname = window.location.hostname;
+        // Check if accessing via local IP, localhost, or .local domain
+        return hostname.match(/^(localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|.*\.local)$/);
     }
     
     openChat() {
@@ -105,88 +166,280 @@ class ZoeOrbWidget extends WidgetModule {
             this.chatOpen = false;
         }
         
-        if (this.isListening) {
-            this.stopVoiceRecognition();
-        }
-        
+        // Stop voice and clean up
+        this.stopVoice();
         this.stopSpeaking();
     }
     
-    startVoiceRecognition() {
-        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-            this.addMessage('Sorry, voice recognition is not supported in your browser.', 'zoe');
-            return;
-        }
-        
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        this.recognition = new SpeechRecognition();
-        
-        this.recognition.continuous = false;
-        this.recognition.interimResults = false;
-        this.recognition.lang = 'en-US';
-        this.recognition.maxAlternatives = 1;
-        
-        const orb = this.element.querySelector(`#zoeOrb-${this.type}`);
-        const status = this.element.querySelector(`#zoeStatus-${this.type}`);
-        
-        if (orb) orb.classList.add('listening');
-        if (status) status.textContent = 'Listening...';
-        this.isListening = true;
-        
-        this.recognition.onstart = () => {
-            console.log('🎤 Voice recognition started');
-        };
-        
-        this.recognition.onresult = (event) => {
-            const transcript = event.results[0][0].transcript;
-            console.log('🎤 Recognized:', transcript);
-            
-            this.addMessage(transcript, 'user');
-            this.processRequest(transcript);
-        };
-        
-        this.recognition.onerror = (event) => {
-            console.error('🎤 Recognition error:', event.error);
-            let errorMessage = 'Sorry, I didn\'t catch that. Please try again.';
-            
-            switch(event.error) {
-                case 'no-speech':
-                    errorMessage = 'No speech detected. Please try speaking again.';
-                    break;
-                case 'audio-capture':
-                    errorMessage = 'No microphone found. Please check your microphone.';
-                    break;
-                case 'not-allowed':
-                    errorMessage = 'Microphone access denied. Please allow microphone access.';
-                    break;
-                case 'network':
-                    errorMessage = 'Network error. Please check your connection.';
-                    break;
-            }
-            
-            this.addMessage(errorMessage, 'zoe');
-            this.resetState();
-        };
-        
-        this.recognition.onend = () => {
-            console.log('🎤 Voice recognition ended');
-            this.resetState();
-        };
-        
+    async startHTTPVoice() {
+        // HTTP Audio Recording + Whisper STT (works through Cloudflare!)
         try {
-            this.recognition.start();
+            const orb = this.element.querySelector(`#zoeOrb-${this.type}`);
+            const status = this.element.querySelector(`#zoeStatus-${this.type}`);
+            
+            if (status) status.textContent = 'Starting...';
+            
+            // Request microphone access
+            this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            
+            if (orb) orb.classList.add('listening');
+            if (status) status.textContent = '🎤 Listening... (speak now)';
+            this.isListening = true;
+            
+            // Create audio chunks array
+            this.audioChunks = [];
+            
+            // Start recording
+            this.mediaRecorder = new MediaRecorder(this.mediaStream);
+            
+            this.mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    this.audioChunks.push(event.data);
+                }
+            };
+            
+            this.mediaRecorder.onstop = async () => {
+                try {
+                    if (status) status.textContent = 'Processing...';
+                    if (orb) orb.classList.add('processing');
+                    
+                    // Create audio blob
+                    const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+                    console.log('🎤 Recorded audio:', audioBlob.size, 'bytes');
+                    
+                    // Send to Whisper for transcription
+                    const formData = new FormData();
+                    formData.append('file', audioBlob, 'audio.webm');
+                    
+                    const response = await fetch('/api/whisper/transcribe', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    if (!response.ok) {
+                        throw new Error('Transcription failed');
+                    }
+                    
+                    const result = await response.json();
+                    const transcript = result.text.trim();
+                    
+                    if (transcript) {
+                        console.log('🎤 You said:', transcript);
+                        this.addMessage(transcript, 'user');
+                        
+                        // Send to Zoe and speak response with her real voice!
+                        await this.processRequestAndSpeak(transcript);
+                    } else {
+                        if (status) status.textContent = 'No speech detected';
+                        setTimeout(() => this.resetState(), 2000);
+                    }
+                    
+                    if (orb) orb.classList.remove('processing');
+                    
+                    // Restart recording if still in conversation mode
+                    if (this.chatOpen && this.isListening) {
+                        setTimeout(() => this.startNextRecording(), 500);
+                    }
+                    
+                } catch (error) {
+                    console.error('❌ Transcription error:', error);
+                    this.addMessage('Voice transcription failed. Please try again.', 'zoe');
+                    this.resetState();
+                }
+            };
+            
+            // Record for 5 seconds at a time
+            this.mediaRecorder.start();
+            console.log('✅ HTTP voice started (Whisper STT + Zoe TTS)');
+            
+            // Auto-stop after 5 seconds
+            setTimeout(() => {
+                if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                    this.mediaRecorder.stop();
+                }
+            }, 5000);
+            
         } catch (error) {
-            console.error('Failed to start speech recognition:', error);
-            this.addMessage('Failed to start voice recognition. Please try again.', 'zoe');
+            console.error('❌ Failed to start HTTP voice:', error);
+            this.addMessage('Microphone access denied or not available. Please check permissions.', 'zoe');
             this.resetState();
         }
     }
     
-    stopVoiceRecognition() {
-        if (this.recognition) {
-            this.recognition.stop();
+    startNextRecording() {
+        // Continue recording if chat is still open
+        if (this.chatOpen && this.isListening && this.mediaStream) {
+            this.audioChunks = [];
+            this.mediaRecorder = new MediaRecorder(this.mediaStream);
+            
+            this.mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    this.audioChunks.push(event.data);
+                }
+            };
+            
+            this.mediaRecorder.onstop = async () => {
+                // Same handling as above
+                const status = this.element.querySelector(`#zoeStatus-${this.type}`);
+                const orb = this.element.querySelector(`#zoeOrb-${this.type}`);
+                
+                try {
+                    const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+                    
+                    if (audioBlob.size < 1000) {
+                        // Too small, probably silence - restart
+                        if (this.chatOpen && this.isListening) {
+                            setTimeout(() => this.startNextRecording(), 500);
+                        }
+                        return;
+                    }
+                    
+                    if (status) status.textContent = 'Processing...';
+                    
+                    const formData = new FormData();
+                    formData.append('file', audioBlob, 'audio.webm');
+                    
+                    const response = await fetch('/api/whisper/transcribe', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    const result = await response.json();
+                    const transcript = result.text.trim();
+                    
+                    if (transcript && transcript.length > 3) {
+                        console.log('🎤 You said:', transcript);
+                        this.addMessage(transcript, 'user');
+                        await this.processRequestAndSpeak(transcript);
+                    }
+                    
+                    if (this.chatOpen && this.isListening) {
+                        setTimeout(() => this.startNextRecording(), 500);
+                    }
+                    
+                } catch (error) {
+                    console.error('❌ Transcription error:', error);
+                    if (this.chatOpen && this.isListening) {
+                        setTimeout(() => this.startNextRecording(), 500);
+                    }
+                }
+            };
+            
+            this.mediaRecorder.start();
+            setTimeout(() => {
+                if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                    this.mediaRecorder.stop();
+                }
+            }, 5000);
         }
-        this.resetState();
+    }
+    
+    // ===== LIVEKIT VOICE (LOCAL ACCESS) =====
+    
+    loadLiveKitSDK() {
+        if (window.LivekitClient || this.liveKitSDKLoaded) {
+            return Promise.resolve();
+        }
+        
+        return new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = '/lib/livekit/livekit-client.umd.min.js';
+            script.onload = () => {
+                this.liveKitSDKLoaded = true;
+                console.log('✅ LiveKit SDK loaded');
+                resolve();
+            };
+            script.onerror = reject;
+            document.head.appendChild(script);
+        });
+    }
+    
+    async startLiveKitVoice() {
+        try {
+            await this.loadLiveKitSDK();
+            
+            const status = this.element.querySelector(`#zoeStatus-${this.type}`);
+            const orb = this.element.querySelector(`#zoeOrb-${this.type}`);
+            
+            if (status) status.textContent = 'Connecting...';
+            if (orb) orb.classList.add('processing');
+            
+            const session = window.zoeAuth?.getCurrentSession();
+            const userId = session?.user_info?.user_id || session?.user_id || 'guest';
+            
+            console.log('🎙️ Starting LiveKit conversation for:', userId);
+            
+            const tokenResponse = await fetch('/api/voice/start-conversation', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Session-ID': session?.session_id || ''
+                },
+                body: JSON.stringify({
+                    user_id: userId,
+                    voice_profile: 'zoe',
+                    room_name: `voice-${userId}-${Date.now()}`
+                })
+            });
+            
+            if (!tokenResponse.ok) {
+                throw new Error(`Token request failed: ${tokenResponse.status}`);
+            }
+            
+            const tokenData = await tokenResponse.json();
+            console.log('✅ Got LiveKit token, connecting...');
+            
+            this.room = new LivekitClient.Room({
+                adaptiveStream: true,
+                dynacast: true,
+            });
+            
+            this.setupLiveKitListeners();
+            
+            await this.room.connect(tokenData.livekit_url, tokenData.token);
+            console.log('✅ Connected to LiveKit');
+            
+            if (status) status.textContent = 'Listening...';
+            if (orb) {
+                orb.classList.remove('processing');
+                orb.classList.add('listening');
+            }
+            this.isListening = true;
+            
+            await this.room.localParticipant.setMicrophoneEnabled(true);
+            console.log('✅ Microphone enabled - speak now!');
+            
+        } catch (error) {
+            console.error('❌ LiveKit error:', error);
+            this.addMessage(`Voice connection failed: ${error.message}`, 'zoe');
+            this.resetState();
+        }
+    }
+    
+    setupLiveKitListeners() {
+        if (!this.room) return;
+        
+        // Listen for data from voice agent (transcription & responses)
+        this.room.on(LivekitClient.RoomEvent.DataReceived, (payload, participant) => {
+            const decoder = new TextDecoder();
+            const data = JSON.parse(decoder.decode(payload));
+            
+            console.log('📨 Voice agent data:', data);
+            
+            if (data.type === 'transcription' && data.text) {
+                this.addMessage(data.text, 'user');
+            } else if (data.type === 'response' && data.text) {
+                this.addMessage(data.text, 'zoe');
+                // Speak with Zoe's real voice via TTS!
+                this.speakWithZoeVoice(data.text);
+            }
+        });
+        
+        // Handle disconnection
+        this.room.on(LivekitClient.RoomEvent.Disconnected, () => {
+            console.log('🔌 LiveKit disconnected');
+            this.resetState();
+        });
     }
     
     resetState() {
@@ -211,16 +464,24 @@ class ZoeOrbWidget extends WidgetModule {
         await this.processRequest(message);
     }
     
-    async processRequest(transcript) {
+    async processRequestAndSpeak(transcript) {
+        // Process request AND speak response with Zoe's real voice!
         const orb = this.element.querySelector(`#zoeOrb-${this.type}`);
         if (orb) orb.classList.add('processing');
         
         this.showTypingIndicator();
         
         try {
-            const response = await fetch('/api/chat/', {
+            const session = window.zoeAuth?.getCurrentSession();
+            
+            // Step 1: Send text to Zoe's brain
+            console.log('🎯 Sending to Zoe:', transcript);
+            const chatResponse = await fetch('/api/chat/', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Session-ID': session?.session_id || ''
+                },
                 body: JSON.stringify({
                     message: transcript,
                     conversation_history: this.conversationHistory.slice(-10),
@@ -228,8 +489,114 @@ class ZoeOrbWidget extends WidgetModule {
                 })
             });
             
+            if (!chatResponse.ok) {
+                throw new Error(`HTTP ${chatResponse.status}`);
+            }
+            
+            const data = await chatResponse.json();
+            const zoeResponse = data.response || 'I understand.';
+            
+            this.hideTypingIndicator();
+            this.addMessage(zoeResponse, 'zoe');
+            
+            // Step 2: Speak with Zoe's REAL voice! 🎤
+            await this.speakWithZoeVoice(zoeResponse);
+            
+        } catch (error) {
+            console.error('❌ Request failed:', error);
+            this.hideTypingIndicator();
+            this.addMessage("I'm having trouble right now. Please try again.", 'zoe');
+        }
+        
+        if (orb) orb.classList.remove('processing');
+    }
+    
+    async speakWithZoeVoice(text) {
+        try {
+            console.log('🔊 Generating Zoe\'s voice...');
+            
+            // Call TTS service to generate Zoe's voice
+            const ttsResponse = await fetch('/api/tts/synthesize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    text: text,
+                    voice: 'zoe',  // Use Zoe's cloned voice!
+                    speed: 1.0
+                })
+            });
+            
+            if (!ttsResponse.ok) {
+                throw new Error('TTS failed');
+            }
+            
+            // Get audio blob
+            const audioBlob = await ttsResponse.blob();
+            const audioUrl = URL.createObjectURL(audioBlob);
+            
+            // Play audio
+            const audio = new Audio(audioUrl);
+            
+            audio.onended = () => {
+                URL.revokeObjectURL(audioUrl); // Cleanup
+                console.log('✅ Zoe finished speaking');
+            };
+            
+            audio.onerror = (e) => {
+                console.error('❌ Audio playback error:', e);
+            };
+            
+            await audio.play();
+            console.log('🎤 Zoe is speaking with her real voice!');
+            
+        } catch (error) {
+            console.error('❌ TTS failed:', error);
+            // Continue without voice if TTS fails
+        }
+    }
+    
+    async processRequest(transcript) {
+        const orb = this.element.querySelector(`#zoeOrb-${this.type}`);
+        if (orb) orb.classList.add('processing');
+        
+        this.showTypingIndicator();
+        
+        try {
+            // Get session for authentication
+            const session = window.zoeAuth?.getCurrentSession();
+            console.log('🎯 Orb widget - session:', session ? 'found' : 'NOT FOUND');
+            console.log('🎯 Orb widget - session_id:', session?.session_id);
+            
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            
+            // Add session ID if available
+            if (session?.session_id) {
+                headers['X-Session-ID'] = session.session_id;
+                console.log('✅ Added session ID to headers');
+            } else {
+                console.warn('⚠️ No session ID available!');
+            }
+            
+            console.log('🎯 Sending message to /api/chat/:', transcript);
+            
+            const response = await fetch('/api/chat/', {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify({
+                    message: transcript,
+                    conversation_history: this.conversationHistory.slice(-10),
+                    mode: 'widget_chat'
+                })
+            });
+            
+            console.log('📡 Response status:', response.status);
+            
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
+                const errorText = await response.text();
+                console.error('❌ Response error:', errorText);
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
             }
             
             const data = await response.json();
@@ -241,15 +608,19 @@ class ZoeOrbWidget extends WidgetModule {
             console.error('Failed to process Zoe request:', error);
             this.hideTypingIndicator();
             
-            const fallbackResponses = [
-                "I'm here to help! Could you tell me more about what you need?",
-                "That's interesting! How can I assist you with that?",
-                "I understand. What would you like me to do for you?",
-                "Thanks for sharing! Is there anything specific I can help with?"
-            ];
+            // Show specific error message or fallback
+            let errorMessage = "I'm having trouble connecting right now. ";
             
-            const randomResponse = fallbackResponses[Math.floor(Math.random() * fallbackResponses.length)];
-            this.addMessage(randomResponse, 'zoe');
+            if (error.message.includes('401')) {
+                errorMessage = "Please refresh the page to reconnect. ";
+            } else if (error.message.includes('500')) {
+                errorMessage = "I'm experiencing technical difficulties. ";
+            } else if (error.message === 'Failed to fetch') {
+                errorMessage = "Network connection lost. Please check your internet. ";
+            }
+            
+            errorMessage += "Try again in a moment!";
+            this.addMessage(errorMessage, 'zoe');
         }
         
         this.resetState();
@@ -303,9 +674,9 @@ class ZoeOrbWidget extends WidgetModule {
             timestamp: new Date().toISOString()
         });
         
-        if (sender === 'zoe') {
-            this.speakText(text);
-        }
+        // Don't use browser TTS - we use Zoe's real voice via speakWithZoeVoice()
+        // Browser TTS is only a fallback if the real TTS fails
+        // (TTS is handled by processRequestAndSpeak and speakWithZoeVoice)
     }
     
     showTypingIndicator() {
@@ -377,7 +748,19 @@ class ZoeOrbWidget extends WidgetModule {
     }
     
     destroy() {
-        this.stopVoiceRecognition();
+        // Stop any active voice sessions
+        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
+            this.mediaRecorder.stop();
+        }
+        if (this.mediaStream) {
+            this.mediaStream.getTracks().forEach(track => track.stop());
+            this.mediaStream = null;
+        }
+        if (this.room) {
+            this.room.disconnect();
+            this.room = null;
+        }
+        
         this.stopSpeaking();
         
         // Cleanup global reference

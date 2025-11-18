@@ -1,7 +1,5 @@
-"""Settings management with working API key storage"""
-# TODO: Enable encrypted API key storage
-# from config.api_keys import APIKeyManager
-from fastapi import APIRouter, HTTPException
+"""Settings management with encrypted API key storage"""
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, Dict
 import os
@@ -10,20 +8,26 @@ from pathlib import Path
 from datetime import datetime
 import logging
 
+from auth_integration import validate_session, AuthenticatedSession
+from encryption_util import get_encryption_manager
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings")
 
 @router.get("/")
-async def get_all_settings():
+async def get_all_settings(
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Get all settings"""
     try:
+        user_id = session.user_id
         # Return a combined view of all settings
         settings = {
-            "apikeys": load_api_keys(),
-            "calendar": load_calendar_settings(),
-            "time_location": load_time_location_settings(),
+            "apikeys": load_api_keys(user_id),
+            "calendar": load_calendar_settings(user_id),
+            "time_location": load_time_location_settings(user_id),
             "version": "1.0.0"
         }
         return {"settings": settings}
@@ -37,101 +41,133 @@ class APIKeyUpdate(BaseModel):
 class APIKeysResponse(BaseModel):
     keys: Dict[str, str]
     
-# Secure storage location
-KEYS_FILE = Path("/app/data/api_keys.enc")
-ENV_FILE = Path("/app/.env")
+# Secure storage location (per-user)
+def get_keys_file(user_id: str) -> Path:
+    """Get user-specific encrypted keys file"""
+    return Path(f"/app/data/api_keys_{user_id}.enc")
 
-def load_api_keys() -> Dict[str, str]:
-    """Load API keys from secure storage"""
+def load_api_keys(user_id: str) -> Dict[str, str]:
+    """Load API keys from encrypted storage"""
     keys = {}
+    keys_file = get_keys_file(user_id)
+    encryption_manager = get_encryption_manager()
     
-    # Try JSON file first
-    if KEYS_FILE.exists():
+    # Try encrypted file
+    if keys_file.exists():
         try:
-            with open(KEYS_FILE) as f:
-                keys = json.load(f)
-        except:
-            pass
-    
-    # Check environment variables
-    for service in ["OPENAI", "ANTHROPIC", "GOOGLE"]:
-        env_key = f"{service}_API_KEY"
-        if os.getenv(env_key):
-            keys[service.lower()] = "****" + os.getenv(env_key)[-4:]
+            with open(keys_file) as f:
+                encrypted_data = json.load(f)
+            
+            # Decrypt each key
+            for service, encrypted_key in encrypted_data.items():
+                try:
+                    decrypted_key = encryption_manager.decrypt(encrypted_key)
+                    # Return masked version for display
+                    keys[service] = "****" + decrypted_key[-4:] if len(decrypted_key) >= 4 else "****"
+                except:
+                    keys[service] = "****[decryption failed]"
+        except Exception as e:
+            logger.error(f"Failed to load API keys: {e}")
     
     return keys
 
-def save_api_key(service: str, key: str):
-    """Save API key securely"""
+def save_api_key(user_id: str, service: str, key: str):
+    """Save API key with encryption"""
+    keys_file = get_keys_file(user_id)
+    encryption_manager = get_encryption_manager()
     
     # Load existing keys
-    keys = {}
-    if KEYS_FILE.exists():
+    encrypted_keys = {}
+    if keys_file.exists():
         try:
-            with open(KEYS_FILE) as f:
-                keys = json.load(f)
+            with open(keys_file) as f:
+                encrypted_keys = json.load(f)
         except:
             pass
     
-    # Update key
-    keys[service] = key
+    # Encrypt and update key
+    encrypted_keys[service] = encryption_manager.encrypt(key)
     
     # Save to file
-    KEYS_FILE.parent.mkdir(exist_ok=True)
-    with open(KEYS_FILE, 'w') as f:
-        json.dump(keys, f)
+    keys_file.parent.mkdir(exist_ok=True)
+    with open(keys_file, 'w') as f:
+        json.dump(encrypted_keys, f)
     
-    # Also set as environment variable for current session
-    env_name = f"{service.upper()}_API_KEY"
-    os.environ[env_name] = key
+    # Set restrictive permissions (owner read/write only)
+    os.chmod(keys_file, 0o600)
     
-    # Try to update .env file
+    logger.info(f"Saved encrypted API key for {service} (user: {user_id})")
+
+def get_decrypted_api_key(user_id: str, service: str) -> Optional[str]:
+    """Get decrypted API key for internal use"""
+    keys_file = get_keys_file(user_id)
+    encryption_manager = get_encryption_manager()
+    
+    if not keys_file.exists():
+        return None
+    
     try:
-        env_lines = []
-        env_updated = False
+        with open(keys_file) as f:
+            encrypted_data = json.load(f)
         
-        if ENV_FILE.exists():
-            with open(ENV_FILE) as f:
-                env_lines = f.readlines()
+        if service not in encrypted_data:
+            return None
         
-        # Update or add the key
-        for i, line in enumerate(env_lines):
-            if line.startswith(f"{env_name}="):
-                env_lines[i] = f"{env_name}={key}\n"
-                env_updated = True
-                break
-        
-        if not env_updated:
-            env_lines.append(f"{env_name}={key}\n")
-        
-        with open(ENV_FILE, 'w') as f:
-            f.writelines(env_lines)
-    except:
-        pass  # Fallback to JSON storage only
+        return encryption_manager.decrypt(encrypted_data[service])
+    except Exception as e:
+        logger.error(f"Failed to decrypt API key for {service}: {e}")
+        return None
 
 @router.get("/apikeys")
-async def get_api_keys():
+async def get_api_keys(
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Get current API key status (masked)"""
-    return {"keys": load_api_keys()}
+    user_id = session.user_id
+    return {"keys": load_api_keys(user_id)}
 
 @router.post("/apikeys")
-async def update_api_key(update: APIKeyUpdate):
+async def update_api_key(
+    update: APIKeyUpdate,
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Update an API key"""
+    user_id = session.user_id
+    
+    # Require admin role or standard authentication for API key management
+    if session.role not in ["admin", "user"]:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    
     try:
-        save_api_key(update.service, update.key)
+        save_api_key(user_id, update.service, update.key)
         return {"success": True, "message": f"{update.service} API key updated"}
     except Exception as e:
+        logger.error(f"Failed to save API key: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/apikeys/{service}")
-async def delete_api_key(service: str):
+async def delete_api_key(
+    service: str,
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Delete an API key"""
+    user_id = session.user_id
+    
+    # Require admin role or standard authentication
+    if session.role not in ["admin", "user"]:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    
     try:
-        keys = load_api_keys()
-        if service in keys:
-            del keys[service]
-            with open(KEYS_FILE, 'w') as f:
-                json.dump(keys, f)
+        keys_file = get_keys_file(user_id)
+        if keys_file.exists():
+            with open(keys_file) as f:
+                keys = json.load(f)
+            
+            if service in keys:
+                del keys[service]
+                with open(keys_file, 'w') as f:
+                    json.dump(keys, f)
+        
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -139,7 +175,8 @@ async def delete_api_key(service: str):
 # =============================
 # Intelligence Settings
 # =============================
-INTELLIGENCE_SETTINGS_FILE = Path("/app/data/intelligence_settings.json")
+def get_intelligence_settings_file(user_id: str) -> Path:
+    return Path(f"/app/data/intelligence_settings_{user_id}.json")
 
 class IntelligenceSettings(BaseModel):
     proactive_enabled: bool = True
@@ -150,70 +187,94 @@ class IntelligenceSettings(BaseModel):
     show_orb: bool = True
     do_not_disturb: bool = False
 
-def load_intelligence_settings() -> Dict:
-    if INTELLIGENCE_SETTINGS_FILE.exists():
+def load_intelligence_settings(user_id: str) -> Dict:
+    settings_file = get_intelligence_settings_file(user_id)
+    if settings_file.exists():
         try:
-            with open(INTELLIGENCE_SETTINGS_FILE) as f:
+            with open(settings_file) as f:
                 return json.load(f)
         except Exception:
             pass
     # defaults
     return IntelligenceSettings().dict()
 
-def save_intelligence_settings(settings: Dict) -> None:
-    INTELLIGENCE_SETTINGS_FILE.parent.mkdir(exist_ok=True)
-    with open(INTELLIGENCE_SETTINGS_FILE, 'w') as f:
+def save_intelligence_settings(user_id: str, settings: Dict) -> None:
+    settings_file = get_intelligence_settings_file(user_id)
+    settings_file.parent.mkdir(exist_ok=True)
+    with open(settings_file, 'w') as f:
         json.dump(settings, f, indent=2)
 
 @router.get("/intelligence")
-async def get_intelligence_settings():
+async def get_intelligence_settings(
+    session: AuthenticatedSession = Depends(validate_session)
+):
     try:
-        return {"settings": load_intelligence_settings()}
+        user_id = session.user_id
+        return {"settings": load_intelligence_settings(user_id)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/intelligence")
-async def update_intelligence_settings(settings: IntelligenceSettings):
+async def update_intelligence_settings(
+    settings: IntelligenceSettings,
+    session: AuthenticatedSession = Depends(validate_session)
+):
     try:
+        user_id = session.user_id
         data = settings.dict()
-        save_intelligence_settings(data)
+        save_intelligence_settings(user_id, data)
         return {"success": True}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/apikeys/test/{service}")
-async def test_api_key(service: str):
+async def test_api_key(
+    service: str,
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Test if an API key works"""
+    user_id = session.user_id
     # This would test the actual API
     # For now, just check if key exists
-    keys = load_api_keys()
+    keys = load_api_keys(user_id)
     exists = service in keys
     return {"service": service, "configured": exists, "working": exists}
 
 @router.get("/export")
-async def export_settings():
+async def export_settings(
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Export all settings and data"""
+    user_id = session.user_id
     try:
-        # This would export all user data
-        # For now, return a mock export
+        # Export user settings (without decrypted API keys)
         export_data = {
             "settings": {
-                "theme": "light",
-                "language": "en",
-                "notifications": True,
-                "timezone": "UTC"
+                "intelligence": load_intelligence_settings(user_id),
+                "calendar": load_calendar_settings(user_id),
+                "time_location": load_time_location_settings(user_id),
             },
-            "api_keys": load_api_keys(),
+            "api_keys_configured": list(load_api_keys(user_id).keys()),
             "exported_at": datetime.now().isoformat(),
-            "version": "1.0.0"
+            "version": "1.0.0",
+            "user_id": user_id
         }
         return export_data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/import")
-async def import_settings(import_data: dict):
+async def import_settings(
+    import_data: dict,
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Import settings and data"""
+    user_id = session.user_id
+    
+    # Require admin role for import
+    if session.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
+    
     try:
         # This would import user data
         # For now, just validate the structure
@@ -225,26 +286,37 @@ async def import_settings(import_data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/clear")
-async def clear_all_data():
-    """Clear all user data (dangerous operation)"""
+async def clear_all_data(
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    """Clear all user data (dangerous operation - admin only)"""
+    user_id = session.user_id
+    
+    # Require admin role for clearing data
+    if session.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
+    
     try:
         # This would clear all user data
         # For now, just return success
+        logger.warning(f"Clear all data requested by user {user_id}")
         return {"success": True, "message": "All data cleared successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 # Calendar Settings
-CALENDAR_SETTINGS_FILE = Path("/app/data/calendar_settings.json")
+def get_calendar_settings_file(user_id: str) -> Path:
+    return Path(f"/app/data/calendar_settings_{user_id}.json")
 
 class CalendarSettings(BaseModel):
     settings: Dict
 
-def load_calendar_settings() -> Dict:
+def load_calendar_settings(user_id: str) -> Dict:
     """Load calendar settings from storage"""
-    if CALENDAR_SETTINGS_FILE.exists():
+    settings_file = get_calendar_settings_file(user_id)
+    if settings_file.exists():
         try:
-            with open(CALENDAR_SETTINGS_FILE) as f:
+            with open(settings_file) as f:
                 return json.load(f)
         except:
             pass
@@ -260,29 +332,42 @@ def load_calendar_settings() -> Dict:
         "syncFrequency": "hourly"
     }
 
-def save_calendar_settings(settings: Dict):
+def save_calendar_settings(user_id: str, settings: Dict):
     """Save calendar settings to storage"""
-    CALENDAR_SETTINGS_FILE.parent.mkdir(exist_ok=True)
-    with open(CALENDAR_SETTINGS_FILE, 'w') as f:
+    settings_file = get_calendar_settings_file(user_id)
+    settings_file.parent.mkdir(exist_ok=True)
+    with open(settings_file, 'w') as f:
         json.dump(settings, f, indent=2)
 
 @router.get("/calendar")
-async def get_calendar_settings():
+async def get_calendar_settings(
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Get calendar settings"""
-    return {"settings": load_calendar_settings()}
+    user_id = session.user_id
+    return {"settings": load_calendar_settings(user_id)}
 
 @router.post("/calendar")
-async def save_calendar_settings_endpoint(settings_data: CalendarSettings):
+async def save_calendar_settings_endpoint(
+    settings_data: CalendarSettings,
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Save calendar settings"""
+    user_id = session.user_id
     try:
-        save_calendar_settings(settings_data.settings)
+        save_calendar_settings(user_id, settings_data.settings)
         return {"success": True, "message": "Calendar settings saved"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/calendar/api")
-async def save_calendar_api_key(api_data: dict):
-    """Save calendar API key (Google, Outlook, etc.)"""
+async def save_calendar_api_key(
+    api_data: dict,
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    """Save calendar API key (Google, Outlook, etc.) with encryption"""
+    user_id = session.user_id
+    
     try:
         service = api_data.get("service")
         api_key = api_data.get("apiKey")
@@ -290,28 +375,16 @@ async def save_calendar_api_key(api_data: dict):
         if not service or not api_key:
             raise HTTPException(status_code=400, detail="Service and API key required")
         
-        # Store calendar API keys separately
-        calendar_keys_file = Path("/app/data/calendar_api_keys.enc")
-        calendar_keys = {}
-        
-        if calendar_keys_file.exists():
-            try:
-                with open(calendar_keys_file) as f:
-                    calendar_keys = json.load(f)
-            except:
-                pass
-        
-        calendar_keys[service] = api_key
-        calendar_keys_file.parent.mkdir(exist_ok=True)
-        with open(calendar_keys_file, 'w') as f:
-            json.dump(calendar_keys, f, indent=2)
+        # Use the encrypted API key storage
+        save_api_key(user_id, f"calendar_{service}", api_key)
         
         return {"success": True, "message": f"{service} calendar API key saved"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 # Time and Location Settings
-TIME_LOCATION_SETTINGS_FILE = Path("/app/data/time_location_settings.json")
+def get_time_location_settings_file(user_id: str) -> Path:
+    return Path(f"/app/data/time_location_settings_{user_id}.json")
 
 class TimeLocationSettings(BaseModel):
     timezone: str = "UTC"
@@ -320,11 +393,12 @@ class TimeLocationSettings(BaseModel):
     weather_api_key: Optional[str] = None
     auto_location_detection: bool = False
 
-def load_time_location_settings() -> Dict:
+def load_time_location_settings(user_id: str) -> Dict:
     """Load time and location settings"""
-    if TIME_LOCATION_SETTINGS_FILE.exists():
+    settings_file = get_time_location_settings_file(user_id)
+    if settings_file.exists():
         try:
-            with open(TIME_LOCATION_SETTINGS_FILE) as f:
+            with open(settings_file) as f:
                 return json.load(f)
         except:
             pass
@@ -338,17 +412,21 @@ def load_time_location_settings() -> Dict:
         "auto_location_detection": False
     }
 
-def save_time_location_settings(settings: Dict):
+def save_time_location_settings(user_id: str, settings: Dict):
     """Save time and location settings"""
-    TIME_LOCATION_SETTINGS_FILE.parent.mkdir(exist_ok=True)
-    with open(TIME_LOCATION_SETTINGS_FILE, 'w') as f:
+    settings_file = get_time_location_settings_file(user_id)
+    settings_file.parent.mkdir(exist_ok=True)
+    with open(settings_file, 'w') as f:
         json.dump(settings, f, indent=2)
 
 @router.get("/time-location")
-async def get_time_location_settings():
+async def get_time_location_settings_route(
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Get time and location settings"""
+    user_id = session.user_id
     try:
-        settings = load_time_location_settings()
+        settings = load_time_location_settings(user_id)
         
         # Get current time info from time sync service
         try:
@@ -369,11 +447,15 @@ async def get_time_location_settings():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/time-location")
-async def save_time_location_settings_endpoint(settings_data: TimeLocationSettings):
+async def save_time_location_settings_endpoint(
+    settings_data: TimeLocationSettings,
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Save time and location settings"""
+    user_id = session.user_id
     try:
         settings = settings_data.dict()
-        save_time_location_settings(settings)
+        save_time_location_settings(user_id, settings)
         
         # Update timezone via time sync service
         if "timezone" in settings:
@@ -390,7 +472,9 @@ async def save_time_location_settings_endpoint(settings_data: TimeLocationSettin
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/time-location/sync")
-async def sync_time_now():
+async def sync_time_now(
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Manually trigger time synchronization"""
     try:
         # Since we're in a Docker container, we can't actually sync system time
@@ -403,7 +487,9 @@ async def sync_time_now():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/time-location/timezones")
-async def get_available_timezones():
+async def get_available_timezones(
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Get available timezones"""
     try:
         # Return common timezones directly to avoid timeout
@@ -432,8 +518,12 @@ async def get_available_timezones():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/time-location/location")
-async def set_location_from_coords(location_data: dict):
+async def set_location_from_coords(
+    location_data: dict,
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Set timezone based on location coordinates"""
+    user_id = session.user_id
     try:
         import requests
         response = requests.post("http://localhost:8000/api/time/location", 
@@ -443,11 +533,11 @@ async def set_location_from_coords(location_data: dict):
             result = response.json()
             
             # Update local settings
-            settings = load_time_location_settings()
+            settings = load_time_location_settings(user_id)
             settings["location"] = location_data
             if "timezone" in result:
                 settings["timezone"] = result["timezone"]
-            save_time_location_settings(settings)
+            save_time_location_settings(user_id, settings)
             
             return result
         else:
@@ -456,31 +546,38 @@ async def set_location_from_coords(location_data: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/time-location/auto-sync")
-async def enable_auto_sync():
+async def enable_auto_sync(
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Enable automatic time synchronization"""
+    user_id = session.user_id
     try:
-        settings = load_time_location_settings()
+        settings = load_time_location_settings(user_id)
         settings["auto_sync"] = True
-        save_time_location_settings(settings)
+        save_time_location_settings(user_id, settings)
         
         return {"success": True, "message": "Auto sync enabled"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/time-location/auto-sync")
-async def disable_auto_sync():
+async def disable_auto_sync(
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Disable automatic time synchronization"""
+    user_id = session.user_id
     try:
-        settings = load_time_location_settings()
+        settings = load_time_location_settings(user_id)
         settings["auto_sync"] = False
-        save_time_location_settings(settings)
+        save_time_location_settings(user_id, settings)
         
         return {"success": True, "message": "Auto sync disabled"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 # N8N Settings
-N8N_SETTINGS_FILE = Path("/app/data/n8n_settings.json")
+def get_n8n_settings_file(user_id: str) -> Path:
+    return Path(f"/app/data/n8n_settings_{user_id}.json")
 
 class N8nSettings(BaseModel):
     n8n_url: str
@@ -488,57 +585,92 @@ class N8nSettings(BaseModel):
     n8n_password: str
     n8n_api_key: str
 
-def load_n8n_settings() -> Dict[str, str]:
-    """Load N8N settings from storage"""
+def load_n8n_settings(user_id: str) -> Dict[str, str]:
+    """Load N8N settings from encrypted storage"""
     settings = {}
+    settings_file = get_n8n_settings_file(user_id)
     
-    if N8N_SETTINGS_FILE.exists():
+    if settings_file.exists():
         try:
-            with open(N8N_SETTINGS_FILE) as f:
+            with open(settings_file) as f:
                 settings = json.load(f)
+            
+            # Decrypt sensitive fields if they exist
+            encryption_manager = get_encryption_manager()
+            if 'n8n_password' in settings:
+                try:
+                    settings['n8n_password'] = encryption_manager.decrypt(settings['n8n_password'])
+                except:
+                    settings['n8n_password'] = ""
+            
+            if 'n8n_api_key' in settings:
+                try:
+                    settings['n8n_api_key'] = encryption_manager.decrypt(settings['n8n_api_key'])
+                except:
+                    settings['n8n_api_key'] = ""
         except Exception as e:
             logger.error(f"Failed to load N8N settings: {e}")
     
     return settings
 
-def save_n8n_settings(settings: Dict[str, str]):
-    """Save N8N settings to storage"""
+def save_n8n_settings(user_id: str, settings: Dict[str, str]):
+    """Save N8N settings to encrypted storage"""
     try:
+        settings_file = get_n8n_settings_file(user_id)
         # Ensure directory exists
-        N8N_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(N8N_SETTINGS_FILE, 'w') as f:
+        with open(settings_file, 'w') as f:
             json.dump(settings, f, indent=2)
         
-        logger.info("N8N settings saved successfully")
+        # Set restrictive permissions
+        os.chmod(settings_file, 0o600)
+        
+        logger.info(f"N8N settings saved successfully for user {user_id}")
     except Exception as e:
         logger.error(f"Failed to save N8N settings: {e}")
         raise
 
 @router.get("/n8n")
-async def get_n8n_settings():
+async def get_n8n_settings(
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Get N8N settings"""
+    user_id = session.user_id
     try:
-        settings = load_n8n_settings()
+        settings = load_n8n_settings(user_id)
         # Don't return password for security
         if 'n8n_password' in settings:
-            del settings['n8n_password']
+            settings['n8n_password'] = "****"
+        if 'n8n_api_key' in settings and settings['n8n_api_key']:
+            settings['n8n_api_key'] = "****" + settings['n8n_api_key'][-4:] if len(settings['n8n_api_key']) >= 4 else "****"
         return {"settings": settings}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/n8n")
-async def save_n8n_settings_endpoint(n8n_settings: N8nSettings):
-    """Save N8N settings"""
+async def save_n8n_settings_endpoint(
+    n8n_settings: N8nSettings,
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    """Save N8N settings with encryption"""
+    user_id = session.user_id
+    
+    # Require admin role for N8N integration
+    if session.role not in ["admin", "user"]:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    
     try:
+        encryption_manager = get_encryption_manager()
+        
         settings = {
             "n8n_url": n8n_settings.n8n_url,
             "n8n_username": n8n_settings.n8n_username,
-            "n8n_password": n8n_settings.n8n_password,
-            "n8n_api_key": n8n_settings.n8n_api_key
+            "n8n_password": encryption_manager.encrypt(n8n_settings.n8n_password),
+            "n8n_api_key": encryption_manager.encrypt(n8n_settings.n8n_api_key)
         }
         
-        save_n8n_settings(settings)
+        save_n8n_settings(user_id, settings)
         
         return {"success": True, "message": "N8N settings saved successfully"}
     except Exception as e:

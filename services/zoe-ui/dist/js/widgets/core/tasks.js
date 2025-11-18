@@ -41,6 +41,9 @@ class TasksWidget extends WidgetModule {
     }
     
     update() {
+        // Re-fetch user ID in case session loaded after init
+        const session = window.zoeAuth?.getCurrentSession();
+        this.userId = session?.user_info?.user_id || session?.user_id || 'default';
         this.loadTasks();
     }
     

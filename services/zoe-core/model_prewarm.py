@@ -26,7 +26,7 @@ async def prewarm_models(models: List[str] = None):
             models = ["phi3:mini"]  # PRIMARY CPU model
             logger.info("🥧 Pi5 mode: Pre-warming CPU-optimized models")
     
-    ollama_url = os.getenv("OLLAMA_URL", "http://zoe-ollama:11434")
+    llm_url = os.getenv("LLM_URL", "http://zoe-llamacpp:11434")
     
     async with httpx.AsyncClient(timeout=60.0) as client:
         for model in models:
@@ -41,18 +41,14 @@ async def prewarm_models(models: List[str] = None):
                 
                 logger.info(f"   Loading with num_gpu={num_gpu}")
                 
-                # Send a minimal request to load the model into GPU
+                # Send a minimal request to load the model into GPU (OpenAI format)
                 response = await client.post(
-                    f"{ollama_url}/api/generate",
+                    f"{llm_url}/v1/chat/completions",
                     json={
                         "model": model,
-                        "prompt": "warmup",
+                        "messages": [{"role": "user", "content": "hi"}],
                         "stream": False,
-                        "options": {
-                            "num_predict": 1,  # Minimal generation
-                            "keep_alive": "30m",  # ✅ Keep models loaded for 30 minutes
-                            "num_gpu": num_gpu  # Use config from model_config.py
-                        }
+                        "max_tokens": 5  # Minimal generation
                     },
                     timeout=60.0
                 )

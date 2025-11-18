@@ -14,6 +14,7 @@ import hashlib
 import pickle
 from dataclasses import dataclass
 from enum import Enum
+import struct
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +26,47 @@ class EntityType(Enum):
     GENERAL = "general"
     EVENT = "event"
     LOCATION = "location"
+
+class FallbackEmbeddingModel:
+    """
+    Deterministic fallback embedding model for offline environments.
+    Uses hash-based embeddings when sentence-transformers is unavailable.
+    """
+    def __init__(self, embedding_dim=384):
+        self.embedding_dim = embedding_dim
+        logger.info(f"Using fallback embedding model (dimension={embedding_dim})")
+    
+    def encode(self, text: str) -> np.ndarray:
+        """Generate deterministic hash-based embedding for text"""
+        # Create a deterministic hash-based embedding
+        hash_obj = hashlib.sha256(text.encode())
+        hash_bytes = hash_obj.digest()
+        
+        # Convert to float32 array of the right size
+        embedding = []
+        for i in range(0, len(hash_bytes), 4):
+            chunk = hash_bytes[i:i+4]
+            if len(chunk) == 4:
+                val = struct.unpack('>I', chunk)[0] / (2**32)  # Normalize to 0-1
+                embedding.append(val)
+        
+        # Pad or truncate to the right size
+        while len(embedding) < self.embedding_dim:
+            # Use additional hash rounds for padding
+            hash_obj = hashlib.sha256(hash_obj.digest())
+            hash_bytes = hash_obj.digest()
+            for i in range(0, len(hash_bytes), 4):
+                if len(embedding) >= self.embedding_dim:
+                    break
+                chunk = hash_bytes[i:i+4]
+                if len(chunk) == 4:
+                    val = struct.unpack('>I', chunk)[0] / (2**32)
+                    embedding.append(val)
+        
+        embedding = embedding[:self.embedding_dim]
+        
+        # Convert to numpy array
+        return np.array(embedding, dtype=np.float32)
 
 @dataclass
 class MemoryResult:
@@ -70,15 +112,17 @@ class LightRAGMemorySystem:
             # Try to use sentence-transformers first
             from sentence_transformers import SentenceTransformer
             self.embedding_model = SentenceTransformer(self.embedding_model_name)
+            self._use_fallback_embeddings = False
             logger.info("Embedding model loaded successfully")
         except ImportError:
             logger.warning("sentence-transformers not available, using fallback")
-            # Fallback to simple hash-based embeddings for testing
-            self.embedding_model = None
+            # Use deterministic fallback embedding model
+            self.embedding_model = FallbackEmbeddingModel(self.embedding_dim)
             self._use_fallback_embeddings = True
         except Exception as e:
             logger.warning(f"Failed to load embedding model: {e}, using fallback")
-            self.embedding_model = None
+            # Use deterministic fallback embedding model
+            self.embedding_model = FallbackEmbeddingModel(self.embedding_dim)
             self._use_fallback_embeddings = True
     
     def init_enhanced_database(self):
@@ -212,40 +256,12 @@ class LightRAGMemorySystem:
     def generate_embedding(self, text: str) -> bytes:
         """Generate embedding for text"""
         try:
-            if self.embedding_model is not None:
-                embedding = self.embedding_model.encode(text)
-                return embedding.tobytes()
-            else:
-                # Fallback: create a simple hash-based embedding
-                return self._generate_fallback_embedding(text)
+            # Use the embedding model (either real or fallback)
+            embedding = self.embedding_model.encode(text)
+            return embedding.tobytes()
         except Exception as e:
             logger.error(f"Failed to generate embedding: {e}")
             raise
-    
-    def _generate_fallback_embedding(self, text: str) -> bytes:
-        """Generate a simple fallback embedding for testing"""
-        import hashlib
-        import struct
-        
-        # Create a simple hash-based embedding
-        hash_obj = hashlib.sha256(text.encode())
-        hash_bytes = hash_obj.digest()
-        
-        # Convert to float32 array of the right size
-        embedding = []
-        for i in range(0, len(hash_bytes), 4):
-            chunk = hash_bytes[i:i+4]
-            if len(chunk) == 4:
-                val = struct.unpack('>I', chunk)[0] / (2**32)  # Normalize to 0-1
-                embedding.append(val)
-        
-        # Pad or truncate to the right size
-        while len(embedding) < self.embedding_dim:
-            embedding.append(0.0)
-        embedding = embedding[:self.embedding_dim]
-        
-        # Convert to bytes
-        return struct.pack('f' * len(embedding), *embedding)
     
     def generate_embedding_hash(self, text: str) -> str:
         """Generate hash for embedding cache"""

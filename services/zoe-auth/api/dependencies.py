@@ -258,7 +258,7 @@ def require_device_type(allowed_types: list) -> Callable:
 
 def rate_limit(max_requests: int, window_seconds: int) -> Callable:
     """
-    Create a rate limiting dependency
+    Create a rate limiting dependency with Redis-based sliding window
     
     Args:
         max_requests: Maximum requests allowed
@@ -271,15 +271,136 @@ def rate_limit(max_requests: int, window_seconds: int) -> Callable:
         request: Request,
         current_session: Optional[AuthSession] = Depends(optional_session)
     ) -> None:
-        # Simple rate limiting implementation
-        # In production, this would use Redis or similar
-        identifier = current_session.user_id if current_session else request.client.host
+        import time
         
-        # TODO: Implement actual rate limiting logic
-        # For now, just pass through
-        pass
+        # Get identifier - prefer user_id, fallback to IP
+        identifier = current_session.user_id if current_session else (
+            request.client.host if request.client else "unknown"
+        )
+        
+        # Try to use Redis if available
+        try:
+            import redis
+            import os
+            
+            redis_host = os.getenv("REDIS_HOST", "zoe-redis")
+            redis_port = int(os.getenv("REDIS_PORT", "6379"))
+            
+            # Connect to Redis
+            r = redis.Redis(
+                host=redis_host,
+                port=redis_port,
+                decode_responses=True,
+                socket_connect_timeout=1,
+                socket_timeout=1
+            )
+            
+            # Rate limit key
+            key = f"rate_limit:{identifier}:{request.url.path}"
+            current_time = time.time()
+            window_start = current_time - window_seconds
+            
+            # Use sorted set for sliding window
+            pipe = r.pipeline()
+            
+            # Remove old entries
+            pipe.zremrangebyscore(key, 0, window_start)
+            
+            # Count requests in window
+            pipe.zcard(key)
+            
+            # Add current request
+            pipe.zadd(key, {str(current_time): current_time})
+            
+            # Set expiry
+            pipe.expire(key, window_seconds + 10)
+            
+            results = pipe.execute()
+            request_count = results[1]
+            
+            if request_count >= max_requests:
+                logger.warning(
+                    f"Rate limit exceeded for {identifier} on {request.url.path}: "
+                    f"{request_count}/{max_requests} in {window_seconds}s"
+                )
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Rate limit exceeded. Max {max_requests} requests per {window_seconds} seconds.",
+                    headers={"Retry-After": str(window_seconds)}
+                )
+                
+        except ImportError:
+            # Redis not available - fall back to in-memory tracking
+            logger.warning("Redis not available for rate limiting - using fallback")
+            _in_memory_rate_limit(identifier, request.url.path, max_requests, window_seconds)
+        except Exception as e:
+            # Redis connection failed or other error - fall back to in-memory tracking
+            logger.warning(f"Redis error ({type(e).__name__}): {e} - using fallback")
+            _in_memory_rate_limit(identifier, request.url.path, max_requests, window_seconds)
     
     return check_rate_limit
+
+
+# In-memory fallback for rate limiting (not production-ready for multi-instance)
+_rate_limit_storage = {}
+_rate_limit_lock = None
+
+def _in_memory_rate_limit(identifier: str, path: str, max_requests: int, window_seconds: int):
+    """Fallback in-memory rate limiting (not suitable for production multi-instance)"""
+    import time
+    import threading
+    
+    global _rate_limit_lock
+    if _rate_limit_lock is None:
+        _rate_limit_lock = threading.Lock()
+    
+    key = f"{identifier}:{path}"
+    current_time = time.time()
+    window_start = current_time - window_seconds
+    
+    with _rate_limit_lock:
+        # Initialize if not exists
+        if key not in _rate_limit_storage:
+            _rate_limit_storage[key] = []
+        
+        # Remove old entries
+        _rate_limit_storage[key] = [
+            ts for ts in _rate_limit_storage[key] 
+            if ts > window_start
+        ]
+        
+        # Check limit
+        if len(_rate_limit_storage[key]) >= max_requests:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded. Max {max_requests} requests per {window_seconds} seconds.",
+                headers={"Retry-After": str(window_seconds)}
+            )
+        
+        # Add current request
+        _rate_limit_storage[key].append(current_time)
+        
+        # Cleanup old keys periodically (every 100 requests)
+        if len(_rate_limit_storage) > 1000:
+            _cleanup_rate_limit_storage(window_seconds)
+
+
+def _cleanup_rate_limit_storage(window_seconds: int):
+    """Clean up old rate limit entries"""
+    import time
+    current_time = time.time()
+    window_start = current_time - (window_seconds * 2)  # Keep 2x window for safety
+    
+    keys_to_remove = []
+    for key, timestamps in _rate_limit_storage.items():
+        # Remove old timestamps
+        _rate_limit_storage[key] = [ts for ts in timestamps if ts > window_start]
+        # Mark empty keys for removal
+        if not _rate_limit_storage[key]:
+            keys_to_remove.append(key)
+    
+    for key in keys_to_remove:
+        del _rate_limit_storage[key]
 
 class PermissionChecker:
     """Helper class for complex permission checking"""

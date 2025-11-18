@@ -127,17 +127,21 @@ class ZoeChatStream:
                 
                 logger.info(f"Zoe says: '{zoe_response[:50]}...'")
                 
-                # Yield response as chat chunk
-                yield llm.ChatChunk(
-                    choices=[
-                        llm.Choice(
-                            delta=llm.ChoiceDelta(
-                                role="assistant",
-                                content=zoe_response
+                # Yield response as chat chunk with proper content extraction
+                # Split into chunks for more natural streaming (if response is long)
+                chunk_size = 100  # Characters per chunk
+                for i in range(0, len(zoe_response), chunk_size):
+                    chunk_text = zoe_response[i:i+chunk_size]
+                    yield llm.ChatChunk(
+                        choices=[
+                            llm.Choice(
+                                delta=llm.ChoiceDelta(
+                                    role="assistant",
+                                    content=chunk_text
+                                )
                             )
-                        )
-                    ]
-                )
+                        ]
+                    )
         
         except httpx.TimeoutException:
             logger.error("Zoe Core timeout")

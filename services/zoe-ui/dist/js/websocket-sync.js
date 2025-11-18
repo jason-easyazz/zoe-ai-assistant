@@ -74,9 +74,15 @@ class ZoeWebSocketSync {
         console.log('📥 WebSocket message received:', data);
         const { type } = data;
         
+        console.log(`🔍 Looking for callback for type: "${type}"`);
+        console.log('🔍 Registered callbacks:', Object.keys(this.callbacks));
+        
         // Call registered callbacks for this message type
         if (this.callbacks[type]) {
+            console.log(`✅ Found callback for "${type}", calling it...`);
             this.callbacks[type](data);
+        } else {
+            console.warn(`⚠️ No callback registered for "${type}"`);
         }
         
         // Call global message callback
@@ -167,6 +173,59 @@ window.ZoeWebSockets = {
         
         // Initialize lists WebSocket
         this.lists = new ZoeWebSocketSync('/api/lists/ws', userId);
+        
+        // Listen for item_added (sent by intent system)
+        this.lists.on('item_added', (data) => {
+            console.log('✅ Item added:', data);
+            console.log('🔄 Refreshing list widgets...');
+            
+            // Refresh ONLY the affected list widget (not all widgets)
+            const listType = data.list_type || 'shopping';
+            
+            if (typeof WidgetManager !== 'undefined' && WidgetManager.modules) {
+                // Update specific list widget
+                const widgetNames = {
+                    'shopping': 'shopping',
+                    'personal_todos': 'personal',
+                    'work_todos': 'work',
+                    'bucket': 'bucket'
+                };
+                
+                const widgetName = widgetNames[listType] || listType;
+                const widget = WidgetManager.modules[widgetName];
+                
+                if (widget && typeof widget.update === 'function') {
+                    console.log(`✅ Updating ${widgetName} widget`);
+                    widget.update();
+                } else {
+                    console.warn(`⚠️ Widget ${widgetName} not found or no update method`);
+                }
+            } else {
+                console.warn('⚠️ WidgetManager not available!');
+            }
+        });
+        
+        // Listen for item_removed
+        this.lists.on('item_removed', (data) => {
+            console.log('🗑️ Item removed:', data);
+            const listType = data.list_type || 'shopping';
+            const widgetNames = {'shopping': 'shopping', 'personal_todos': 'personal', 'work_todos': 'work', 'bucket': 'bucket'};
+            const widgetName = widgetNames[listType] || listType;
+            const widget = WidgetManager?.modules?.[widgetName];
+            if (widget && typeof widget.update === 'function') widget.update();
+        });
+        
+        // Listen for item_completed
+        this.lists.on('item_completed', (data) => {
+            console.log('✔️ Item completed:', data);
+            const listType = data.list_type || 'shopping';
+            const widgetNames = {'shopping': 'shopping', 'personal_todos': 'personal', 'work_todos': 'work', 'bucket': 'bucket'};
+            const widgetName = widgetNames[listType] || listType;
+            const widget = WidgetManager?.modules?.[widgetName];
+            if (widget && typeof widget.update === 'function') widget.update();
+        });
+        
+        // Legacy events (for backwards compatibility)
         this.lists.on('list_created', (data) => {
             console.log('📋 List created:', data);
             // Refresh all list widgets

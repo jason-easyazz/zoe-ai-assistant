@@ -56,7 +56,7 @@ class AIClient:
         # Load saved keys
         self.anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
         self.openai_key = os.getenv("OPENAI_API_KEY", "")
-        self.ollama_url = "http://zoe-ollama:11434"
+        self.llm_url = "http://zoe-llamacpp:11434"
         
         # Check which services are available
         self.has_claude = bool(self.anthropic_key and self.anthropic_key != "your_claude_key_here")
@@ -149,7 +149,7 @@ class AIClient:
             
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
-                    f"{self.ollama_url}/api/generate",
+                    f"{self.llm_url}/api/generate",
                     json={
                         "model": model,
                         "prompt": prompt,

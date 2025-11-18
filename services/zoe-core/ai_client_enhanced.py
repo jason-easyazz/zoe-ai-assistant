@@ -16,7 +16,7 @@ class AIClient:
     def __init__(self):
         self.openai_key = os.getenv("OPENAI_API_KEY")
         self.anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-        self.ollama_url = "http://zoe-ollama:11434"
+        self.llm_url = "http://zoe-llamacpp:11434"
         
     async def generate_implementation(
         self,
@@ -155,7 +155,7 @@ Ensure all code is production-ready and follows Zoe's patterns.
         try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(
-                    f"{self.ollama_url}/api/generate",
+                    f"{self.llm_url}/api/generate",
                     json={
                         "model": model,
                         "prompt": prompt,

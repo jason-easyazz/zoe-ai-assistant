@@ -19,6 +19,23 @@ from auth_integration import validate_session, AuthenticatedSession
 # Setup logger IMMEDIATELY
 logger = logging.getLogger(__name__)
 
+
+def clean_llm_response(response: str) -> str:
+    """Remove unwanted prefixes from LLM responses"""
+    # Strip leading/trailing whitespace
+    response = response.strip()
+    
+    # Remove common LLM prefixes
+    prefixes_to_remove = ["Zoe:", "Response:", "Assistant:", "Thought:", "Action:"]
+    for prefix in prefixes_to_remove:
+        if response.startswith(prefix):
+            response = response[len(prefix):].strip()
+            break  # Only remove one prefix
+    
+    return response
+
+
+
 # Add parent directory to path only if not already accessible
 # This allows imports to work in both Docker (/app) and local dev environments
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -60,6 +77,18 @@ from temporal_memory_integration import (
 
 # Initialize temporal memory system
 temporal_memory = TemporalMemoryIntegration()
+
+# Import intent system (HassIL-based classification)
+from intent_system.classifiers import UnifiedIntentClassifier, get_context_manager
+from intent_system.executors import IntentExecutor
+
+# Initialize intent system
+USE_INTENT_SYSTEM = os.getenv("USE_INTENT_CHAT", "true").lower() == "true"
+intent_classifier = UnifiedIntentClassifier(intents_dir="intent_system/intents/en") if USE_INTENT_SYSTEM else None
+intent_executor = IntentExecutor() if USE_INTENT_SYSTEM else None
+context_manager = get_context_manager() if USE_INTENT_SYSTEM else None
+
+logger.info(f"Intent system enabled: {USE_INTENT_SYSTEM}")
 
 # Wrapper functions for backward compatibility
 async def start_chat_episode(user_id: str, context_type: str = "chat") -> Optional[int]:
@@ -576,7 +605,7 @@ async def intelligent_routing(message: str, context: Dict) -> Dict:
         
         # Use RouteLLM's model recommendation, but map to our model selector
         # RouteLLM returns model names like "zoe-chat", "zoe-memory", "zoe-action"
-        # We'll use model_selector to get the actual Ollama model name
+        # We'll use model_selector to get the actual model name
         route_model = routing_decision.get("model", "zoe-chat")
         
         # Map RouteLLM model names to query types for model_selector
@@ -592,7 +621,7 @@ async def intelligent_routing(message: str, context: Dict) -> Dict:
         
         # Cache the result
         routing_result = {
-            "model": model,  # Now uses actual Ollama model name from model_selector
+            "model": model,  # Now uses actual model name from model_selector
             "type": routing_type,
             "requires_memory": requires_memory,
             "confidence": routing_decision.get("confidence", 0.8),
@@ -653,17 +682,18 @@ async def build_system_prompt(memories: Dict, user_context: Dict, routing_type: 
     # ✅ NEW: Use enhanced prompts with examples, preferences, and conversation history
     return build_enhanced_prompt(memories, user_context, routing_type, user_preferences, recent_episodes)
 
-async def call_ollama_streaming(message: str, context: Dict, memories: Dict, user_context: Dict, routing: Dict, tools_context: str = ""):
+async def generate_streaming_response(message: str, context: Dict, memories: Dict, user_context: Dict, routing: Dict, tools_context: str = ""):
     """
-    Stream response with AG-UI Protocol compliance
+    Stream response from LLM inference server with AG-UI Protocol compliance
     AG-UI Event Types: https://github.com/ag-ui-protocol/ag-ui
     """
     import json
     
     async def generate():
+        session_id = context.get('session_id', f"session_{datetime.now().timestamp()}")
+        user_id_for_prompt = context.get("user_id", "default")
+        
         try:
-            session_id = context.get('session_id', f"session_{datetime.now().timestamp()}")
-            
             # AG-UI Event: session_start
             yield f"data: {json.dumps({'type': 'session_start', 'session_id': session_id, 'timestamp': datetime.now().isoformat()})}\n\n"
             
@@ -677,17 +707,73 @@ async def call_ollama_streaming(message: str, context: Dict, memories: Dict, use
             }
             yield f"data: {json.dumps({'type': 'agent_state_delta', 'state': {'context': context_breakdown, 'routing': routing.get('type', 'conversation'), 'model': 'selecting...'}, 'timestamp': datetime.now().isoformat()})}\n\n"
             
-            # Build prompt with routing-specific template and user preferences
-            user_id_for_prompt = context.get("user_id", "default")
+            # 🎯 NEW: INTENT-FIRST CLASSIFICATION (Tier 0/1 - HassIL/Keywords)
+            # Try intent classification before LLM routing
+            if USE_INTENT_SYSTEM and intent_classifier and intent_executor:
+                try:
+                    start_intent_time = time.time()
+                    
+                    # Classify intent using HassIL (Tier 0) or Keywords (Tier 1)
+                    intent = intent_classifier.classify(message)
+                    
+                    if intent and intent.confidence >= 0.7:
+                        # Intent matched! Execute directly (10ms target)
+                        intent_latency_ms = (time.time() - start_intent_time) * 1000
+                        logger.info(
+                            f"🎯 INTENT MATCH: {intent.name}, "
+                            f"tier: {intent.tier}, "
+                            f"confidence: {intent.confidence:.2f}, "
+                            f"latency: {intent_latency_ms:.2f}ms"
+                        )
+                        
+                        # Execute intent
+                        result = await intent_executor.execute(intent, user_id_for_prompt, session_id)
+                        
+                        # Stream intent result
+                        total_latency_ms = (time.time() - start_intent_time) * 1000
+                        yield f"data: {json.dumps({'type': 'agent_state_delta', 'state': {'model': f'intent-tier-{intent.tier}', 'engine': 'hassil' if intent.tier == 0 else 'keywords', 'status': 'complete', 'latency_ms': total_latency_ms}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                        
+                        # Stream response word by word for UX consistency
+                        for word in result.message.split():
+                            yield f"data: {json.dumps({'type': 'message_delta', 'delta': word + ' ', 'timestamp': datetime.now().isoformat()})}\n\n"
+                        
+                        yield f"data: {json.dumps({'type': 'session_end', 'session_id': session_id, 'final_state': {'intent': intent.name, 'tier': intent.tier, 'latency_ms': total_latency_ms, 'complete': True}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                        
+                        logger.info(f"⚡ INTENT EXECUTION COMPLETE: {total_latency_ms:.2f}ms (target: <10ms for Tier 0)")
+                        return  # Skip LLM entirely!
+                    else:
+                        intent_latency_ms = (time.time() - start_intent_time) * 1000
+                        logger.debug(f"No intent match, falling back to LLM (classification took {intent_latency_ms:.2f}ms)")
+                        
+                except Exception as e:
+                    logger.warning(f"Intent classification failed, falling back to LLM: {e}")
             
+            # FALLBACK: Original routing logic
             # 🚀 GENIUS: STREAMING - Apply same minimal prompts (like non-streaming)
             routing_type = routing.get("type", "conversation")
             is_greeting = len(message) < 20 and any(g in message.lower() for g in ["hi", "hello", "hey", "morning", "afternoon", "evening", "thanks", "thank you", "bye", "goodnight"])
             is_action = routing_type == "action" or routing.get("mcp_tools_needed", False)
             
-            # 🎯 HYBRID APPROACH: Auto-inject tool calls for streaming too
+            # 🎯 THREE-TIER ROUTING: Smart action detection
+            # Tier 1: Simple greeting → Fast LLM (no tools)
+            # Tier 2: Single clear action → Direct MemAgent (NO LLM!)  ⚡
+            # Tier 3: Complex multi-step → Advanced LLM + tools
+            
+            # Check if this is a simple, deterministic action
+            simple_action_result = await _try_direct_memagent_action(message, user_id_for_prompt, is_action)
+            
+            if simple_action_result:
+                # ✅ Action executed directly by MemAgent - NO LLM needed!
+                logger.info(f"⚡ DIRECT EXECUTION: MemAgent handled action without LLM")
+                yield f"data: {json.dumps({'type': 'agent_state_delta', 'state': {'model': 'memagent-direct', 'engine': 'pattern-match', 'status': 'complete'}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                yield f"data: {json.dumps({'type': 'message_delta', 'delta': simple_action_result, 'timestamp': datetime.now().isoformat()})}\n\n"
+                yield f"data: {json.dumps({'type': 'session_end', 'session_id': session_id, 'final_state': {'tokens': len(simple_action_result.split()), 'complete': True}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                return  # Skip LLM entirely!
+            
+            # Fallback: Use LLM (existing flow)
             injected_tool_call = _auto_inject_tool_call(message)
             injected_execution_result = None
+            logger.info(f"🔍 AUTO-INJECT DEBUG: message='{message}', is_action={is_action}, injected={injected_tool_call is not None}")
             if injected_tool_call and is_action:
                 logger.info(f"🎯 STREAMING: AUTO-INJECTED tool call: {injected_tool_call[:80]}...")
                 try:
@@ -750,8 +836,9 @@ async def call_ollama_streaming(message: str, context: Dict, memories: Dict, use
             conversation_history = conversation_history[-10:]
             await context_cache.set("conversation", conversation_key, conversation_history, 3600)
             
-            # Stream from Ollama using /api/chat endpoint
-            ollama_url = "http://zoe-ollama:11434/api/chat"
+            # Stream from LiteLLM gateway (handles all models: local + cloud)
+            # LiteLLM provides: unified API, fallbacks, caching, load balancing
+            llm_url = "http://zoe-litellm:8001/v1/chat/completions"
             
             # ✅ PRIMARY MODEL: gemma3n-e2b-gpu-fixed (5.6GB - now fits with proper memory management)
             # Keep loaded for 30m to avoid 20s reload penalty
@@ -783,7 +870,7 @@ async def call_ollama_streaming(message: str, context: Dict, memories: Dict, use
                     pass
             
             # AG-UI Event: agent_state_delta (model selected)
-            engine_type = "tensorrt-gpu" if use_tensorrt else "ollama-cpu"
+            engine_type = "tensorrt-gpu" if use_tensorrt else "llm-inference"
             yield f"data: {json.dumps({'type': 'agent_state_delta', 'state': {'model': selected_model, 'engine': engine_type, 'status': 'generating'}, 'timestamp': datetime.now().isoformat()})}\n\n"
             
             # Check if this requires tool calls via MCP (for AG-UI events)
@@ -792,7 +879,7 @@ async def call_ollama_streaming(message: str, context: Dict, memories: Dict, use
                 yield f"data: {json.dumps({'type': 'action', 'name': 'mcp_tools', 'arguments': {{'query': message}}, 'status': 'running', 'timestamp': datetime.now().isoformat()})}\n\n"
             
             async with httpx.AsyncClient(timeout=60.0) as client:  # Increased timeout for model loading
-                # Route to TensorRT or Ollama
+                # Route to TensorRT or LLM inference server
                 if use_tensorrt:
                     # TensorRT endpoint - OpenAI compatible
                     endpoint_url = f"{tensorrt_url}/api/generate"
@@ -804,35 +891,35 @@ async def call_ollama_streaming(message: str, context: Dict, memories: Dict, use
                         "stream": False  # TensorRT doesn't support streaming yet
                     }
                 else:
-                    # Ollama endpoint
-                    endpoint_url = ollama_url
+                    # LLM inference server endpoint (OpenAI-compatible format)
+                    endpoint_url = llm_url
                     request_json = {
                         "model": selected_model,
                         "messages": messages,
                         "stream": True,
-                        "options": {
-                            "temperature": model_config.temperature,
-                            "top_p": model_config.top_p,
-                            "num_predict": model_config.num_predict,
-                            "num_ctx": model_config.num_ctx,
-                            "repeat_penalty": model_config.repeat_penalty,
-                            "stop": model_config.stop_tokens,
-                            "num_gpu": model_config.num_gpu if model_config.num_gpu is not None else 1,
-                            "keep_alive": "30m"
-                        }
+                        "temperature": model_config.temperature,
+                        "top_p": model_config.top_p,
+                        "max_tokens": model_config.num_predict,
+                        "stop": model_config.stop_tokens if model_config.stop_tokens else []
                     }
+                
+                # LiteLLM requires authentication
+                headers = {}
+                if "litellm" in llm_url:
+                    headers["Authorization"] = "Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f"
                 
                 async with client.stream(
                     "POST",
                     endpoint_url,
-                    json=request_json
+                    json=request_json,
+                    headers=headers
                 ) as response:
                     # Check response status
                     if response.status_code != 200:
                         try:
                             error_text = await response.aread()
                             error_msg = error_text.decode()[:500] if error_text else "Unknown error"
-                            logger.error(f"Ollama error {response.status_code} for {selected_model}: {error_msg}")
+                            logger.error(f"LLM error {response.status_code} for {selected_model}: {error_msg}")
                             
                             # Try fallback model
                             fallback_model = model_selector.get_fallback_model(selected_model)
@@ -844,50 +931,57 @@ async def call_ollama_streaming(message: str, context: Dict, memories: Dict, use
                                 async with httpx.AsyncClient(timeout=fallback_config.timeout) as fallback_client:
                                     async with fallback_client.stream(
                                         "POST",
-                                        ollama_url,
+                                        llm_url,
                                         json={
                                             "model": fallback_model,
                                             "messages": messages,  # Use same messages for fallback
                                             "stream": True,
-                                            "options": {
-                                                "temperature": fallback_config.temperature,
-                                                "top_p": fallback_config.top_p,
-                                                "num_predict": fallback_config.num_predict,
-                                                "num_ctx": fallback_config.num_ctx,
-                                                "repeat_penalty": fallback_config.repeat_penalty,
-                                                "stop": fallback_config.stop_tokens,
-                                                "num_gpu": fallback_num_gpu,
-                                                "keep_alive": "30m"  # ✅ DUAL-MODEL: Keep models loaded
-                                            }
-                                        }
+                                            "temperature": fallback_config.temperature,
+                                            "top_p": fallback_config.top_p,
+                                            "max_tokens": fallback_config.num_predict,
+                                            "stop": fallback_config.stop_tokens if fallback_config.stop_tokens else []
+                                        },
+                                        headers=headers  # Reuse headers from above (includes auth)
                                     ) as fallback_response:
                                         if fallback_response.status_code == 200:
                                             full_response = ""
                                             async for line in fallback_response.aiter_lines():
                                                 if line.strip():
+                                                    # Handle OpenAI SSE format
+                                                    line_data = line.strip()
+                                                    if line_data.startswith("data: "):
+                                                        line_data = line_data[6:]
+                                                    if line_data == "[DONE]":
+                                                        continue
+                                                    
                                                     try:
-                                                        chunk = json.loads(line)
-                                                        # ✅ PHASE 2: /api/chat returns message.content instead of response
-                                                        if "message" in chunk and "content" in chunk["message"]:
+                                                        chunk = json.loads(line_data)
+                                                        # OpenAI format: choices[0].delta.content
+                                                        token = None
+                                                        if "choices" in chunk and len(chunk["choices"]) > 0:
+                                                            delta = chunk["choices"][0].get("delta", {})
+                                                            token = delta.get("content", "")
+                                                        # Fallback: Ollama format
+                                                        elif "message" in chunk and "content" in chunk["message"]:
                                                             token = chunk["message"]["content"]
-                                                            full_response += token
-                                                            yield f"data: {json.dumps({'type': 'message_delta', 'delta': token, 'timestamp': datetime.now().isoformat()})}\n\n"
-                                                        elif "response" in chunk:  # Fallback for old format
+                                                        elif "response" in chunk:
                                                             token = chunk["response"]
+                                                        
+                                                        if token:
                                                             full_response += token
                                                             yield f"data: {json.dumps({'type': 'message_delta', 'delta': token, 'timestamp': datetime.now().isoformat()})}\n\n"
                                                     except Exception as e:
                                                         logger.error(f"Error parsing fallback chunk: {e}")
                                             # Continue with tool calls and session_end
                                         else:
-                                            yield f"data: {json.dumps({'type': 'error', 'error': {'message': f'Both {selected_model} and {fallback_model} failed. Please check Ollama.', 'code': 'MODEL_ERROR'}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                            yield f"data: {json.dumps({'type': 'error', 'error': {'message': f'Both {selected_model} and {fallback_model} failed. Please check LLM service.', 'code': 'MODEL_ERROR'}, 'timestamp': datetime.now().isoformat()})}\n\n"
                                             return
                             else:
-                                yield f"data: {json.dumps({'type': 'error', 'error': {'message': f'Model {selected_model} failed: {error_msg}', 'code': 'OLLAMA_ERROR'}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                yield f"data: {json.dumps({'type': 'error', 'error': {'message': f'Model {selected_model} failed: {error_msg}', 'code': 'LLM_ERROR'}, 'timestamp': datetime.now().isoformat()})}\n\n"
                                 return
                         except Exception as e:
-                            logger.error(f"Error handling Ollama failure: {e}")
-                            yield f"data: {json.dumps({'type': 'error', 'error': {'message': f'Ollama request failed: {str(e)}', 'code': 'OLLAMA_ERROR'}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                            logger.error(f"Error handling LLM failure: {e}")
+                            yield f"data: {json.dumps({'type': 'error', 'error': {'message': f'LLM request failed: {str(e)}', 'code': 'LLM_ERROR'}, 'timestamp': datetime.now().isoformat()})}\n\n"
                             return
                     
                     full_response = ""
@@ -901,13 +995,26 @@ async def call_ollama_streaming(message: str, context: Dict, memories: Dict, use
                     
                     async for line in response.aiter_lines():
                         if line.strip():
+                            # Handle OpenAI SSE format: "data: {...}"
+                            line_data = line.strip()
+                            if line_data.startswith("data: "):
+                                line_data = line_data[6:]  # Remove "data: " prefix
+                            
+                            # Skip [DONE] message
+                            if line_data == "[DONE]":
+                                continue
+                            
                             try:
-                                chunk = json.loads(line)
-                                # ✅ PHASE 2: /api/chat returns message.content instead of response
+                                chunk = json.loads(line_data)
+                                # OpenAI format: choices[0].delta.content
                                 token = None
-                                if "message" in chunk and "content" in chunk["message"]:
+                                if "choices" in chunk and len(chunk["choices"]) > 0:
+                                    delta = chunk["choices"][0].get("delta", {})
+                                    token = delta.get("content", "")
+                                # Fallback: Ollama format (message.content or response)
+                                elif "message" in chunk and "content" in chunk["message"]:
                                     token = chunk["message"]["content"]
-                                elif "response" in chunk:  # Fallback for old format
+                                elif "response" in chunk:
                                     token = chunk["response"]
                                 
                                 if token:
@@ -1012,10 +1119,10 @@ async def call_ollama_streaming(message: str, context: Dict, memories: Dict, use
                                     # Stream normal content (not code blocks or tool calls)
                                     yield f"data: {json.dumps({'type': 'message_delta', 'delta': token, 'timestamp': datetime.now().isoformat()})}\n\n"
                                 elif "error" in chunk:
-                                    # Ollama returned error in response
+                                    # LLM returned error in response
                                     error_msg = chunk.get("error", "Unknown error")
-                                    logger.error(f"Ollama response error: {error_msg}")
-                                    yield f"data: {json.dumps({'type': 'error', 'error': {'message': str(error_msg), 'code': 'OLLAMA_ERROR'}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                    logger.error(f"LLM response error: {error_msg}")
+                                    yield f"data: {json.dumps({'type': 'error', 'error': {'message': str(error_msg), 'code': 'LLM_ERROR'}, 'timestamp': datetime.now().isoformat()})}\n\n"
                                     return
                             except Exception as e:
                                 logger.error(f"Error parsing chunk: {e}, line: {line[:100]}")
@@ -1065,8 +1172,8 @@ async def call_ollama_streaming(message: str, context: Dict, memories: Dict, use
     
     return generate()
 
-async def call_ollama_with_context(message: str, context: Dict, memories: Dict, user_context: Dict, routing: Dict = None, model: str = None) -> str:
-    """Call Ollama with full context using flexible model selection"""
+async def generate_response(message: str, context: Dict, memories: Dict, user_context: Dict, routing: Dict = None, model: str = None) -> str:
+    """Generate response from LLM inference server with full context using flexible model selection"""
     routing_type = routing.get("type", "conversation") if routing else "conversation"
     user_id_for_prompt = context.get("user_id", "default")
     
@@ -1102,8 +1209,8 @@ async def call_ollama_with_context(message: str, context: Dict, memories: Dict, 
     
     if is_greeting:
         # ⚡ MINIMAL GREETING (150 chars) - Inspired by Google Assistant's speed
-        system_prompt = f"You are Zoe, a friendly AI assistant. Respond warmly to the greeting in 5-10 words."
-        logger.info(f"⚡ GENIUS: Minimal greeting prompt (150 chars vs 8KB = 50x faster!)")
+        system_prompt = f"You are Zoe, a friendly AI assistant. Respond warmly to the greeting in 5-10 words. Focus on the USER - ask how THEY are or how you can help THEM. Do not talk about yourself, your day, or make up experiences. You're an AI, not a person with a personal life."
+        logger.info(f"⚡ GENIUS: Anti-hallucination greeting prompt")
         
     elif is_action:
         # 🎯 MODEL-ADAPTIVE FUNCTION CALLING (non-streaming)
@@ -1112,17 +1219,19 @@ async def call_ollama_with_context(message: str, context: Dict, memories: Dict, 
         logger.info(f"🎯 Using {model}-adaptive function calling prompt (non-streaming): {len(system_prompt)} chars")
     
     else:
-        # 💬 REGULAR CONVERSATION (~1.5KB) - Balanced
-        prompt_cache_key = f"conversation_{user_id_for_prompt}"
-        system_prompt = await context_cache.get("system_prompt", prompt_cache_key)
-        
-        if not system_prompt:
-            # Build lighter prompt (no MCP tools, no action emphasis)
-            system_prompt = await build_system_prompt(memories, user_context, "conversation", user_id_for_prompt)
-            await context_cache.set("system_prompt", prompt_cache_key, system_prompt, CACHE_TTL["system_prompt"])
-            logger.info(f"💬 Regular conversation prompt (~1.5KB)")
-        else:
-            logger.info(f"✅ Using cached conversation prompt")
+        # 💬 REGULAR CONVERSATION - Use minimal prompt to avoid example contamination
+        system_prompt = """You are Zoe, a warm and helpful AI assistant.
+
+CRITICAL RULES:
+1. You are an AI assistant - do NOT pretend to have personal experiences, meals, friends, or days
+2. Do NOT use first-person experiences (e.g., "I had dinner", "I met friends", "my day was")
+3. Do NOT make up stories, events, or people
+4. Do NOT prefix responses with "Zoe:", "Response:", or "Assistant:"
+5. Focus on helping the USER - ask about THEIR life, not yours
+6. If asked about yourself, briefly explain you're an AI assistant designed to help
+
+Be helpful, friendly, and honest about being an AI."""
+        logger.info(f"💬 Using anti-hallucination conversation prompt")
     
     full_prompt = f"{system_prompt}\n\nUser's message: {message}\nZoe:"
     
@@ -1136,7 +1245,7 @@ async def call_ollama_with_context(message: str, context: Dict, memories: Dict, 
     logger.info(f"📏 System prompt length: {len(system_prompt)} chars")
     
     try:
-        # 🚀 USE PROVIDER ABSTRACTION (llama.cpp, vLLM, or Ollama)
+        # 🚀 USE PROVIDER ABSTRACTION (llama.cpp, vLLM, TGI, etc.)
         provider = get_llm_provider()
         logger.info(f"🔄 Sending request via {provider.__class__.__name__}")
         
@@ -1167,11 +1276,11 @@ async def call_ollama_with_context(message: str, context: Dict, memories: Dict, 
             user_id=user_context.get("user_id", "default")
         )
         
-        return response_text
+        return clean_llm_response(response_text)
             
     except Exception as e:
         import traceback
-        logger.error(f"Ollama error with {selected_model}: {e}\n{traceback.format_exc()}")
+        logger.error(f"LLM error with {selected_model}: {e}\n{traceback.format_exc()}")
         
         # Update performance metrics for failure
         model_selector.update_performance(selected_model, model_config.timeout, False)
@@ -1182,9 +1291,15 @@ async def call_ollama_with_context(message: str, context: Dict, memories: Dict, 
             logger.info(f"🔄 Trying fallback model: {fallback_model}")
             try:
                 fallback_config = model_selector.get_model_config(fallback_model)
+                
+                # LiteLLM requires authentication
+                headers = {}
+                if "litellm" in llm_url:
+                    headers["Authorization"] = "Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f"
+                
                 async with httpx.AsyncClient(timeout=fallback_config.timeout) as client:
                     response = await client.post(
-                        ollama_url,
+                        llm_url,
                         json={
                             "model": fallback_model,
                             "messages": messages,  # ✅ Use messages array
@@ -1198,7 +1313,8 @@ async def call_ollama_with_context(message: str, context: Dict, memories: Dict, 
                                 "stop": fallback_config.stop_tokens,
                                 "num_gpu": fallback_config.num_gpu if fallback_config.num_gpu is not None else 1  # ✅ MODEL-SPECIFIC GPU
                             }
-                        }
+                        },
+                        headers=headers
                     )
                     data = response.json()
                     # ✅ /api/chat returns message.content
@@ -1208,7 +1324,7 @@ async def call_ollama_with_context(message: str, context: Dict, memories: Dict, 
                     response_time = data.get("total_duration", 0) / 1e9
                     model_selector.update_performance(fallback_model, response_time, True)
                     
-                    return response_text
+                    return clean_llm_response(response_text)
                     
             except Exception as fallback_error:
                 logger.error(f"Fallback model {fallback_model} also failed: {fallback_error}")
@@ -1994,7 +2110,40 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
         if episode_id:
             logger.info(f"📝 Started temporal episode {episode_id} for user {actual_user_id}")
         
-        # Step 0: Detect if this needs orchestration (planning requests)
+        # Step 0: 🎯 INTENT-FIRST CLASSIFICATION (Tier 0/1 - HassIL/Keywords)
+        # Try intent classification before LLM routing (for both streaming AND non-streaming)
+        if USE_INTENT_SYSTEM and intent_classifier and intent_executor:
+            try:
+                start_intent_time = time.time()
+                intent = intent_classifier.classify(msg.message)
+                
+                if intent and intent.confidence >= 0.7:
+                    # Intent matched! Execute directly
+                    intent_latency_ms = (time.time() - start_intent_time) * 1000
+                    logger.info(
+                        f"🎯 INTENT MATCH (non-stream): {intent.name}, "
+                        f"tier: {intent.tier}, "
+                        f"confidence: {intent.confidence:.2f}, "
+                        f"latency: {intent_latency_ms:.2f}ms"
+                    )
+                    result = await intent_executor.execute(intent, actual_user_id, context.get("session_id", "default"))
+                    
+                    # Return non-streaming response
+                    return {
+                        "response": result.message,
+                        "routing": "intent_system",
+                        "intent": intent.name,
+                        "tier": intent.tier,
+                        "confidence": intent.confidence,
+                        "latency_ms": (time.time() - start_intent_time) * 1000
+                    }
+                else:
+                    intent_latency_ms = (time.time() - start_intent_time) * 1000
+                    logger.debug(f"No intent match (non-stream), falling back to LLM (classification took {intent_latency_ms:.2f}ms)")
+            except Exception as e:
+                logger.warning(f"Intent classification failed (non-stream), falling back to LLM: {e}")
+        
+        # Step 1: Detect if this needs orchestration (planning requests)
         needs_orchestration = _is_planning_request(msg.message)
         
         if needs_orchestration and stream:
@@ -2177,7 +2326,7 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                     try:
                         interaction_id = await training_collector.log_interaction({
                             "message": msg.message,
-                            "response": response,
+                            "response": clean_llm_response(response),
                             "context": context,
                             "routing_type": "action_executed",
                             "model_used": "enhanced_mem_agent",
@@ -2248,7 +2397,7 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                     else:
                         # Non-streaming response (JSON)
                         return {
-                            "response": response,
+                            "response": clean_llm_response(response),
                             "interaction_id": interaction_id,  # ✅ NEW: For feedback
                             "response_time": time.time() - start_time,
                             "routing": "action_executed",
@@ -2296,7 +2445,7 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
         # ✅ PHASE 1.1: PARALLEL CONTEXT FETCHING - Fetch memories, user_context, and MCP tools in parallel
         # ✅ FAST PATH: Skip for simple greetings to save 3-5 seconds
         if is_simple_greeting:
-            # Skip all overhead for simple greetings - go straight to Ollama
+            # Skip all overhead for simple greetings - go straight to LLM
             memories = {}
             user_context = {"calendar_events": [], "active_lists": [], "recent_journal": [], "people": [], "projects": []}
             tools_context = ""  # Will be fetched later if needed
@@ -2378,7 +2527,7 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
         if stream:
             # Return streaming response with AG-UI protocol
             return StreamingResponse(
-                await call_ollama_streaming(msg.message, context, memories, user_context, routing, tools_context),
+                await generate_streaming_response(msg.message, context, memories, user_context, routing, tools_context),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -2388,7 +2537,8 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
             )
         else:
             # Return regular response
-            response = await call_ollama_with_context(msg.message, context, memories, user_context, routing)
+            injected_execution_result = None  # Initialize for non-streaming path
+            response = await generate_response(msg.message, context, memories, user_context, routing)
             
             # ✅ FIX: Log the raw response to see if LLM is generating tool calls
             logger.info(f"📝 LLM raw response (first 500 chars): {response[:500]}")
@@ -2465,7 +2615,7 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                 
                 interaction_id = await training_collector.log_interaction({
                     "message": msg.message,
-                    "response": response,
+                    "response": clean_llm_response(response),
                     "context": context,
                     "routing_type": routing.get("type"),
                     "model_used": model_used,
@@ -2500,7 +2650,7 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                     logger.warning(f"Failed to queue satisfaction tracking: {e}")
             
             return {
-                "response": response,
+                "response": clean_llm_response(response),
                 "interaction_id": interaction_id,  # ✅ NEW: For feedback tracking
                 "response_time": response_time,
                 "routing": routing.get("type"),
@@ -2571,6 +2721,114 @@ def _is_simple_query(message: str) -> bool:
         return True
     
     return False  # All other queries use gemma3n-e2b-gpu-fixed for performance
+
+async def _try_direct_memagent_action(message: str, user_id: str, is_action: bool) -> Optional[str]:
+    """
+    🎯 TIER 2: Direct MemAgent execution for simple, deterministic actions
+    NO LLM needed! Pattern match → API call → Done ⚡
+    
+    Returns response string if action was executed, None if LLM needed
+    """
+    if not is_action:
+        return None
+    
+    import re
+    import httpx
+    
+    message_lower = message.lower()
+    
+    # ===== SHOPPING LIST - Single Item =====
+    shopping_patterns = [
+        (r'add\s+([\w\s]+?)\s+to\s+(?:my\s+)?(?:shopping|list)', 1),
+        (r'put\s+([\w\s]+?)\s+on\s+(?:my\s+)?(?:shopping|list)', 1),
+        (r'(?:i\s+)?need\s+to\s+buy\s+([\w]+)', 1),
+    ]
+    
+    for pattern, group in shopping_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            item = match.group(group).strip()
+            
+            # Skip multi-item (use LLM for those)
+            if ' and ' in item or ',' in item:
+                logger.info(f"⚠️ Multi-item detected: '{item}' - using LLM")
+                return None
+            
+            # Skip junk
+            if len(item) < 2 or ' and ' in item:
+                continue
+            
+            # ⚡ DIRECT DATABASE INSERT (10ms, no LLM!)
+            try:
+                conn = sqlite3.connect("/app/data/zoe.db")
+                cursor = conn.cursor()
+                
+                # Get or create shopping list
+                cursor.execute("""
+                    SELECT id FROM lists 
+                    WHERE user_id = ? AND list_type = 'shopping' 
+                    LIMIT 1
+                """, (user_id,))
+                
+                row = cursor.fetchone()
+                if row:
+                    list_id = row[0]
+                else:
+                    # Create shopping list
+                    cursor.execute("""
+                        INSERT INTO lists (user_id, list_type, list_category, name)
+                        VALUES (?, 'shopping', 'shopping', 'Shopping List')
+                    """, (user_id,))
+                    list_id = cursor.lastrowid
+                
+                # Add item
+                cursor.execute("""
+                    INSERT INTO list_items (list_id, task_text, priority, completed)
+                    VALUES (?, ?, 'medium', 0)
+                """, (list_id, item))
+                
+                conn.commit()
+                conn.close()
+                
+                logger.info(f"⚡ DIRECT: Added '{item}' to shopping list (no LLM!)")
+                
+                # Notify via WebSocket
+                try:
+                    from routers.lists import lists_ws_manager
+                    import asyncio
+                    asyncio.create_task(lists_ws_manager.broadcast_to_user(user_id, {
+                        "type": "item_added",
+                        "list_type": "shopping",
+                        "list_id": list_id,
+                        "item": item
+                    }))
+                except:
+                    pass  # WebSocket notification is optional
+                
+                return f"✅ Added {item} to your shopping list!"
+                    
+            except Exception as e:
+                logger.warning(f"❌ Direct database insert failed: {e}")
+                return None
+    
+    # ===== CALENDAR EVENT - Simple =====
+    calendar_patterns = [
+        (r'schedule\s+([\w\s]+?)\s+(?:at|for)\s+([\w\s:]+)', 'schedule'),
+    ]
+    
+    for pattern, event_type in calendar_patterns:
+        match = re.search(pattern, message_lower)
+        if match:
+            # Skip complex events (use LLM)
+            if 'tomorrow' in message_lower or 'next week' in message_lower:
+                logger.info(f"⚠️ Complex time detected - using LLM")
+                return None
+            
+            # For now, defer to LLM for calendar (needs date parsing)
+            return None
+    
+    return None  # No simple action matched
+
 
 def _auto_inject_tool_call(message: str) -> Optional[str]:
     """

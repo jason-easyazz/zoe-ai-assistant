@@ -236,12 +236,12 @@ async def call_ollama_with_intelligent_routing(message: str, context: Dict, memo
     full_prompt = f"{system_prompt}\n\nUser's message: {message}\nZoe:"
     
     try:
-        # Call Ollama
-        ollama_url = "http://zoe-ollama:11434/api/generate"
+        # Call LLM inference server
+        llm_url = "http://zoe-llamacpp:11434/api/generate"
         
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
-                ollama_url,
+                llm_url,
                 json={
                     "model": selected_model,
                     "prompt": full_prompt,

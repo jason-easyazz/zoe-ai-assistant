@@ -51,6 +51,109 @@ def __init__(self, db_path: str = "/home/zoe/assistant/data/zoe.db"):  # HARDCOD
 
 ---
 
+## 🌐 LITELLM GATEWAY RULES - MANDATORY
+
+**Added**: 2025-11-17  
+**Status**: 🔒 ENFORCED
+
+### ⚠️ CRITICAL: All LLM Calls MUST Use LiteLLM Gateway
+
+**ARCHITECTURE DECISION**: LiteLLM Gateway is the **ONLY** way to call LLMs in production.
+
+**Gateway Endpoint**: `http://zoe-litellm:8001/v1/chat/completions`
+
+**Why**:
+- ✅ Unified API for all models (local + cloud)
+- ✅ Automatic fallbacks & retries
+- ✅ Redis-backed caching (10min TTL)
+- ✅ Load balancing across workers
+- ✅ Usage tracking & cost control
+- ✅ Zero-code model switching
+
+### ✅ CORRECT Pattern:
+
+```python
+# Use LiteLLMProvider (default)
+from llm_provider import get_llm_provider
+
+provider = get_llm_provider()  # Returns LiteLLMProvider
+response = await provider.generate(prompt, model="local-model")
+
+# Or direct API call
+llm_url = "http://zoe-litellm:8001/v1/chat/completions"
+response = await client.post(
+    llm_url,
+    headers={"Authorization": "Bearer <master_key>"},
+    json={"model": "local-model", "messages": [...]}
+)
+```
+
+### ❌ WRONG Patterns (FORBIDDEN):
+
+```python
+# ❌ Direct llamacpp call
+response = await client.post("http://zoe-llamacpp:11434/v1/chat/completions", ...)
+
+# ❌ Direct OpenAI call
+response = await client.post("https://api.openai.com/v1/chat/completions", ...)
+
+# ❌ Direct Anthropic call
+response = await client.post("https://api.anthropic.com/v1/messages", ...)
+
+# ❌ Hardcoded model logic
+if task == "coding":
+    url = "https://api.openai.com/..."  # NO!
+```
+
+### 🔒 Enforcement:
+
+**Validation Script**: `tools/audit/validate_litellm.sh`
+
+```bash
+# Run before every commit
+bash tools/audit/validate_litellm.sh
+```
+
+**Checks**:
+- ✅ No direct inference service calls
+- ✅ LiteLLM service is running and healthy
+- ✅ Configuration is valid
+- ✅ Models are accessible
+- ✅ Functional test passes
+
+**Violations = BLOCKED COMMIT**
+
+### 📚 Full Documentation:
+
+- **Architecture**: `docs/architecture/LITELLM_INTEGRATION.md`
+- **Development Rules**: `docs/governance/LITELLM_RULES.md`
+- **Validation Script**: `tools/audit/validate_litellm.sh`
+
+### 🔧 Configuration Management:
+
+**File**: `services/zoe-litellm/minimal_config.yaml`  
+**Mounted**: ✅ Read-only volume  
+**Updates**: Restart service (`docker restart zoe-litellm`)
+
+**Model Changes**:
+1. Edit `minimal_config.yaml`
+2. Restart: `docker restart zoe-litellm`
+3. Validate: `bash tools/audit/validate_litellm.sh`
+
+**NEVER** hardcode models in Python code!
+
+### 🚨 Emergency Bypass Protocol:
+
+If you MUST bypass LiteLLM (EMERGENCY ONLY):
+1. Create issue documenting why
+2. Add `# TODO: TECH DEBT - Issue #XXX` comment
+3. Set 48-hour deadline for fix
+4. After deadline: BLOCKS ALL NEW FEATURES
+
+See `docs/governance/LITELLM_RULES.md` for full protocol.
+
+---
+
 ## 🔒 AUTHENTICATION & USER ISOLATION RULES - CRITICAL
 
 ### ⚠️ MANDATORY: All User Data Endpoints Must Require Authentication

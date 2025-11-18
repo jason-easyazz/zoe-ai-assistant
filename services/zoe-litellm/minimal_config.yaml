@@ -1,26 +1,69 @@
 model_list:
   # llama.cpp models (OpenAI-compatible API)
-  - model_name: hermes3-8b
+  # NOTE: llama.cpp loads ONE model at a time. Update model name to match loaded model.
+  # Currently loaded: smollm2-1.7b (check with: docker inspect zoe-llamacpp | grep MODEL_NAME)
+  
+  - model_name: smollm2-1.7b
     litellm_params:
-      model: openai/hermes3-8b
+      model: openai//models/smollm2-1.7b-gguf/SmolLM2-1.7B-Instruct-Q4_K_M.gguf
       api_base: http://zoe-llamacpp:11434/v1
       api_key: dummy  # llama.cpp doesn't need a key
       temperature: 0.7
       max_tokens: 512
       timeout: 30
-
-  - model_name: gemma-2-2b
+  
+  # Alias for the primary local model (whatever is loaded)
+  - model_name: local-model
     litellm_params:
-      model: openai/gemma-2-2b
+      model: openai//models/smollm2-1.7b-gguf/SmolLM2-1.7B-Instruct-Q4_K_M.gguf
+      api_base: http://zoe-llamacpp:11434/v1
+      api_key: dummy
+      temperature: 0.7
+      max_tokens: 512
+      timeout: 30
+  
+  # Fast variant (same model, lower tokens)
+  - model_name: local-fast
+    litellm_params:
+      model: openai//models/smollm2-1.7b-gguf/SmolLM2-1.7B-Instruct-Q4_K_M.gguf
+      api_base: http://zoe-llamacpp:11434/v1
+      api_key: dummy
+      temperature: 0.7
+      max_tokens: 128
+      timeout: 20
+  
+  # LEGACY ALIASES (for backward compatibility with old model names)
+  # These point to the actual loaded model (smollm2-1.7b)
+  - model_name: gemma3n-e2b-gpu-fixed
+    litellm_params:
+      model: openai//models/smollm2-1.7b-gguf/SmolLM2-1.7B-Instruct-Q4_K_M.gguf
       api_base: http://zoe-llamacpp:11434/v1
       api_key: dummy
       temperature: 0.7
       max_tokens: 256
-      timeout: 20
-
-  - model_name: qwen2.5-7b
+      timeout: 30
+  
+  - model_name: phi3:mini
     litellm_params:
-      model: openai/qwen2.5-7b
+      model: openai//models/smollm2-1.7b-gguf/SmolLM2-1.7B-Instruct-Q4_K_M.gguf
+      api_base: http://zoe-llamacpp:11434/v1
+      api_key: dummy
+      temperature: 0.7
+      max_tokens: 256
+      timeout: 30
+  
+  - model_name: qwen2.5:7b
+    litellm_params:
+      model: openai//models/smollm2-1.7b-gguf/SmolLM2-1.7B-Instruct-Q4_K_M.gguf
+      api_base: http://zoe-llamacpp:11434/v1
+      api_key: dummy
+      temperature: 0.7
+      max_tokens: 512
+      timeout: 30
+  
+  - model_name: hermes3-8b
+    litellm_params:
+      model: openai//models/smollm2-1.7b-gguf/SmolLM2-1.7B-Instruct-Q4_K_M.gguf
       api_base: http://zoe-llamacpp:11434/v1
       api_key: dummy
       temperature: 0.7
@@ -48,20 +91,23 @@ router_settings:
   routing_strategy: simple-shuffle  # or "least-busy", "latency-based-routing"
   model_group_alias:
     fast-model:
-      - gemma-2-2b
-      - qwen2.5-7b
+      - local-fast
+      - smollm2-1.7b
     function-calling:
-      - hermes3-8b
+      - local-model
       - gpt-4o-mini
     powerful:
       - claude-3-5-sonnet
       - gpt-4o-mini
   
-  # Fallback order
+  # Fallback chains (if primary model fails, try these in order)
   fallbacks:
-    - hermes3-8b
-    - qwen2.5-7b
-    - gemma-2-2b
+    - gemma3n-e2b-gpu-fixed: ["phi3:mini", "local-model"]
+    - phi3:mini: ["local-model"]
+    - qwen2.5:7b: ["hermes3-8b", "local-model"]
+    - hermes3-8b: ["local-model"]
+    - local-model: ["local-fast"]
+    - smollm2-1.7b: ["local-fast"]
 
 general_settings:
   master_key: "sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f"
@@ -84,5 +130,3 @@ general_settings:
 
 litellm_settings:
   drop_params: true  # Drop unsupported params instead of erroring
-  success_callback: ["langfuse"]  # Optional: track usage
-  failure_callback: ["langfuse"]

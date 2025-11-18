@@ -46,3 +46,8 @@ opencv-python>=4.8.0
 # Push notifications (Phase 2)
 py-vapid>=1.9.1
 pywebpush>=2.0.0
+# Intent System (HassIL-based)
+hassil==1.5.1
+home-assistant-intents>=2025.11.7
+flashtext==2.7
+pyyaml==6.0.1

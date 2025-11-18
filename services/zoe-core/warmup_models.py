@@ -12,12 +12,12 @@ from model_config import MODEL_CONFIGS
 
 logger = logging.getLogger(__name__)
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://zoe-ollama:11434/api/generate")
+LLM_URL = os.getenv("LLM_URL", "http://zoe-llamacpp:11434/v1/chat/completions")
 # Allow running from host or container
 if os.path.exists("/.dockerenv"):
-    OLLAMA_URL = "http://zoe-ollama:11434/api/generate"
+    LLM_URL = "http://zoe-llamacpp:11434/v1/chat/completions"
 else:
-    OLLAMA_URL = "http://localhost:11434/api/generate"
+    LLM_URL = "http://localhost:11434/v1/chat/completions"
 MODELS = [
     "gemma3n-e2b-gpu-fixed",
     "gemma3n:e4b",
@@ -45,15 +45,12 @@ async def warmup_model(model_name: str):
                 logger.info(f"   Warming {model_name} with num_gpu={num_gpu}")
                 
                 response = await client.post(
-                    OLLAMA_URL,
+                    LLM_URL,
                     json={
                         "model": model_name,
-                        "prompt": "warmup",
+                        "messages": [{"role": "user", "content": "hi"}],
                         "stream": False,
-                        "options": {
-                            "num_gpu": num_gpu,  # Use config from model_config.py
-                            "num_predict": 5  # Minimal tokens for warmup
-                        }
+                        "max_tokens": 5  # Minimal tokens for warmup
                     }
                 )
                 if response.status_code == 200:

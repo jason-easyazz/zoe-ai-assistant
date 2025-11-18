@@ -23,17 +23,24 @@ LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "secretsecretsecretsecretse
 # External LiveKit URL for browser clients (use Pi's hostname or IP)
 # Will detect from request headers
 def get_external_livekit_url(request_host: str, is_https: bool = False) -> str:
-    """Get external LiveKit URL based on request origin"""
-    # Extract hostname from request (e.g., "zoe.local" or "192.168.1.x")
+    """
+    Get external LiveKit URL - intelligently routes based on access method
     
+    Local network: Use local IP with port 7443 (bypasses Cloudflare)
+    Remote: Use Cloudflare bypass on /livekit/ path (requires bypass rule)
+    """
     if request_host:
         host = request_host.split(':')[0]  # Remove port if present
         
         if is_https:
-            # HTTPS: Use nginx WSS proxy (port 443, path /livekit/)
-            return f"wss://{host}/livekit"
+            # If accessing via Cloudflare domain, use /livekit/ path (requires bypass rule)
+            # This assumes the user configured Cloudflare Access bypass for /livekit/*
+            if "the411.life" in host or "cloudflare" in host:
+                return f"wss://{host}/livekit"
+            
+            # Local network or direct IP: Use port 7443
+            return f"wss://{host}:7443"
         else:
-            # HTTP: Direct WebSocket connection
             return f"ws://{host}:7880"
     
     return "ws://localhost:7880"
@@ -94,7 +101,10 @@ async def start_conversation(request: StartConversationRequest, http_request: Re
         # Detect if request came over HTTPS
         is_https = (
             http_request.headers.get("x-forwarded-proto") == "https" or
-            http_request.url.scheme == "https"
+            http_request.url.scheme == "https" or
+            # Assume HTTPS for domain names (not localhost/IP)
+            (http_request.headers.get("host", "").split(":")[0] not in ["localhost", "127.0.0.1"] 
+             and not http_request.headers.get("host", "").split(":")[0].replace(".", "").isdigit())
         )
         
         # Get external LiveKit URL for browser clients
@@ -104,7 +114,7 @@ async def start_conversation(request: StartConversationRequest, http_request: Re
         )
         
         logger.info(f"Created voice conversation for user {request.user_id} in room {room_name}")
-        logger.info(f"LiveKit URL: {external_url} (HTTPS detected: {is_https})")
+        logger.info(f"LiveKit URL: {external_url} (HTTPS detected: {is_https}, host: {http_request.headers.get('host')})")
         
         return ConversationToken(
             token=jwt_token,
