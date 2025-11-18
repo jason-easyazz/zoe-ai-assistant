@@ -271,6 +271,7 @@ services:
     ports:
     - 80:80
     - 443:443
+    - 7443:7443
     volumes:
     - ./services/zoe-ui/dist:/usr/share/nginx/html
     - ./services/zoe-ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro
@@ -292,8 +293,8 @@ services:
     environment:
       - CUDA_VISIBLE_DEVICES=0
       - NVIDIA_VISIBLE_DEVICES=all
-      - MODEL_PATH=/models/gemma-3-4b-gguf/gemma-3-4b-it.Q4_K_M.gguf
-      - MODEL_NAME=gemma-3-4b
+      - MODEL_PATH=/models/llama-3.2-3b-gguf/Llama-3.2-3B-Instruct-Q4_K_M.gguf
+      - MODEL_NAME=llama3.2-3b
       - CTX_SIZE=2048          # Optimized for voice (reduced from 4096)
       - N_GPU_LAYERS=99        # All layers on GPU
       - THREADS=8              # Increased for parallel work
@@ -372,8 +373,8 @@ services:
     - ./ssl:/ssl:ro
     environment:
     - N8N_BASIC_AUTH_ACTIVE=true
-    - N8N_BASIC_AUTH_USER=zoe
-    - N8N_BASIC_AUTH_PASSWORD=zoe2025
+    - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-zoe}
+    - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-zoe2025}
     - N8N_SECURE_COOKIE=true
     - N8N_PROTOCOL=https
     - N8N_HOST=zoe.local
@@ -390,6 +391,8 @@ services:
     container_name: zoe-litellm
     ports:
     - 8001:8001
+    volumes:
+    - ./services/zoe-litellm/minimal_config.yaml:/app/minimal_config.yaml:ro  # Mount config for easy updates
     environment:
     - OPENAI_API_KEY=${OPENAI_API_KEY}
     - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
@@ -401,7 +404,7 @@ services:
     depends_on:
     - zoe-llamacpp  # Updated: vLLM replaced with llama.cpp
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8001/health -H 'Authorization: Bearer sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f' || exit 0"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 0"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -430,6 +433,8 @@ services:
     container_name: zoe-cloudflared
     command: --config /etc/cloudflared/config.yml --no-autoupdate tunnel run
     restart: unless-stopped
+    profiles:
+    - cloudflare
     volumes:
     - ./config/cloudflared-config.yml:/etc/cloudflared/config.yml:ro
     - ./config/d417c04a-babc-48e4-85e6-a9badc20a7a6.json:/etc/cloudflared/d417c04a-babc-48e4-85e6-a9badc20a7a6.json:ro

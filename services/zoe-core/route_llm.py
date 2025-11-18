@@ -17,68 +17,65 @@ class ZoeRouter:
         self.enabled = LiteRouter is not None
         self.router = None
         if self.enabled:
-            # Minimal local-first config; can be overridden by env/config file
+            # ✅ UPDATED 2025-11-18: Using TESTED OPTIMIZED models (see MODEL_TEST_ANALYSIS.md)
+            # NOW using llama.cpp server (zoe-llamacpp) with tested winning models
             self.router = LiteRouter(
                 model_list=[
                     {
-                        "model_name": "zoe-action",  # Tool calling - BEST MODEL
+                        "model_name": "zoe-action",  # Tool calling - TESTED MODEL
                         "litellm_params": {
-                            "model": "vllm/qwen2.5-coder-7b",  # 98% tool accuracy with AWQ
-                            "api_base": os.getenv("VLLM_BASE", "http://zoe-vllm:11434"),
-                            "temperature": 0.6,  # Lower = more precise
-                            "num_gpu": -1,  # Auto GPU allocation
+                            "model": "openai/qwen2.5:7b",  # 🥈 Tested: 90/100 tool score, 3.26s avg
+                            "api_base": os.getenv("LLAMACPP_BASE", "http://zoe-llamacpp:11434/v1"),
+                            "temperature": 0.7,
+                            "num_predict": 512,
+                            "num_ctx": 4096,
+                            "repeat_penalty": 1.1,
+                            "stop": ["\n\n", "User:", "Human:", "<tool_call>"],
+                            "keep_alive": "30m",
+                        },
+                        "model_info": {"id": "tool-calling-specialist", "tested": True, "score": 90},
+                    },
+                    {
+                        "model_name": "zoe-chat",  # Fast conversation - TESTED WINNER
+                        "litellm_params": {
+                            "model": "openai/llama3.2:3b",  # 🏆 Tested winner: 75/100, 3.19s avg, 0 hallucinations
+                            "api_base": os.getenv("LLAMACPP_BASE", "http://zoe-llamacpp:11434/v1"),
+                            "temperature": 0.7,
+                            "num_predict": 512,  # Increased for complete responses
+                            "num_ctx": 4096,  # Increased for better context
+                            "repeat_penalty": 1.1,
+                            "stop": ["\n\n", "User:", "Human:", "<tool_call>"],
+                            "keep_alive": "30m",
+                        },
+                        "model_info": {"id": "fast-chat-specialist", "tested": True, "score": 75},
+                    },
+                    {
+                        "model_name": "zoe-vision",  # Image/multimodal (FUTURE - not currently loaded)
+                        "litellm_params": {
+                            "model": "openai/llama3.2-vision:11b",  # Vision capability (when available)
+                            "api_base": os.getenv("LLAMACPP_BASE", "http://zoe-llamacpp:11434/v1"),
+                            "temperature": 0.7,
                             "num_predict": 512,
                             "num_ctx": 4096,
                             "repeat_penalty": 1.1,
                             "stop": ["\n\n", "User:", "Human:"],
                             "keep_alive": "30m",
                         },
-                        "model_info": {"id": "tool-calling-specialist"},
-                    },
-                    {
-                        "model_name": "zoe-chat",  # Fast conversation
-                        "litellm_params": {
-                            "model": "vllm/llama-3.2-3b",  # Fast conversation with AWQ
-                            "api_base": os.getenv("VLLM_BASE", "http://zoe-vllm:11434"),
-                            "temperature": 0.7,
-                            "num_gpu": 0,  # CPU only for speed
-                            "num_predict": 256,
-                            "num_ctx": 2048,
-                            "repeat_penalty": 1.1,
-                            "stop": ["\n\n", "User:", "Human:"],
-                            "keep_alive": "30m",
-                        },
-                        "model_info": {"id": "fast-chat-specialist"},
-                    },
-                    {
-                        "model_name": "zoe-vision",  # Image/multimodal
-                        "litellm_params": {
-                            "model": "vllm/qwen2-vl-7b",  # Vision with AWQ
-                            "api_base": os.getenv("VLLM_BASE", "http://zoe-vllm:11434"),
-                            "temperature": 0.7,
-                            "num_gpu": 99,  # All GPU layers
-                            "num_predict": 256,
-                            "num_ctx": 2048,
-                            "repeat_penalty": 1.1,
-                            "stop": ["\n\n", "User:", "Human:"],
-                            "keep_alive": "30m",
-                        },
-                        "model_info": {"id": "vision-specialist"},
+                        "model_info": {"id": "vision-specialist", "tested": False, "available": False},
                     },
                     {
                         "model_name": "zoe-memory",  # Context-heavy retrieval
                         "litellm_params": {
-                            "model": "vllm/qwen2.5-coder-7b",  # Excellent context handling with AWQ
-                            "api_base": os.getenv("VLLM_BASE", "http://zoe-vllm:11434"),
+                            "model": "openai/qwen2.5:7b",  # Same as action (excellent at both)
+                            "api_base": os.getenv("LLAMACPP_BASE", "http://zoe-llamacpp:11434/v1"),
                             "temperature": 0.7,
-                            "num_gpu": 43,  # Qwen-optimized layers
                             "num_predict": 512,
                             "num_ctx": 4096,
                             "repeat_penalty": 1.1,
-                            "stop": ["\n\n", "User:", "Human:"],
+                            "stop": ["\n\n", "User:", "Human:", "<tool_call>"],
                             "keep_alive": "30m",
                         },
-                        "model_info": {"id": "memory-retrieval-specialist"},
+                        "model_info": {"id": "memory-retrieval-specialist", "tested": True},
                     },
                 ],
                 redis_host=os.getenv("ZOE_REDIS_HOST", "zoe-redis"),

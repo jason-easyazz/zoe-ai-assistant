@@ -90,14 +90,16 @@ MODEL_CONFIGS = {
         category=ModelCategory.FAST_LANE,
         temperature=0.7,
         top_p=0.9,
-        num_predict=256,
-        num_ctx=2048,
+        num_predict=512,  # Increased from 256 for complete responses
+        num_ctx=4096,  # Increased from 2048 for better context memory
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["\n\n", "User:", "Human:", "<tool_call>"],  # Added tool_call stop token
         timeout=30,
-        description="Fast CPU model - 3.2B parameters, good balance",
-        benchmark_score=80.0,
-        tool_calling_score=35.0
+        description="🏆 TESTED WINNER - Fast, stable, 0 hallucinations (3.19s avg, 75/100 quality)",
+        benchmark_score=85.0,  # Updated from real testing
+        tool_calling_score=35.0,
+        response_time_avg=3.19,  # From actual testing
+        quality_score=75.0  # From actual testing
     ),
     
     "gemma3n-e2b-gpu:latest": ModelConfig(
@@ -118,13 +120,13 @@ MODEL_CONFIGS = {
     "gemma3n-e2b-gpu-fixed": ModelConfig(
         name="gemma3n-e2b-gpu-fixed",
         category=ModelCategory.FAST_LANE,
-        temperature=0.7,
+        temperature=0.6,  # Lower temperature for less hallucination
         top_p=0.9,
-        num_predict=64,
-        num_ctx=1024,
-        repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
-        timeout=30,
+        num_predict=512,  # Increased from 64 to allow full responses
+        num_ctx=4096,  # Increased from 1024 for better context
+        repeat_penalty=1.2,  # Increased from 1.1 to reduce repetition
+        stop_tokens=["\n\n", "User:", "Human:", "Zoe:", "Response:", "Thought:"],  # Added more stop tokens
+        timeout=45,  # Increased timeout for longer responses
         num_gpu=99,  # All GPU layers - works fast with proper configuration
         description="GPU-optimized ultra-fast model - 4.5B parameters, multimodal (vision)",
         benchmark_score=90.0,
@@ -241,12 +243,14 @@ MODEL_CONFIGS = {
         num_predict=512,
         num_ctx=4096,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["\n\n", "User:", "Human:", "<tool_call>"],  # Added tool_call stop token
         timeout=60,
         num_gpu=43,  # ✅ QWEN OPTIMIZED: ~43 layers for 7B model
-        description="Excellent function calling - 7B parameters",
+        description="🥈 TESTED - Best tool calling (3.26s avg, 75/100 quality, Q4 quantization)",
         benchmark_score=92.0,
-        tool_calling_score=90.0
+        tool_calling_score=90.0,
+        response_time_avg=3.26,  # From actual testing (Q4)
+        quality_score=75.0  # From actual testing
     ),
     
     "hermes3:8b-llama3.1-q4_K_M": ModelConfig(
@@ -503,27 +507,21 @@ class ModelSelector:
                           if config.category == ModelCategory.BALANCED]
         
         # Prefer models with good tool calling scores
-        scored_models = [(name, config.tool_calling_score or 0) for name in balanced_models]
+        scored_models = [(name, MODEL_CONFIGS[name].tool_calling_score or 0) for name in balanced_models]
         scored_models.sort(key=lambda x: x[1], reverse=True)
         
         return scored_models[0][0] if scored_models else "qwen2.5:7b"
     
     def _get_best_conversation_model(self) -> str:
-        """Get the best model for general conversation - use gemma3n-e2b-gpu-fixed for quality"""
-        # PRIMARY: gemma3n-e2b-gpu-fixed (5.6GB) - Best quality, keep ALONE
-        if "gemma3n-e2b-gpu-fixed" in MODEL_CONFIGS:
-            return "gemma3n-e2b-gpu-fixed"
+        """Get the best model for general conversation - tested on Jetson 2025-11-18"""
+        # 🏆 WINNER: Llama-3.2-3B (1.9GB, 3.19s avg, 75/100 quality, 0 hallucinations)
+        # Tested with multi-turn conversations - stable, fast, no fabrications
+        # See: MODEL_TEST_ANALYSIS.md for full benchmark results
+        if "llama3.2:3b" in MODEL_CONFIGS:
+            return "llama3.2:3b"
         
-        # FALLBACK: Multimodal model
-        if "gemma3n:e2b" in MODEL_CONFIGS:
-            return "gemma3n:e2b"
-        
-        # EMERGENCY: Smaller models if gemma unavailable
-        for model in ["phi3:mini", "llama3.2:3b", "gemma2:2b"]:
-            if model in MODEL_CONFIGS:
-                return model
-        
-        return "phi3:mini"  # Ultimate fallback
+        # Fallback: phi3:mini (also tested, reliable)
+        return "phi3:mini"
     
     def get_routing_model(self) -> str:
         """Get lightweight CPU model for routing decisions (always phi3:mini)"""
