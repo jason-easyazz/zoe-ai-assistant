@@ -1416,19 +1416,35 @@
                 const session = window.zoeAuth?.getCurrentSession();
                 const userId = session?.user_info?.user_id || session?.user_id;
                 
+                console.log('📋 Loading sessions for user:', userId);
+                console.log('📋 Session object:', session);
+                
                 const response = await apiRequest(`/api/chat/sessions/?user_id=${userId}`);
                 const sessions = response.sessions || [];
                 
+                console.log('📋 Loaded sessions:', sessions.length, sessions);
+                
                 const sessionsList = document.getElementById('sessionsList');
-                sessionsList.innerHTML = sessions.map((s, idx) => `
-                    <div class="session-item ${s.id === currentSessionId ? 'active' : ''}" onclick="loadSession('${s.id}')">
-                        <div class="session-title">${s.title}</div>
-                        <div class="session-meta">
-                            <span>${s.message_count} messages</span>
-                            <span>${formatSessionTime(s.updated_at)}</span>
+                
+                if (sessions.length === 0) {
+                    // Show empty state
+                    sessionsList.innerHTML = `
+                        <div style="padding: 20px; text-align: center; color: #94a3b8;">
+                            <p style="margin-bottom: 10px;">No sessions yet</p>
+                            <p style="font-size: 12px;">Start chatting to create your first session!</p>
                         </div>
-                    </div>
-                `).join('');
+                    `;
+                } else {
+                    sessionsList.innerHTML = sessions.map((s, idx) => `
+                        <div class="session-item ${s.id === currentSessionId ? 'active' : ''}" onclick="loadSession('${s.id}')">
+                            <div class="session-title">${s.title}</div>
+                            <div class="session-meta">
+                                <span>${s.message_count} messages</span>
+                                <span>${formatSessionTime(s.updated_at)}</span>
+                            </div>
+                        </div>
+                    `).join('');
+                }
                 
                 // Don't auto-load old sessions - let user click to view history
                 // Always start with a clean chat unless explicitly loading a session
@@ -1437,16 +1453,25 @@
                 //     await loadSessionMessages(currentSessionId);
                 // }
             } catch (error) {
-                console.error('Failed to load sessions:', error);
+                console.error('❌ Failed to load sessions:', error);
+                const sessionsList = document.getElementById('sessionsList');
+                sessionsList.innerHTML = `
+                    <div style="padding: 20px; text-align: center; color: #ef4444;">
+                        <p>Error loading sessions</p>
+                        <p style="font-size: 12px;">${error.message}</p>
+                    </div>
+                `;
             }
         }
 
         async function createOrGetCurrentSession() {
             if (!currentSessionId) {
                 const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_info?.user_id || session?.user_id;
+                const userId = session?.user_info?.user_id || session?.user_id || 'default';
                 
                 console.log('💬 Creating/getting chat session for user:', userId);
+                console.log('💬 Auth available:', !!window.zoeAuth);
+                console.log('💬 Session object:', session);
                 
                 try {
                     const response = await apiRequest('/api/chat/sessions/', {
@@ -1459,8 +1484,11 @@
                     });
                     currentSessionId = response.session_id;
                     console.log('✅ Created new session:', currentSessionId);
+                    
+                    // Reload sessions list to show the new session
+                    await loadSessions();
                 } catch (error) {
-                    console.error('Failed to create session:', error);
+                    console.error('❌ Failed to create session:', error);
                     currentSessionId = `session_${Date.now()}`;
                 }
             }
@@ -1552,7 +1580,9 @@
             
             try {
                 const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_info?.user_id || session?.user_id;
+                const userId = session?.user_info?.user_id || session?.user_id || 'default';
+                
+                console.log('💾 Saving message to session:', currentSessionId, 'user:', userId);
                 
                 await apiRequest(`/api/chat/sessions/${currentSessionId}/messages/?user_id=${userId}`, {
                     method: 'POST',
@@ -1563,8 +1593,13 @@
                         content: content
                     })
                 });
+                
+                console.log('✅ Message saved to session');
+                
+                // Reload sessions to update message count
+                await loadSessions();
             } catch (error) {
-                console.error('Failed to save message:', error);
+                console.error('❌ Failed to save message:', error);
             }
         }
 

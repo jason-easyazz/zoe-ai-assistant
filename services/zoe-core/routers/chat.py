@@ -398,9 +398,34 @@ async def search_memories(query: str, user_id: str, time_range: str = "all") -> 
             result = cursor.fetchone()
             if result and result[0]:
                 facts = json.loads(result[0])
+                # Improved matching: extract keywords from query and match against fact keys
+                query_lower = query.lower()
+                query_words = set(query_lower.split())
+                
+                # For "What is my X?" queries, extract the X part
+                import re
+                what_is_my_match = re.search(r'what\s+(?:is|are)\s+my\s+([a-z_\s]+)', query_lower)
+                if what_is_my_match:
+                    target = what_is_my_match.group(1).strip().replace(' ', '_')
+                    query_words.add(target)
+                
                 # Search through facts JSON for matches
                 for fact_key, fact_value in facts.items():
-                    if query.lower() in fact_key.lower() or query.lower() in str(fact_value).lower():
+                    fact_key_lower = fact_key.lower()
+                    fact_value_lower = str(fact_value).lower()
+                    
+                    # Match if:
+                    # 1. Query contains fact_key or fact_value
+                    # 2. Any query word matches fact_key (e.g., "favorite" matches "favorite_color")
+                    # 3. Query is asking about this fact (e.g., "what is my favorite color" matches "favorite_color")
+                    matches = (
+                        query_lower in fact_key_lower or 
+                        query_lower in fact_value_lower or
+                        any(word in fact_key_lower for word in query_words if len(word) > 2) or
+                        fact_key_lower in query_lower
+                    )
+                    
+                    if matches:
                         memories["semantic_results"].append({
                             "type": "self_fact",
                             "fact_key": fact_key,
@@ -698,9 +723,10 @@ async def intelligent_routing(message: str, context: Dict) -> Dict:
             'todo list', 'remember', 'who are', 'contacts', 'people', 'appointment', 'meeting',
             "don't let me forget", "i need to buy", "put on my list", "buy some", "get some",
             "we're out of", "running low", "noticed we need", "could use", "going to need",
-            "my favorite", "i work as", "i am a", "my job is", "my car is"
+            "my favorite", "i work as", "i am a", "my job is", "my car is",
+            "my name is", "i'm called", "i'm named", "call me", "i live in", "i'm from", "i am from"
         ]
-        memory_patterns = ['remember', 'who is', 'what did', 'when did', 'recall', 'what is my', "what's my"]
+        memory_patterns = ['remember', 'who is', 'what did', 'when did', 'recall', 'what is my', "what's my", "what do i", "where do i", "where am i"]
         
         # Fallback: Use model_selector for actual model names (already imported at top)
         if any(pattern in message_lower for pattern in action_patterns):
@@ -909,7 +935,7 @@ async def generate_streaming_response(message: str, context: Dict, memories: Dic
             # Voice mode should stay at 128 tokens, but capability questions need more detail
             if any(phrase in message.lower() for phrase in ["what can you", "what are your", "tell me what", "capabilities", "what things"]):
                 # Temporarily increase num_predict for capability questions (NOT for voice mode)
-                is_voice_mode = hasattr(msg, 'voice_mode') and msg.voice_mode
+                is_voice_mode = context.get('voice_mode', False)
                 if not is_voice_mode:
                     original_num_predict = model_config.num_predict
                     model_config.num_predict = max(256, model_config.num_predict * 2)  # Reduced from 512 for faster responses
@@ -2192,8 +2218,9 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                 if intent and intent.confidence >= 0.7:
                     # Intent matched! Execute directly
                     intent_latency_ms = (time.time() - start_intent_time) * 1000
+                    stream_mode = "stream" if stream else "non-stream"
                     logger.info(
-                        f"🎯 INTENT MATCH (non-stream): {intent.name}, "
+                        f"🎯 INTENT MATCH ({stream_mode}): {intent.name}, "
                         f"tier: {intent.tier}, "
                         f"confidence: {intent.confidence:.2f}, "
                         f"latency: {intent_latency_ms:.2f}ms"
@@ -2213,15 +2240,50 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                         response_text = ResponseFormatter.format_with_confidence(response_text, confidence)
                         logger.info(f"[P0-2] Confidence formatting applied: {confidence:.2f}")
                     
-                    # Return non-streaming response
-                    return {
-                        "response": response_text,
-                        "routing": "intent_system",
-                        "intent": intent.name,
-                        "tier": intent.tier,
-                        "confidence": intent.confidence,
-                        "latency_ms": (time.time() - start_intent_time) * 1000
-                    }
+                    # ✅ FIX: Return streaming response if requested
+                    if stream:
+                        async def stream_intent_response():
+                            import json as json_module
+                            try:
+                                session_id = msg.session_id or f"session_{int(time.time() * 1000)}"
+                                
+                                # Event: session_start
+                                yield f"data: {json_module.dumps({'type': 'session_start', 'session_id': session_id, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                
+                                # Event: agent_state_delta
+                                yield f"data: {json_module.dumps({'type': 'agent_state_delta', 'state': {'routing': 'intent_system', 'intent': intent.name}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                
+                                # Event: message_delta (stream response word by word)
+                                words = response_text.split(' ')
+                                for i, word in enumerate(words):
+                                    yield f"data: {json_module.dumps({'type': 'message_delta', 'delta': word + (' ' if i < len(words) - 1 else ''), 'timestamp': datetime.now().isoformat()})}\n\n"
+                                    await asyncio.sleep(0.02)  # Fast streaming for intent responses
+                                
+                                # Event: session_end
+                                yield f"data: {json_module.dumps({'type': 'session_end', 'session_id': session_id, 'final_state': {'complete': True}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                            except Exception as e:
+                                logger.error(f"Intent streaming error: {e}")
+                                yield f"data: {json_module.dumps({'type': 'error', 'error': {'message': str(e)}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                        
+                        return StreamingResponse(
+                            stream_intent_response(),
+                            media_type="text/event-stream",
+                            headers={
+                                "Cache-Control": "no-cache",
+                                "X-Accel-Buffering": "no",
+                                "Connection": "keep-alive"
+                            }
+                        )
+                    else:
+                        # Return non-streaming JSON response
+                        return {
+                            "response": response_text,
+                            "routing": "intent_system",
+                            "intent": intent.name,
+                            "tier": intent.tier,
+                            "confidence": intent.confidence,
+                            "latency_ms": (time.time() - start_intent_time) * 1000
+                        }
                 else:
                     intent_latency_ms = (time.time() - start_intent_time) * 1000
                     logger.debug(f"No intent match (non-stream), falling back to LLM (classification took {intent_latency_ms:.2f}ms)")

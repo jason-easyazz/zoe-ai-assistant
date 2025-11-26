@@ -78,7 +78,7 @@ MODEL_CONFIGS = {
         num_predict=256,
         num_ctx=2048,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=30,
         description="Smallest, fastest CPU model - 3.8B parameters, excellent for chat",
         benchmark_score=85.0,
@@ -93,7 +93,7 @@ MODEL_CONFIGS = {
         num_predict=128,  # 🎙️ VOICE: Optimized for real-time voice (<2s responses)
         num_ctx=512,  # 🎙️ VOICE: Reduced for faster prompt processing
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:", "<tool_call>"],  # Added tool_call stop token
+        stop_tokens=["User:", "Human:", "<tool_call>"],  # Keep tool_call to detect tool requests
         timeout=30,
         description="🏆 TESTED WINNER - Fast, stable, 0 hallucinations (voice-optimized)",
         benchmark_score=85.0,  # Updated from real testing
@@ -110,7 +110,7 @@ MODEL_CONFIGS = {
         num_predict=256,
         num_ctx=2048,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=45,
         description="GPU-optimized fast model - 4.5B parameters (has GPU allocation issues - use gemma3n-e2b-gpu-fixed instead)",
         benchmark_score=90.0,
@@ -125,7 +125,7 @@ MODEL_CONFIGS = {
         num_predict=512,  # Increased from 64 to allow full responses
         num_ctx=4096,  # Increased from 1024 for better context
         repeat_penalty=1.2,  # Increased from 1.1 to reduce repetition
-        stop_tokens=["\n\n", "User:", "Human:", "Zoe:", "Response:", "Thought:"],  # Added more stop tokens
+        stop_tokens=["User:", "Human:", "Zoe:", "Response:", "Thought:"],  # Prevent model from speaking as multiple personas
         timeout=45,  # Increased timeout for longer responses
         num_gpu=99,  # All GPU layers - works fast with proper configuration
         description="GPU-optimized ultra-fast model - 4.5B parameters, multimodal (vision)",
@@ -141,7 +141,7 @@ MODEL_CONFIGS = {
         num_predict=512,
         num_ctx=4096,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=60,
         description="Multimodal model - image, audio, video understanding (from Gemma DevDay article)",
         benchmark_score=85.0,
@@ -156,7 +156,7 @@ MODEL_CONFIGS = {
         num_predict=1024,
         num_ctx=8192,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=120,
         description="Large, very accurate model - 27B parameters (from Gemma DevDay article) - NOTE: Requires 11.3 GiB memory, use qwen3:8b or deepseek-r1:14b as alternative",
         benchmark_score=95.0,
@@ -171,7 +171,7 @@ MODEL_CONFIGS = {
         num_predict=256,
         num_ctx=2048,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=30,
         description="Small, fast model - 2B parameters (from Gemma DevDay article)",
         benchmark_score=75.0,
@@ -186,7 +186,7 @@ MODEL_CONFIGS = {
         num_predict=128,
         num_ctx=1024,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=30,
         description="Quick queries, casual chat - Claude's recommended fast model"
     ),
@@ -199,7 +199,7 @@ MODEL_CONFIGS = {
         num_predict=128,
         num_ctx=1024,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=30,
         description="Current benchmark winner - fastest with 50% tool call rate",
         benchmark_score=95.0,
@@ -215,7 +215,7 @@ MODEL_CONFIGS = {
         num_predict=128,
         num_ctx=1024,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=30,
         description="Fast responses - Claude's recommended fast model"
     ),
@@ -228,7 +228,7 @@ MODEL_CONFIGS = {
         num_predict=256,
         num_ctx=2048,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=60,
         num_gpu=35,  # ✅ QWEN OPTIMIZED: ~35 layers for 3B model
         description="Balanced performance - Good function calling",
@@ -243,7 +243,7 @@ MODEL_CONFIGS = {
         num_predict=512,
         num_ctx=4096,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:", "<tool_call>"],  # Added tool_call stop token
+        stop_tokens=["User:", "Human:", "<tool_call>"],  # Keep tool_call to detect tool requests
         timeout=60,
         num_gpu=43,  # ✅ QWEN OPTIMIZED: ~43 layers for 7B model
         description="🥈 TESTED - Best tool calling (3.26s avg, 75/100 quality, Q4 quantization)",
@@ -261,7 +261,7 @@ MODEL_CONFIGS = {
         num_predict=512,
         num_ctx=4096,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=60,
         num_gpu=-1,  # ✅ HERMES OPTIMIZED: Auto-detect (uses all available efficiently)
         description="BEST function calling model - Hermes-3 Llama 3.1 8B Q4 quantization",
@@ -277,7 +277,7 @@ MODEL_CONFIGS = {
         num_predict=512,
         num_ctx=4096,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=60,
         description="Primary workhorse - Claude's recommended balanced model"
     ),
@@ -290,7 +290,7 @@ MODEL_CONFIGS = {
         num_predict=512,
         num_ctx=4096,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=60,
         description="Good balance - Claude's recommended balanced model"
     ),
@@ -303,7 +303,7 @@ MODEL_CONFIGS = {
         num_predict=1024,
         num_ctx=8192,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=120,
         description="New flagship model - Claude's recommended heavy reasoning model"
     ),
@@ -316,7 +316,7 @@ MODEL_CONFIGS = {
         num_predict=1024,
         num_ctx=8192,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=120,
         description="Complex analysis - Claude's recommended heavy reasoning model"
     ),
@@ -329,7 +329,7 @@ MODEL_CONFIGS = {
         num_predict=1024,
         num_ctx=8192,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=120,
         description="General heavy tasks - Claude's recommended heavy reasoning model"
     ),
@@ -343,7 +343,7 @@ MODEL_CONFIGS = {
         num_predict=512,
         num_ctx=4096,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=30,
         description="Llama-3.2-3B-Instruct-AWQ - Fast conversation, voice responses (2GB)",
         benchmark_score=90.0,
@@ -359,7 +359,7 @@ MODEL_CONFIGS = {
         num_predict=512,
         num_ctx=8192,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=60,
         description="Qwen2.5-Coder-7B-Instruct-AWQ - Tool calling, Home Assistant automation (4.5GB)",
         benchmark_score=95.0,
@@ -375,7 +375,7 @@ MODEL_CONFIGS = {
         num_predict=512,
         num_ctx=4096,
         repeat_penalty=1.1,
-        stop_tokens=["\n\n", "User:", "Human:"],
+        stop_tokens=["User:", "Human:"],
         timeout=90,
         description="Qwen2-VL-7B-Instruct-AWQ - Vision analysis, photo understanding (5GB)",
         benchmark_score=92.0,
@@ -392,27 +392,27 @@ class ModelSelector:
         self.db_path = db_path
         self.hardware = HARDWARE_PLATFORM
         
-        # Platform-specific model selection
+        # Platform-specific model selection - UPDATED to match LiteLLM service models
         if self.hardware == 'jetson':
-            # Jetson Orin NX: GPU-accelerated models
-            self.current_model = "hermes3:8b-llama3.1-q4_K_M"  # PRIMARY - BEST function calling (GPU)
+            # Jetson Orin NX: GPU-accelerated models (matching LiteLLM service config)
+            self.current_model = "qwen2.5:7b"  # PRIMARY - Available in LiteLLM service
             self.fallback_chain = [
-                "hermes3:8b-llama3.1-q4_K_M",  # PRIMARY (4.9 GB, GPU)
-                "qwen2.5:7b",                   # Excellent alternative (4.7 GB, GPU)
-                "phi3:mini",                    # Fast fallback (2.2 GB, CPU)
-                "llama3.2:3b",                 # Reliable fallback (2.0 GB, CPU)
+                "qwen2.5:7b",                   # PRIMARY - Available in LiteLLM
+                "phi3:mini",                    # Fast fallback - Available in LiteLLM
+                "hermes3-8b",                   # Alternative - Available in LiteLLM (note: dash not colon)
+                "local-model",                  # Generic fallback - Available in LiteLLM
             ]
-            logger.info(f"🚀 Jetson mode: GPU-accelerated models enabled")
+            logger.info(f"🚀 Jetson mode: GPU-accelerated models enabled (matching LiteLLM service)")
         else:
-            # Raspberry Pi 5: CPU-optimized models
-            self.current_model = "phi3:mini"  # PRIMARY for Pi - fast on CPU
+            # Raspberry Pi 5: CPU-optimized models (matching LiteLLM service config)
+            self.current_model = "phi3:mini"  # PRIMARY for Pi - fast on CPU, available in LiteLLM
             self.fallback_chain = [
-                "phi3:mini",                    # PRIMARY (2.2 GB, CPU-optimized)
-                "llama3.2:3b",                 # Alternative (2.0 GB)
-                "qwen2.5:3b",                   # Balanced (2.0 GB)
-                "gemma2:2b",                    # Lightweight (1.6 GB)
+                "phi3:mini",                    # PRIMARY - Available in LiteLLM
+                "local-fast",                   # Fast fallback - Available in LiteLLM
+                "local-model",                  # Generic fallback - Available in LiteLLM
+                "smollm2-1.7b",                 # Lightweight - Available in LiteLLM
             ]
-            logger.info(f"🥧 Raspberry Pi mode: CPU-optimized models enabled")
+            logger.info(f"🥧 Raspberry Pi mode: CPU-optimized models enabled (matching LiteLLM service)")
         
         # Initialize database for quality tracking
         self._init_quality_database()
@@ -513,14 +513,13 @@ class ModelSelector:
         return scored_models[0][0] if scored_models else "qwen2.5:7b"
     
     def _get_best_conversation_model(self) -> str:
-        """Get the best model for general conversation - tested on Jetson 2025-11-18"""
-        # 🏆 WINNER: Llama-3.2-3B (1.9GB, 3.19s avg, 75/100 quality, 0 hallucinations)
-        # Tested with multi-turn conversations - stable, fast, no fabrications
-        # See: MODEL_TEST_ANALYSIS.md for full benchmark results
-        if "llama3.2:3b" in MODEL_CONFIGS:
-            return "llama3.2:3b"
+        """Get the best model for general conversation - matching LiteLLM service"""
+        # 🔧 FIXED: Use models that exist in LiteLLM service
+        # Priority: qwen2.5:7b (available) > phi3:mini (available) > local-model (fallback)
+        if "qwen2.5:7b" in MODEL_CONFIGS:
+            return "qwen2.5:7b"  # Available in LiteLLM service
         
-        # Fallback: phi3:mini (also tested, reliable)
+        # Fallback: phi3:mini (also available in LiteLLM)
         return "phi3:mini"
     
     def get_routing_model(self) -> str:
@@ -536,10 +535,15 @@ class ModelSelector:
         # 3. qwen2.5:3b (score: 75)
         # 4. hermes3 (score: 50, good fallback)
         
-        qwen_preference = ["qwen2.5:7b", "qwen2.5:14b", "qwen2.5:3b", "hermes3:8b-llama3.1-q4_K_M"]
+        # 🔧 FIXED: Use models that exist in LiteLLM service
+        qwen_preference = ["qwen2.5:7b", "hermes3-8b", "phi3:mini"]  # Available in LiteLLM
         for model in qwen_preference:
             if model in MODEL_CONFIGS:
                 logger.info(f"✅ Selected {model} for action execution (tool_calling_score: {MODEL_CONFIGS[model].tool_calling_score})")
+                return model
+            # Also check if model exists in LiteLLM service (allow partial matches)
+            if "qwen2.5:7b" == model or "phi3:mini" == model or "hermes3-8b" == model:
+                logger.info(f"✅ Selected {model} for action execution (available in LiteLLM)")
                 return model
         
         # Fallback: Sort all models by tool calling score
