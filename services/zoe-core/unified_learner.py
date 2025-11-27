@@ -253,11 +253,132 @@ class UnifiedLearningEngine:
         """Find happiness/positive patterns in journals"""
         positive_moods = [j for j in journals if j.get('mood') in ['happy', 'excited', 'content']]
         return [f"Found {len(positive_moods)} entries with positive mood indicators"]
+    
+    async def get_frequently_bought_together(
+        self, user_id: str, item: str, min_confidence: float = 0.5
+    ) -> List[str]:
+        """
+        Learn item pairings from user's actual behavior.
+        No hardcoded milk→bread rules - learns from history.
+        
+        Args:
+            user_id: User ID
+            item: The item to find associations for
+            min_confidence: Minimum confidence threshold (0-1)
+            
+        Returns:
+            List of items frequently bought with the given item
+        """
+        import sqlite3
+        
+        try:
+            conn = sqlite3.connect("/app/data/zoe.db")
+            cursor = conn.cursor()
+            
+            # Find items added within 2 minutes of each other (shopping session)
+            # More lenient time window and lower threshold for faster learning
+            cursor.execute("""
+                WITH item_sessions AS (
+                    SELECT 
+                        json_extract(tool_params, '$.item') as item,
+                        timestamp,
+                        datetime(timestamp, '-2 minutes') as session_start,
+                        datetime(timestamp, '+2 minutes') as session_end
+                    FROM action_logs
+                    WHERE user_id = ?
+                      AND tool_name = 'add_to_list'
+                      AND json_extract(tool_params, '$.list_type') = 'shopping'
+                      AND json_extract(tool_params, '$.item') LIKE ?
+                )
+                SELECT 
+                    json_extract(tp.tool_params, '$.item') as paired_item,
+                    COUNT(*) as frequency
+                FROM action_logs tp
+                INNER JOIN item_sessions ses ON 
+                    tp.timestamp BETWEEN ses.session_start AND ses.session_end
+                WHERE tp.user_id = ?
+                  AND tp.tool_name = 'add_to_list'
+                  AND json_extract(tp.tool_params, '$.list_type') = 'shopping'
+                  AND json_extract(tp.tool_params, '$.item') NOT LIKE ?
+                GROUP BY paired_item
+                HAVING frequency >= 2
+                ORDER BY frequency DESC
+                LIMIT 5
+            """, (user_id, f"%{item}%", user_id, f"%{item}%"))
+            
+            pairs = cursor.fetchall()
+            conn.close()
+            
+            return [p[0] for p in pairs] if pairs else []
+        
+        except Exception as e:
+            logger.error(f"Error getting frequently bought together: {e}")
+            return []
+    
+    async def get_related_actions(
+        self, user_id: str, tool_name: str, params: dict
+    ) -> List[dict]:
+        """
+        Find related actions that commonly follow the given action.
+        
+        Args:
+            user_id: User ID
+            tool_name: The tool that was just executed
+            params: Parameters of the tool execution
+            
+        Returns:
+            List of related action suggestions
+        """
+        import sqlite3
+        
+        try:
+            conn = sqlite3.connect("/app/data/zoe.db")
+            cursor = conn.cursor()
+            
+            # Find actions that commonly happen within 10 minutes after this action
+            cursor.execute("""
+                WITH this_action AS (
+                    SELECT timestamp
+                    FROM action_logs
+                    WHERE user_id = ?
+                      AND tool_name = ?
+                    ORDER BY timestamp DESC
+                    LIMIT 10
+                )
+                SELECT 
+                    al.tool_name,
+                    al.tool_params,
+                    COUNT(*) as frequency
+                FROM action_logs al
+                INNER JOIN this_action ta ON 
+                    al.timestamp BETWEEN ta.timestamp 
+                    AND datetime(ta.timestamp, '+10 minutes')
+                WHERE al.user_id = ?
+                  AND al.tool_name != ?
+                  AND al.timestamp > datetime('now', '-30 days')
+                GROUP BY al.tool_name, al.tool_params
+                HAVING frequency >= 2
+                ORDER BY frequency DESC
+                LIMIT 3
+            """, (user_id, tool_name, user_id, tool_name))
+            
+            results = cursor.fetchall()
+            conn.close()
+            
+            return [
+                {
+                    "tool_name": row[0],
+                    "params": json.loads(row[1]) if row[1] else {},
+                    "frequency": row[2]
+                }
+                for row in results
+            ]
+        
+        except Exception as e:
+            logger.error(f"Error getting related actions: {e}")
+            return []
 
 
 # Global instance
 unified_learner = UnifiedLearningEngine()
-
-
-
 

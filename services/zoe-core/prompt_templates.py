@@ -3,6 +3,9 @@ Enhanced System Prompts with Few-Shot Learning
 Domain-specific templates for better LLM performance
 """
 from typing import Dict, List
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class PromptTemplates:
@@ -456,12 +459,66 @@ When recalling information, make connections:
         return templates.get(routing_type, PromptTemplates.base_system_prompt())
 
 
+def get_condensed_system_prompt() -> str:
+    """
+    Condensed system prompt for memory queries.
+    Keep under 500 tokens to leave room for facts and context.
+    """
+    return """You are Zoe, a helpful AI assistant.
+
+Key behaviors:
+- Answer questions using the user facts provided at the top of this prompt
+- Be concise and direct for voice responses
+- If user asks about themselves, check the CRITICAL section first
+- Never say "I don't know" if the answer is in the user facts section
+
+Conversation style:
+- Natural and friendly
+- Brief responses (1-2 sentences for voice)
+- Use the user's stored information when relevant
+"""
+
+
 # Helper function for chat router
 def build_enhanced_prompt(memories: Dict, user_context: Dict, routing_type: str = "conversation", user_preferences: Dict = None, recent_episodes: List = None) -> str:
-    """Build comprehensive system prompt with context, learned preferences, and conversation history"""
+    """
+    Build comprehensive system prompt with context, learned preferences, and conversation history.
+    CRITICAL: Facts MUST be at the beginning! Even with CTX_SIZE=2048, prioritize facts first.
+    """
+    prompt_parts = []
     
-    # Start with appropriate template
-    base_prompt = PromptTemplates.get_prompt_for_routing(routing_type)
+    # ==========================================
+    # PART 1: USER FACTS (HIGHEST PRIORITY - FIRST!)
+    # ==========================================
+    if memories and memories.get("semantic_results"):
+        facts = [r for r in memories["semantic_results"] 
+                 if r.get('type') == 'self_fact']
+        
+        if facts:
+            prompt_parts.append("=" * 50)
+            prompt_parts.append("🔴 CRITICAL: USER'S PERSONAL INFORMATION 🔴")
+            prompt_parts.append("=" * 50)
+            prompt_parts.append("")
+            
+            for fact in facts[:10]:  # Limit to 10 facts
+                key = fact.get('fact_key', '').replace('_', ' ').title()
+                value = fact.get('fact_value', '')
+                prompt_parts.append(f"• {key}: {value}")
+            
+            prompt_parts.append("")
+            prompt_parts.append("⚠️ INSTRUCTION: Use the above facts to answer questions.")
+            prompt_parts.append("⚠️ DO NOT say 'I don't know' if the answer is listed above.")
+            prompt_parts.append("=" * 50)
+            prompt_parts.append("")
+    
+    # ==========================================
+    # PART 2: SYSTEM PROMPT (CONDENSED FOR MEMORY)
+    # ==========================================
+    if routing_type == "memory-retrieval":
+        # Use shorter system prompt for memory queries
+        base_prompt = get_condensed_system_prompt()
+    else:
+        base_prompt = PromptTemplates.get_prompt_for_routing(routing_type)
     
     # ✅ NEW: Add user preferences if available
     if user_preferences:
@@ -488,41 +545,60 @@ def build_enhanced_prompt(memories: Dict, user_context: Dict, routing_type: str 
         episode_section += "\n**REMEMBER**: Reference specific details from above when answering questions about what happened.\n"
         base_prompt += episode_section
     
+    prompt_parts.append(base_prompt)
+    
+    # ==========================================
+    # PART 3: OTHER CONTEXT (calendar, lists, etc.)
+    # ==========================================
     # ✅ NEW: Use consolidated summary if available
     if user_context.get("consolidated_summary"):
         context_section = "\n\n# CONSOLIDATED CONTEXT\n"
         context_section += user_context["consolidated_summary"]
-        return base_prompt + context_section
+        prompt_parts.append(context_section)
+    else:
+        # Otherwise build context from individual pieces
+        context_section = "\n\n# CURRENT USER CONTEXT\n"
+        
+        if user_context.get("calendar_events"):
+            context_section += "\n## Today's Events:\n"
+            for event in user_context["calendar_events"][:5]:
+                context_section += f"• {event.get('title')} at {event.get('start_time', 'TBD')}\n"
+        
+        if user_context.get("people"):
+            context_section += "\n## Key People:\n"
+            for person in user_context["people"][:5]:
+                context_section += f"• {person.get('name')} ({person.get('relationship')})\n"
+        
+        if user_context.get("projects"):
+            context_section += "\n## Active Projects:\n"
+            for project in user_context["projects"][:5]:
+                context_section += f"• {project.get('name')} - {project.get('status')}\n"
+        
+        if user_context.get("recent_journal"):
+            context_section += "\n## Recent Journal:\n"
+            for entry in user_context["recent_journal"][:3]:
+                context_section += f"• {entry.get('title')} (Mood: {entry.get('mood')})\n"
+        
+        # Add other semantic results (non-fact memories) to context section
+        if memories and memories.get("semantic_results"):
+            other_results = [r for r in memories["semantic_results"] 
+                           if r.get('type') != 'self_fact']
+            if other_results:
+                context_section += "\n## Additional Context:\n"
+                for result in other_results[:10]:
+                    context_section += f"• {result.get('content', '')}\n"
+        
+        prompt_parts.append(context_section)
     
-    # Otherwise build context from individual pieces
-    context_section = "\n\n# CURRENT USER CONTEXT\n"
+    # ==========================================
+    # LOG TOKEN COUNT FOR DEBUGGING
+    # ==========================================
+    final_prompt = "\n".join(prompt_parts)
+    estimated_tokens = len(final_prompt.split()) * 1.3
+    logger.info(f"[Prompt] Estimated tokens: {estimated_tokens:.0f} (CTX_SIZE: 2048) for routing_type: {routing_type}")
     
-    if user_context.get("calendar_events"):
-        context_section += "\n## Today's Events:\n"
-        for event in user_context["calendar_events"][:5]:
-            context_section += f"• {event.get('title')} at {event.get('start_time', 'TBD')}\n"
+    if estimated_tokens > 1800:
+        logger.warning(f"[Prompt] Token count high! May still truncate.")
     
-    if user_context.get("people"):
-        context_section += "\n## Key People:\n"
-        for person in user_context["people"][:5]:
-            context_section += f"• {person.get('name')} ({person.get('relationship')})\n"
-    
-    if user_context.get("projects"):
-        context_section += "\n## Active Projects:\n"
-        for project in user_context["projects"][:5]:
-            context_section += f"• {project.get('name')} - {project.get('status')}\n"
-    
-    if user_context.get("recent_journal"):
-        context_section += "\n## Recent Journal:\n"
-        for entry in user_context["recent_journal"][:3]:
-            context_section += f"• {entry.get('title')} (Mood: {entry.get('mood')})\n"
-    
-    # Add memory search results if available
-    if memories:
-        if memories.get("semantic_results"):
-            context_section += "\n## Relevant Memories:\n"
-            for result in memories["semantic_results"][:5]:
-                context_section += f"• {result.get('content', '')}\n"
-    
-    return base_prompt + context_section
+    return final_prompt
 

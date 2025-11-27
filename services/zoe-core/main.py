@@ -187,6 +187,71 @@ async def metrics():
 
 # ===== STARTUP AND SHUTDOWN EVENTS =====
 
+async def proactive_suggestion_loop():
+    """Background task for proactive assistance suggestions"""
+    import asyncio
+    import sqlite3
+    from datetime import datetime
+    
+    logger.info("✨ Proactive suggestion loop started")
+    
+    while True:
+        try:
+            await asyncio.sleep(3600)  # Check every hour
+            
+            current_hour = datetime.now().hour
+            current_day = datetime.now().strftime("%A")
+            
+            # Get active users (users who've done something in last 24 hours)
+            conn = sqlite3.connect("/app/data/zoe.db")
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT DISTINCT user_id
+                FROM action_logs
+                WHERE timestamp > datetime('now', '-24 hours')
+            """)
+            active_users = [row[0] for row in cursor.fetchall()]
+            conn.close()
+            
+            logger.info(f"🔍 Checking proactive opportunities for {len(active_users)} active users")
+            
+            for user_id in active_users:
+                try:
+                    from predictive_intelligence import predictive_intelligence
+                    
+                    # Sunday evening - suggest weekly planning
+                    if current_day == "Sunday" and 18 <= current_hour <= 21:
+                        logger.info(f"💡 Proactive: Suggesting weekly planning to {user_id}")
+                        # TODO: Send notification via notification system
+                    
+                    # Morning - check today's schedule
+                    elif 6 <= current_hour <= 9:
+                        logger.info(f"💡 Proactive: Suggesting schedule check to {user_id}")
+                        # TODO: Send notification via notification system
+                    
+                    # Check for shopping list threshold
+                    conn = sqlite3.connect("/app/data/zoe.db")
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM list_items li
+                        JOIN lists l ON li.list_id = l.id
+                        WHERE l.user_id = ? AND l.list_type = 'shopping'
+                          AND li.completed = 0
+                    """, (user_id,))
+                    count = cursor.fetchone()[0]
+                    conn.close()
+                    
+                    if count >= 8:
+                        logger.info(f"💡 Proactive: User {user_id} has {count} shopping items - suggest trip")
+                        # TODO: Send notification via notification system
+                
+                except Exception as e:
+                    logger.error(f"Error in proactive check for {user_id}: {e}")
+        
+        except Exception as e:
+            logger.error(f"Error in proactive suggestion loop: {e}")
+            await asyncio.sleep(60)  # Wait 1 minute before retrying on error
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on startup"""
@@ -199,6 +264,14 @@ async def startup_event():
         logger.info("✅ Calendar reminder service started")
     except Exception as e:
         logger.error(f"❌ Failed to start calendar reminders: {e}")
+    
+    try:
+        # Start proactive suggestion loop
+        import asyncio
+        asyncio.create_task(proactive_suggestion_loop())
+        logger.info("✅ Proactive suggestion loop started")
+    except Exception as e:
+        logger.error(f"❌ Failed to start proactive suggestions: {e}")
     
     try:
         # Start task reminder service

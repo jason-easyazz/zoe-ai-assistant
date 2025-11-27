@@ -10,19 +10,63 @@ const DASHBOARD_VERSION = '1.0.0';
 console.log(`🎯 Zoe Dashboard v${DASHBOARD_VERSION} - Initializing...`);
 
 /**
+ * List of valid list widget types for the lists page
+ * Only these widgets should appear on the lists page
+ */
+const LIST_WIDGET_TYPES = [
+    'shopping',
+    'work',
+    'personal',
+    'bucket',
+    'project',
+    'reminders',
+    'dynamic-list'
+];
+
+/**
+ * Check if a widget type is a valid list widget
+ */
+function isListWidget(widgetType) {
+    return LIST_WIDGET_TYPES.includes(widgetType);
+}
+
+/**
  * Get widget configuration from manifest
  * Falls back to defaults if manifest not loaded
+ * For list widgets, allows unlimited height
  */
 function getWidgetConfig(widgetId) {
     const config = WidgetManager.getWidgetConfig(widgetId);
-    if (config && config.config) {
-        return config.config;
+    
+    // Check if this is a list widget
+    const isList = isListWidget(widgetId);
+    
+    // Convert manifest format to expected format
+    if (config) {
+        // Manifest has defaultSize: {w, h} and minSize: {w, h}
+        const defaultSize = config.defaultSize || { w: 3, h: 3 };
+        const minSize = config.minSize || { w: 2, h: 2 };
+        
+        const widgetConfig = {
+            defaultW: defaultSize.w || 3,
+            defaultH: defaultSize.h || 3,
+            minW: minSize.w || 2,
+            minH: minSize.h || 2,
+            maxW: 12, // Full width allowed
+            maxH: isList ? 999 : 8 // Unlimited height for lists (999 rows = ~70,000px), 8 for others
+        };
+        
+        return widgetConfig;
     }
     
-    // Fallback defaults
+    // Fallback defaults - unlimited height for list widgets
     return {
-        minW: 2, maxW: 12, minH: 2, maxH: 8,
-        defaultW: 3, defaultH: 3
+        minW: 2, 
+        maxW: 12, 
+        minH: 2, 
+        maxH: isList ? 999 : 8, // Unlimited height for lists, 8 for others
+        defaultW: 3, 
+        defaultH: 3
     };
 }
 
@@ -118,8 +162,65 @@ class Dashboard {
         
         console.log(`✅ Gridstack initialized with native drag & resize (${isMobile ? 'Mobile compact' : 'Desktop free-form'})`);
         
+        // Clean up any non-list widgets that might already be displayed
+        this.cleanupNonListWidgets();
+        
         // Load saved layout
         this.loadLayout();
+        
+        // Update maxH for all list widgets to allow unlimited height
+        this.updateListWidgetHeights();
+    }
+    
+    /**
+     * Remove any non-list widgets that might already be in the grid
+     * This ensures the lists page only shows list widgets
+     */
+    cleanupNonListWidgets() {
+        if (!this.grid) return;
+        
+        const nodesToRemove = [];
+        this.grid.engine.nodes.forEach((node) => {
+            const widget = node.el.querySelector('.widget');
+            if (widget) {
+                const widgetType = widget.getAttribute('data-widget-type');
+                if (widgetType && !isListWidget(widgetType)) {
+                    console.warn(`🗑️ Removing non-list widget "${widgetType}" from lists page`);
+                    nodesToRemove.push(node.el);
+                }
+            }
+        });
+        
+        // Remove non-list widgets
+        nodesToRemove.forEach(el => {
+            this.grid.removeWidget(el, false); // false = don't trigger change event
+        });
+        
+        if (nodesToRemove.length > 0) {
+            console.log(`✅ Cleaned up ${nodesToRemove.length} non-list widget(s)`);
+            // Save the cleaned layout
+            this.saveLayout();
+        }
+    }
+    
+    /**
+     * Update maxH constraint for all list widgets to allow unlimited height
+     * This ensures existing widgets can be resized as tall as needed
+     */
+    updateListWidgetHeights() {
+        if (!this.grid) return;
+        
+        this.grid.engine.nodes.forEach((node) => {
+            const widget = node.el.querySelector('.widget');
+            if (widget) {
+                const widgetType = widget.getAttribute('data-widget-type');
+                if (widgetType && isListWidget(widgetType)) {
+                    // Update maxH to 999 (effectively unlimited)
+                    node.maxH = 999;
+                    console.log(`📏 Updated maxH for list widget "${widgetType}" to unlimited (999 rows)`);
+                }
+            }
+        });
     }
     
     toggleEditMode() {
@@ -156,6 +257,13 @@ class Dashboard {
     
     addWidget(type) {
         console.log('🎯 Dashboard.addWidget called with type:', type);
+        
+        // FILTER: Only allow list widgets on the lists page
+        if (!isListWidget(type)) {
+            console.warn(`⚠️ Widget type "${type}" is not a list widget. Only list widgets are allowed on the lists page.`);
+            console.log('Valid list widgets:', LIST_WIDGET_TYPES);
+            return null;
+        }
         
         if (!this.grid) {
             console.error('❌ Grid not initialized');
@@ -293,6 +401,12 @@ class Dashboard {
                     return;
                 }
                 
+                // FILTER: Only save list widgets
+                if (!isListWidget(widgetType)) {
+                    console.warn(`⚠️ Skipping non-list widget "${widgetType}" - only list widgets are saved on lists page`);
+                    return;
+                }
+                
                 layout.push({
                     type: widgetType,
                     x: node.x,
@@ -315,7 +429,7 @@ class Dashboard {
             LayoutProtection.saveLayout(this.storageKey, layout);
         } else {
             localStorage.setItem(this.storageKey, JSON.stringify(layout));
-            console.log('💾 Layout saved:', layout.length, 'widgets');
+            console.log('💾 Layout saved:', layout.length, 'list widgets');
         }
     }
     
@@ -356,7 +470,17 @@ class Dashboard {
         
         this.grid.removeAll();
         
+        let loadedCount = 0;
+        let filteredCount = 0;
+        
         layout.forEach(item => {
+            // FILTER: Only load list widgets
+            if (!isListWidget(item.type)) {
+                console.warn(`⚠️ Filtering out non-list widget "${item.type}" from saved layout`);
+                filteredCount++;
+                return;
+            }
+            
             const config = getWidgetConfig(item.type);
             const module = WidgetManager.modules[item.type];
             
@@ -399,9 +523,17 @@ class Dashboard {
                 module.init(widget);
                 this.updateListColumns(widget);
             }
+            
+            loadedCount++;
         });
         
-        console.log('✅ Layout loaded');
+        if (filteredCount > 0) {
+            console.log(`✅ Layout loaded: ${loadedCount} list widgets (${filteredCount} non-list widgets filtered out)`);
+            // Save the cleaned layout
+            this.saveLayout();
+        } else {
+            console.log('✅ Layout loaded:', loadedCount, 'list widgets');
+        }
     }
     
     createDefaultLayout() {

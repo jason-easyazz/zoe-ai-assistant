@@ -2510,14 +2510,23 @@ class ZoeMCPServer:
             
             # If specific fact requested
             if fact_key:
+                # Try to find the fact in any of the JSON fields
                 value = facts.get(fact_key) or preferences.get(fact_key) or personality_traits.get(fact_key) or interests.get(fact_key)
+                
+                # Also try partial matches (e.g., "favorite_color" matches "favorite_color")
+                if not value:
+                    for key, val in facts.items():
+                        if fact_key.lower() in key.lower() or key.lower() in fact_key.lower():
+                            value = val
+                            break
+                
                 if value:
                     return CallToolResult(
-                        content=[TextContent(type="text", text=f"ℹ️ {fact_key}: {value}")]
+                        content=[TextContent(type="text", text=f"Your {fact_key.replace('_', ' ')} is {value}")]
                     )
                 else:
                     return CallToolResult(
-                        content=[TextContent(type="text", text=f"ℹ️ No information found for '{fact_key}'")]
+                        content=[TextContent(type="text", text=f"I don't have information about your {fact_key.replace('_', ' ')}. Would you like to tell me?")]
                     )
             
             # Return all self info

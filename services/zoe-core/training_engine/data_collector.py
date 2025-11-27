@@ -323,11 +323,27 @@ class TrainingDataCollector:
             """, (f"action_pattern_{user_id}", pattern_key))
             
             conn.commit()
+            conn.close()
+            
+            # Also log to action_logs in zoe.db for suggestion engine
+            try:
+                action_conn = sqlite3.connect("/app/data/zoe.db")
+                action_cursor = action_conn.cursor()
+                action_cursor.execute("""
+                    INSERT INTO action_logs (user_id, tool_name, tool_params, success, context)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (user_id, tool_name, json.dumps(params), success, json.dumps({})))
+                action_conn.commit()
+                action_conn.close()
+            except Exception as e:
+                logger.warning(f"Failed to log to action_logs: {e}")
+            
             logger.debug(f"📚 Logged action pattern: {tool_name} (success={success})")
         except Exception as e:
             logger.error(f"Failed to log action pattern: {e}")
         finally:
-            conn.close()
+            if conn:
+                conn.close()
     
     def get_todays_training_data(self) -> List[Dict]:
         """Get all training examples from today"""

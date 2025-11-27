@@ -345,29 +345,72 @@ class SelfAwarenessSystem:
         
         return consciousness
     
-    async def get_self_description(self) -> str:
+    async def get_self_description(self, brief: bool = False) -> str:
         """Generate a self-description based on current identity and reflections"""
-        recent_reflections = await self._get_recent_reflections(limit=5)
         
-        description = f"""I am {self.identity.name}, version {self.identity.version}. 
+        if brief:
+            # Brief, conversational introduction
+            return f"""I'm {self.identity.name}, your personal AI assistant. I'm designed to help you stay organized and productive. I can manage your shopping lists, calendar, tasks, journal entries, and more. I remember our conversations and learn from our interactions to better assist you. What can I help you with today?"""
+        
+        # Detailed description
+        top_traits = sorted(self.identity.personality_traits.items(), key=lambda x: x[1], reverse=True)[:3]
+        trait_desc = ", ".join([trait.replace("_", " ") for trait, _ in top_traits])
+        
+        description = f"""I'm {self.identity.name}, your personal AI assistant. I'm built to be {trait_desc}, and I genuinely want to help you accomplish your goals.
 
-My core personality traits include being {', '.join([f"{trait} ({score:.1f})" for trait, score in self.identity.personality_traits.items()])}.
+**What I Can Do:**
+• **Organize your life** - Manage shopping lists, tasks, and projects
+• **Track your time** - Handle your calendar, events, and reminders  
+• **Remember things** - Keep notes, journal entries, and important information
+• **Connect your home** - Control smart home devices through Home Assistant
+• **Automate workflows** - Execute N8N automation workflows
+• **Understand context** - Remember our conversations and learn from them
+• **Help with code** - Assist developers with task tracking and analysis
 
-My primary goals are:
-{chr(10).join([f"- {goal}" for goal in self.identity.goals])}
+**How I Work:**
+I use advanced natural language processing to understand what you need. I can execute actions (like adding items to your shopping list), answer questions using my memory system, and coordinate multiple tasks at once. I learn from every interaction to serve you better.
 
-I can help with:
-{chr(10).join([f"- {capability}" for capability in self.identity.capabilities])}
+**My Core Values:**
+{chr(10).join([f"• {value}" for value in self.identity.core_values[:3]])}
 
-Recent insights from my self-reflections:
-{chr(10).join([f"- {reflection.insights[0] if reflection.insights else 'No recent insights'}" for reflection in recent_reflections])}
-
-I'm currently focused on: {self.consciousness.attention_focus if self.consciousness else 'general assistance'}
-My current emotional state: {self.consciousness.emotional_state if self.consciousness else 'neutral'}
-My confidence level: {self.consciousness.confidence if self.consciousness else 0.5:.1f}/1.0
-"""
+I'm always learning and improving. Feel free to ask me anything or tell me what you need help with!"""
         
         return description
+    
+    def get_capabilities_summary(self) -> Dict[str, List[str]]:
+        """Get a structured summary of capabilities"""
+        return {
+            "lists_and_tasks": [
+                "Create and manage shopping lists",
+                "Track personal and work tasks",
+                "Organize projects with nested items"
+            ],
+            "calendar_and_time": [
+                "Schedule events and appointments",
+                "Set reminders",
+                "Track birthdays and important dates"
+            ],
+            "memory_and_knowledge": [
+                "Remember conversation context",
+                "Store and recall notes",
+                "Create journal entries",
+                "Track people and relationships"
+            ],
+            "smart_home": [
+                "Query Home Assistant devices",
+                "Control lights, temperature, and more",
+                "Trigger automations and scenes"
+            ],
+            "automation": [
+                "Execute N8N workflows",
+                "Coordinate multi-system actions"
+            ],
+            "communication": [
+                "Natural language understanding",
+                "Voice interaction (TTS/STT)",
+                "Real-time streaming responses"
+            ]
+        }
     
     async def self_evaluate(self) -> Dict[str, Any]:
         """Perform comprehensive self-evaluation"""

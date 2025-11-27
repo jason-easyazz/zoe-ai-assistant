@@ -154,8 +154,8 @@ class Dashboard {
         }
     }
     
-    addWidget(type) {
-        console.log('🎯 Dashboard.addWidget called with type:', type);
+    addWidget(type, options = {}) {
+        console.log('🎯 Dashboard.addWidget called with type:', type, 'options:', options);
         
         if (!this.grid) {
             console.error('❌ Grid not initialized');
@@ -214,10 +214,10 @@ class Dashboard {
         // Add remove button to the grid item
         this.addRemoveButton(gridItem);
         
-        // Initialize widget module
+        // Initialize widget module with options
         const widget = gridItem.querySelector('.widget');
         if (widget) {
-            module.init(widget);
+            module.init(widget, options);
             this.updateListColumns(widget);
         }
         
@@ -484,7 +484,7 @@ if (document.readyState === 'loading') {
 
 // Expose functions for HTML onclick handlers
 window.toggleEditMode = () => dashboard?.toggleEditMode();
-window.addWidget = (type) => dashboard?.addWidget(type);
+window.addWidget = (type, options) => dashboard?.addWidget(type, options);
 window.removeWidget = (widget) => dashboard?.removeWidget(widget);
 
 // Pull-to-refresh cache clearing

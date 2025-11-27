@@ -26,29 +26,29 @@ class ZoeRouter:
             self.router = LiteRouter(
                 model_list=[
                     {
-                        "model_name": "zoe-action",  # Tool calling - TESTED MODEL
+                        "model_name": "zoe-action",  # Tool calling - connects to llama.cpp directly for classification
                         "litellm_params": {
-                            "model": "openai/qwen2.5:7b",  # 🥈 Tested: 90/100 tool score, 3.26s avg
+                            "model": "openai//models/llama-3.2-3b-gguf/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
                             "api_base": os.getenv("LLAMACPP_BASE", "http://zoe-llamacpp:11434/v1"),
-                            "api_key": "sk-dummy",  # Required by litellm but not used for llama.cpp
+                            "api_key": "sk-dummy",
                             "temperature": 0.7,
-                            "num_predict": 256,  # ⚡ OPTIMIZED: Reduced from 512 for faster responses
-                            "num_ctx": 4096,
+                            "num_predict": 256,
+                            "num_ctx": 2048,
                             "repeat_penalty": 1.1,
                             "stop": ["\n\n", "User:", "Human:", "<tool_call>"],
                             "keep_alive": "30m",
                         },
-                        "model_info": {"id": "tool-calling-specialist", "tested": True, "score": 90},
+                        "model_info": {"id": "tool-calling-specialist", "tested": True, "score": 75},
                     },
                     {
-                        "model_name": "zoe-chat",  # Fast conversation - TESTED WINNER
+                        "model_name": "zoe-chat",  # Fast conversation
                         "litellm_params": {
-                            "model": "openai/llama3.2:3b",  # 🏆 Tested winner: 75/100, 3.19s avg, 0 hallucinations
+                            "model": "openai//models/llama-3.2-3b-gguf/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
                             "api_base": os.getenv("LLAMACPP_BASE", "http://zoe-llamacpp:11434/v1"),
-                            "api_key": "sk-dummy",  # Required by litellm but not used for llama.cpp
+                            "api_key": "sk-dummy",
                             "temperature": 0.7,
-                            "num_predict": 128,  # 🎙️ VOICE: Reduced from 256 for real-time voice (<2s responses)
-                            "num_ctx": 512,  # 🎙️ VOICE: Reduced for faster prompt processing
+                            "num_predict": 128,  # 🎙️ VOICE: Optimized for real-time
+                            "num_ctx": 2048,
                             "repeat_penalty": 1.1,
                             "stop": ["\n\n", "User:", "Human:", "<tool_call>"],
                             "keep_alive": "30m",
@@ -56,14 +56,14 @@ class ZoeRouter:
                         "model_info": {"id": "fast-chat-specialist", "tested": True, "score": 75},
                     },
                     {
-                        "model_name": "zoe-vision",  # Image/multimodal (FUTURE - not currently loaded)
+                        "model_name": "zoe-vision",  # Image/multimodal (FUTURE)
                         "litellm_params": {
-                            "model": "openai/llama3.2-vision:11b",  # Vision capability (when available)
+                            "model": "openai//models/llama-3.2-3b-gguf/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
                             "api_base": os.getenv("LLAMACPP_BASE", "http://zoe-llamacpp:11434/v1"),
-                            "api_key": "sk-dummy",  # Required by litellm but not used for llama.cpp
+                            "api_key": "sk-dummy",
                             "temperature": 0.7,
                             "num_predict": 512,
-                            "num_ctx": 4096,
+                            "num_ctx": 2048,
                             "repeat_penalty": 1.1,
                             "stop": ["\n\n", "User:", "Human:"],
                             "keep_alive": "30m",
@@ -73,12 +73,12 @@ class ZoeRouter:
                     {
                         "model_name": "zoe-memory",  # Context-heavy retrieval
                         "litellm_params": {
-                            "model": "openai/qwen2.5:7b",  # Same as action (excellent at both)
+                            "model": "openai//models/llama-3.2-3b-gguf/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
                             "api_base": os.getenv("LLAMACPP_BASE", "http://zoe-llamacpp:11434/v1"),
-                            "api_key": "sk-dummy",  # Required by litellm but not used for llama.cpp
+                            "api_key": "sk-dummy",
                             "temperature": 0.7,
-                            "num_predict": 256,  # ⚡ OPTIMIZED: Reduced from 512 for faster responses
-                            "num_ctx": 4096,
+                            "num_predict": 256,
+                            "num_ctx": 2048,
                             "repeat_penalty": 1.1,
                             "stop": ["\n\n", "User:", "Human:", "<tool_call>"],
                             "keep_alive": "30m",

@@ -1,42 +1,44 @@
 model_list:
   # llama.cpp models (OpenAI-compatible API)
   # NOTE: llama.cpp loads ONE model at a time. Update model name to match loaded model.
-  # Currently loaded: smollm2-1.7b (check with: docker inspect zoe-llamacpp | grep MODEL_NAME)
+  # Currently loaded: llama3.2-3b (check with: docker inspect zoe-llamacpp | grep MODEL_NAME)
   
-  - model_name: smollm2-1.7b
+  # Primary model - the actual model loaded in llama.cpp
+  # llama.cpp exposes model with full path as model name
+  - model_name: llama3.2-3b
     litellm_params:
-      model: openai//models/smollm2-1.7b-gguf/SmolLM2-1.7B-Instruct-Q4_K_M.gguf
+      model: openai//models/llama-3.2-3b-gguf/Llama-3.2-3B-Instruct-Q4_K_M.gguf  # Full path exposed by llama.cpp
       api_base: http://zoe-llamacpp:11434/v1
       api_key: dummy  # llama.cpp doesn't need a key
       temperature: 0.7
-      max_tokens: 512
+      max_tokens: 256
       timeout: 30
   
   # Alias for the primary local model (whatever is loaded)
   - model_name: local-model
     litellm_params:
-      model: openai//models/smollm2-1.7b-gguf/SmolLM2-1.7B-Instruct-Q4_K_M.gguf
+      model: openai//models/llama-3.2-3b-gguf/Llama-3.2-3B-Instruct-Q4_K_M.gguf
       api_base: http://zoe-llamacpp:11434/v1
       api_key: dummy
       temperature: 0.7
-      max_tokens: 512
+      max_tokens: 256
       timeout: 30
   
-  # Fast variant (same model, lower tokens)
+  # Fast variant (same model, lower tokens for voice)
   - model_name: local-fast
     litellm_params:
-      model: openai//models/smollm2-1.7b-gguf/SmolLM2-1.7B-Instruct-Q4_K_M.gguf
+      model: openai//models/llama-3.2-3b-gguf/Llama-3.2-3B-Instruct-Q4_K_M.gguf
       api_base: http://zoe-llamacpp:11434/v1
       api_key: dummy
       temperature: 0.7
       max_tokens: 128
       timeout: 20
   
-  # LEGACY ALIASES (for backward compatibility with old model names)
-  # These point to the actual loaded model (smollm2-1.7b)
+  # Legacy aliases (for backward compatibility)
+  # All point to the actual loaded model (llama3.2-3b)
   - model_name: gemma3n-e2b-gpu-fixed
     litellm_params:
-      model: openai//models/smollm2-1.7b-gguf/SmolLM2-1.7B-Instruct-Q4_K_M.gguf
+      model: openai//models/llama-3.2-3b-gguf/Llama-3.2-3B-Instruct-Q4_K_M.gguf
       api_base: http://zoe-llamacpp:11434/v1
       api_key: dummy
       temperature: 0.7
@@ -45,7 +47,7 @@ model_list:
   
   - model_name: phi3:mini
     litellm_params:
-      model: openai//models/smollm2-1.7b-gguf/SmolLM2-1.7B-Instruct-Q4_K_M.gguf
+      model: openai//models/llama-3.2-3b-gguf/Llama-3.2-3B-Instruct-Q4_K_M.gguf
       api_base: http://zoe-llamacpp:11434/v1
       api_key: dummy
       temperature: 0.7
@@ -54,20 +56,20 @@ model_list:
   
   - model_name: qwen2.5:7b
     litellm_params:
-      model: openai//models/smollm2-1.7b-gguf/SmolLM2-1.7B-Instruct-Q4_K_M.gguf
+      model: openai//models/llama-3.2-3b-gguf/Llama-3.2-3B-Instruct-Q4_K_M.gguf
       api_base: http://zoe-llamacpp:11434/v1
       api_key: dummy
       temperature: 0.7
-      max_tokens: 512
+      max_tokens: 256
       timeout: 30
   
   - model_name: hermes3-8b
     litellm_params:
-      model: openai//models/smollm2-1.7b-gguf/SmolLM2-1.7B-Instruct-Q4_K_M.gguf
+      model: openai//models/llama-3.2-3b-gguf/Llama-3.2-3B-Instruct-Q4_K_M.gguf
       api_base: http://zoe-llamacpp:11434/v1
       api_key: dummy
       temperature: 0.7
-      max_tokens: 512
+      max_tokens: 256
       timeout: 30
 
   # External models (if API keys available)
@@ -101,13 +103,14 @@ router_settings:
       - gpt-4o-mini
   
   # Fallback chains (if primary model fails, try these in order)
+  # All models fallback to local-model (which is llama3.2-3b)
   fallbacks:
-    - gemma3n-e2b-gpu-fixed: ["phi3:mini", "local-model"]
+    - gemma3n-e2b-gpu-fixed: ["local-model"]
     - phi3:mini: ["local-model"]
-    - qwen2.5:7b: ["hermes3-8b", "local-model"]
+    - qwen2.5:7b: ["local-model"]
     - hermes3-8b: ["local-model"]
     - local-model: ["local-fast"]
-    - smollm2-1.7b: ["local-fast"]
+    - llama3.2-3b: ["local-fast"]
 
 general_settings:
   master_key: "sk-f3320300bb32df8f176495bb888ba7c8f87a0d01c2371b50f767b9ead154175f"

@@ -545,6 +545,8 @@ class RBACManager:
             ("users.update", "Update user information", "users", "update"),
             ("users.delete", "Delete users", "users", "delete"),
             ("users.assign_role", "Assign roles to users", "users", "assign_role"),
+            ("users.reset_password", "Reset user passwords", "users", "reset_password"),
+            ("users.unlock", "Unlock user accounts", "users", "unlock"),
             
             # Profile management
             ("profile.read", "View own profile", "profile", "read"),

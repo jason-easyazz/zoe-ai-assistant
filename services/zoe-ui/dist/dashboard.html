@@ -564,6 +564,11 @@
             width: 100%;
         }
         
+        /* Shopping widget - match other lists styling */
+        .widget[data-widget-type="shopping"] {
+            padding: 24px;
+        }
+        
         /* Add Item Input for List Widgets */
         .add-item-input {
             width: 100%;
@@ -578,8 +583,6 @@
             height: 44px; /* Fixed single-line height */
             line-height: 20px; /* Proper line height for single line */
         }
-        
-        .add-item-input:focus {
             outline: none;
             border-color: #7B61FF;
             background: rgba(123, 97, 255, 0.05);
@@ -1571,6 +1574,94 @@
             from { transform: translateX(-50%) translateY(10px) rotate(0deg); }
             to { transform: translateX(-50%) translateY(10px) rotate(360deg); }
         }
+        
+        /* Project List Widget Styles */
+        .project-select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid rgba(123, 97, 255, 0.3);
+            border-radius: 6px;
+            font-size: 13px;
+            background: white;
+        }
+        
+        .stage-nav {
+            display: flex;
+            gap: 6px;
+            padding: 8px 0;
+            overflow-x: auto;
+            border-bottom: 1px solid rgba(123, 97, 255, 0.2);
+            margin-bottom: 12px;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(123, 97, 255, 0.3) transparent;
+        }
+        
+        .stage-nav::-webkit-scrollbar {
+            height: 4px;
+        }
+        
+        .stage-nav::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        .stage-nav::-webkit-scrollbar-thumb {
+            background: rgba(123, 97, 255, 0.3);
+            border-radius: 2px;
+        }
+        
+        .stage-nav-item {
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            white-space: nowrap;
+            cursor: pointer;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        
+        .stage-nav-item.active {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white;
+            font-weight: bold;
+        }
+        
+        .stage-nav-item.completed {
+            background: rgba(123, 97, 255, 0.1);
+            color: #7B61FF;
+        }
+        
+        .stage-nav-item.completed::after {
+            content: ' ✓';
+        }
+        
+        .stage-view {
+            margin-bottom: 16px;
+        }
+        
+        .stage-preview {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+        
+        .stage-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        
+        .stage-progress {
+            font-size: 11px;
+            color: #666;
+        }
+        
+        /* Auto-advance animation */
+        @keyframes fadeInOut {
+            0% { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
+            20% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+            80% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+            100% { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
+        }
     </style>
     <script src="js/auth.js"></script>
     <script>
@@ -1744,6 +1835,7 @@
             <!-- Tabs for Core vs Marketplace -->
             <div style="display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #ddd;">
                 <button id="coreWidgetsTab" class="library-tab active" onclick="switchLibraryTab('core')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid #7B61FF; font-weight: 500;">Core Widgets</button>
+                <button id="yourListsTab" class="library-tab" onclick="switchLibraryTab('your-lists')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500;">Your Lists</button>
                 <button id="marketplaceTab" class="library-tab" onclick="switchLibraryTab('marketplace')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500;">Marketplace</button>
                 <button id="aiGenerateTab" class="library-tab" onclick="switchLibraryTab('ai')" style="padding: 8px 16px; border: none; background: none; cursor: pointer; border-bottom: 2px solid transparent; font-weight: 500;">✨ AI Generate</button>
             </div>
@@ -1751,6 +1843,11 @@
             <!-- Core Widgets Grid -->
             <div id="coreWidgetsGrid" class="library-grid">
                 <!-- Core widget library items will be populated here -->
+            </div>
+            
+            <!-- Your Lists Grid -->
+            <div id="yourListsGrid" class="library-grid" style="display: none;">
+                <!-- Your existing lists and projects will be populated here -->
             </div>
             
             <!-- Marketplace Grid -->
@@ -1796,6 +1893,7 @@
     <script src="js/widgets/core/reminders.js"></script>
     <script src="js/widgets/core/dynamic-list.js"></script>
     <script src="js/widgets/core/week-planner.js"></script>
+    <script src="js/widgets/core/project.js"></script>
     
     <!-- Widget registration will happen after dashboard.js is loaded -->
 
@@ -1814,34 +1912,166 @@
         }
         
         // Load available widgets into library
-        function loadCoreWidgets() {
+        async function loadCoreWidgets() {
             const grid = document.getElementById('coreWidgetsGrid');
             
-            const availableWidgets = [
+            // All widgets available for creation
+            const widgets = [
                 { type: 'time', icon: '🕐', name: 'Clock', desc: 'Current time and date' },
                 { type: 'weather', icon: '🌤️', name: 'Weather', desc: 'Weather forecast' },
                 { type: 'zoe-orb', icon: '💬', name: 'Zoe Chat', desc: 'Chat with Zoe AI' },
                 { type: 'events', icon: '📅', name: 'Events', desc: 'Calendar events' },
                 { type: 'tasks', icon: '✅', name: 'Tasks', desc: 'Task list' },
-                { type: 'shopping', icon: '🛒', name: 'Shopping', desc: 'Shopping list' },
                 { type: 'notes', icon: '📝', name: 'Notes', desc: 'Quick notes' },
                 { type: 'journal', icon: '📔', name: 'Quick Journal', desc: 'Journal with photo & text' },
                 { type: 'home', icon: '🏠', name: 'Home', desc: 'Smart home controls' },
-                { type: 'personal', icon: '📝', name: 'Personal', desc: 'Personal list' },
-                { type: 'work', icon: '💼', name: 'Work', desc: 'Work tasks' },
-                { type: 'bucket', icon: '🎯', name: 'Bucket List', desc: 'Goals' },
-                { type: 'reminders', icon: '🔔', name: 'Reminders', desc: 'Reminders' },
                 { type: 'system', icon: '💻', name: 'System', desc: 'System info' },
-                { type: 'week-planner', icon: '📅', name: 'Week Planner', desc: 'Weekly events, lists, and transactions' }
+                { type: 'week-planner', icon: '📅', name: 'Week Planner', desc: 'Weekly planner' },
+                { type: 'reminders', icon: '🔔', name: 'Reminders', desc: 'Reminders' },
+                { type: 'shopping', icon: '🛒', name: 'New Shopping List', desc: 'Create new shopping list' },
+                { type: 'work', icon: '💼', name: 'New Work Tasks', desc: 'Create new work list' },
+                { type: 'personal', icon: '📝', name: 'New Personal', desc: 'Create new personal list' },
+                { type: 'bucket', icon: '🎯', name: 'New Bucket List', desc: 'Create new bucket list' },
+                { type: 'project', icon: '📋', name: 'New Project', desc: 'Create new project' }
             ];
             
-            grid.innerHTML = availableWidgets.map(widget => `
+            // Build HTML
+            let html = widgets.map(widget => `
                 <div class="widget-item" onclick="addWidget('${widget.type}')">
                     <div class="widget-icon">${widget.icon}</div>
                     <div class="widget-name">${widget.name}</div>
                     <div class="widget-desc">${widget.desc}</div>
                 </div>
             `).join('');
+            
+            grid.innerHTML = html;
+        }
+        
+        // Load "Your Lists" tab
+        async function loadYourLists() {
+            const grid = document.getElementById('yourListsGrid');
+            grid.innerHTML = '<div style="text-align: center; padding: 20px; color: #999;">Loading your lists...</div>';
+            
+            const widgets = await fetchExistingWidgets();
+            
+            if (widgets.length === 0) {
+                grid.innerHTML = '<div style="text-align: center; padding: 40px; color: #999;"><p style="font-size: 18px; margin-bottom: 8px;">No lists yet</p><p style="font-size: 14px;">Create your first list from the "Core Widgets" tab</p></div>';
+                return;
+            }
+            
+            let html = '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px;">';
+            html += widgets.map(widget => `
+                <div class="widget-item" onclick="addExistingWidget('${widget.type}', ${widget.id})">
+                    <div class="widget-icon">${widget.icon}</div>
+                    <div class="widget-name">${widget.name}</div>
+                    <div class="widget-desc">${widget.desc}</div>
+                </div>
+            `).join('');
+            html += '</div>';
+            
+            grid.innerHTML = html;
+        }
+        
+        // Fetch existing widgets (projects, lists, etc.)
+        async function fetchExistingWidgets() {
+            const widgets = [];
+            
+            try {
+                // Fetch existing projects
+                const projectsResponse = await apiRequest('/api/projects');
+                if (projectsResponse.projects) {
+                    projectsResponse.projects.forEach(project => {
+                        widgets.push({
+                            type: 'project',
+                            id: project.id,
+                            icon: '📋',
+                            name: project.name,
+                            desc: `${project.stages?.length || 0} stages`
+                        });
+                    });
+                }
+                
+                // Fetch existing shopping lists
+                const shoppingResponse = await apiRequest('/api/lists/shopping');
+                if (shoppingResponse.lists) {
+                    shoppingResponse.lists.forEach(list => {
+                        widgets.push({
+                            type: 'shopping',
+                            id: list.id,
+                            icon: '🛒',
+                            name: list.name || 'Shopping List',
+                            desc: `${list.items?.length || 0} items`
+                        });
+                    });
+                }
+                
+                // Fetch work lists
+                const workResponse = await apiRequest('/api/lists/work_todos');
+                if (workResponse.lists) {
+                    workResponse.lists.forEach(list => {
+                        widgets.push({
+                            type: 'work',
+                            id: list.id,
+                            icon: '💼',
+                            name: list.name || 'Work Tasks',
+                            desc: `${list.items?.length || 0} items`
+                        });
+                    });
+                }
+                
+                // Fetch personal lists
+                const personalResponse = await apiRequest('/api/lists/personal_todos');
+                if (personalResponse.lists) {
+                    personalResponse.lists.forEach(list => {
+                        widgets.push({
+                            type: 'personal',
+                            id: list.id,
+                            icon: '📝',
+                            name: list.name || 'Personal',
+                            desc: `${list.items?.length || 0} items`
+                        });
+                    });
+                }
+                
+                // Fetch bucket lists
+                const bucketResponse = await apiRequest('/api/lists/bucket');
+                if (bucketResponse.lists) {
+                    bucketResponse.lists.forEach(list => {
+                        widgets.push({
+                            type: 'bucket',
+                            id: list.id,
+                            icon: '🎯',
+                            name: list.name || 'Bucket List',
+                            desc: `${list.items?.length || 0} items`
+                        });
+                    });
+                }
+                
+            } catch (error) {
+                console.error('Failed to fetch existing widgets:', error);
+            }
+            
+            return widgets;
+        }
+        
+        // Add existing widget with specific ID
+        function addExistingWidget(type, id) {
+            console.log('📞 Adding existing widget:', type, id);
+            
+            if (window.dashboard && window.dashboard.addWidget) {
+                // Pass the ID as an option
+                const gridItem = window.dashboard.addWidget(type, { id: id, projectId: id });
+                
+                if (gridItem) {
+                    console.log('✅ Existing widget added successfully');
+                } else {
+                    console.error('❌ Failed to add existing widget');
+                }
+            } else {
+                console.error('❌ Dashboard not initialized');
+            }
+            
+            closeWidgetLibrary();
         }
         
         // Add widget to dashboard
@@ -1872,13 +2102,36 @@
         
         // Tab switching (for future use)
         function switchLibraryTab(tab) {
+            // Remove active class from all tabs
             document.querySelectorAll('.library-tab').forEach(btn => {
                 btn.classList.remove('active');
+                btn.style.borderBottomColor = 'transparent';
             });
             
+            // Hide all grids
+            document.getElementById('coreWidgetsGrid').style.display = 'none';
+            document.getElementById('yourListsGrid').style.display = 'none';
+            document.getElementById('marketplaceGrid').style.display = 'none';
+            document.getElementById('aiGeneratePanel').style.display = 'none';
+            
+            // Show selected tab
             if (tab === 'core') {
                 document.getElementById('coreWidgetsTab').classList.add('active');
+                document.getElementById('coreWidgetsTab').style.borderBottomColor = '#7B61FF';
                 document.getElementById('coreWidgetsGrid').style.display = 'grid';
+            } else if (tab === 'your-lists') {
+                document.getElementById('yourListsTab').classList.add('active');
+                document.getElementById('yourListsTab').style.borderBottomColor = '#7B61FF';
+                document.getElementById('yourListsGrid').style.display = 'block';
+                loadYourLists();
+            } else if (tab === 'marketplace') {
+                document.getElementById('marketplaceTab').classList.add('active');
+                document.getElementById('marketplaceTab').style.borderBottomColor = '#7B61FF';
+                document.getElementById('marketplaceGrid').style.display = 'grid';
+            } else if (tab === 'ai') {
+                document.getElementById('aiGenerateTab').classList.add('active');
+                document.getElementById('aiGenerateTab').style.borderBottomColor = '#7B61FF';
+                document.getElementById('aiGeneratePanel').style.display = 'block';
             }
         }
     </script>

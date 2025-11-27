@@ -2004,26 +2004,80 @@ async def parse_and_execute_tool_calls(response_text: str, user_id: str) -> str:
             if result.get("success"):
                 # Replace the tool call with success message
                 success_msg = result.get("message", f"Executed {tool_name} successfully")
-                # ✅ FIX: Try multiple replacement patterns to ensure we catch all variations
-                original_tool_call = f"[TOOL_CALL:{tool_name}:{params_json}]"
-                # Also try with the original params_json (before quote fixing)
-                original_params = response_text[response_text.find(f"[TOOL_CALL:{tool_name}:") + len(f"[TOOL_CALL:{tool_name}:"):response_text.find("]", response_text.find(f"[TOOL_CALL:{tool_name}:"))]
-                original_tool_call_variants = [
-                    original_tool_call,
-                    f"[TOOL_CALL:{tool_name}:{original_params}]",
-                    f"[TOOL_CALL:{tool_name}:{params_json}]",
-                ]
-                for variant in original_tool_call_variants:
-                    if variant in final_response:
-                        final_response = final_response.replace(variant, success_msg, 1)
-                        logger.info(f"✅ Replaced tool call variant with: {success_msg[:50]}")
-                        break
+                
+                # ✨ NEW: Generate intelligent suggestions
+                try:
+                    from suggestion_engine import suggestion_engine
+                    
+                    suggestions_data = await suggestion_engine.generate_post_action_suggestions(
+                        tool_name=tool_name,
+                        params=params,
+                        result=result,
+                        user_id=user_id,
+                        context={"message": response_text, "session_id": "mcp_execution"}
+                    )
+                    
+                    # Append suggestions to response
+                    if suggestions_data.get("suggestions"):
+                        success_msg += "\n\n"
+                        for suggestion in suggestions_data["suggestions"]:
+                            icon = {"related_item": "💡", "action_trigger": "📅", 
+                                   "reminder": "⏰", "proactive": "✨", 
+                                   "frequent_together": "💡", "preparation": "📋",
+                                   "related": "🔗", "relationship_maintenance": "💝",
+                                   "important_date": "🎂", "convert_to_task": "✅",
+                                   "follow_up": "📌", "automation": "🤖"}.get(suggestion["type"], "💡")
+                            success_msg += f"{icon} {suggestion['action']}\n"
+                    
+                    # Add alternatives if available
+                    if suggestions_data.get("alternatives"):
+                        success_msg += "\n💭 **Better approach:**\n"
+                        for alt in suggestions_data["alternatives"]:
+                            success_msg += f"   • {alt['suggestion']} - {alt['why']}\n"
+                    
+                    # Add insights if available
+                    if suggestions_data.get("insights"):
+                        success_msg += "\n📊 " + " ".join(suggestions_data["insights"])
+                    
+                    logger.info(f"✨ Generated {len(suggestions_data.get('suggestions', []))} suggestions for {tool_name}")
+                    
+                    # Log suggestions shown for acceptance tracking
+                    if suggestions_data.get("suggestions"):
+                        await suggestion_engine.log_suggestions_shown(
+                            user_id,
+                            tool_name,
+                            suggestions_data["suggestions"]
+                        )
+                
+                except Exception as e:
+                    logger.warning(f"Failed to generate suggestions: {e}")
+                
+                # ✅ NEW: Try to replace Hermes-style XML tool calls first
+                hermes_pattern = r'<tool_call>\s*\{[^}]*"name"\s*:\s*"' + re.escape(tool_name) + r'"[^<]*\}\s*</tool_call>'
+                if re.search(hermes_pattern, final_response, re.DOTALL):
+                    final_response = re.sub(hermes_pattern, success_msg, final_response, count=1, flags=re.DOTALL)
+                    logger.info(f"✅ Replaced Hermes XML tool call with: {success_msg[:50]}")
                 else:
-                    # If no exact match, try regex replacement
-                    import re
-                    tool_call_pattern = re.escape(f"[TOOL_CALL:{tool_name}:") + r".*?" + re.escape("]")
-                    final_response = re.sub(tool_call_pattern, success_msg, final_response, count=1)
-                    logger.info(f"✅ Replaced tool call via regex with: {success_msg[:50]}")
+                    # ✅ FIX: Try multiple replacement patterns to ensure we catch all variations
+                    original_tool_call = f"[TOOL_CALL:{tool_name}:{params_json}]"
+                    # Also try with the original params_json (before quote fixing)
+                    original_params = response_text[response_text.find(f"[TOOL_CALL:{tool_name}:") + len(f"[TOOL_CALL:{tool_name}:"):response_text.find("]", response_text.find(f"[TOOL_CALL:{tool_name}:"))]
+                    original_tool_call_variants = [
+                        original_tool_call,
+                        f"[TOOL_CALL:{tool_name}:{original_params}]",
+                        f"[TOOL_CALL:{tool_name}:{params_json}]",
+                    ]
+                    for variant in original_tool_call_variants:
+                        if variant in final_response:
+                            final_response = final_response.replace(variant, success_msg, 1)
+                            logger.info(f"✅ Replaced tool call variant with: {success_msg[:50]}")
+                            break
+                    else:
+                        # If no exact match, try regex replacement
+                        import re
+                        tool_call_pattern = re.escape(f"[TOOL_CALL:{tool_name}:") + r".*?" + re.escape("]")
+                        final_response = re.sub(tool_call_pattern, success_msg, final_response, count=1)
+                        logger.info(f"✅ Replaced tool call via regex with: {success_msg[:50]}")
                 
                 # ✅ NEW: Learn from successful action patterns
                 try:
@@ -2039,10 +2093,16 @@ async def parse_and_execute_tool_calls(response_text: str, user_id: str) -> str:
             else:
                 # Replace with error message
                 error_msg = result.get("error", f"Failed to execute {tool_name}")
-                final_response = final_response.replace(
-                    f"[TOOL_CALL:{tool_name}:{params_json}]",
-                    f"Error: {error_msg}"
-                )
+                
+                # Try Hermes-style XML first
+                hermes_pattern = r'<tool_call>\s*\{[^}]*"name"\s*:\s*"' + re.escape(tool_name) + r'"[^<]*\}\s*</tool_call>'
+                if re.search(hermes_pattern, final_response, re.DOTALL):
+                    final_response = re.sub(hermes_pattern, f"Error: {error_msg}", final_response, count=1, flags=re.DOTALL)
+                else:
+                    final_response = final_response.replace(
+                        f"[TOOL_CALL:{tool_name}:{params_json}]",
+                        f"Error: {error_msg}"
+                    )
                 
                 # ✅ NEW: Learn from failed action patterns
                 try:
@@ -2240,6 +2300,134 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                         response_text = ResponseFormatter.format_with_confidence(response_text, confidence)
                         logger.info(f"[P0-2] Confidence formatting applied: {confidence:.2f}")
                     
+                    # ✨ Extract params BEFORE anything else (for logging and suggestions)
+                    intent_to_tool = {
+                        "ListAdd": "add_to_list",
+                        "CalendarCreate": "create_calendar_event",
+                        "CalendarAdd": "create_calendar_event",
+                        "EventCreate": "create_calendar_event",
+                        "ScheduleEvent": "create_calendar_event",
+                        "PersonAdd": "add_person",
+                        "NoteCreate": "create_note",
+                        "CreateNote": "create_note",
+                        "TaskAdd": "add_to_list",
+                        "ReminderCreate": "create_reminder",
+                    }
+                    
+                    tool_name = intent_to_tool.get(intent.name)
+                    extracted_params = {}
+                    
+                    if tool_name and intent.name == "ListAdd":
+                        # Extract item from message for ListAdd
+                        import re
+                        match = re.search(r'add\s+(.+?)\s+to\s+(?:the\s+)?(\w+)\s+list', msg.message, re.IGNORECASE)
+                        if match:
+                            extracted_params = {
+                                "item": match.group(1).strip(),
+                                "list_type": match.group(2).lower() if match.group(2) else "shopping"
+                            }
+                        else:
+                            # Fallback: extract item name
+                            words = msg.message.lower().replace("add", "").replace("to", "").replace("shopping", "").replace("list", "").replace("the", "").strip()
+                            extracted_params = {"item": words, "list_type": "shopping"}
+                        
+                        # Log to action_logs immediately for learning
+                        try:
+                            import sqlite3
+                            import json
+                            conn = sqlite3.connect("/app/data/zoe.db")
+                            cursor = conn.cursor()
+                            cursor.execute("""
+                                INSERT INTO action_logs (user_id, tool_name, tool_params, success, context)
+                                VALUES (?, ?, ?, ?, ?)
+                            """, (actual_user_id, "add_to_list", json.dumps(extracted_params), True, json.dumps({"message": msg.message})))
+                            conn.commit()
+                            conn.close()
+                            logger.debug(f"📝 Logged action to action_logs: {extracted_params}")
+                        except Exception as e:
+                            logger.warning(f"Failed to log action: {e}")
+                    
+                    elif tool_name and intent.name in ["CalendarCreate", "CalendarAdd", "EventCreate", "ScheduleEvent"]:
+                        # Extract calendar params from message
+                        import re
+                        # Try to extract event title
+                        title_match = re.search(r'schedule\s+(?:a\s+)?(.+?)\s+for', msg.message, re.IGNORECASE)
+                        if not title_match:
+                            title_match = re.search(r'schedule\s+(?:a\s+)?(.+)', msg.message, re.IGNORECASE)
+                        
+                        extracted_params = {
+                            "title": title_match.group(1).strip() if title_match else "Event",
+                            "message_text": msg.message
+                        }
+                        
+                        # Log to action_logs for learning
+                        try:
+                            import sqlite3
+                            import json
+                            conn = sqlite3.connect("/app/data/zoe.db")
+                            cursor = conn.cursor()
+                            cursor.execute("""
+                                INSERT INTO action_logs (user_id, tool_name, tool_params, success, context)
+                                VALUES (?, ?, ?, ?, ?)
+                            """, (actual_user_id, "create_calendar_event", json.dumps(extracted_params), True, json.dumps({"message": msg.message})))
+                            conn.commit()
+                            conn.close()
+                            logger.debug(f"📝 Logged calendar action: {extracted_params}")
+                        except Exception as e:
+                            logger.warning(f"Failed to log calendar action: {e}")
+                    
+                    # ✨ NEW: Generate intelligent suggestions after intent execution
+                    if result.success:
+                        try:
+                            from suggestion_engine import suggestion_engine
+                            
+                            if tool_name:
+                                # Use extracted params
+                                params = extracted_params if extracted_params else (getattr(result, 'params', {}) or {})
+                                
+                                suggestions_data = await suggestion_engine.generate_post_action_suggestions(
+                                    tool_name=tool_name,
+                                    params=params,
+                                    result={"success": True, "message": response_text},
+                                    user_id=actual_user_id,
+                                    context={"message": msg.message, "session_id": context.get("session_id", "default")}
+                                )
+                                
+                                # Append suggestions to response
+                                if suggestions_data.get("suggestions"):
+                                    response_text += "\n\n"
+                                    for suggestion in suggestions_data["suggestions"]:
+                                        icon = {"related_item": "💡", "action_trigger": "📅", 
+                                               "reminder": "⏰", "proactive": "✨", 
+                                               "frequent_together": "💡", "preparation": "📋",
+                                               "related": "🔗", "relationship_maintenance": "💝",
+                                               "important_date": "🎂", "convert_to_task": "✅",
+                                               "follow_up": "📌", "automation": "🤖"}.get(suggestion["type"], "💡")
+                                        response_text += f"{icon} {suggestion['action']}\n"
+                                
+                                # Add alternatives if available
+                                if suggestions_data.get("alternatives"):
+                                    response_text += "\n💭 **Better approach:**\n"
+                                    for alt in suggestions_data["alternatives"]:
+                                        response_text += f"   • {alt['suggestion']} - {alt['why']}\n"
+                                
+                                # Add insights if available
+                                if suggestions_data.get("insights"):
+                                    response_text += "\n📊 " + " ".join(suggestions_data["insights"])
+                                
+                                logger.info(f"✨ Generated {len(suggestions_data.get('suggestions', []))} suggestions for intent {intent.name}")
+                                
+                                # Log suggestions shown for acceptance tracking
+                                if suggestions_data.get("suggestions"):
+                                    await suggestion_engine.log_suggestions_shown(
+                                        actual_user_id,
+                                        tool_name,
+                                        suggestions_data["suggestions"]
+                                    )
+                        
+                        except Exception as e:
+                            logger.warning(f"Failed to generate suggestions for intent: {e}")
+                    
                     # ✅ FIX: Return streaming response if requested
                     if stream:
                         async def stream_intent_response():
@@ -2289,6 +2477,34 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                     logger.debug(f"No intent match (non-stream), falling back to LLM (classification took {intent_latency_ms:.2f}ms)")
             except Exception as e:
                 logger.warning(f"Intent classification failed (non-stream), falling back to LLM: {e}")
+        
+        # Step 0: Check if this is a self-awareness query (who are you, what can you do)
+        if _is_self_awareness_query(msg.message):
+            logger.info(f"🎯 Self-awareness query detected: {msg.message}")
+            self_awareness_response = await _handle_self_awareness_query(msg.message, actual_user_id)
+            
+            if stream:
+                async def self_awareness_stream():
+                    import json as json_module
+                    session_id = msg.session_id or f"session_{int(time.time() * 1000)}"
+                    yield f"data: {json_module.dumps({'type': 'session_start', 'session_id': session_id, 'timestamp': datetime.now().isoformat()})}\n\n"
+                    
+                    # Stream the response word by word
+                    words = self_awareness_response.split(' ')
+                    for i, word in enumerate(words):
+                        yield f"data: {json_module.dumps({'type': 'message_delta', 'delta': word + (' ' if i < len(words) - 1 else ''), 'timestamp': datetime.now().isoformat()})}\n\n"
+                        await asyncio.sleep(0.02)
+                    
+                    yield f"data: {json_module.dumps({'type': 'session_end', 'session_id': session_id, 'timestamp': datetime.now().isoformat()})}\n\n"
+                
+                return StreamingResponse(self_awareness_stream(), media_type="text/event-stream")
+            else:
+                return {
+                    "response": self_awareness_response,
+                    "routing": "self_awareness",
+                    "interaction_id": f"self_aware_{int(time.time() * 1000)}",
+                    "response_time": time.time() - start_time
+                }
         
         # Step 1: Detect if this needs orchestration (planning requests)
         needs_orchestration = _is_planning_request(msg.message)
@@ -3190,6 +3406,44 @@ def _is_planning_request(message: str) -> bool:
     ]
     message_lower = message.lower()
     return any(phrase in message_lower for phrase in orchestration_patterns)
+
+def _is_self_awareness_query(message: str) -> bool:
+    """Detect if user is asking about Zoe's identity, capabilities, or self-concept"""
+    self_awareness_patterns = [
+        # Identity questions
+        "who are you", "what are you", "tell me about yourself",
+        "introduce yourself", "who is zoe", "what is zoe",
+        # Capability questions
+        "what can you do", "what can you help", "what do you do",
+        "what are you capable", "what are your capabilities",
+        "what features", "what can i ask",
+        # Self-awareness
+        "describe yourself", "what are you good at", "what are your skills",
+        "what can i use you for", "how can you help", "what help can you provide"
+    ]
+    message_lower = message.lower()
+    return any(phrase in message_lower for phrase in self_awareness_patterns)
+
+async def _handle_self_awareness_query(message: str, user_id: str) -> str:
+    """Handle self-awareness queries with identity-aware responses"""
+    try:
+        from self_awareness import self_awareness
+        
+        # Set user context
+        self_awareness.set_user_context(user_id)
+        
+        # Determine if brief or detailed response is needed
+        brief_patterns = ["quickly", "brief", "short", "summary"]
+        is_brief = any(pattern in message.lower() for pattern in brief_patterns)
+        
+        # Get appropriate self-description
+        description = await self_awareness.get_self_description(brief=is_brief)
+        
+        return description
+    except Exception as e:
+        logger.error(f"Self-awareness query failed: {e}")
+        # Fallback response
+        return """I'm Zoe, your personal AI assistant. I can help you manage shopping lists, calendar events, tasks, notes, journal entries, and more. I remember our conversations and learn from our interactions. I can also control your smart home devices and automate workflows. What can I help you with today?"""
 
 # ============================================================================
 # FEEDBACK & TRAINING ENDPOINTS

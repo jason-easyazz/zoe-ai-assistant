@@ -7,11 +7,27 @@ With Martin-inspired productivity features
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any, Set
-from datetime import datetime, date
+from datetime import datetime, date, time
 import sqlite3
 import json
 import os
 import asyncio
+
+# Platform-specific hierarchy limits
+try:
+    from model_config import detect_hardware
+    HARDWARE_PLATFORM = detect_hardware()
+except:
+    HARDWARE_PLATFORM = 'unknown'
+
+PLATFORM_MAX_DEPTH = {
+    'jetson': 5,    # Can handle more nesting
+    'pi5': 3,       # Keep simpler for performance
+    'unknown': 3    # Conservative default
+}
+MAX_HIERARCHY_DEPTH = PLATFORM_MAX_DEPTH.get(HARDWARE_PLATFORM, 3)
+
+print(f"[Lists] Platform: {HARDWARE_PLATFORM}, Max hierarchy depth: {MAX_HIERARCHY_DEPTH}")
 
 router = APIRouter(prefix="/api/lists", tags=["lists"])
 
@@ -93,6 +109,82 @@ class ProductivityAnalytics(BaseModel):
 # Database path
 DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 
+
+# ==================================================================
+# HIERARCHY VALIDATION FUNCTIONS
+# ==================================================================
+
+def validate_hierarchy_depth(parent_id: Optional[int], conn: sqlite3.Connection) -> tuple:
+    """
+    Prevent deep nesting that could cause performance issues.
+    Returns (is_valid, error_message)
+    
+    Max depth: 3 for Pi 5, 5 for Jetson
+    """
+    if parent_id is None:
+        return True, ""  # Top-level item is always valid
+    
+    cursor = conn.cursor()
+    current_depth = 0
+    current_id = parent_id
+    visited = set()
+    
+    while current_id is not None and current_depth < MAX_HIERARCHY_DEPTH + 1:
+        # Check for circular reference during traversal
+        if current_id in visited:
+            return False, "Circular reference detected in item hierarchy"
+        visited.add(current_id)
+        
+        cursor.execute("SELECT parent_id FROM list_items WHERE id = ?", (current_id,))
+        result = cursor.fetchone()
+        if result is None:
+            break
+        current_id = result[0]
+        current_depth += 1
+    
+    if current_depth >= MAX_HIERARCHY_DEPTH:
+        return False, f"Maximum hierarchy depth ({MAX_HIERARCHY_DEPTH} levels) exceeded for this platform ({HARDWARE_PLATFORM})"
+    
+    return True, ""
+
+
+def prevent_circular_reference(item_id: int, new_parent_id: Optional[int], conn: sqlite3.Connection) -> tuple:
+    """
+    Prevent item from becoming its own ancestor.
+    Returns (is_valid, error_message)
+    """
+    if new_parent_id is None:
+        return True, ""  # Moving to top level is always safe
+    
+    if item_id == new_parent_id:
+        return False, "Item cannot be its own parent"
+    
+    cursor = conn.cursor()
+    current_id = new_parent_id
+    visited = set([item_id])
+    
+    # Traverse up the parent chain to see if we encounter item_id
+    while current_id is not None:
+        if current_id == item_id:
+            return False, "Cannot create circular reference: item would become its own ancestor"
+        
+        if current_id in visited:
+            return False, "Circular reference detected in existing hierarchy"
+        visited.add(current_id)
+        
+        cursor.execute("SELECT parent_id FROM list_items WHERE id = ?", (current_id,))
+        result = cursor.fetchone()
+        if result is None:
+            break
+        current_id = result[0]
+    
+    return True, ""
+
+
+# ==================================================================
+# DATABASE HELPERS
+# ==================================================================
+
 def get_connection(row_factory=None):
     conn = sqlite3.connect(DB_PATH, timeout=5.0)
     if row_factory is not None:
@@ -166,6 +258,39 @@ def init_lists_db():
     except:
         pass  # Column already exists
     
+    # Run migration for Enhanced Lists features
+    try:
+        import subprocess
+        import sys
+        migration_script = "/app/scripts/maintenance/migrate_lists_enhancements.py"
+        if not os.path.exists(migration_script):
+            migration_script = os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts/maintenance/migrate_lists_enhancements.py")
+        if os.path.exists(migration_script):
+            subprocess.run([sys.executable, migration_script], check=False, timeout=30)
+    except Exception as e:
+        print(f"⚠️  Could not run migration script: {e}")
+        # Fallback: Add columns manually if migration script fails
+        try:
+            cursor.execute("ALTER TABLE list_items ADD COLUMN parent_id INTEGER REFERENCES list_items(id) ON DELETE CASCADE")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE list_items ADD COLUMN reminder_time DATETIME")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE list_items ADD COLUMN repeat_pattern TEXT")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE list_items ADD COLUMN repeat_end_date DATE")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE list_items ADD COLUMN due_time TIME")
+        except:
+            pass
+    
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_lists_category 
         ON lists(list_category, user_id)
@@ -175,6 +300,31 @@ def init_lists_db():
         CREATE INDEX IF NOT EXISTS idx_list_items_list_id
         ON list_items(list_id)
     """)
+    
+    # Create indexes for Enhanced Lists features
+    try:
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_list_items_parent_id
+            ON list_items(parent_id)
+        """)
+    except:
+        pass
+    
+    try:
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_list_items_reminder_time
+            ON list_items(reminder_time)
+        """)
+    except:
+        pass
+    
+    try:
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_list_items_due_date_time
+            ON list_items(due_date, due_time)
+        """)
+    except:
+        pass
     
     conn.commit()
     conn.close()
@@ -187,6 +337,151 @@ def normalize_list_type(list_type: str, category: str = "personal") -> str:
     if list_type == "tasks":
         return "personal_todos" if category == "personal" else "work_todos"
     return list_type
+
+def get_platform() -> str:
+    """Get hardware platform for depth limits"""
+    try:
+        from model_config import detect_hardware
+        return detect_hardware()
+    except:
+        return "unknown"
+
+def prevent_circular_reference(item_id: int, new_parent_id: Optional[int], conn: sqlite3.Connection) -> tuple:
+    """
+    Prevent item from becoming its own ancestor.
+    Returns (is_valid, error_message)
+    """
+    if new_parent_id is None:
+        return True, ""  # Moving to top level is always safe
+    
+    if item_id == new_parent_id:
+        return False, "Item cannot be its own parent"
+    
+    # Check if new_parent_id is a descendant of item_id
+    current_id = new_parent_id
+    visited = set()
+    
+    while current_id is not None:
+        if current_id == item_id:
+            return False, "Cannot create circular reference: item would become its own ancestor"
+        
+        if current_id in visited:
+            return False, "Circular reference detected in existing hierarchy"
+        
+        visited.add(current_id)
+        
+        cursor = conn.execute(
+            "SELECT parent_id FROM list_items WHERE id = ?",
+            (current_id,)
+        )
+        result = cursor.fetchone()
+        if result is None:
+            break
+        current_id = result[0] if result[0] is not None else None
+        
+        # Prevent infinite loops
+        if len(visited) > 100:
+            return False, "Hierarchy too deep (safety limit)"
+    
+    return True, ""  # No circular reference
+
+async def sync_item_reminder(item_id: int, reminder_time: Optional[str], repeat_pattern: Optional[str], user_id: str) -> bool:
+    """
+    Sync list item reminder using MCP server
+    This integrates with Zoe's intelligent reminder system
+    """
+    try:
+        # Check if MCP reminder tool exists
+        # First, try to import MCP client
+        mcp_client = None
+        try:
+            # Try different possible import paths
+            try:
+                from services.mcp_client import MCPClient
+                mcp_client = MCPClient()
+            except ImportError:
+                try:
+                    from mcp_client import MCPClient
+                    mcp_client = MCPClient()
+                except ImportError:
+                    # MCP client not available, use direct API call as fallback
+                    import httpx
+                    
+                    if reminder_time:
+                        # Create reminder via API
+                        async with httpx.AsyncClient() as client:
+                            reminder_data = {
+                                "title": f"List item reminder",
+                                "linked_list_item_id": item_id,
+                                "reminder_time": reminder_time,
+                                "reminder_type": "once",
+                                "category": "personal",
+                                "priority": "medium"
+                            }
+                            if repeat_pattern:
+                                reminder_data["recurring_pattern"] = json.loads(repeat_pattern) if isinstance(repeat_pattern, str) else repeat_pattern
+                            
+                            response = await client.post(
+                                "http://localhost:8000/api/reminders",
+                                json=reminder_data,
+                                params={"user_id": user_id},
+                                timeout=5.0
+                            )
+                            if response.status_code in [200, 201]:
+                                return True
+                    else:
+                        # Delete reminder if reminder_time is None
+                        async with httpx.AsyncClient() as client:
+                            # Find existing reminder
+                            response = await client.get(
+                                f"http://localhost:8000/api/reminders",
+                                params={"linked_list_item_id": item_id, "user_id": user_id},
+                                timeout=5.0
+                            )
+                            if response.status_code == 200:
+                                reminders = response.json()
+                                if reminders.get("reminders"):
+                                    for reminder in reminders["reminders"]:
+                                        await client.delete(
+                                            f"http://localhost:8000/api/reminders/{reminder['id']}",
+                                            params={"user_id": user_id},
+                                            timeout=5.0
+                                        )
+                                return True
+                    
+                    return False
+        
+        except Exception as e:
+            print(f"⚠️  Error syncing reminder via MCP/API: {e}")
+            return False
+        
+        if mcp_client:
+            # Use MCP tool for reminder management
+            try:
+                if reminder_time:
+                    result = await mcp_client.call_tool(
+                        tool_name="set_reminder",
+                        arguments={
+                            "linked_list_item_id": item_id,
+                            "reminder_time": reminder_time,
+                            "repeat_pattern": json.loads(repeat_pattern) if isinstance(repeat_pattern, str) else repeat_pattern if repeat_pattern else None,
+                            "source": "list_item"
+                        }
+                    )
+                    return result is not None
+                else:
+                    # Delete reminder via MCP if available
+                    # For now, return True (reminder cleared)
+                    return True
+            except Exception as e:
+                print(f"⚠️  Error calling MCP tool: {e}")
+                return False
+        
+        return False
+        
+    except Exception as e:
+        print(f"⚠️  Error in sync_item_reminder: {e}")
+        return False
 
 # Request/Response models
 class ListItem(BaseModel):
@@ -863,26 +1158,110 @@ async def get_lists(
     for row in rows:
         list_id = row[0]
         
-        # Get items for this list
-        cursor.execute("""
-            SELECT id, task_text, priority, completed, completed_at, created_at, updated_at
-            FROM list_items
-            WHERE list_id = ?
-            ORDER BY created_at ASC
-        """, (list_id,))
+        # Check which columns exist first
+        cursor.execute("PRAGMA table_info(list_items)")
+        columns_info = cursor.fetchall()
+        column_names = [col[1] for col in columns_info]
+        
+        # Build SELECT based on available columns
+        base_columns = ["id", "task_text", "priority", "completed", "completed_at", "created_at", "updated_at"]
+        optional_columns = ["parent_id", "reminder_time", "repeat_pattern", "due_date", "due_time", "repeat_end_date", "sort_order"]
+        
+        select_columns = base_columns.copy()
+        for col in optional_columns:
+            if col in column_names:
+                select_columns.append(col)
+        
+        # Get items for this list (with or without hierarchical structure)
+        try:
+            if "parent_id" in column_names and "sort_order" in column_names:
+                order_clause = "ORDER BY parent_id IS NULL DESC, sort_order, created_at ASC"
+            else:
+                order_clause = "ORDER BY created_at ASC"
+            
+            cursor.execute(f"""
+                SELECT {', '.join(select_columns)}
+                FROM list_items
+                WHERE list_id = ?
+                {order_clause}
+            """, (list_id,))
+        except sqlite3.OperationalError as e:
+            # Fallback to simple query if ORDER BY fails
+            cursor.execute(f"""
+                SELECT {', '.join([c for c in select_columns if c != 'parent_id' and c != 'sort_order'])}
+                FROM list_items
+                WHERE list_id = ?
+                ORDER BY created_at ASC
+            """, (list_id,))
         
         item_rows = cursor.fetchall()
-        items = []
+        
+        # Build hierarchical structure if parent_id exists
+        has_hierarchy = "parent_id" in column_names
+        all_items = {}
+        root_items = []
+        
+        # First pass: create all item dictionaries
         for item_row in item_rows:
-            items.append({
-                "id": item_row[0],
-                "text": item_row[1],
-                "priority": item_row[2],
-                "completed": bool(item_row[3]),
-                "completed_at": item_row[4],
-                "created_at": item_row[5],
-                "updated_at": item_row[6]
-            })
+            # Build a dict mapping column names to values
+            row_dict = {}
+            for idx, col_name in enumerate(select_columns):
+                if idx < len(item_row):
+                    row_dict[col_name] = item_row[idx]
+            
+            item_id = row_dict.get("id")
+            if item_id is None:
+                continue  # Skip invalid rows
+            
+            item_data = {
+                "id": item_id,
+                "text": row_dict.get("task_text", ""),
+                "priority": row_dict.get("priority", "medium"),
+                "completed": bool(row_dict.get("completed", False)),
+                "completed_at": row_dict.get("completed_at"),
+                "created_at": row_dict.get("created_at"),
+                "updated_at": row_dict.get("updated_at"),
+                "parent_id": row_dict.get("parent_id"),
+                "reminder_time": row_dict.get("reminder_time"),
+                "repeat_pattern": row_dict.get("repeat_pattern"),
+                "due_date": row_dict.get("due_date"),
+                "due_time": row_dict.get("due_time"),
+                "repeat_end_date": row_dict.get("repeat_end_date"),
+                "sub_items": []
+            }
+            
+            if has_hierarchy:
+                # Calculate depth
+                depth = 0
+                current_parent = item_data["parent_id"]
+                while current_parent is not None:
+                    depth += 1
+                    if current_parent in all_items:
+                        current_parent = all_items[current_parent].get("parent_id")
+                    else:
+                        break
+                    if depth > 10:  # Safety check
+                        break
+                item_data["depth"] = depth
+            
+            all_items[item_id] = item_data
+        
+        # Second pass: build tree structure (or flat structure if no hierarchy)
+        items = []
+        if has_hierarchy:
+            for item_id, item_data in all_items.items():
+                if item_data["parent_id"] is None:
+                    items.append(item_data)
+                else:
+                    parent = all_items.get(item_data["parent_id"])
+                    if parent:
+                        parent["sub_items"].append(item_data)
+                    else:
+                        # Parent not found, treat as root
+                        items.append(item_data)
+        else:
+            # No hierarchy - return flat list
+            items = list(all_items.values())
         
         lists.append({
             "id": row[0],
@@ -1048,6 +1427,305 @@ async def update_list(
     
     return {"message": "List updated", "id": list_id}
 
+@router.post("/{list_type}/{list_id}/items")
+async def add_list_item(
+    list_type: str,
+    list_id: int,
+    task_text: str = Query(..., description="Task text"),
+    parent_id: Optional[int] = Query(None, description="Parent item ID for sub-items"),
+    priority: str = Query("medium", description="Priority: low, medium, high"),
+    reminder_time: Optional[str] = Query(None, description="Reminder time (YYYY-MM-DD HH:MM:SS)"),
+    due_date: Optional[str] = Query(None, description="Due date (YYYY-MM-DD)"),
+    due_time: Optional[str] = Query(None, description="Due time (HH:MM:SS)"),
+    repeat_pattern: Optional[str] = Query(None, description="Repeat pattern JSON"),
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    user_id = session.user_id
+    """Add an item to a list"""
+    init_lists_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Verify list exists and belongs to user
+    cursor.execute("""
+        SELECT id FROM lists 
+        WHERE id = ? AND list_type = ? AND user_id = ?
+    """, (list_id, list_type, user_id))
+    
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="List not found")
+    
+    # Validate hierarchy depth if parent_id is provided
+    if parent_id is not None:
+        is_valid, error_msg = validate_hierarchy_depth(parent_id, conn)
+        if not is_valid:
+            conn.close()
+            raise HTTPException(status_code=400, detail=error_msg)
+        
+        # Verify parent item exists and belongs to same list
+        cursor.execute("""
+            SELECT id FROM list_items 
+            WHERE id = ? AND list_id = ?
+        """, (parent_id, list_id))
+        if not cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=404, detail="Parent item not found")
+    
+    # Insert new item
+    cursor.execute("""
+        INSERT INTO list_items (list_id, task_text, priority, parent_id, reminder_time, due_date, due_time, repeat_pattern)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (list_id, task_text, priority, parent_id, reminder_time, due_date, due_time, repeat_pattern))
+    
+    item_id = cursor.lastrowid
+    conn.commit()
+    
+    # Sync reminder via MCP if reminder_time is set
+    if reminder_time:
+        await sync_item_reminder(item_id, reminder_time, repeat_pattern, user_id)
+    
+    conn.close()
+    
+    # Broadcast update via WebSocket
+    await lists_ws_manager.broadcast_to_user(user_id, {
+        "type": "item_added",
+        "list_type": list_type,
+        "list_id": list_id,
+        "item_id": item_id,
+        "parent_id": parent_id,
+        "action": "added"
+    })
+    
+    return {
+        "id": item_id,
+        "message": "Item added",
+        "list_id": list_id,
+        "text": task_text,
+        "parent_id": parent_id
+    }
+
+@router.put("/{list_type}/{list_id}/items/{item_id}")
+async def update_list_item(
+    list_type: str,
+    list_id: int,
+    item_id: int,
+    task_text: Optional[str] = Query(None, description="Task text"),
+    parent_id: Optional[int] = Query(None, description="Parent item ID (use -1 to remove parent)"),
+    priority: Optional[str] = Query(None, description="Priority: low, medium, high"),
+    completed: Optional[bool] = Query(None, description="Completed status"),
+    reminder_time: Optional[str] = Query(None, description="Reminder time (YYYY-MM-DD HH:MM:SS)"),
+    due_date: Optional[str] = Query(None, description="Due date (YYYY-MM-DD)"),
+    due_time: Optional[str] = Query(None, description="Due time (HH:MM:SS)"),
+    repeat_pattern: Optional[str] = Query(None, description="Repeat pattern JSON"),
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    user_id = session.user_id
+    """Update a list item"""
+    init_lists_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Verify item exists and belongs to user's list
+    cursor.execute("""
+        SELECT li.id, li.parent_id, li.reminder_time FROM list_items li
+        JOIN lists l ON li.list_id = l.id
+        WHERE li.id = ? AND li.list_id = ? AND l.user_id = ?
+    """, (item_id, list_id, user_id))
+    
+    item = cursor.fetchone()
+    if not item:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Item not found")
+    
+    old_parent_id = item[1]
+    old_reminder_time = item[2]
+    
+    # Handle parent_id update
+    new_parent_id = parent_id
+    if parent_id == -1:
+        new_parent_id = None
+    
+    if new_parent_id is not None and new_parent_id != old_parent_id:
+        # Validate circular reference
+        is_valid, error_msg = prevent_circular_reference(item_id, new_parent_id, conn)
+        if not is_valid:
+            conn.close()
+            raise HTTPException(status_code=400, detail=error_msg)
+        
+        # Validate hierarchy depth
+        is_valid, error_msg = validate_hierarchy_depth(new_parent_id, conn)
+        if not is_valid:
+            conn.close()
+            raise HTTPException(status_code=400, detail=error_msg)
+        
+        # Verify new parent exists and belongs to same list
+        cursor.execute("""
+            SELECT id FROM list_items 
+            WHERE id = ? AND list_id = ?
+        """, (new_parent_id, list_id))
+        if not cursor.fetchone():
+            conn.close()
+            raise HTTPException(status_code=404, detail="Parent item not found")
+    
+    # Build update query
+    updates = []
+    params = []
+    
+    if task_text is not None:
+        updates.append("task_text = ?")
+        params.append(task_text)
+    if parent_id is not None:
+        updates.append("parent_id = ?")
+        params.append(new_parent_id)
+    if priority is not None:
+        updates.append("priority = ?")
+        params.append(priority)
+    if completed is not None:
+        updates.append("completed = ?")
+        params.append(completed)
+        if completed:
+            updates.append("completed_at = ?")
+            params.append(datetime.now().isoformat())
+        else:
+            updates.append("completed_at = NULL")
+    if reminder_time is not None:
+        updates.append("reminder_time = ?")
+        params.append(reminder_time)
+    if due_date is not None:
+        updates.append("due_date = ?")
+        params.append(due_date)
+    if due_time is not None:
+        updates.append("due_time = ?")
+        params.append(due_time)
+    if repeat_pattern is not None:
+        updates.append("repeat_pattern = ?")
+        params.append(repeat_pattern)
+    
+    updates.append("updated_at = ?")
+    params.append(datetime.now().isoformat())
+    params.append(item_id)
+    
+    if updates:
+        cursor.execute(f"""
+            UPDATE list_items 
+            SET {', '.join(updates)}
+            WHERE id = ?
+        """, params)
+        conn.commit()
+    
+    # Sync reminder via MCP if reminder_time changed
+    if reminder_time != old_reminder_time:
+        await sync_item_reminder(item_id, reminder_time, repeat_pattern, user_id)
+    
+    conn.close()
+    
+    # Broadcast update via WebSocket
+    await lists_ws_manager.broadcast_to_user(user_id, {
+        "type": "item_updated",
+        "list_type": list_type,
+        "list_id": list_id,
+        "item_id": item_id,
+        "action": "updated"
+    })
+    
+    return {
+        "id": item_id,
+        "message": "Item updated",
+        "list_id": list_id
+    }
+
+@router.patch("/{list_type}/{list_id}")
+async def rename_list(
+    list_type: str,
+    list_id: int,
+    name: str = Query(..., description="New list name"),
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    user_id = session.user_id
+    """Rename a list"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Update list name
+    cursor.execute("""
+        UPDATE lists 
+        SET name = ?, updated_at = ?
+        WHERE id = ? AND list_type = ? AND user_id = ?
+    """, (name, datetime.now().isoformat(), list_id, list_type, user_id))
+    
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="List not found")
+    
+    conn.commit()
+    
+    # Get updated list
+    cursor.execute("""
+        SELECT id, name, list_type, list_category, created_at, updated_at
+        FROM lists
+        WHERE id = ?
+    """, (list_id,))
+    
+    row = cursor.fetchone()
+    conn.close()
+    
+    if not row:
+        raise HTTPException(status_code=404, detail="List not found after update")
+    
+    return {
+        "id": row[0],
+        "name": row[1],
+        "list_type": row[2],
+        "category": row[3],
+        "created_at": row[4],
+        "updated_at": row[5]
+    }
+
+@router.delete("/{list_type}/{list_id}/items/{item_id}")
+async def delete_list_item(
+    list_type: str,
+    list_id: int,
+    item_id: int,
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    user_id = session.user_id
+    """Delete a list item"""
+    init_lists_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Verify item exists and belongs to user's list
+    cursor.execute("""
+        SELECT li.id FROM list_items li
+        JOIN lists l ON li.list_id = l.id
+        WHERE li.id = ? AND li.list_id = ? AND l.user_id = ?
+    """, (item_id, list_id, user_id))
+    
+    if not cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=404, detail="Item not found")
+    
+    # Delete item (CASCADE will handle sub-items)
+    cursor.execute("""
+        DELETE FROM list_items
+        WHERE id = ?
+    """, (item_id,))
+    
+    conn.commit()
+    conn.close()
+    
+    # Broadcast update via WebSocket
+    await lists_ws_manager.broadcast_to_user(user_id, {
+        "type": "item_deleted",
+        "list_type": list_type,
+        "list_id": list_id,
+        "item_id": item_id,
+        "action": "deleted"
+    })
+    
+    return {"message": "Item deleted", "id": item_id}
+
 @router.delete("/{list_type}/{list_id}")
 async def delete_list(
     list_type: str,
@@ -1153,6 +1831,55 @@ async def set_item_reminder(
         return {"message": "Reminder set for item", "item_index": item_index}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/calendar-items")
+async def get_calendar_items(
+    start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
+    end_date: str = Query(..., description="End date (YYYY-MM-DD)"),
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    user_id = session.user_id
+    """Get list items with reminder times for calendar display"""
+    init_lists_db()
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Query items with reminder_time set within date range
+        cursor.execute("""
+            SELECT li.id, li.task_text, li.reminder_time, li.due_date, li.due_time,
+                   l.id as list_id, l.name as list_name, l.list_type, l.list_category
+            FROM list_items li
+            JOIN lists l ON li.list_id = l.id
+            WHERE l.user_id = ?
+              AND (li.reminder_time IS NOT NULL OR (li.due_date IS NOT NULL AND li.due_time IS NOT NULL))
+              AND (
+                DATE(li.reminder_time) BETWEEN ? AND ?
+                OR (li.due_date BETWEEN ? AND ?)
+              )
+            ORDER BY COALESCE(li.reminder_time, li.due_date || ' ' || li.due_time) ASC
+        """, (user_id, start_date, end_date, start_date, end_date))
+        
+        items = []
+        for row in cursor.fetchall():
+            items.append({
+                "id": row[0],
+                "task_text": row[1],
+                "reminder_time": row[2],
+                "due_date": row[3],
+                "due_time": row[4],
+                "list_id": row[5],
+                "list_name": row[6],
+                "list_type": row[7],
+                "list_category": row[8]
+            })
+        
+        conn.close()
+        return {"items": items, "count": len(items)}
+    except Exception as e:
+        if conn:
+            conn.close()
+        raise HTTPException(status_code=500, detail=f"Error getting calendar items: {str(e)}")
 
 @router.get("/{list_type}/reminders/today")
 async def get_todays_reminders(
