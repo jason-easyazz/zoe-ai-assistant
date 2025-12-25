@@ -5,14 +5,16 @@
 ## 🚨 The Problem We Fixed
 
 **Date**: 2025-11-10
-**Issue**: `zoe-core` and `zoe-ollama` were on different Docker networks:
+**Issue**: Services were on different Docker networks:
 - `zoe-core` → `assistant_zoe-network`
-- `zoe-ollama` → `zoe-network`
+- LLM service → `zoe-network`
 
-**Result**: 100% test failure because zoe-core couldn't reach Ollama
+**Result**: 100% test failure because zoe-core couldn't reach the LLM service
 - Error: `[Errno -2] Name or service not known`
 - All LLM requests failed → generic greetings returned
 - Tests showed 0% success rate
+
+> **Note**: As of Dec 2025, Zoe uses `zoe-llamacpp` (llama.cpp) instead of Ollama for LLM inference.
 
 ## ✅ The Solution
 
@@ -35,7 +37,7 @@ services:
     networks:
       - zoe-network
   
-  zoe-ollama:
+  zoe-llamacpp:
     networks:
       - zoe-network
   
@@ -51,7 +53,7 @@ services:
 1. ✅ Network has explicit `name:` field
 2. ✅ All services specify `networks: [zoe-network]`
 3. ✅ Run validation script: `tools/docker/validate_networks.sh`
-4. ✅ Test connectivity: `docker exec zoe-core ping -c 2 zoe-ollama`
+4. ✅ Test connectivity: `docker exec zoe-core ping -c 2 zoe-llamacpp`
 
 ## 🛠️ Validation Commands
 
@@ -63,8 +65,8 @@ docker network ls
 # Check which network each container is on
 docker ps --format "{{.Names}}: {{.Networks}}"
 
-# Verify zoe-core can reach zoe-ollama
-docker exec zoe-core ping -c 2 zoe-ollama
+# Verify zoe-core can reach zoe-llamacpp
+docker exec zoe-core ping -c 2 zoe-llamacpp
 ```
 
 ### Fix Mismatched Networks
@@ -88,7 +90,7 @@ services:
     networks:
       - assistant_zoe-network  # ❌ WRONG
   
-  zoe-ollama:
+  zoe-llamacpp:
     networks:
       - zoe-network  # ❌ DIFFERENT from zoe-core
 ```
@@ -105,7 +107,7 @@ networks:
 ## 🎯 Why This Matters
 
 **Inter-Service Communication**:
-- `zoe-core` → `zoe-ollama:11434` (LLM inference)
+- `zoe-core` → `zoe-llamacpp:11434` (LLM inference via llama.cpp)
 - `zoe-core` → `zoe-mcp-server:8003` (Tool calling)
 - `zoe-mcp-server` → `zoe-core:8000` (API calls)
 - `zoe-mem-agent` → `zoe-core:8000` (Expert coordination)
@@ -177,7 +179,7 @@ fi
 
 ### Symptom: Generic "Hi there!" responses
 **Cause**: LLM service unreachable, falling back to default
-**Fix**: Verify `docker exec zoe-core ping zoe-ollama` works
+**Fix**: Verify `docker exec zoe-core ping zoe-llamacpp` works
 
 ## 📌 Summary
 

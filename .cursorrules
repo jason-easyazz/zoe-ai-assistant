@@ -187,17 +187,19 @@ elif HARDWARE == 'pi5':
 
 ### Model Selection Rules
 
-**Jetson Models** (GPU-accelerated):
-- Primary: `hermes3:8b-llama3.1-q4_K_M` (4.9GB)
-- Chat: `gemma3n-e2b-gpu-fixed` (5.6GB, num_gpu=99)
-- Vision: `gemma3n-e2b-gpu-fixed` (multimodal)
-- Memory: `qwen2.5:7b` (4.7GB)
+**Jetson Models** (GPU-accelerated via llama.cpp):
+- Primary: `Llama-3.2-3B-Instruct-Q4_K_M.gguf` (2.0GB)
+- Chat: llama.cpp with GPU layers (n_gpu_layers=33)
+- Vision: Not currently supported
+- Memory: Same model with different context
 
-**Pi5 Models** (CPU-optimized):
-- Primary: `phi3:mini` (2.2GB, num_gpu=0)
-- Chat: `phi3:mini` (fast on CPU)
-- Vision: `llava:7b-v1.6-q4` (CPU-compatible)
-- Memory: `qwen2.5:3b` (2.0GB)
+**Pi5 Models** (CPU-optimized via llama.cpp):
+- Primary: `Llama-3.2-3B-Instruct-Q4_K_M.gguf` (2.0GB, CPU-only)
+- Chat: llama.cpp with CPU threads (n_threads=4)
+- Vision: Not currently supported
+- Memory: Same model with different context
+
+> **Note**: Ollama was replaced with llama.cpp (zoe-llamacpp) for better performance.
 
 ### Testing Rules
 
@@ -214,9 +216,12 @@ elif HARDWARE == 'pi5':
 - `docker-compose.pi5.yml` - CPU configs
 - `docker-compose.yml` - Base (auto-detect)
 
-**Image selection**:
-- Jetson: Use `dustynv/ollama:r36.2.0` (Jetson-optimized)
-- Pi5: Use `ollama/ollama:latest` (standard ARM)
+**LLM Service**:
+- Uses `zoe-llamacpp` container (llama.cpp server)
+- Jetson: GPU acceleration with CUDA
+- Pi5: CPU-only with optimized threads
+
+> **Note**: Ollama was retired; llama.cpp provides better GGUF model support.
 
 ### Feature Flags
 
