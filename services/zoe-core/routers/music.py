@@ -720,9 +720,12 @@ async def youtube_auth_start(
     import requests
     import sqlite3
     
-    # YouTube Music OAuth client credentials (used by ytmusicapi - these are public)
-    client_id = "REDACTED_CLIENT_ID"
-    client_secret = "REDACTED_CLIENT_SECRET"
+    # YouTube Music OAuth client credentials from environment
+    client_id = os.getenv("YTMUSIC_CLIENT_ID", "")
+    client_secret = os.getenv("YTMUSIC_CLIENT_SECRET", "")
+    
+    if not client_id or not client_secret:
+        raise HTTPException(status_code=503, detail="YouTube Music OAuth not configured")
     
     try:
         # Start device authorization flow using YouTube's OAuth endpoint
@@ -822,9 +825,9 @@ async def youtube_auth_poll(
         logger.error(f"Failed to get device code: {e}")
         raise HTTPException(status_code=500, detail="Database error")
     
-    # Poll for token
-    client_id = "REDACTED_CLIENT_ID"
-    client_secret = "REDACTED_CLIENT_SECRET"
+    # Poll for token - use credentials from environment
+    client_id = os.getenv("YTMUSIC_CLIENT_ID", "")
+    client_secret = os.getenv("YTMUSIC_CLIENT_SECRET", "")
     
     try:
         response = requests.post(
@@ -934,8 +937,8 @@ async def youtube_auth_callback(
     
     # Exchange code for tokens
     try:
-        client_id = "REDACTED_CLIENT_ID"
-        client_secret = "REDACTED_CLIENT_SECRET"
+        client_id = os.getenv("YTMUSIC_CLIENT_ID", "")
+        client_secret = os.getenv("YTMUSIC_CLIENT_SECRET", "")
         
         token_response = requests.post(
             "https://oauth2.googleapis.com/token",
@@ -1033,8 +1036,11 @@ async def youtube_auth_with_code(
     try:
         import requests
         
-        client_id = "REDACTED_CLIENT_ID"
-        client_secret = "REDACTED_CLIENT_SECRET"
+        client_id = os.getenv("YTMUSIC_CLIENT_ID", "")
+        client_secret = os.getenv("YTMUSIC_CLIENT_SECRET", "")
+        
+        if not client_id or not client_secret:
+            raise HTTPException(status_code=503, detail="YouTube Music OAuth not configured")
         
         token_response = requests.post(
             "https://oauth2.googleapis.com/token",
