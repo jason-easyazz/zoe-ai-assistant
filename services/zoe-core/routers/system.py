@@ -285,3 +285,19 @@ async def get_storage_analysis():
     except Exception as e:
         logger.error(f"Storage analysis failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Storage analysis failed: {str(e)}")
+
+@router.get("/platform")
+async def get_platform():
+    """Get platform information"""
+    try:
+        return {
+            "platform": platform.system(),
+            "platform_release": platform.release(),
+            "platform_version": platform.version(),
+            "architecture": platform.machine(),
+            "processor": platform.processor(),
+            "python_version": platform.python_version()
+        }
+    except Exception as e:
+        logger.error(f"Failed to get platform info: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

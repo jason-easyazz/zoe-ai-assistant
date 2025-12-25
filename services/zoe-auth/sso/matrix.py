@@ -88,7 +88,7 @@ class MatrixIntegration:
             # Find user by username
             with auth_db.get_connection() as conn:
                 cursor = conn.execute(
-                    "SELECT user_id, email FROM users WHERE username = ? AND is_active = 1",
+                    "SELECT user_id, email FROM auth_users WHERE username = ? AND is_active = 1",
                     (username,)
                 )
                 row = cursor.fetchone()

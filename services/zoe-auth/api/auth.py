@@ -101,8 +101,8 @@ async def get_user_profiles():
         with auth_db.get_connection() as conn:
             cursor = conn.execute("""
                 SELECT user_id, username, role
-                FROM users
-                WHERE is_active = 1 AND user_id != 'system'
+                FROM auth_users
+                WHERE user_id != 'system'
                 ORDER BY username
             """)
             
@@ -193,7 +193,7 @@ async def login(request: LoginRequest, http_request: Request):
         
         # Look up user by username first
         with auth_db.get_connection() as conn:
-            cursor = conn.execute("SELECT user_id, password_hash FROM users WHERE username = ?", (request.username,))
+            cursor = conn.execute("SELECT user_id, password_hash FROM auth_users WHERE username = ?", (request.username,))
             user_row = cursor.fetchone()
             
             if not user_row:
@@ -552,7 +552,7 @@ async def setup_initial_password(request: InitialPasswordSetupRequest, http_requ
         # Look up user
         with auth_db.get_connection() as conn:
             cursor = conn.execute(
-                "SELECT user_id, password_hash FROM users WHERE username = ?",
+                "SELECT user_id, password_hash FROM auth_users WHERE username = ?",
                 (request.username,)
             )
             user_row = cursor.fetchone()

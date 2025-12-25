@@ -45,10 +45,13 @@
                     if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
                         // New service worker installed, show update prompt
                         showUpdateNotification();
-                    } else if (newWorker.state === 'activated') {
-                        // New service worker activated, reload to use it
-                        console.log('🔄 New service worker activated, reloading...');
+                    } else if (newWorker.state === 'activated' && !navigator.serviceWorker.controller) {
+                        // First activation (no existing controller), reload once
+                        console.log('🔄 Service worker first activation, reloading...');
                         window.location.reload();
+                    } else if (newWorker.state === 'activated') {
+                        // Update activation - don't reload automatically to prevent loops
+                        console.log('✅ Service worker updated successfully (manual refresh recommended)');
                     }
                 });
             });

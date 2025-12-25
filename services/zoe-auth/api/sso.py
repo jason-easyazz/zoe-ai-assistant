@@ -181,7 +181,7 @@ async def get_n8n_user_info(email: str):
         from models.database import auth_db
         with auth_db.get_connection() as conn:
             cursor = conn.execute(
-                "SELECT user_id FROM users WHERE email = ? AND is_active = 1",
+                "SELECT user_id FROM auth_users WHERE email = ? AND is_active = 1",
                 (email,)
             )
             row = cursor.fetchone()

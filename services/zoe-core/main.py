@@ -290,6 +290,14 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"⚠️ Model pre-warming failed (non-critical): {e}")
     
+    # ⏱️ Start timer background service
+    try:
+        from intent_system.handlers.timer_service import start_timer_service
+        start_timer_service(check_interval=1.0)
+        logger.info("✅ Timer service started")
+    except Exception as e:
+        logger.error(f"❌ Failed to start timer service: {e}")
+    
     logger.info("🎉 All services started successfully")
 
 @app.on_event("shutdown")
@@ -310,6 +318,14 @@ async def shutdown_event():
         logger.info("✅ Task reminder service stopped")
     except Exception as e:
         logger.error(f"❌ Error stopping task reminders: {e}")
+    
+    # ⏱️ Stop timer service
+    try:
+        from intent_system.handlers.timer_service import stop_timer_service
+        stop_timer_service()
+        logger.info("✅ Timer service stopped")
+    except Exception as e:
+        logger.error(f"❌ Error stopping timer service: {e}")
     
     logger.info("👋 Shutdown complete")
 

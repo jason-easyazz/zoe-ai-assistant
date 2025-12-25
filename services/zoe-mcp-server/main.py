@@ -1011,6 +1011,109 @@ class ZoeMCPServer:
                             }
                         }
                     }
+                ),
+                # Music Tools
+                Tool(
+                    name="music_play",
+                    description="Search and play music on a device",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Search query - song, artist, or album to play"
+                            },
+                            "target_device": {
+                                "type": "string",
+                                "description": "Device ID to play on (optional)"
+                            },
+                            "provider": {
+                                "type": "string",
+                                "enum": ["youtube_music"],
+                                "description": "Music provider",
+                                "default": "youtube_music"
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                ),
+                Tool(
+                    name="music_control",
+                    description="Control music playback (pause, resume, skip, volume)",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": ["pause", "resume", "skip", "previous", "volume"],
+                                "description": "Playback action"
+                            },
+                            "value": {
+                                "type": "integer",
+                                "description": "Volume level (0-100) for volume action"
+                            },
+                            "target_device": {
+                                "type": "string",
+                                "description": "Device ID (optional)"
+                            }
+                        },
+                        "required": ["action"]
+                    }
+                ),
+                Tool(
+                    name="music_search",
+                    description="Search for music without playing",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Search query"
+                            },
+                            "filter_type": {
+                                "type": "string",
+                                "enum": ["songs", "albums", "artists", "playlists"],
+                                "description": "Type of results",
+                                "default": "songs"
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Max results",
+                                "default": 10
+                            }
+                        },
+                        "required": ["query"]
+                    }
+                ),
+                Tool(
+                    name="music_queue_add",
+                    description="Add a track to the music queue",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "track_id": {
+                                "type": "string",
+                                "description": "Track/video ID to add"
+                            },
+                            "title": {
+                                "type": "string",
+                                "description": "Track title (for display)"
+                            },
+                            "artist": {
+                                "type": "string",
+                                "description": "Artist name (for display)"
+                            }
+                        },
+                        "required": ["track_id"]
+                    }
+                ),
+                Tool(
+                    name="music_now_playing",
+                    description="Get currently playing track info",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {}
+                    }
                 )
             ]
             return ListToolsResult(tools=tools)
@@ -1157,6 +1260,17 @@ class ZoeMCPServer:
                     return await self._set_temperature(arguments, user_context)
                 elif name == "get_temperature":
                     return await self._get_temperature(arguments, user_context)
+                # Music Tools
+                elif name == "music_play":
+                    return await self._music_play(arguments, user_context)
+                elif name == "music_control":
+                    return await self._music_control(arguments, user_context)
+                elif name == "music_search":
+                    return await self._music_search(arguments, user_context)
+                elif name == "music_queue_add":
+                    return await self._music_queue_add(arguments, user_context)
+                elif name == "music_now_playing":
+                    return await self._music_now_playing(arguments, user_context)
                 else:
                     return CallToolResult(
                         content=[TextContent(type="text", text=f"Unknown tool: {name}")]
@@ -2475,16 +2589,39 @@ class ZoeMCPServer:
             )
     
     async def _get_self_info(self, args: Dict[str, Any], user_context) -> CallToolResult:
-        """Get information about the user themselves"""
+        """Get information about user - queries BOTH self_facts and people.is_self"""
         fact_key = args.get("fact_key")
-        # Fix: user_context might be an object, extract user_id properly
-        user_id = getattr(user_context, 'user_id', None) or user_context.get("user_id", "default") if isinstance(user_context, dict) else "default"
+        
+        # Extract user_id from multiple possible sources
+        user_id = None
+        if hasattr(user_context, 'user_id'):
+            user_id = user_context.user_id
+        elif isinstance(user_context, dict):
+            user_id = user_context.get("user_id")
+        
+        # Fallback to args if not in context
+        if not user_id or user_id == "default":
+            user_id = args.get("user_id", "default")
+        
+        logger.info(f"🔍 _get_self_info: user_id={user_id}, fact_key={fact_key}, args={args}")
         
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         try:
-            # Get self entry
+            # Strategy: Query BOTH tables, merge with self_facts taking precedence
+            
+            # 1. Get from self_facts table (newer system)
+            cursor.execute("""
+                SELECT fact_key, fact_value 
+                FROM self_facts 
+                WHERE user_id = ?
+            """, (user_id,))
+            rows = cursor.fetchall()
+            self_facts = {row[0]: row[1] for row in rows}
+            logger.info(f"🔍 Found {len(self_facts)} facts in self_facts table for {user_id}")
+            
+            # 2. Get from people.is_self (legacy system)
             cursor.execute("""
                 SELECT name, facts, preferences, personality_traits, interests 
                 FROM people 
@@ -2492,32 +2629,44 @@ class ZoeMCPServer:
             """, (user_id,))
             result = cursor.fetchone()
             
-            if not result:
-                conn.close()
-                return CallToolResult(
-                    content=[TextContent(type="text", text=f"❌ No self entry found for user {user_id}")]
-                )
+            people_facts = {}
+            user_name = "User"
             
-            name, facts_json, prefs_json, traits_json, interests_json = result
+            if result:
+                user_name, facts_json, prefs_json, traits_json, interests_json = result
+                
+                # Parse JSON fields with defensive handling
+                for json_field, field_name in [
+                    (facts_json, "facts"),
+                    (prefs_json, "preferences"), 
+                    (traits_json, "personality_traits"),
+                    (interests_json, "interests")
+                ]:
+                    if json_field and json_field not in ('null', 'None', '{}', '[]'):
+                        try:
+                            parsed = json.loads(json_field)
+                            if isinstance(parsed, dict):
+                                people_facts.update(parsed)
+                        except json.JSONDecodeError:
+                            logger.warning(f"Invalid JSON in people.{field_name} for user {user_id}: {json_field[:50]}")
             
-            # Parse JSON fields
-            facts = json.loads(facts_json) if facts_json else {}
-            preferences = json.loads(prefs_json) if prefs_json else {}
-            personality_traits = json.loads(traits_json) if traits_json else {}
-            interests = json.loads(interests_json) if interests_json else {}
+            # 3. Merge: self_facts takes precedence for conflicts
+            merged_facts = {**people_facts, **self_facts}
             
             conn.close()
             
             # If specific fact requested
             if fact_key:
-                # Try to find the fact in any of the JSON fields
-                value = facts.get(fact_key) or preferences.get(fact_key) or personality_traits.get(fact_key) or interests.get(fact_key)
+                # Try exact match first
+                value = merged_facts.get(fact_key)
                 
-                # Also try partial matches (e.g., "favorite_color" matches "favorite_color")
+                # Try suffix match (e.g., "color" matches "favorite_color" but not "colorado_trip")
                 if not value:
-                    for key, val in facts.items():
-                        if fact_key.lower() in key.lower() or key.lower() in fact_key.lower():
+                    for key, val in merged_facts.items():
+                        # Match if key ends with fact_key or exact match
+                        if key.lower().endswith(f"_{fact_key.lower()}") or key.lower() == fact_key.lower():
                             value = val
+                            logger.debug(f"Suffix match: {fact_key} → {key}")
                             break
                 
                 if value:
@@ -2529,26 +2678,15 @@ class ZoeMCPServer:
                         content=[TextContent(type="text", text=f"I don't have information about your {fact_key.replace('_', ' ')}. Would you like to tell me?")]
                     )
             
-            # Return all self info
-            result_text = f"👤 {name} (You)\n\n"
+            # Return all facts
+            if not merged_facts:
+                return CallToolResult(
+                    content=[TextContent(type="text", text=f"I don't have any personal facts stored yet. Tell me about yourself!")]
+                )
             
-            if facts:
-                result_text += "📝 Facts:\n"
-                for key, value in facts.items():
-                    result_text += f"  - {key}: {value}\n"
-            
-            if preferences:
-                result_text += "\n⚙️ Preferences:\n"
-                for key, value in preferences.items():
-                    result_text += f"  - {key}: {value}\n"
-            
-            if interests:
-                result_text += "\n💡 Interests:\n"
-                for key, value in interests.items():
-                    result_text += f"  - {key}: {value}\n"
-            
-            if not facts and not preferences and not interests:
-                result_text += "No information stored yet."
+            result_text = f"About {user_name}:\n\n"
+            for key, value in merged_facts.items():
+                result_text += f"- {key.replace('_', ' ')}: {value}\n"
             
             return CallToolResult(
                 content=[TextContent(type="text", text=result_text.strip())]
@@ -2936,6 +3074,187 @@ class ZoeMCPServer:
                     temp = data.get("temperature", "Unknown")
                     return CallToolResult(content=[TextContent(type="text", text=f"Temperature: {temp}°")])
                 return CallToolResult(content=[TextContent(type="text", text=f"Error: {response.status_code}")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"Error: {str(e)}")])
+    
+    # ========================================================================
+    # MUSIC TOOLS
+    # ========================================================================
+    
+    async def _music_play(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Search and play music"""
+        query = args.get("query", "")
+        target_device = args.get("target_device")
+        
+        if not query:
+            return CallToolResult(content=[TextContent(type="text", text="Please specify what to play")])
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                # First search for the track
+                search_response = await client.get(
+                    f"{self.zoe_api_url}/api/music/search",
+                    params={"q": query, "limit": 1},
+                    headers={"X-Auth-Token": self.auth_token},
+                    timeout=15.0
+                )
+                
+                if search_response.status_code != 200:
+                    return CallToolResult(content=[TextContent(type="text", text=f"Search failed: {search_response.status_code}")])
+                
+                results = search_response.json().get("results", [])
+                if not results:
+                    return CallToolResult(content=[TextContent(type="text", text=f"No results found for '{query}'")])
+                
+                track = results[0]
+                track_id = track.get("videoId") or track.get("id")
+                
+                # Play the track
+                play_response = await client.post(
+                    f"{self.zoe_api_url}/api/music/play",
+                    json={"track_id": track_id, "target_device_id": target_device},
+                    headers={"X-Auth-Token": self.auth_token},
+                    timeout=15.0
+                )
+                
+                if play_response.status_code == 200:
+                    title = track.get("title", "Unknown")
+                    artist = track.get("artist", "Unknown")
+                    return CallToolResult(content=[TextContent(type="text", text=f"🎵 Playing {title} by {artist}")])
+                else:
+                    return CallToolResult(content=[TextContent(type="text", text=f"Playback failed: {play_response.status_code}")])
+                    
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"Error: {str(e)}")])
+    
+    async def _music_control(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Control music playback"""
+        action = args.get("action", "")
+        value = args.get("value")
+        target_device = args.get("target_device")
+        
+        action_map = {
+            "pause": "/api/music/pause",
+            "resume": "/api/music/resume",
+            "skip": "/api/music/skip",
+            "previous": "/api/music/previous"
+        }
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                if action == "volume" and value is not None:
+                    response = await client.post(
+                        f"{self.zoe_api_url}/api/music/volume",
+                        json={"volume": value},
+                        headers={"X-Auth-Token": self.auth_token, "X-Device-Id": target_device or ""},
+                        timeout=10.0
+                    )
+                    if response.status_code == 200:
+                        return CallToolResult(content=[TextContent(type="text", text=f"🔊 Volume set to {value}%")])
+                elif action in action_map:
+                    response = await client.post(
+                        f"{self.zoe_api_url}{action_map[action]}",
+                        headers={"X-Auth-Token": self.auth_token, "X-Device-Id": target_device or ""},
+                        timeout=10.0
+                    )
+                    if response.status_code == 200:
+                        emoji = {"pause": "⏸️", "resume": "▶️", "skip": "⏭️", "previous": "⏮️"}
+                        return CallToolResult(content=[TextContent(type="text", text=f"{emoji.get(action, '✅')} {action.capitalize()}")])
+                else:
+                    return CallToolResult(content=[TextContent(type="text", text=f"Unknown action: {action}")])
+                    
+                return CallToolResult(content=[TextContent(type="text", text=f"Action failed: {response.status_code}")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"Error: {str(e)}")])
+    
+    async def _music_search(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Search for music"""
+        query = args.get("query", "")
+        filter_type = args.get("filter_type", "songs")
+        limit = args.get("limit", 10)
+        
+        if not query:
+            return CallToolResult(content=[TextContent(type="text", text="Please specify search query")])
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.zoe_api_url}/api/music/search",
+                    params={"q": query, "filter_type": filter_type, "limit": limit},
+                    headers={"X-Auth-Token": self.auth_token},
+                    timeout=15.0
+                )
+                
+                if response.status_code != 200:
+                    return CallToolResult(content=[TextContent(type="text", text=f"Search failed: {response.status_code}")])
+                
+                results = response.json().get("results", [])
+                
+                if not results:
+                    return CallToolResult(content=[TextContent(type="text", text=f"No results for '{query}'")])
+                
+                # Format results
+                output = f"🔍 Search results for '{query}':\n"
+                for i, track in enumerate(results[:5], 1):
+                    title = track.get("title", "Unknown")
+                    artist = track.get("artist", "")
+                    output += f"{i}. {title}"
+                    if artist:
+                        output += f" - {artist}"
+                    output += "\n"
+                
+                return CallToolResult(content=[TextContent(type="text", text=output.strip())])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"Error: {str(e)}")])
+    
+    async def _music_queue_add(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Add track to queue"""
+        track_id = args.get("track_id", "")
+        title = args.get("title", "")
+        artist = args.get("artist", "")
+        
+        if not track_id:
+            return CallToolResult(content=[TextContent(type="text", text="Please specify track_id")])
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.zoe_api_url}/api/music/queue/add",
+                    json={"track_id": track_id, "title": title, "artist": artist},
+                    headers={"X-Auth-Token": self.auth_token},
+                    timeout=10.0
+                )
+                
+                if response.status_code == 200:
+                    return CallToolResult(content=[TextContent(type="text", text=f"➕ Added to queue")])
+                return CallToolResult(content=[TextContent(type="text", text=f"Failed: {response.status_code}")])
+        except Exception as e:
+            return CallToolResult(content=[TextContent(type="text", text=f"Error: {str(e)}")])
+    
+    async def _music_now_playing(self, args: Dict[str, Any], user_context) -> CallToolResult:
+        """Get currently playing track"""
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.zoe_api_url}/api/music/state",
+                    headers={"X-Auth-Token": self.auth_token},
+                    timeout=10.0
+                )
+                
+                if response.status_code != 200:
+                    return CallToolResult(content=[TextContent(type="text", text=f"Failed: {response.status_code}")])
+                
+                state = response.json()
+                
+                if not state.get("track_id"):
+                    return CallToolResult(content=[TextContent(type="text", text="Nothing is playing")])
+                
+                title = state.get("track_title", "Unknown")
+                artist = state.get("artist", "Unknown")
+                is_playing = state.get("is_playing", False)
+                
+                status = "🎵 Now playing" if is_playing else "⏸️ Paused"
+                return CallToolResult(content=[TextContent(type="text", text=f"{status}: {title} by {artist}")])
         except Exception as e:
             return CallToolResult(content=[TextContent(type="text", text=f"Error: {str(e)}")])
     

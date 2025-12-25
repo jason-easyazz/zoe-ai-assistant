@@ -1,5 +1,5 @@
 """Intelligent Chat Router for Zoe v2.0 with RouteLLM + LiteLLM + Enhanced MEM Agent"""
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Query, Depends, Header
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, Dict, List
 import httpx
@@ -103,6 +103,44 @@ logger.info(f"Intent system enabled: {USE_INTENT_SYSTEM}")
 FeatureFlags.log_feature_status()
 
 # Wrapper functions for backward compatibility
+async def save_chat_message(session_id: str, user_id: str, role: str, content: str, metadata: dict = None):
+    """
+    Save chat message to database with BOTH session and user isolation
+    Critical for message persistence and conversation history
+    """
+    try:
+        conn = sqlite3.connect("/app/data/zoe.db")
+        cursor = conn.cursor()
+        
+        # Ensure session exists (create if needed)
+        cursor.execute("SELECT id FROM chat_sessions WHERE id = ?", (session_id,))
+        if not cursor.fetchone():
+            cursor.execute("""
+                INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at, message_count)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0)
+            """, (session_id, user_id, "Chat Session"))
+            logger.info(f"📝 Created new chat session: {session_id} for user {user_id}")
+        
+        # Save message with BOTH session_id AND user_id for proper isolation
+        cursor.execute("""
+            INSERT INTO chat_messages (session_id, role, content, metadata, created_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """, (session_id, role, content, json.dumps(metadata or {})))
+        
+        # Update session timestamp and message count
+        cursor.execute("""
+            UPDATE chat_sessions 
+            SET updated_at = CURRENT_TIMESTAMP, 
+                message_count = (SELECT COUNT(*) FROM chat_messages WHERE session_id = ?)
+            WHERE id = ?
+        """, (session_id, session_id))
+        
+        conn.commit()
+        conn.close()
+        logger.info(f"💾 Saved {role} message to session {session_id} for user {user_id}")
+    except Exception as e:
+        logger.error(f"❌ Failed to save chat message: {e}", exc_info=True)
+
 async def start_chat_episode(user_id: str, context_type: str = "chat") -> Optional[int]:
     """Start a new chat episode for conversation continuity"""
     try:
@@ -471,6 +509,34 @@ async def get_user_context_with_validation(user_id: str, query: str = "", intent
     # Fetch context normally
     return await get_user_context(user_id, query)
 
+async def validate_user_isolation(data: List, expected_user_id: str, data_type: str = "data") -> List:
+    """
+    🔥 PHASE 5: Ensure no cross-user data leakage
+    Validates that all retrieved data belongs to the expected user
+    """
+    validated = []
+    violations = 0
+    
+    for item in data:
+        if not isinstance(item, dict):
+            validated.append(item)
+            continue
+            
+        item_user_id = item.get("user_id")
+        
+        # Allow items with no user_id (system data) or matching user_id
+        if item_user_id is None or item_user_id == expected_user_id:
+            validated.append(item)
+        else:
+            violations += 1
+            logger.warning(f"🚨 USER ISOLATION VIOLATION in {data_type}: Expected {expected_user_id}, got {item_user_id}")
+            logger.warning(f"   Item: {item.get('name', item.get('title', str(item)[:50]))}")
+    
+    if violations > 0:
+        logger.error(f"🚨 CRITICAL: {violations} user isolation violations detected in {data_type}!")
+    
+    return validated
+
 async def get_user_context(user_id: str, query: str = "") -> Dict:
     """Get comprehensive user context with smart selection and caching"""
     # ✅ PHASE 1.2: Check cache first
@@ -487,6 +553,7 @@ async def get_user_context(user_id: str, query: str = "") -> Dict:
         "recent_journal": [],
         "people": [],
         "projects": [],
+        "self_facts": [],  # 🔥 NEW: Add self-facts
         "consolidated_summary": ""
     }
     
@@ -541,7 +608,7 @@ async def get_user_context(user_id: str, query: str = "") -> Dict:
         # Get key people
         try:
             cursor.execute("""
-                SELECT name, profile FROM people 
+                SELECT name, profile, user_id FROM people 
                 WHERE user_id = ? ORDER BY updated_at DESC LIMIT 5
             """, (user_id,))
             context["people"] = []
@@ -549,22 +616,51 @@ async def get_user_context(user_id: str, query: str = "") -> Dict:
                 profile = json.loads(r[1]) if r[1] else {}
                 context["people"].append({
                     "name": r[0], 
-                    "relationship": profile.get("relationship", "contact")
+                    "relationship": profile.get("relationship", "contact"),
+                    "user_id": r[2]  # Include for validation
                 })
-            logger.info(f"Found {len(context['people'])} people")
+            # 🔥 PHASE 5: Validate user isolation
+            context["people"] = await validate_user_isolation(context["people"], user_id, "people")
+            logger.info(f"Found {len(context['people'])} people (validated)")
         except Exception as e:
             logger.error(f"People error: {e}")
         
         # Get active projects
         try:
             cursor.execute("""
-                SELECT name, status FROM projects 
+                SELECT name, status, user_id FROM projects 
                 WHERE user_id = ? AND status != 'completed' LIMIT 5
             """, (user_id,))
-            context["projects"] = [{"name": r[0], "status": r[1]} for r in cursor.fetchall()]
-            logger.info(f"Found {len(context['projects'])} projects")
+            context["projects"] = [{"name": r[0], "status": r[1], "user_id": r[2]} for r in cursor.fetchall()]
+            # 🔥 PHASE 5: Validate user isolation
+            context["projects"] = await validate_user_isolation(context["projects"], user_id, "projects")
+            logger.info(f"Found {len(context['projects'])} projects (validated)")
         except Exception as e:
             logger.error(f"Projects error: {e}")
+        
+        # 🔥 NEW: Get self-facts (user's personal information) from people.facts
+        try:
+            cursor.execute("""
+                SELECT facts, name, updated_at 
+                FROM people 
+                WHERE user_id = ? AND is_self = 1
+            """, (user_id,))
+            result = cursor.fetchone()
+            if result and result[0]:
+                facts_json = result[0]
+                user_name = result[1]
+                updated_at = result[2]
+                facts_dict = json.loads(facts_json) if facts_json else {}
+                
+                context["self_facts"] = [
+                    {"key": k, "value": v, "source": "user_stated"} 
+                    for k, v in facts_dict.items()
+                ]
+                logger.info(f"✅ Found {len(context['self_facts'])} self-facts for user {user_id} (name: {user_name})")
+            else:
+                logger.info(f"ℹ️  No self entry found for user {user_id}")
+        except Exception as e:
+            logger.error(f"Self-facts error: {e}")
         
         conn.close()
     except Exception as e:
@@ -621,14 +717,44 @@ async def intelligent_routing(message: str, context: Dict) -> Dict:
     try:
         # ✅ OPTIMIZATION: Fast path for simple actions - skip RouteLLM overhead
         message_lower = message.lower()
-        simple_action_keywords = ['add to', 'add ', 'create ', 'schedule ', 'show my', 'get my']
-        if any(keyword in message_lower for keyword in simple_action_keywords):
-            # Fast direct routing for simple actions
+        
+        # 🔥 PHASE 3: Recall questions should go to conversation mode (not action)
+        # This ensures they use build_system_prompt with properly formatted self_facts
+        recall_patterns = [
+            r'what\s+(?:is|are)\s+my\s+',
+            r'what\'s\s+my\s+',
+            r'tell\s+me\s+about\s+(?:my|myself)',
+            r'do\s+you\s+know\s+my\s+',
+            r'what\s+do\s+you\s+know\s+about\s+me'
+        ]
+        is_recall_question = any(re.search(pattern, message_lower) for pattern in recall_patterns)
+        
+        if is_recall_question:
+            # Route recall questions to conversation mode for better fact presentation
+            routing_result = {
+                "model": model_selector._get_best_conversation_model(),
+                "type": "conversation",
+                "confidence": 0.95,
+                "reasoning": "Recall question detected - using conversation mode for fact retrieval",
+                "mcp_tools_needed": False,
+                "route_llm_model": "zoe-conversation",
+                "requires_memory": True
+            }
+            logger.info(f"🧠 Routing recall question to conversation mode: {message[:50]}...")
+            await context_cache.set("routing_decision", cache_key, routing_result, CACHE_TTL["routing_decision"])
+            return routing_result
+        
+        # NOTE: Simple action keywords like "add", "schedule", "show my" are now handled
+        # by the intent system first (HassIL/keyword matching) for faster, deterministic responses.
+        # Only complex action patterns that need LLM tool-calling should go through this fast path.
+        complex_action_keywords = ['please help me', 'can you help', 'figure out', 'analyze']
+        if any(keyword in message_lower for keyword in complex_action_keywords):
+            # Fast direct routing for complex actions that need LLM reasoning
             routing_result = {
                 "model": model_selector._get_best_action_model(),
                 "type": "action",
                 "confidence": 0.9,
-                "reasoning": "Simple action detected (fast path)",
+                "reasoning": "Complex action detected (fast path)",
                 "mcp_tools_needed": True,
                 "route_llm_model": "zoe-action",
                 "requires_memory": False
@@ -718,9 +844,31 @@ async def intelligent_routing(message: str, context: Dict) -> Dict:
         logger.warning(f"RouteLLM routing failed, using fallback: {e}")
         # Enhanced fallback heuristics with comprehensive patterns
         message_lower = message.lower()
+        
+        # 🔥 PRIORITY CHECK: Calendar keywords MUST go to calendar, not lists!
+        calendar_priority_keywords = [
+            'appointment', 'meeting', 'schedule', 'remind me on', 'remind me at',
+            'doctor', 'dentist', 'call on', 'call at', 'tomorrow at', 'next week at',
+            'on monday', 'on tuesday', 'on wednesday', 'on thursday', 'on friday',
+            'at 9am', 'at 10am', 'at 11am', 'at 12pm', 'at 1pm', 'at 2pm', 'at 3pm',
+            'at 4pm', 'at 5pm', 'at 6pm', 'at 7pm', 'at 8pm', 'at 9pm'
+        ]
+        
+        # Check calendar first (highest priority)
+        if any(keyword in message_lower for keyword in calendar_priority_keywords):
+            logger.info(f"🗓️ Calendar keyword detected, routing to calendar action")
+            return {
+                "model": model_selector._get_best_action_model(), 
+                "type": "action", 
+                "requires_memory": False, 
+                "mcp_tools_needed": True,
+                "tool_hint": "create_calendar_event"  # Hint for the LLM
+            }
+        
+        # Then check other action patterns
         action_patterns = [
-            'add to', 'add ', 'create ', 'schedule ', 'remind ', 'shopping list', 'shopping',
-            'todo list', 'remember', 'who are', 'contacts', 'people', 'appointment', 'meeting',
+            'add to', 'add ', 'create ', 'remind ', 'shopping list', 'shopping',
+            'todo list', 'remember', 'who are', 'contacts', 'people',
             "don't let me forget", "i need to buy", "put on my list", "buy some", "get some",
             "we're out of", "running low", "noticed we need", "could use", "going to need",
             "my favorite", "i work as", "i am a", "my job is", "my car is",
@@ -751,8 +899,174 @@ async def intelligent_routing(message: str, context: Dict) -> Dict:
                 "mcp_tools_needed": False
             }
 
+async def get_user_info(user_id: str) -> dict:
+    """Get user information from database for identity injection"""
+    try:
+        conn = sqlite3.connect("/app/data/zoe.db")
+        cursor = conn.cursor()
+        # Users table has user_id (not id) and username (not display_name)
+        cursor.execute("SELECT username, role FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {"username": row[0], "display_name": row[0], "role": row[1]}
+        return {"username": user_id, "display_name": None, "role": "user"}
+    except Exception as e:
+        logger.warning(f"Could not fetch user info: {e}")
+        return {"username": user_id, "display_name": None, "role": "user"}
+
+async def ensure_self_entry(user_id: str):
+    """Ensure user has a self entry in people table"""
+    try:
+        conn = sqlite3.connect("/app/data/zoe.db")
+        cursor = conn.cursor()
+        
+        # Check if self entry exists
+        cursor.execute("SELECT id FROM people WHERE user_id = ? AND is_self = 1", (user_id,))
+        if not cursor.fetchone():
+            # Create self entry
+            cursor.execute("""
+                INSERT INTO people (user_id, name, is_self, facts, created_at, updated_at)
+                VALUES (?, 'Me', 1, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """, (user_id,))
+            conn.commit()
+            logger.info(f"✅ Created self entry for user {user_id}")
+        
+        conn.close()
+    except Exception as e:
+        logger.error(f"❌ Failed to ensure self entry: {e}")
+
+async def extract_and_store_self_facts(message: str, user_id: str):
+    """
+    🔥 PHASE 2: Extract self-facts from natural language and store them
+    Automatically detects patterns like "my favorite X is Y" and stores to people.facts JSON
+    Improved to handle British spellings, informal language, and variations
+    """
+    import re
+    
+    # Ensure self entry exists first
+    await ensure_self_entry(user_id)
+    
+    facts = {}
+    message_lower = message.lower()
+    
+    # Pattern matching for common self-facts (improved with tighter patterns)
+    patterns = {
+        # Favorites (both US and British spelling) - use AND to separate from other content
+        r"my (?:favorite|favourite|fav) (\w+) is ([^,.!?]+?)(?:\s+and\s|\.|$|,|!|\?)": lambda m: (f"favorite_{m.group(1)}", m.group(2).strip()),
+        
+        # Name variations - capture just the name, not surrounding text
+        r"my name is ([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)": lambda m: ("name", m.group(1).strip()),
+        r"(?:call me|i'?m) ([A-Z][a-z]+)(?:\s|,|\.|\?|!|$)": lambda m: ("name", m.group(1).strip()),
+        
+        # Location
+        r"i (?:live in|am from|reside in) ([^,.!?]+?)(?:\.|$|,|!|\?)": lambda m: ("location", m.group(1).strip()),
+        
+        # Occupation
+        r"i (?:work as|am a|am an) ([^,.!?]+?)(?:\.|$|,|!|\?)": lambda m: ("occupation", m.group(1).strip()),
+        
+        # Remember commands
+        r"remember (?:that )?(.+?)(?:\.|$|,|!|\?)": lambda m: ("note", m.group(1).strip()),
+        
+        # Birthday/Age
+        r"(?:my birthday is|i was born (?:on|in)) ([^,.!?]+?)(?:\.|$|,|!|\?)": lambda m: ("birthday", m.group(1).strip()),
+        r"i(?:'m| am) (\d+) (?:years old)": lambda m: ("age", m.group(1).strip()),
+    }
+    
+    for pattern, extractor in patterns.items():
+        matches = re.finditer(pattern, message_lower, re.IGNORECASE)
+        for match in matches:
+            try:
+                key, value = extractor(match)
+                # Clean up the value
+                value = value.strip().rstrip('.').rstrip(',').rstrip('!').rstrip('?')
+                # Skip if value is too short or looks invalid
+                if value and len(value) > 1 and not value.isspace():
+                    facts[key] = value
+                    logger.info(f"🎯 Extracted fact: {key} = {value}")
+            except Exception as e:
+                logger.debug(f"Failed to extract fact from pattern: {e}")
+                continue
+    
+    if facts:
+        try:
+            conn = sqlite3.connect("/app/data/zoe.db")
+            cursor = conn.cursor()
+            
+            # Get existing facts from people table
+            cursor.execute("SELECT id, facts FROM people WHERE user_id = ? AND is_self = 1", (user_id,))
+            result = cursor.fetchone()
+            
+            if result:
+                person_id, existing_facts_json = result
+                existing_facts = json.loads(existing_facts_json) if existing_facts_json else {}
+                
+                # Merge new facts
+                existing_facts.update(facts)
+                
+                # Update people table - use extracted name if available, otherwise keep current
+                display_name = facts.get('name') if 'name' in facts else existing_facts.get('name', 'Me')
+                cursor.execute("""
+                    UPDATE people 
+                    SET facts = ?, name = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                """, (json.dumps(existing_facts), display_name, person_id))
+                
+                conn.commit()
+                logger.info(f"✅ Stored {len(facts)} self-facts for user {user_id} in people.facts")
+            
+            conn.close()
+        except Exception as e:
+            logger.error(f"Failed to store self-facts: {e}")
+    else:
+        logger.debug(f"No self-facts detected in message: {message[:50]}...")
+
 async def build_system_prompt(memories: Dict, user_context: Dict, routing_type: str = "conversation", user_id: str = "default") -> str:
-    """Build enhanced system prompt with few-shot learning, context, learned preferences, and conversation history"""
+    """Build enhanced system prompt with USER IDENTITY FIRST, then memories, then base prompt"""
+    
+    # 🔥 PHASE 2: Get user info for identity injection
+    user = await get_user_info(user_id)
+    user_name = user.get("display_name") or user.get("username") or user_id
+    
+    logger.info(f"🆔 Building prompt for user_id='{user_id}' → name='{user_name}'")
+    
+    # 🔥 NEW: Format self-facts prominently
+    self_facts = user_context.get("self_facts", [])
+    logger.info(f"🔍 DEBUG: user_context keys: {list(user_context.keys())}")
+    logger.info(f"🔍 DEBUG: self_facts from context: {self_facts}")
+    
+    self_facts_section = ""
+    if self_facts:
+        self_facts_section = f"\n# WHAT YOU KNOW ABOUT {user_name.upper()}\n"
+        self_facts_section += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        for fact in self_facts:
+            # Format fact key nicely (favorite_colour → Favorite Colour)
+            key_display = fact['key'].replace('_', ' ').title()
+            self_facts_section += f"• {key_display}: {fact['value']}\n"
+        self_facts_section += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        self_facts_section += "Reference these facts confidently in your responses.\n\n"
+        logger.info(f"💾 Including {len(self_facts)} self-facts in prompt")
+    else:
+        logger.warning(f"⚠️  No self-facts found in user_context for {user_id}")
+    
+    # 🔥 PHASE 2: USER IDENTITY SECTION - ALWAYS FIRST
+    user_identity_section = f"""
+# WHO YOU'RE TALKING TO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Name: {user_name}
+User ID: {user_id}
+
+# CRITICAL RULES
+- You are having a conversation with {user_name}
+- ONLY discuss this user's actual data
+- NEVER mention people from examples (John, Sarah, Mom, David, etc.)
+- If you don't know something about {user_name}, ASK them - don't make it up
+- When referencing their stored information, be confident: "Your favorite color is blue" not "I think you mentioned..."
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{self_facts_section}"""
+    
+    logger.info(f"✅ User identity section created for {user_name}")
+    
     # ✅ NEW: Get user preferences
     try:
         user_preferences = await preference_learner.get_preferences(user_id)
@@ -764,7 +1078,16 @@ async def build_system_prompt(memories: Dict, user_context: Dict, routing_type: 
     recent_episodes = episode_context.get("recent_episodes", [])
     
     # ✅ NEW: Use enhanced prompts with examples, preferences, and conversation history
-    return build_enhanced_prompt(memories, user_context, routing_type, user_preferences, recent_episodes)
+    base_prompt = build_enhanced_prompt(memories, user_context, routing_type, user_preferences, recent_episodes)
+    
+    # 🔥 PHASE 2: Return with identity section FIRST
+    full_prompt = user_identity_section + "\n\n" + base_prompt
+    logger.info(f"📝 Full prompt length: {len(full_prompt)} chars (identity: {len(user_identity_section)} chars)")
+    
+    # 🔍 DEBUG: Log first 800 chars of prompt to verify facts are included (use INFO for visibility)
+    logger.info(f"🔍 Prompt preview (first 800 chars):\n{full_prompt[:800]}")
+    
+    return full_prompt
 
 async def generate_streaming_response(message: str, context: Dict, memories: Dict, user_context: Dict, routing: Dict, tools_context: str = ""):
     """
@@ -798,7 +1121,11 @@ async def generate_streaming_response(message: str, context: Dict, memories: Dic
                     start_intent_time = time.time()
                     
                     # Classify intent using HassIL (Tier 0) or Keywords (Tier 1)
-                    intent = intent_classifier.classify(message)
+                    intent = intent_classifier.classify(
+                        message, 
+                        user_id=user_id_for_prompt, 
+                        session_id=session_id
+                    )
                     
                     if intent and intent.confidence >= 0.7:
                         # Intent matched! Execute directly (10ms target)
@@ -810,8 +1137,13 @@ async def generate_streaming_response(message: str, context: Dict, memories: Dic
                             f"latency: {intent_latency_ms:.2f}ms"
                         )
                         
-                        # Execute intent
-                        result = await intent_executor.execute(intent, user_id_for_prompt, session_id)
+                        # Execute intent (pass full context including device_id)
+                        result = await intent_executor.execute(
+                            intent, 
+                            user_id_for_prompt, 
+                            session_id,
+                            request_context=context
+                        )
                         
                         # Stream intent result
                         total_latency_ms = (time.time() - start_intent_time) * 1000
@@ -872,19 +1204,26 @@ async def generate_streaming_response(message: str, context: Dict, memories: Dic
             system_prompt = None
             
             if is_greeting:
-                # ⚡ MINIMAL GREETING (150 chars)
-                system_prompt = f"You are Zoe, a friendly AI assistant. Respond warmly to the greeting in 5-10 words."
-                logger.info(f"⚡ GENIUS (STREAMING): Minimal greeting prompt ({len(system_prompt)} chars)")
+                # ⚡ MINIMAL GREETING with user identity
+                user = await get_user_info(user_id_for_prompt)
+                user_name = user.get("username") or "there"
+                system_prompt = f"You are Zoe talking to {user_name}. Respond warmly to the greeting in 5-10 words. Use their name if appropriate."
+                logger.info(f"⚡ Greeting prompt with identity for {user_name}")
                 
             elif is_action:
                 # 🎯 MODEL-ADAPTIVE FUNCTION CALLING
-                action_prompt = await get_model_adaptive_action_prompt(routing.get("model", "hermes3:8b-llama3.1-q4_K_M"))
+                action_prompt = await get_model_adaptive_action_prompt(
+                    routing.get("model", "hermes3:8b-llama3.1-q4_K_M"),
+                    user_context=user_context,
+                    user_id=user_id_for_prompt
+                )
                 system_prompt = action_prompt
                 logger.info(f"🎯 Using model-adaptive function calling prompt: {len(system_prompt)} chars")
                     
             else:
                 # 💬 REGULAR CONVERSATION
-                prompt_cache_key = f"conversation_{user_id_for_prompt}"
+                # 🔥 PHASE 2: Add version to cache key to force regeneration with user identity
+                prompt_cache_key = f"conversation_v2_{user_id_for_prompt}"  # v2 = with user identity
                 system_prompt = await context_cache.get("system_prompt", prompt_cache_key)
                 
                 if not system_prompt:
@@ -892,7 +1231,7 @@ async def generate_streaming_response(message: str, context: Dict, memories: Dic
                     await context_cache.set("system_prompt", prompt_cache_key, system_prompt, CACHE_TTL["system_prompt"])
                     logger.info(f"💬 Regular prompt (streaming): {len(system_prompt)} chars")
                 else:
-                    logger.info(f"✅ Cached conversation prompt (streaming)")
+                    logger.info(f"✅ Cached conversation prompt (streaming) v2")
             
             # ✅ PHASE 2: MIGRATE TO /api/chat FOR PROPER PROMPT CACHING
             # Use conversation context management for KV cache reuse
@@ -1306,30 +1645,34 @@ async def generate_response(message: str, context: Dict, memories: Dict, user_co
             injected_execution_result = None
     
     if is_greeting:
-        # ⚡ MINIMAL GREETING (150 chars) - Inspired by Google Assistant's speed
-        system_prompt = f"You are Zoe, a friendly AI assistant. Respond warmly to the greeting in 5-10 words. Focus on the USER - ask how THEY are or how you can help THEM. Do not talk about yourself, your day, or make up experiences. You're an AI, not a person with a personal life."
-        logger.info(f"⚡ GENIUS: Anti-hallucination greeting prompt")
+        # ⚡ MINIMAL GREETING with user identity
+        user = await get_user_info(user_id_for_prompt)
+        user_name = user.get("username") or "there"
+        system_prompt = f"You are Zoe talking to {user_name}. Respond warmly to the greeting in 5-10 words. Use their name if appropriate."
+        logger.info(f"⚡ Greeting prompt with identity for {user_name} (non-streaming)")
         
     elif is_action:
         # 🎯 MODEL-ADAPTIVE FUNCTION CALLING (non-streaming)
-        action_prompt = await get_model_adaptive_action_prompt(model)
+        action_prompt = await get_model_adaptive_action_prompt(
+            model,
+            user_context=user_context,
+            user_id=user_id_for_prompt
+        )
         system_prompt = action_prompt
         logger.info(f"🎯 Using {model}-adaptive function calling prompt (non-streaming): {len(system_prompt)} chars")
     
     else:
-        # 💬 REGULAR CONVERSATION - Use minimal prompt to avoid example contamination
-        system_prompt = """You are Zoe, a warm and helpful AI assistant.
-
-CRITICAL RULES:
-1. You are an AI assistant - do NOT pretend to have personal experiences, meals, friends, or days
-2. Do NOT use first-person experiences (e.g., "I had dinner", "I met friends", "my day was")
-3. Do NOT make up stories, events, or people
-4. Do NOT prefix responses with "Zoe:", "Response:", or "Assistant:"
-5. Focus on helping the USER - ask about THEIR life, not yours
-6. If asked about yourself, briefly explain you're an AI assistant designed to help
-
-Be helpful, friendly, and honest about being an AI."""
-        logger.info(f"💬 Using anti-hallucination conversation prompt")
+        # 💬 REGULAR CONVERSATION
+        # 🔥 PHASE 2: Use proper system prompt with user identity (not minimal hardcoded version)
+        prompt_cache_key = f"conversation_v2_{user_id_for_prompt}"  # v2 = with user identity
+        system_prompt = await context_cache.get("system_prompt", prompt_cache_key)
+        
+        if not system_prompt:
+            system_prompt = await build_system_prompt(memories, user_context, "conversation", user_id_for_prompt)
+            await context_cache.set("system_prompt", prompt_cache_key, system_prompt, CACHE_TTL["system_prompt"])
+            logger.info(f"💬 Built fresh prompt with user identity (non-streaming): {len(system_prompt)} chars")
+        else:
+            logger.info(f"✅ Using cached conversation prompt v2 (non-streaming)")
     
     full_prompt = f"{system_prompt}\n\nUser's message: {message}\nZoe:"
     
@@ -1434,12 +1777,48 @@ Be helpful, friendly, and honest about being an AI."""
 # MCP SERVER INTEGRATION - PROPER TOOL CONTEXT
 # ============================================================================
 
-async def get_model_adaptive_action_prompt(model_name: str) -> str:
+async def get_model_adaptive_action_prompt(model_name: str, user_context: Dict = None, user_id: str = "default") -> str:
     """
     Get action prompt ADAPTED to the specific model's strengths.
     ALL models output the SAME format: [TOOL_CALL:tool_name:{"params"}]
     But INSTRUCTIONS vary based on model capabilities.
+    
+    Phase 3: Now includes user context and self_facts at the top.
     """
+    
+    # 🔥 PHASE 3: Include user self_facts at top of prompt
+    user_facts_section = ""
+    if user_context and user_context.get("self_facts"):
+        user_info = await get_user_info(user_id)
+        user_name = user_info.get("username", user_id) if user_info else user_id
+        
+        self_facts = user_context.get("self_facts", [])
+        if self_facts:
+            user_facts_section = f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## IMPORTANT: Known Facts About {user_name}
+"""
+            # Cap at 25 facts for 500 token budget
+            for fact in self_facts[:25]:
+                key = fact.get("key", "")
+                value = fact.get("value", "")
+                if key and value:
+                    user_facts_section += f"- {key.replace('_', ' ')}: {value}\n"
+            
+            user_facts_section += f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CRITICAL INSTRUCTION:
+When {user_name} asks "What is my X?", answer DIRECTLY from the facts above.
+DO NOT generate a tool call for get_self_info if the answer is already listed above.
+
+Example:
+User: "What is my favorite color?"
+YOU: "Your favorite color is purple." (if favorite color: purple is listed above)
+WRONG: <tool_call>get_self_info</tool_call>
+
+"""
+            logger.info(f"💾 Including {len(self_facts)} self-facts in action prompt for {user_name}")
     
     # Common output format (same for ALL models)
     output_format = """
@@ -1452,7 +1831,7 @@ Example: [TOOL_CALL:add_to_list:{"list_name":"shopping","task_text":"bread","pri
     # Model-specific instructions
     if "hermes" in model_name.lower():
         # Hermes-3: Supports native function calling, use structured approach
-        prompt = f"""You are Zoe. You have access to functions for taking actions.
+        prompt = f"""{user_facts_section}You are Zoe. You have access to functions for taking actions.
 
 {output_format}
 
@@ -1521,18 +1900,14 @@ Assistant: <tool_call>
 {{"name": "store_self_fact", "arguments": {{"fact_key": "favorite_food", "fact_value": "pizza"}}}}
 </tool_call>
 
-User: "What is my favorite food?"
-Assistant: <tool_call>
-{{"name": "get_self_info", "arguments": {{"fact_key": "favorite_food"}}}}
-</tool_call>
-
 CRITICAL: When user requests an action (add, create, schedule, buy, etc.), you MUST respond with a <tool_call> tag first, then add friendly text after.
 CRITICAL: When user says "My X is Y", use store_self_fact to remember it about the USER.
+CRITICAL: If user asks "What is my X?" and X is already listed in the "Known Facts" section above, answer directly WITHOUT calling get_self_info.
 """
     
     elif "gemma" in model_name.lower():
         # Gemma: Needs MORE examples and explicit patterns
-        prompt = f"""You are Zoe. When user wants to ADD, CREATE, or SCHEDULE something, you MUST call a function.
+        prompt = f"""{user_facts_section}You are Zoe. When user wants to ADD, CREATE, or SCHEDULE something, you MUST call a function.
 
 {output_format}
 
@@ -1554,7 +1929,7 @@ CRITICAL: Your FIRST characters must be [TOOL_CALL: for action requests!
     
     else:
         # Default: Works for Phi, Llama, and other models
-        prompt = f"""You are Zoe. For action requests, use this EXACT format:
+        prompt = f"""{user_facts_section}You are Zoe. For action requests, use this EXACT format:
 
 {output_format}
 
@@ -2175,10 +2550,21 @@ import json as json_module
 async def chat(
     msg: ChatMessage,
     stream: bool = Query(False, description="Enable streaming response"),
-    session: AuthenticatedSession = Depends(validate_session)
+    session: AuthenticatedSession = Depends(validate_session),
+    user_id: str = Query(None, description="User ID override (dev mode only)"),
+    x_device_id: Optional[str] = Header(None, description="Device identifier for routing alerts")
 ):
     """Intelligent chat with perfect memory, routing, cross-system integration AND action execution!"""
-    user_id = session.user_id
+    # 🔥 Allow user_id override in dev mode for testing
+    if session.dev_bypass and user_id:
+        actual_user_id = user_id
+        logger.info(f"🧪 DEV MODE: Using user_id override: {user_id}")
+    else:
+        actual_user_id = session.user_id
+    
+    # Get device_id from header or message context
+    device_id = x_device_id or (msg.context.get("device_id") if msg.context else None)
+    
     try:
         import time
         start_time = time.time()
@@ -2186,9 +2572,9 @@ async def chat(
         # ✅ NEW: Wrap entire request in timeout to prevent hangs
         try:
             async with asyncio.timeout(60):  # 60s max for entire request (increased for Pi 5 testing)
-                return await _chat_handler(msg, user_id, stream, start_time)
+                return await _chat_handler(msg, actual_user_id, stream, start_time, device_id)
         except asyncio.TimeoutError:
-            logger.warning(f"Chat request timed out after 60s for user {user_id}")
+            logger.warning(f"Chat request timed out after 60s for user {actual_user_id}")
             return {
                 "response": "I'm processing a lot right now. Could you try that again? I want to make sure I give you a complete answer.",
                 "response_time": 60.0,
@@ -2199,24 +2585,124 @@ async def chat(
         logger.error(f"Chat error: {str(e)}", exc_info=True)
         return {"response": "I'm here to help! Could you rephrase that for me? I want to make sure I understand exactly what you need. 😊"}
 
-async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time: float):
+async def deterministic_tool_selection(message: str) -> Optional[Dict]:
+    """
+    Pre-filter tool selection for high-confidence patterns.
+    Returns None for ambiguous cases (let LLM decide).
+    
+    This prevents the LLM from choosing the wrong tool for obvious cases like
+    "dentist appointment tomorrow at 3pm" going to shopping list.
+    """
+    message_lower = message.lower()
+    
+    # Calendar: Require BOTH event-type keyword AND specific time/date
+    # High specificity prevents false positives
+    calendar_patterns = [
+        # "appointment/meeting/doctor + specific time"
+        r'(appointment|meeting|doctor|dentist|interview|visit)\s+.+?(tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}:\d{2}|\d{1,2}\s*(am|pm))',
+        
+        # "schedule/book + action + time"
+        r'(schedule|book)\s+.+?\s+(for|on|at)\s+(tomorrow|next\s+(week|month)|monday|tuesday|wednesday|thursday|friday|\d)',
+        
+        # "meeting with person + time"
+        r'meeting\s+with\s+\w+.+?(at|on)\s+(\d|tomorrow|monday|tuesday|wednesday|thursday|friday)',
+        
+        # "remind me + specific date/time" (NOT "remind me to buy")
+        r'remind\s+me\s+(on|at)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}:\d{2}|\d{1,2}\s*(am|pm)|tomorrow)',
+    ]
+    
+    for pattern in calendar_patterns:
+        if re.search(pattern, message_lower):
+            logger.info(f"🗓️ DETERMINISTIC: Calendar pattern matched")
+            logger.debug(f"   Pattern: {pattern[:60]}...")
+            logger.debug(f"   Message: {message[:80]}")
+            return {"tool": "create_calendar_event", "confidence": 0.95}
+    
+    # Shopping: Require explicit list context
+    # "add X to list" or "buy X from store"
+    shopping_patterns = [
+        # "add + item + to + (shopping/grocery/todo) + list"
+        r'add\s+.+?\s+to\s+(my\s+)?(shopping|grocery|todo|to-do)\s*list',
+        
+        # "put + item + on + list"
+        r'put\s+.+?\s+on\s+(the\s+|my\s+)?(shopping|grocery|todo)\s+list',
+        
+        # "need to/going to + buy/get + item + from store"
+        r'(need to|going to)\s+(buy|get|pick up)\s+\w+\s+(from|at)\s+(the\s+)?(store|shop|market|grocery)',
+        
+        # "buy/get" + common grocery items (tighter than generic "buy")
+        r'(buy|get|pick up)\s+(milk|eggs|bread|butter|cheese|meat|vegetables|fruit|groceries)',
+    ]
+    
+    for pattern in shopping_patterns:
+        if re.search(pattern, message_lower):
+            logger.info(f"🛒 DETERMINISTIC: Shopping pattern matched")
+            logger.debug(f"   Pattern: {pattern[:60]}...")
+            logger.debug(f"   Message: {message[:80]}")
+            return {"tool": "add_to_list", "confidence": 0.9}
+    
+    # No match - log for debugging
+    logger.debug(f"🤔 No deterministic match for: '{message[:60]}...' → delegating to LLM")
+    return None
+
+
+async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time: float, device_id: Optional[str] = None):
     """Internal chat handler with timeout protection"""
     try:
         # Use provided user_id from query param or body (for UI compatibility)
         actual_user_id = user_id if user_id != "default" else msg.user_id or "default"
         
-        # Initialize routing to None (will be set by Enhanced MEM Agent or intelligent_routing)
-        routing = None
+        # Generate or use existing session_id
+        session_id = msg.session_id or f"session_{int(time.time() * 1000)}"
+        
+        # Get device_id from context if not provided
+        if not device_id and msg.context:
+            device_id = msg.context.get("device_id")
+        
+        # 🔥 PHASE 1: Save user message IMMEDIATELY (before processing)
+        await save_chat_message(session_id, actual_user_id, "user", msg.message, {
+            "context": msg.context,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        # 🔥 PHASE 2: Auto-extract and store self-facts from user message
+        await extract_and_store_self_facts(msg.message, actual_user_id)
+        
+        # 🎯 PHASE 2 (NEW): Check for deterministic tool selection
+        # This prevents "dentist appointment" from going to shopping list
+        deterministic_choice = await deterministic_tool_selection(msg.message)
+        
+        if deterministic_choice:
+            logger.info(f"🎯 Using deterministic tool: {deterministic_choice['tool']} (confidence: {deterministic_choice['confidence']})")
+            
+            # Force the tool by setting routing with tool hint
+            # LLM will still handle parameter extraction, we just pre-select the tool
+            routing = {
+                "model": model_selector._get_best_action_model(),
+                "type": "action",
+                "requires_memory": False,
+                "mcp_tools_needed": True,
+                "deterministic_tool": deterministic_choice['tool'],  # Hint for tool selection
+                "confidence": deterministic_choice['confidence']
+            }
+        else:
+            # Initialize routing to None (will be set by Enhanced MEM Agent or intelligent_routing)
+            routing = None
         
         # Enhanced context
         context = {
             "mode": msg.context.get("mode", "user") if msg.context else "user",
             "user_id": actual_user_id,
-            "session_id": msg.session_id or "default"
+            "session_id": session_id,
+            "device_id": device_id  # Track source device for alerts
         }
         
         if msg.context:
             context.update(msg.context)
+        
+        # Ensure device_id is in context (may have come from msg.context)
+        if device_id:
+            context["device_id"] = device_id
         
         # Check for onboarding mode
         onboarding_mode = msg.context.get("onboarding_mode", False) if msg.context else False
@@ -2268,12 +2754,20 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
         if episode_id:
             logger.info(f"📝 Started temporal episode {episode_id} for user {actual_user_id}")
         
-        # Step 0: 🎯 INTENT-FIRST CLASSIFICATION (Tier 0/1 - HassIL/Keywords)
-        # Try intent classification before LLM routing (for both streaming AND non-streaming)
+        # Initialize intent to None (may be set by intent system)
+        intent = None
+        
+        # 🎯 INTENT-FIRST CLASSIFICATION (Tier 0/1 - HassIL/Keywords)
+        # ALWAYS try intent system first - it's faster and more accurate than LLM routing
+        # Deterministic routing is only used as fallback when intent system doesn't match
         if USE_INTENT_SYSTEM and intent_classifier and intent_executor:
             try:
                 start_intent_time = time.time()
-                intent = intent_classifier.classify(msg.message)
+                intent = intent_classifier.classify(
+                    msg.message,
+                    user_id=actual_user_id,
+                    session_id=context.get("session_id", "default")
+                )
                 
                 if intent and intent.confidence >= 0.7:
                     # Intent matched! Execute directly
@@ -2291,7 +2785,12 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                         temperature = TemperatureManager.get_temperature_for_intent(intent)
                         logger.info(f"[P0-3] Temperature for {intent.name}: {temperature}")
                     
-                    result = await intent_executor.execute(intent, actual_user_id, context.get("session_id", "default"))
+                    result = await intent_executor.execute(
+                        intent, 
+                        actual_user_id, 
+                        context.get("session_id", "default"),
+                        request_context=context  # Pass full context including device_id
+                    )
                     
                     # P0-2: Add confidence formatting if enabled
                     response_text = result.message
@@ -2433,10 +2932,10 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                         async def stream_intent_response():
                             import json as json_module
                             try:
-                                session_id = msg.session_id or f"session_{int(time.time() * 1000)}"
+                                session_id_local = msg.session_id or f"session_{int(time.time() * 1000)}"
                                 
                                 # Event: session_start
-                                yield f"data: {json_module.dumps({'type': 'session_start', 'session_id': session_id, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                yield f"data: {json_module.dumps({'type': 'session_start', 'session_id': session_id_local, 'timestamp': datetime.now().isoformat()})}\n\n"
                                 
                                 # Event: agent_state_delta
                                 yield f"data: {json_module.dumps({'type': 'agent_state_delta', 'state': {'routing': 'intent_system', 'intent': intent.name}, 'timestamp': datetime.now().isoformat()})}\n\n"
@@ -2447,8 +2946,17 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                                     yield f"data: {json_module.dumps({'type': 'message_delta', 'delta': word + (' ' if i < len(words) - 1 else ''), 'timestamp': datetime.now().isoformat()})}\n\n"
                                     await asyncio.sleep(0.02)  # Fast streaming for intent responses
                                 
+                                # 🔥 PHASE 1: Save assistant response after streaming
+                                await save_chat_message(session_id_local, actual_user_id, "assistant", response_text, {
+                                    "routing": "intent_system",
+                                    "intent": intent.name,
+                                    "tier": intent.tier,
+                                    "confidence": intent.confidence,
+                                    "timestamp": datetime.now().isoformat()
+                                })
+                                
                                 # Event: session_end
-                                yield f"data: {json_module.dumps({'type': 'session_end', 'session_id': session_id, 'final_state': {'complete': True}, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                yield f"data: {json_module.dumps({'type': 'session_end', 'session_id': session_id_local, 'final_state': {'complete': True}, 'timestamp': datetime.now().isoformat()})}\n\n"
                             except Exception as e:
                                 logger.error(f"Intent streaming error: {e}")
                                 yield f"data: {json_module.dumps({'type': 'error', 'error': {'message': str(e)}, 'timestamp': datetime.now().isoformat()})}\n\n"
@@ -2463,6 +2971,15 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                             }
                         )
                     else:
+                        # 🔥 PHASE 1: Save assistant response for non-streaming
+                        await save_chat_message(session_id, actual_user_id, "assistant", response_text, {
+                            "routing": "intent_system",
+                            "intent": intent.name,
+                            "tier": intent.tier,
+                            "confidence": intent.confidence,
+                            "timestamp": datetime.now().isoformat()
+                        })
+                        
                         # Return non-streaming JSON response
                         return {
                             "response": response_text,
@@ -2486,8 +3003,8 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
             if stream:
                 async def self_awareness_stream():
                     import json as json_module
-                    session_id = msg.session_id or f"session_{int(time.time() * 1000)}"
-                    yield f"data: {json_module.dumps({'type': 'session_start', 'session_id': session_id, 'timestamp': datetime.now().isoformat()})}\n\n"
+                    session_id_local = msg.session_id or f"session_{int(time.time() * 1000)}"
+                    yield f"data: {json_module.dumps({'type': 'session_start', 'session_id': session_id_local, 'timestamp': datetime.now().isoformat()})}\n\n"
                     
                     # Stream the response word by word
                     words = self_awareness_response.split(' ')
@@ -2495,16 +3012,67 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                         yield f"data: {json_module.dumps({'type': 'message_delta', 'delta': word + (' ' if i < len(words) - 1 else ''), 'timestamp': datetime.now().isoformat()})}\n\n"
                         await asyncio.sleep(0.02)
                     
-                    yield f"data: {json_module.dumps({'type': 'session_end', 'session_id': session_id, 'timestamp': datetime.now().isoformat()})}\n\n"
+                    # 🔥 PHASE 1: Save assistant response after streaming
+                    await save_chat_message(session_id_local, actual_user_id, "assistant", self_awareness_response, {
+                        "routing": "self_awareness",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    
+                    yield f"data: {json_module.dumps({'type': 'session_end', 'session_id': session_id_local, 'timestamp': datetime.now().isoformat()})}\n\n"
                 
                 return StreamingResponse(self_awareness_stream(), media_type="text/event-stream")
             else:
+                # 🔥 PHASE 1: Save assistant response for non-streaming
+                await save_chat_message(session_id, actual_user_id, "assistant", self_awareness_response, {
+                    "routing": "self_awareness",
+                    "timestamp": datetime.now().isoformat()
+                })
+                
                 return {
                     "response": self_awareness_response,
                     "routing": "self_awareness",
                     "interaction_id": f"self_aware_{int(time.time() * 1000)}",
                     "response_time": time.time() - start_time
                 }
+        
+        # Step 0.5: Check for weather queries (fast path)
+        if _is_weather_query(msg.message):
+            logger.info(f"🌤️ Detected weather query: {msg.message}")
+            weather_response = await _get_weather_response(actual_user_id)
+            
+            if weather_response:
+                if stream:
+                    async def weather_stream():
+                        import json as json_module
+                        session_id_local = msg.session_id or f"session_{int(time.time() * 1000)}"
+                        yield f"data: {json_module.dumps({'type': 'session_start', 'session_id': session_id_local, 'timestamp': datetime.now().isoformat()})}\n\n"
+                        
+                        # Stream the response
+                        for line in weather_response.split('\n'):
+                            yield f"data: {json_module.dumps({'type': 'message_delta', 'delta': line + chr(10), 'timestamp': datetime.now().isoformat()})}\n\n"
+                            await asyncio.sleep(0.03)
+                        
+                        await save_chat_message(session_id_local, actual_user_id, "assistant", weather_response, {
+                            "routing": "weather",
+                            "timestamp": datetime.now().isoformat()
+                        })
+                        
+                        yield f"data: {json_module.dumps({'type': 'session_end', 'session_id': session_id_local, 'timestamp': datetime.now().isoformat()})}\n\n"
+                    
+                    return StreamingResponse(weather_stream(), media_type="text/event-stream")
+                else:
+                    await save_chat_message(session_id, actual_user_id, "assistant", weather_response, {
+                        "routing": "weather",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    
+                    return {
+                        "response": weather_response,
+                        "routing": "weather",
+                        "interaction_id": f"weather_{int(time.time() * 1000)}",
+                        "response_time": time.time() - start_time
+                    }
+            # If weather fetch failed, continue to LLM (it will say it can't access weather)
         
         # Step 1: Detect if this needs orchestration (planning requests)
         needs_orchestration = _is_planning_request(msg.message)
@@ -2810,7 +3378,7 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
         if is_simple_greeting:
             # Skip all overhead for simple greetings - go straight to LLM
             memories = {}
-            user_context = {"calendar_events": [], "active_lists": [], "recent_journal": [], "people": [], "projects": []}
+            user_context = {"calendar_events": [], "active_lists": [], "recent_journal": [], "people": [], "projects": [], "self_facts": []}
             tools_context = ""  # Will be fetched later if needed
             logger.info(f"⚡ Fast path: Skipping memory/context for simple greeting")
         else:
@@ -2830,7 +3398,7 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                             memories = {}
                         if isinstance(user_context, Exception):
                             logger.warning(f"User context failed: {user_context}")
-                            user_context = {"calendar_events": [], "active_lists": [], "recent_journal": [], "people": [], "projects": []}
+                            user_context = {"calendar_events": [], "active_lists": [], "recent_journal": [], "people": [], "projects": [], "self_facts": []}
                         if isinstance(tools_context, Exception):
                             logger.warning(f"MCP tools context failed: {tools_context}")
                             tools_context = ""
@@ -2851,7 +3419,7 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                             return_exceptions=True
                         )
                         if isinstance(user_context, Exception):
-                            user_context = {"calendar_events": [], "active_lists": [], "recent_journal": [], "people": [], "projects": []}
+                            user_context = {"calendar_events": [], "active_lists": [], "recent_journal": [], "people": [], "projects": [], "self_facts": []}
                         if isinstance(tools_context, Exception):
                             tools_context = ""
             except asyncio.TimeoutError:
@@ -2863,7 +3431,7 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                     memories["episode_context"] = temporal_enhancement.get("episode_context", {})
                 except:
                     pass
-                user_context = {"calendar_events": [], "active_lists": [], "recent_journal": [], "people": [], "projects": []}
+                user_context = {"calendar_events": [], "active_lists": [], "recent_journal": [], "people": [], "projects": [], "self_facts": []}
                 tools_context = ""
 
         # Step 3: Emit intelligence stream context update
@@ -3011,6 +3579,16 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                     logger.debug(f"📊 Queued satisfaction tracking for interaction {final_interaction_id}")
                 except Exception as e:
                     logger.warning(f"Failed to queue satisfaction tracking: {e}")
+            
+            # 🔥 PHASE 1: Save assistant response to database
+            await save_chat_message(session_id, actual_user_id, "assistant", clean_llm_response(response), {
+                "routing": routing.get("type"),
+                "model": routing.get("model"),
+                "intent": intent.name if intent else None,
+                "response_time": response_time,
+                "memories_used": memory_count,
+                "timestamp": datetime.now().isoformat()
+            })
             
             return {
                 "response": clean_llm_response(response),
@@ -3327,28 +3905,34 @@ def _auto_inject_tool_call(message: str) -> Optional[str]:
                 return f'[TOOL_CALL:store_self_fact:{{"fact_key":"{key}","fact_value":"{value}"}}]'
     
     # ===== PERSONAL FACTS RETRIEVAL =====
+    # ⚠️ DISABLED: Auto-injection for recall questions
+    # Recall questions should go through LLM with self_facts in prompt (Phase 3)
+    # This ensures LLM can answer from context, not via tool execution
+    #
     # Pattern: "What is my X?" - retrieve facts about the user
-    self_info_patterns = [
-        (r'what\s+is\s+my\s+([a-z_\s]+?)\?', None),
-        (r'what\'s\s+my\s+([a-z_\s]+?)\?', None),
-        (r'what\s+do\s+i\s+(like|love|enjoy|prefer)\?', 'interests'),
-        (r'tell\s+me\s+about\s+(?:my|myself)', None),
-    ]
+    # self_info_patterns = [
+    #     (r'what\s+is\s+my\s+([a-z_\s]+?)\?', None),
+    #     (r'what\'s\s+my\s+([a-z_\s]+?)\?', None),
+    #     (r'what\s+do\s+i\s+(like|love|enjoy|prefer)\?', 'interests'),
+    #     (r'tell\s+me\s+about\s+(?:my|myself)', None),
+    # ]
+    #
+    # for pattern, fixed_key in self_info_patterns:
+    #     match = re.search(pattern, message_lower)
+    #     if match:
+    #         if fixed_key:
+    #             key = fixed_key
+    #         elif fixed_key is None and len(match.groups()) > 0:
+    #             key = match.group(1).strip().replace(' ', '_')
+    #         else:
+    #             key = ""  # Get all info
+    #         
+    #         if key:
+    #             return f'[TOOL_CALL:get_self_info:{{"fact_key":"{key}"}}]'
+    #         else:
+    #             return f'[TOOL_CALL:get_self_info:{{}}]'
     
-    for pattern, fixed_key in self_info_patterns:
-        match = re.search(pattern, message_lower)
-        if match:
-            if fixed_key:
-                key = fixed_key
-            elif fixed_key is None and len(match.groups()) > 0:
-                key = match.group(1).strip().replace(' ', '_')
-            else:
-                key = ""  # Get all info
-            
-            if key:
-                return f'[TOOL_CALL:get_self_info:{{"fact_key":"{key}"}}]'
-            else:
-                return f'[TOOL_CALL:get_self_info:{{}}]'
+    # Phase 3 fix: Let LLM answer recall questions from facts in prompt
     
     return None
 
@@ -3390,22 +3974,116 @@ def _is_simple_action(message: str) -> bool:
 
 def _is_planning_request(message: str) -> bool:
     """Detect if message needs full orchestration (planning requests and complex multi-step tasks)"""
-    orchestration_patterns = [
+    message_lower = message.lower()
+    
+    # First, check for explicit planning keywords (high confidence)
+    explicit_planning_patterns = [
         # Planning requests
         "plan my day", "plan day", "help me plan", "organize my day",
         "organize my week", "plan my week", "what should i do",
         "how should i plan", "help plan", "organize day", "plan my",
-        # Multi-step tasks
-        "and then", "and also", "after that",
-        # Multiple systems (calendar + lists, etc.)
-        "calendar and", "list and", "remind and", "schedule and",
-        "add to list and", "create event and",
         # Complex queries
         "all my", "show me everything", "what do i have",
         "plan my morning", "plan my afternoon", "plan my evening"
     ]
+    
+    if any(phrase in message_lower for phrase in explicit_planning_patterns):
+        return True
+    
+    # For multi-step task patterns, require action verbs to avoid false positives
+    # on casual conversation like "I had work and then dinner"
+    action_indicators = [
+        "add", "create", "schedule", "set", "make", "put", "remind",
+        "show", "check", "get", "find", "list", "book", "reserve",
+        "cancel", "delete", "update", "change", "move", "help me",
+        "can you", "could you", "please", "i need", "i want"
+    ]
+    
+    has_action_indicator = any(word in message_lower for word in action_indicators)
+    
+    if has_action_indicator:
+        # Multi-step task patterns (only if action indicator present)
+        multi_step_patterns = [
+            "and then", "and also", "after that"
+        ]
+        if any(phrase in message_lower for phrase in multi_step_patterns):
+            return True
+        
+        # Multiple systems (calendar + lists, etc.)
+        system_combo_patterns = [
+            "calendar and", "list and", "remind and", "schedule and",
+            "add to list and", "create event and"
+        ]
+        if any(phrase in message_lower for phrase in system_combo_patterns):
+            return True
+    
+    return False
+
+def _is_weather_query(message: str) -> bool:
+    """Detect if user is asking about weather"""
     message_lower = message.lower()
-    return any(phrase in message_lower for phrase in orchestration_patterns)
+    weather_patterns = [
+        "weather", "temperature", "forecast", "rain", "sunny", "cloudy",
+        "hot today", "cold today", "warm today", "humid",
+        "what's it like outside", "whats it like outside",
+        "how's the weather", "hows the weather",
+        "is it going to rain", "will it rain",
+        "do i need an umbrella", "do i need a jacket",
+        "what should i wear"
+    ]
+    return any(pattern in message_lower for pattern in weather_patterns)
+
+async def _get_weather_response(user_id: str) -> str:
+    """Fetch weather from the weather API and format a friendly response"""
+    try:
+        async with httpx.AsyncClient() as client:
+            # Call the weather API
+            response = await client.get(
+                "http://localhost:8000/api/weather/",
+                params={"user_id": user_id},
+                headers={"X-Auth-Token": "internal", "X-Session-ID": "weather-query"},
+                timeout=10.0
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                temp = data.get("temperature", "N/A")
+                unit = data.get("temperature_unit", "celsius")
+                unit_symbol = "°F" if unit.lower() == "fahrenheit" else "°C"
+                condition = data.get("description", data.get("condition", "Unknown"))
+                location = data.get("location", "your area")
+                humidity = data.get("humidity")
+                wind = data.get("wind_speed")
+                
+                # Build a friendly response
+                response_text = f"🌡️ **Current Weather in {location}**\n\n"
+                response_text += f"**Temperature:** {temp}{unit_symbol}\n"
+                response_text += f"**Conditions:** {condition}\n"
+                
+                if humidity:
+                    response_text += f"**Humidity:** {humidity}%\n"
+                if wind:
+                    response_text += f"**Wind:** {wind} km/h\n"
+                
+                # Add a friendly tip based on conditions
+                condition_lower = condition.lower()
+                if "rain" in condition_lower or "drizzle" in condition_lower:
+                    response_text += "\n☔ Don't forget your umbrella!"
+                elif "clear" in condition_lower or "sunny" in condition_lower:
+                    response_text += "\n☀️ Great day to be outside!"
+                elif "cloud" in condition_lower:
+                    response_text += "\n⛅ Might want to keep an eye on the sky."
+                elif "snow" in condition_lower:
+                    response_text += "\n❄️ Bundle up and stay warm!"
+                
+                return response_text
+            else:
+                logger.warning(f"Weather API returned {response.status_code}")
+                return None
+                
+    except Exception as e:
+        logger.error(f"Failed to fetch weather: {e}")
+        return None
 
 def _is_self_awareness_query(message: str) -> bool:
     """Detect if user is asking about Zoe's identity, capabilities, or self-concept"""

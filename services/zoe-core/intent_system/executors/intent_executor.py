@@ -62,7 +62,15 @@ class IntentExecutor:
     def _register_builtin_handlers(self):
         """Register built-in intent handlers."""
         # Import handlers lazily to avoid circular imports
-        from intent_system.handlers import lists_handlers
+        from intent_system.handlers import (
+            lists_handlers, 
+            calendar_handlers, 
+            weather_handlers,
+            time_handlers,
+            greeting_handlers,
+            homeassistant_handlers,
+            music_handlers
+        )
         
         # Register list handlers
         self.register_handler("ListAdd", lists_handlers.handle_list_add)
@@ -70,6 +78,62 @@ class IntentExecutor:
         self.register_handler("ListShow", lists_handlers.handle_list_show)
         self.register_handler("ListClear", lists_handlers.handle_list_clear)
         self.register_handler("ListComplete", lists_handlers.handle_list_complete)
+        
+        # Register calendar handlers
+        self.register_handler("CalendarShow", calendar_handlers.handle_calendar_show)
+        self.register_handler("CalendarToday", calendar_handlers.handle_calendar_today)
+        self.register_handler("CalendarAdd", calendar_handlers.handle_calendar_add)
+        self.register_handler("CalendarDelete", calendar_handlers.handle_calendar_delete)
+        self.register_handler("CalendarComplete", calendar_handlers.handle_calendar_complete)
+        
+        # Register weather handlers
+        self.register_handler("WeatherCurrent", weather_handlers.handle_weather_current)
+        self.register_handler("WeatherForecast", weather_handlers.handle_weather_forecast)
+        
+        # Register time handlers
+        self.register_handler("TimeNow", time_handlers.handle_time_now)
+        self.register_handler("DateToday", time_handlers.handle_date_today)
+        self.register_handler("TimerSet", time_handlers.handle_timer_set)
+        self.register_handler("TimerShow", time_handlers.handle_timer_show)
+        self.register_handler("TimerCancel", time_handlers.handle_timer_cancel)
+        
+        # Register greeting handlers
+        self.register_handler("Greeting", greeting_handlers.handle_greeting)
+        self.register_handler("Goodbye", greeting_handlers.handle_goodbye)
+        self.register_handler("Thanks", greeting_handlers.handle_thanks)
+        self.register_handler("Help", greeting_handlers.handle_help)
+        
+        # Register Home Assistant handlers
+        self.register_handler("HassTurnOn", homeassistant_handlers.handle_turn_on)
+        self.register_handler("HassTurnOff", homeassistant_handlers.handle_turn_off)
+        self.register_handler("HassToggle", homeassistant_handlers.handle_toggle)
+        self.register_handler("HassSetBrightness", homeassistant_handlers.handle_set_brightness)
+        self.register_handler("HassSetColor", homeassistant_handlers.handle_set_color)
+        self.register_handler("HassClimateSetTemperature", homeassistant_handlers.handle_set_temperature)
+        self.register_handler("HassCoverOpen", homeassistant_handlers.handle_cover_open)
+        self.register_handler("HassCoverClose", homeassistant_handlers.handle_cover_close)
+        self.register_handler("HassLockDoor", homeassistant_handlers.handle_lock_door)
+        self.register_handler("HassUnlockDoor", homeassistant_handlers.handle_unlock_door)
+        
+        # Register Music handlers
+        self.register_handler("MusicPlay", music_handlers.handle_music_play)
+        self.register_handler("MusicPause", music_handlers.handle_music_pause)
+        self.register_handler("MusicResume", music_handlers.handle_music_resume)
+        self.register_handler("MusicSkip", music_handlers.handle_music_skip)
+        self.register_handler("MusicPrevious", music_handlers.handle_music_previous)
+        self.register_handler("MusicVolume", music_handlers.handle_music_volume)
+        self.register_handler("MusicQueue", music_handlers.handle_music_queue)
+        self.register_handler("MusicQueueAdd", music_handlers.handle_music_queue_add)
+        self.register_handler("MusicNowPlaying", music_handlers.handle_music_now_playing)
+        self.register_handler("MusicSearch", music_handlers.handle_music_search)
+        
+        # Register Music Recommendation handlers
+        self.register_handler("MusicSimilar", music_handlers.handle_music_similar)
+        self.register_handler("MusicRadio", music_handlers.handle_music_radio)
+        self.register_handler("MusicDiscover", music_handlers.handle_music_discover)
+        self.register_handler("MusicMood", music_handlers.handle_music_mood)
+        self.register_handler("MusicLike", music_handlers.handle_music_like)
+        self.register_handler("MusicStats", music_handlers.handle_music_stats)
         
         logger.info(f"Registered {len(self.handlers)} intent handlers")
     
@@ -92,7 +156,8 @@ class IntentExecutor:
         self,
         intent: ZoeIntent,
         user_id: str,
-        session_id: str = "default"
+        session_id: str = "default",
+        request_context: Optional[Dict[str, Any]] = None
     ) -> ExecutionResult:
         """
         Execute an intent.
@@ -101,6 +166,7 @@ class IntentExecutor:
             intent: The classified intent
             user_id: User identifier
             session_id: Session identifier
+            request_context: Optional additional context from the request (device_id, etc.)
             
         Returns:
             ExecutionResult with success status and message
@@ -134,7 +200,12 @@ class IntentExecutor:
             "last_area": context.last_area,
             "last_time": context.last_time,
             "last_intent": context.last_intent,
+            "session_id": session_id,
         }
+        
+        # Merge in request context (device_id, etc.)
+        if request_context:
+            context_dict.update(request_context)
         
         try:
             # Execute handler

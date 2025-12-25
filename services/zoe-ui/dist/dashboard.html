@@ -1760,6 +1760,10 @@
                     <div class="more-item-icon">⚡</div>
                     <div class="more-item-label">Workflows</div>
                 </div>
+                <div class="more-item" onclick="navigateToPage('music.html')">
+                    <div class="more-item-icon">🎵</div>
+                    <div class="more-item-label">Music</div>
+                </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
                     <div class="more-item-label">Settings</div>
@@ -1894,6 +1898,12 @@
     <script src="js/widgets/core/dynamic-list.js"></script>
     <script src="js/widgets/core/week-planner.js"></script>
     <script src="js/widgets/core/project.js"></script>
+    <script src="js/widgets/core/music.js"></script>
+    
+    <!-- Music Widgets (Advanced) -->
+    <script src="js/widgets/music/music-state.js"></script>
+    <script src="js/widgets/music/player.js"></script>
+    <script src="js/widgets/music/library.js"></script>
     
     <!-- Widget registration will happen after dashboard.js is loaded -->
 
@@ -2203,6 +2213,8 @@
             }
         })();
     </script>
+    <!-- Mini Player for persistent music playback -->
+    <script src="js/mini-player.js"></script>
 </body>
 </html>
 

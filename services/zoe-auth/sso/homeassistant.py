@@ -255,7 +255,7 @@ class HomeAssistantIntegration:
             
             with auth_db.get_connection() as conn:
                 cursor = conn.execute("""
-                    SELECT user_id FROM users 
+                    SELECT user_id FROM auth_users 
                     WHERE is_active = 1
                 """)
                 
@@ -351,7 +351,7 @@ class HomeAssistantIntegration:
             # Check for users that need syncing
             with auth_db.get_connection() as conn:
                 cursor = conn.execute("""
-                    SELECT user_id, updated_at FROM users 
+                    SELECT user_id, updated_at FROM auth_users 
                     WHERE is_active = 1 
                     AND updated_at > datetime('now', '-1 hour')
                 """)

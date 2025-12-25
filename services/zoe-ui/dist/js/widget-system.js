@@ -139,7 +139,10 @@ function getWidgetClassName(manifestName) {
         'Quick Notes': 'NotesWidget',
         'Shopping List': 'ShoppingWidget',
         'System Status': 'SystemWidget',
-        'Bucket List': 'BucketWidget'
+        'Bucket List': 'BucketWidget',
+        'Music Player': 'MusicWidget',
+        'Music Player (New)': 'MusicPlayerWidget',
+        'Music Library': 'MusicLibraryWidget'
     };
     
     // Check special cases first

@@ -652,7 +652,7 @@ async def get_system_stats(
             user_stats = {row[0]: row[1] for row in cursor.fetchall()}
             
             # Total users
-            cursor = conn.execute("SELECT COUNT(*) FROM users WHERE is_active = 1")
+            cursor = conn.execute("SELECT COUNT(*) FROM auth_users WHERE is_active = 1")
             total_users = cursor.fetchone()[0]
             
             # Recent logins (last 24 hours)

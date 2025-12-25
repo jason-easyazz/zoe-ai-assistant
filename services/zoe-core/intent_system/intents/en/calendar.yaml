@@ -1,7 +1,7 @@
 language: "en"
 
 intents:
-  CalendarCreate:
+  CalendarAdd:
     data:
       - sentences:
           - "remind me to {task} [at] {time}"
@@ -15,15 +15,32 @@ intents:
   CalendarShow:
     data:
       - sentences:
-          - "what's on my calendar [today]"
-          - "show my calendar [for] [today]"
-          - "what [events] do I have [today]"
-          - "what's on my schedule [today]"
-          - "show my schedule [for] [today]"
+          - "what's on my calendar"
+          - "show my calendar"
+          - "what events do I have"
+          - "what's on my schedule"
+          - "show my schedule"
           - "my calendar"
           - "my schedule"
           - "my events"
           - "what do I have scheduled"
+          - "upcoming events"
+          - "show [me] [my] events"
+          - "whats on my calendar"
+
+  CalendarToday:
+    data:
+      - sentences:
+          - "what's on my calendar today"
+          - "show my calendar for today"
+          - "what events do I have today"
+          - "what's on my schedule today"
+          - "show my schedule for today"
+          - "today's calendar"
+          - "today's schedule"
+          - "today's events"
+          - "what do I have today"
+          - "what's today"
 
   CalendarDelete:
     data:

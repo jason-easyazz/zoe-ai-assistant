@@ -1232,6 +1232,10 @@
                     <div class="more-item-icon">⚡</div>
                     <div class="more-item-label">Workflows</div>
                 </div>
+                <div class="more-item" onclick="navigateToPage('music.html')">
+                    <div class="more-item-icon">🎵</div>
+                    <div class="more-item-label">Music</div>
+                </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
                     <div class="more-item-label">Settings</div>
@@ -1368,9 +1372,10 @@
 
     <script src="js/auth.js?v=9.0&t=1760020000"></script>
     <script src="js/common.js?v=9.0&t=1760020000"></script>
+        <script src="js/chat-sessions.js?v=2.1"></script>
     <script>
         // Cache buster - force browser to reload this script
-        console.log('🔄 Chat.html v10.0 - COMPLETE ORCHESTRATION: Interactive Action Cards with Time Slot Picker!');
+        console.log('🔄 Chat.html v10.1 - WITH SESSION HISTORY UI!');
     </script>
     <script>
         // State
@@ -2802,5 +2807,7 @@
         }
 
     </script>
+    <!-- Mini Player for persistent music playback -->
+    <script src="js/mini-player.js"></script>
 </body>
 </html><!-- Cache Bust: 1760009000 - v8.1 Fresh Start -->

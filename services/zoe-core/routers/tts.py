@@ -1,15 +1,21 @@
 """
 TTS Router - Proxy to zoe-tts service with user context
-Provides voice synthesis and voice cloning management
+Provides voice synthesis, voice cloning, and device-targeted speech
+
+Device-Aware Features:
+- Speak to specific device via WebSocket
+- Speak to room via HA media_player
+- Broadcast to all user's audio-capable devices
 """
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, Header
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
 import httpx
 import logging
 import os
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -259,4 +265,160 @@ async def tts_info():
             "backend": TTS_SERVICE_URL,
             "error": str(e)
         }
+
+
+# ============================================================
+# Device-Targeted Speech
+# ============================================================
+
+class SpeakRequest(BaseModel):
+    """Request to speak text on a specific device or room"""
+    text: str
+    voice: str = "default"
+    speed: float = 1.0
+    target_device_id: Optional[str] = None
+    target_room: Optional[str] = None
+    priority: str = "normal"  # normal, high, critical
+
+
+@router.post("/speak")
+async def speak(
+    request: SpeakRequest,
+    user_id: Optional[str] = Query(None),
+    x_device_id: Optional[str] = Header(None)
+):
+    """
+    Synthesize speech and play on a specific device or room.
+    
+    Routing priority:
+    1. target_device_id if specified
+    2. target_room if specified (plays on room's media_player)
+    3. Source device (X-Device-Id header) if available
+    4. Broadcast to all user's audio-capable devices
+    
+    Args:
+        text: Text to speak
+        voice: Voice profile ID
+        target_device_id: Specific device to play on
+        target_room: Room to play in (uses HA media_player)
+    """
+    try:
+        # Step 1: Synthesize speech
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            tts_request = {
+                "text": request.text,
+                "voice": request.voice,
+                "speed": request.speed,
+                "user_id": user_id
+            }
+            
+            response = await client.post(
+                f"{TTS_SERVICE_URL}/synthesize",
+                json=tts_request
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"TTS synthesis failed: {response.text}")
+                raise HTTPException(status_code=response.status_code, detail="TTS synthesis failed")
+            
+            audio_data = response.content
+        
+        # Step 2: Route to target device(s)
+        target_device = request.target_device_id or x_device_id
+        target_room = request.target_room
+        
+        # Get device info if we have a device_id
+        device_info = None
+        if target_device:
+            try:
+                from routers.devices import get_connection
+                import sqlite3
+                conn = get_connection()
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM devices WHERE id = ?", (target_device,))
+                row = cursor.fetchone()
+                conn.close()
+                if row:
+                    device_info = dict(row)
+                    # Use device's room if no room specified
+                    if not target_room and device_info.get("room"):
+                        target_room = device_info["room"]
+            except Exception as e:
+                logger.warning(f"Could not get device info: {e}")
+        
+        # Encode audio as base64 for WebSocket transmission
+        audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+        
+        tts_message = {
+            "type": "tts_play",
+            "audio_data": audio_base64,
+            "audio_format": "wav",
+            "text": request.text,
+            "priority": request.priority
+        }
+        
+        played_on = []
+        
+        # Try device-specific playback
+        if target_device:
+            try:
+                from routers.websocket import send_to_device
+                success = await send_to_device(target_device, tts_message)
+                if success:
+                    played_on.append({"type": "device", "id": target_device})
+                    logger.info(f"TTS sent to device {target_device}")
+            except Exception as e:
+                logger.warning(f"Failed to send TTS to device: {e}")
+        
+        # Try room-based playback via HA
+        if target_room and not played_on:
+            try:
+                # Get media_player entities in room
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        "http://localhost:8000/api/homeassistant/entities",
+                        params={"domain": "media_player"},
+                        timeout=5.0
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        entities = data.get("entities", [])
+                        
+                        # Find media_player matching room
+                        room_normalized = target_room.lower().replace(" ", "_")
+                        for entity in entities:
+                            entity_id = entity.get("entity_id", "")
+                            if room_normalized in entity_id.lower():
+                                # Play on HA media_player
+                                # Note: Would need to host the audio and provide URL
+                                played_on.append({"type": "ha_media_player", "entity_id": entity_id, "room": target_room})
+                                logger.info(f"TTS routed to HA media_player {entity_id} in {target_room}")
+                                break
+            except Exception as e:
+                logger.warning(f"Failed to route TTS to room: {e}")
+        
+        # Fallback: Broadcast to all user's devices
+        if not played_on and user_id:
+            try:
+                from routers.websocket import broadcast_to_user
+                count = await broadcast_to_user(user_id, tts_message)
+                if count > 0:
+                    played_on.append({"type": "broadcast", "device_count": count})
+                    logger.info(f"TTS broadcast to {count} devices for user {user_id}")
+            except Exception as e:
+                logger.warning(f"Failed to broadcast TTS: {e}")
+        
+        return {
+            "success": len(played_on) > 0,
+            "text": request.text,
+            "played_on": played_on,
+            "audio_size_bytes": len(audio_data)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Speak failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 

@@ -925,7 +925,7 @@ class ShoppingWidget extends WidgetModule {
         }
         
         console.log('🔌 Setting up WebSocket sync for shopping list');
-        this.wsSync = new ZoeWebSocketSync('/api/ws/lists', this.userId);
+        this.wsSync = new ZoeWebSocketSync('/api/lists/ws', this.userId);
         
         // Listen for list updates
         this.wsSync.on('list_updated', (data) => {

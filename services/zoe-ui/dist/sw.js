@@ -7,8 +7,8 @@
 // Import Workbox from CDN (no build step needed)
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
-// Zoe UI Version 4.13.1 - Widget System Fix
-const SW_VERSION = '4.13.1';
+// Zoe UI Version 4.15.0 - Fixed WebSocket URLs and added missing endpoints
+const SW_VERSION = '4.15.0';
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded

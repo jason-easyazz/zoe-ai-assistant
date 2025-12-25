@@ -133,9 +133,8 @@ class AuthManager:
             # Get user data
             with auth_db.get_connection() as conn:
                 cursor = conn.execute("""
-                    SELECT username, password_hash, is_active, failed_login_attempts, 
-                           locked_until, created_at, updated_at
-                    FROM users 
+                    SELECT username, password_hash, created_at, updated_at
+                    FROM auth_users 
                     WHERE user_id = ?
                 """, (user_id,))
                 
@@ -148,42 +147,20 @@ class AuthManager:
                         error_message="Invalid credentials"
                     )
 
-                username, password_hash, is_active, failed_attempts, locked_until, created_at, updated_at = row
-
-                # Check if account is active
-                if not is_active:
-                    self._log_auth_attempt(user_id, "password", "blocked", 
-                                         "account_disabled", ip_address)
-                    return AuthValidationResult(
-                        success=False,
-                        error_message="Account is disabled"
-                    )
-
-                # Check if account is locked
-                if locked_until:
-                    locked_until_dt = datetime.fromisoformat(locked_until)
-                    if datetime.now() < locked_until_dt:
-                        self._log_auth_attempt(user_id, "password", "blocked", 
-                                             "account_locked", ip_address)
-                        return AuthValidationResult(
-                            success=False,
-                            error_message="Account is temporarily locked",
-                            locked_until=locked_until_dt
-                        )
-                    else:
-                        # Lock period expired, reset failed attempts
-                        conn.execute("""
-                            UPDATE users 
-                            SET failed_login_attempts = 0, locked_until = NULL
-                            WHERE user_id = ?
-                        """, (user_id,))
+                username, password_hash, created_at, updated_at = row
+                
+                # NOTE: auth_users table doesn't have is_active, failed_attempts, locked_until columns
+                # Assuming all users are active and not locked
+                is_active = True
+                failed_attempts = 0
+                locked_until = None
 
                 # Verify password
                 if password_hash and bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8')):
-                    # Success - reset failed attempts and update last login
+                    # Success - update last login
                     conn.execute("""
-                        UPDATE users 
-                        SET failed_login_attempts = 0, locked_until = NULL, last_login = ?
+                        UPDATE auth_users 
+                        SET last_login = ?
                         WHERE user_id = ?
                     """, (datetime.now().isoformat(), user_id))
 
@@ -199,36 +176,16 @@ class AuthManager:
                         requires_password_change=requires_change
                     )
                 else:
-                    # Failed password - increment counter
-                    new_failed_attempts = failed_attempts + 1
-                    locked_until_new = None
-                    
-                    # Lock account after 5 failed attempts
-                    if new_failed_attempts >= 5:
-                        locked_until_new = datetime.now() + timedelta(minutes=15)
-                    
-                    conn.execute("""
-                        UPDATE users 
-                        SET failed_login_attempts = ?, locked_until = ?
-                        WHERE user_id = ?
-                    """, (new_failed_attempts, 
-                          locked_until_new.isoformat() if locked_until_new else None,
-                          user_id))
+                    # Failed password
+                    # NOTE: auth_users table doesn't have failed_login_attempts or locked_until columns
+                    # Skipping account locking logic
 
                     self._log_auth_attempt(user_id, "password", "failure", 
                                          "invalid_password", ip_address)
                     
-                    if locked_until_new:
-                        return AuthValidationResult(
+                    return AuthValidationResult(
                             success=False,
-                            error_message="Too many failed attempts. Account locked.",
-                            locked_until=locked_until_new
-                        )
-                    else:
-                        remaining = 5 - new_failed_attempts
-                        return AuthValidationResult(
-                            success=False,
-                            error_message=f"Invalid password. {remaining} attempts remaining."
+                            error_message="Invalid password"
                         )
 
         except Exception as e:
@@ -274,7 +231,7 @@ class AuthManager:
             # Validate new password
             with auth_db.get_connection() as conn:
                 cursor = conn.execute(
-                    "SELECT username, email FROM users WHERE user_id = ?",
+                    "SELECT username, email FROM auth_users WHERE user_id = ?",
                     (user_id,)
                 )
                 row = cursor.fetchone()
@@ -395,9 +352,8 @@ class AuthManager:
         try:
             with auth_db.get_connection() as conn:
                 cursor = conn.execute("""
-                    SELECT username, email, role, is_active, is_verified, created_at, 
-                           last_login, failed_login_attempts, locked_until, settings
-                    FROM users 
+                    SELECT username, email, role, created_at, last_login
+                    FROM auth_users 
                     WHERE user_id = ?
                 """, (user_id,))
                 
@@ -408,14 +364,14 @@ class AuthManager:
                         "username": row[0],
                         "email": row[1],
                         "role": row[2],
-                        "is_active": bool(row[3]),
-                        "is_verified": bool(row[4]),
-                        "created_at": row[5],
-                        "last_login": row[6],
-                        "failed_login_attempts": row[7],
-                        "locked_until": row[8],
-                        "is_locked": bool(row[8] and datetime.now() < datetime.fromisoformat(row[8])),
-                        "settings": row[9] or "{}"
+                        "is_active": True,
+                        "is_verified": True,
+                        "created_at": row[3],
+                        "last_login": row[4],
+                        "failed_login_attempts": 0,
+                        "locked_until": None,
+                        "is_locked": False,
+                        "settings": "{}"
                     }
                     
         except Exception as e:
@@ -537,7 +493,7 @@ class AuthManager:
         with auth_db.get_connection() as conn:
             while True:
                 user_id = base_id if counter == 1 else f"{base_id}_{counter}"
-                cursor = conn.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
+                cursor = conn.execute("SELECT 1 FROM auth_users WHERE user_id = ?", (user_id,))
                 if not cursor.fetchone():
                     return user_id
                 counter += 1

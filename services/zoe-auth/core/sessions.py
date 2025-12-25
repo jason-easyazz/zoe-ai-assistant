@@ -410,7 +410,7 @@ class EnhancedSessionManager:
         try:
             with auth_db.get_connection() as conn:
                 cursor = conn.execute(
-                    "SELECT password_hash FROM users WHERE user_id = ? AND is_active = 1",
+                    "SELECT password_hash FROM auth_users WHERE user_id = ? AND is_active = 1",
                     (user_id,)
                 )
                 row = cursor.fetchone()

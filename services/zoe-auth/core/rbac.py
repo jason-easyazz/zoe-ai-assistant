@@ -219,7 +219,7 @@ class RBACManager:
         try:
             with auth_db.get_connection() as conn:
                 cursor = conn.execute(
-                    "SELECT role FROM users WHERE user_id = ? AND is_active = 1",
+                    "SELECT role FROM auth_users WHERE user_id = ?",
                     (user_id,)
                 )
                 row = cursor.fetchone()

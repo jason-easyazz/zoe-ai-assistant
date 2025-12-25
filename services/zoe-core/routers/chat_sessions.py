@@ -108,10 +108,13 @@ async def create_session(
 @router.get("/", response_model=Dict[str, Any])
 async def get_sessions(
     session: AuthenticatedSession = Depends(validate_session),
+    user_id: Optional[str] = Query(None, description="Override user_id (dev mode only)"),
     limit: int = Query(50, description="Maximum number of sessions to return")
 ):
     """Get user's chat sessions"""
-    user_id = session.user_id
+    # Allow user_id override in dev mode (for UI compatibility)
+    actual_user_id = user_id if (session.dev_bypass and user_id) else session.user_id
+    
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -122,7 +125,7 @@ async def get_sessions(
             WHERE user_id = ?
             ORDER BY updated_at DESC
             LIMIT ?
-        """, (user_id, limit))
+        """, (actual_user_id, limit))
         
         sessions = []
         for row in cursor.fetchall():

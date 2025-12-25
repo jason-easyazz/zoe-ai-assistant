@@ -52,6 +52,10 @@ class ReminderCreate(BaseModel):
     family_member: Optional[str] = None
     snooze_minutes: int = 5
     requires_acknowledgment: bool = False
+    # Source device for alert routing
+    source_device_id: Optional[str] = None
+    source_session_id: Optional[str] = None
+    source_room: Optional[str] = None
 
 class ReminderUpdate(BaseModel):
     title: Optional[str] = None
@@ -148,6 +152,13 @@ def init_reminders_db():
         pass
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)")
     
+    # Migration: Add source device columns for device-aware alert routing
+    for col in ["source_device_id", "source_session_id", "source_room"]:
+        try:
+            cursor.execute(f"ALTER TABLE reminders ADD COLUMN {col} TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+    
     conn.commit()
     conn.close()
 
@@ -169,20 +180,22 @@ async def create_reminder(reminder: ReminderCreate, session: AuthenticatedSessio
             # Default to tomorrow at 9am if not specified
             reminder_timestamp = (datetime.now() + timedelta(days=1)).replace(hour=9, minute=0, second=0).isoformat()
         
-        # Insert reminder (removed reminder_time column as it doesn't exist in schema)
+        # Insert reminder with source device info for alert routing
         cursor.execute("""
             INSERT INTO reminders (
                 user_id, title, description, reminder_type, category, priority,
                 due_date, due_time, recurring_pattern, linked_list_id, linked_list_item_id,
-                family_member, snooze_minutes, requires_acknowledgment
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                family_member, snooze_minutes, requires_acknowledgment,
+                source_device_id, source_session_id, source_room
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             user_id, reminder.title, reminder.description,
             reminder.reminder_type.value, reminder.category.value, reminder.priority.value,
             reminder.due_date, reminder.due_time.isoformat() if reminder.due_time else None, 
             json.dumps(reminder.recurring_pattern) if reminder.recurring_pattern else None,
             reminder.linked_list_id, reminder.linked_list_item_id, reminder.family_member,
-            reminder.snooze_minutes, reminder.requires_acknowledgment
+            reminder.snooze_minutes, reminder.requires_acknowledgment,
+            reminder.source_device_id, reminder.source_session_id, reminder.source_room
         ))
         
         reminder_id = cursor.lastrowid
@@ -499,7 +512,7 @@ async def get_pending_notifications(session: AuthenticatedSession = Depends(vali
         cursor.execute("""
             SELECT n.*
             FROM notifications n
-            WHERE n.user_id = ? AND n.is_read = FALSE 
+            WHERE n.user_id = ? AND (n.read = 0 OR n.read IS NULL)
             ORDER BY n.created_at ASC
         """, (user_id,))
         
@@ -510,12 +523,12 @@ async def get_pending_notifications(session: AuthenticatedSession = Depends(vali
                 "title": row["title"] if "title" in row.keys() else "",
                 "message": row["message"],
                 "notification_type": row["notification_type"],
-                "is_read": bool(row["is_read"]),
-                "is_delivered": bool(row["is_read"]),  # Map is_read to is_delivered for compatibility
+                "is_read": bool(row["read"]) if "read" in row.keys() else False,
+                "is_delivered": bool(row["is_delivered"]) if "is_delivered" in row.keys() else False,
                 "priority": row["priority"] if row["priority"] else "medium",
                 "action_url": row["action_url"] if "action_url" in row.keys() else None,
                 "created_at": row["created_at"],
-                "read_at": row["read_at"] if "read_at" in row.keys() else None
+                "read_at": row["acknowledged_at"] if "acknowledged_at" in row.keys() else None
             }
             notifications.append(notification)
         

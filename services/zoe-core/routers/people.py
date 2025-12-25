@@ -237,13 +237,17 @@ class RelationshipCreate(BaseModel):
 async def get_self(
     session: AuthenticatedSession = Depends(validate_session)
 ):
-    """Get the authenticated user's own profile (is_self=true entry)"""
+    """Get the authenticated user's own profile (is_self=true entry)
+    
+    🔥 NEW: Merges data from BOTH people.is_self AND self_facts table
+    """
     user_id = session.user_id
     
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
+    # Get from people table (legacy system)
     cursor.execute("""
         SELECT * FROM people 
         WHERE user_id = ? AND is_self = 1
@@ -251,21 +255,65 @@ async def get_self(
     """, (user_id,))
     
     row = cursor.fetchone()
+    
+    # Build person dict
+    if row:
+        person = dict(row)
+        for field in ['tags', 'facts', 'preferences', 'metadata', 'personality_traits', 'interests', 'important_dates']:
+            if field in person and person[field]:
+                try:
+                    person[field] = json.loads(person[field])
+                except:
+                    person[field] = {} if field != 'tags' else []
+    else:
+        # Create minimal self entry if none exists
+        person = {
+            "id": None,
+            "user_id": user_id,
+            "name": f"User_{user_id}",
+            "is_self": 1,
+            "facts": {},
+            "preferences": {},
+            "personality_traits": {},
+            "interests": {}
+        }
+    
+    # 🔥 NEW: Merge in self_facts from self_facts table (newer system)
+    cursor.execute("""
+        SELECT fact_key, fact_value, confidence, source, updated_at
+        FROM self_facts
+        WHERE user_id = ?
+        ORDER BY updated_at DESC
+    """, (user_id,))
+    
+    self_facts_rows = cursor.fetchall()
+    
+    # Add self_facts as a separate field for visibility
+    person["self_facts"] = [
+        {
+            "key": row[0],
+            "value": row[1],
+            "confidence": row[2],
+            "source": row[3],
+            "updated_at": row[4]
+        }
+        for row in self_facts_rows
+    ]
+    
+    # Also merge into facts dict for backward compatibility
+    if not person.get("facts"):
+        person["facts"] = {}
+    
+    for row in self_facts_rows:
+        person["facts"][row[0]] = row[1]
+    
     conn.close()
     
-    if not row:
-        return {"self": None, "message": "No self entry found. Create one with POST /api/people"}
-    
-    # Build person dict with JSON parsing
-    person = dict(row)
-    for field in ['tags', 'facts', 'preferences', 'metadata', 'personality_traits', 'interests', 'important_dates']:
-        if field in person and person[field]:
-            try:
-                person[field] = json.loads(person[field])
-            except:
-                person[field] = {} if field != 'tags' else []
-    
-    return {"self": person}
+    return {
+        "self": person,
+        "facts_count": len(self_facts_rows),
+        "source": "merged from people.is_self and self_facts table"
+    }
 
 @router.patch("/self")
 async def update_self(

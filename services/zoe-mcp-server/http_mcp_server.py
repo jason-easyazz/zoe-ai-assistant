@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Zoe Advanced MCP Server - HTTP API")
 
 class ToolRequest(BaseModel):
+    user_id: Optional[str] = "default"  # User ID for isolation
     _auth_token: Optional[str] = "default"
     _session_id: Optional[str] = "default"
     _context: Optional[Dict[str, Any]] = None  # Enhanced context for Samantha-level intelligence
@@ -166,11 +167,15 @@ async def list_tools(request: ToolRequest):
 async def add_to_list(request: AddToListRequest):
     """Add item to list"""
     try:
+        # 🔥 FIX: Use actual user_id from request instead of hardcoded 'default'
+        user_id = request.user_id or "default"
+        logger.info(f"✅ add_to_list: user_id={user_id}, task={request.task_text}")
+        
         result = await mcp_server._add_to_list({
             "list_name": request.list_name,
             "task_text": request.task_text,
             "priority": request.priority
-        }, type('UserContext', (), {'user_id': 'default', 'username': 'default'})())
+        }, type('UserContext', (), {'user_id': user_id, 'username': user_id})())
         
         return {
             "success": True,
@@ -206,13 +211,17 @@ async def create_person(request: CreatePersonRequest):
 async def create_calendar_event(request: CreateCalendarEventRequest):
     """Create a calendar event"""
     try:
+        # 🔥 FIX: Use actual user_id from request instead of hardcoded 'default'
+        user_id = request.user_id or "default"
+        logger.info(f"✅ create_calendar_event: user_id={user_id}, title={request.title}")
+        
         result = await mcp_server._create_calendar_event({
             "title": request.title,
             "start_date": request.start_date,
             "start_time": request.start_time,
             "description": request.description,
             "location": request.location
-        }, type('UserContext', (), {'user_id': 'default', 'username': 'default'})())
+        }, type('UserContext', (), {'user_id': user_id, 'username': user_id})())
         
         return {
             "success": True,
@@ -521,12 +530,18 @@ async def store_self_fact(request: ToolRequest):
 async def get_self_info(request: ToolRequest):
     """Get information about the user themselves"""
     try:
-        # Get user_id from request parameters, not as attribute
-        params = dict(request)
-        user_id = params.get('user_id', 'default')
+        # Extract user_id from request body
+        user_id = request.user_id or "default"
+        logger.info(f"🔍 get_self_info called with user_id: {user_id}")
+        
+        params = request.dict() if hasattr(request, 'dict') else dict(request)
+        logger.info(f"🔍 params dict: {params}")
+        
+        # Create user context with proper user_id
         user_context = type('UserContext', (), {'user_id': user_id, 'username': user_id})()
         
         result = await mcp_server._get_self_info(params, user_context)
+        logger.info(f"🔍 Result message preview: {result.content[0].text[:100]}")
         
         return {
             "success": True,

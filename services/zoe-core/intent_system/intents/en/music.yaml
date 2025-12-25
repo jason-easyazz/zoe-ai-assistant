@@ -1,0 +1,214 @@
+# Music Intent Patterns
+# Voice commands for music playback control
+
+intents:
+  MusicPlay:
+    data:
+      - sentences:
+          - play {query}
+          - play some {query}
+          - play {query} music
+          - put on {query}
+          - put on some {query}
+          - play music by {artist}
+          - play {song} by {artist}
+          - play some {genre}
+          - play {genre} music
+          - can you play {query}
+          - i want to hear {query}
+          - i want to listen to {query}
+        slots:
+          query:
+            type: free_text
+          artist:
+            type: free_text
+          song:
+            type: free_text
+          genre:
+            type: free_text
+
+  MusicPause:
+    data:
+      - sentences:
+          - pause
+          - pause music
+          - pause the music
+          - stop music
+          - stop the music
+          - stop playing
+          - pause playback
+
+  MusicResume:
+    data:
+      - sentences:
+          - resume
+          - resume music
+          - resume playback
+          - continue
+          - continue playing
+          - continue music
+          - unpause
+          - play
+          - keep playing
+
+  MusicSkip:
+    data:
+      - sentences:
+          - skip
+          - skip this
+          - skip this song
+          - next
+          - next song
+          - next track
+          - play next
+          - skip to next
+
+  MusicPrevious:
+    data:
+      - sentences:
+          - previous
+          - previous song
+          - previous track
+          - go back
+          - last song
+          - play previous
+          - back
+          - play that again
+
+  MusicVolume:
+    data:
+      - sentences:
+          - volume {level}
+          - set volume to {level}
+          - set the volume to {level}
+          - volume to {level}
+          - volume at {level}
+          - turn it up
+          - turn it down
+          - louder
+          - quieter
+          - softer
+          - make it louder
+          - make it quieter
+          - turn up the volume
+          - turn down the volume
+          - raise the volume
+          - lower the volume
+        slots:
+          level:
+            type: number
+
+  MusicSearch:
+    data:
+      - sentences:
+          - search for {query}
+          - search {query}
+          - find {query}
+          - find me {query}
+          - look for {query}
+        slots:
+          query:
+            type: free_text
+
+  MusicQueue:
+    data:
+      - sentences:
+          - whats in the queue
+          - show queue
+          - show the queue
+          - whats playing next
+          - what song is next
+          - what's next
+
+  MusicQueueAdd:
+    data:
+      - sentences:
+          - add {query} to queue
+          - queue {query}
+          - add {query} to the queue
+          - play {query} next
+          - queue up {query}
+        slots:
+          query:
+            type: free_text
+
+  MusicNowPlaying:
+    data:
+      - sentences:
+          - what song is this
+          - whats playing
+          - what's playing
+          - what is playing
+          - what is this song
+          - who is this
+          - who sings this
+          - what artist is this
+
+  MusicSimilar:
+    data:
+      - sentences:
+          - play something similar
+          - play something like this
+          - more like this
+          - play similar songs
+          - play similar music
+          - find similar songs
+          - play more like this
+          - something similar
+          - similar to this
+
+  MusicRadio:
+    data:
+      - sentences:
+          - play my radio
+          - start my radio
+          - personal radio
+          - play radio
+          - start radio
+          - play personalized music
+          - play my music
+          - shuffle my favorites
+
+  MusicDiscover:
+    data:
+      - sentences:
+          - discover new music
+          - find me something new
+          - play discovery mix
+          - play new music
+          - show me new music
+          - recommend something new
+          - surprise me
+          - play something i havent heard
+          - play something new
+
+  MusicMood:
+    data:
+      - sentences:
+          - play something for this mood
+          - match my mood
+          - play mood music
+          - more of this vibe
+          - keep this vibe going
+          - play something that fits
+
+  MusicLike:
+    data:
+      - sentences:
+          - like this song
+          - i like this
+          - love this song
+          - add to favorites
+          - favorite this
+          - thumbs up
+
+  MusicStats:
+    data:
+      - sentences:
+          - show my listening stats
+          - my music stats
+          - how much have i listened
+          - what are my top songs
+          - what are my favorite artists
+          - my listening history
+

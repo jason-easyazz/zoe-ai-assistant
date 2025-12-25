@@ -79,7 +79,7 @@ class N8nIntegration:
             # Find user by email
             with auth_db.get_connection() as conn:
                 cursor = conn.execute(
-                    "SELECT user_id, username FROM users WHERE email = ? AND is_active = 1",
+                    "SELECT user_id, username FROM auth_users WHERE email = ? AND is_active = 1",
                     (email,)
                 )
                 row = cursor.fetchone()

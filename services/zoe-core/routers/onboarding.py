@@ -10,7 +10,7 @@ This system learns about users through natural conversation to enable:
 - Two Zoes talking to determine if their users are compatible
 """
 
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Depends, Header
 import os
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
@@ -21,6 +21,9 @@ import logging
 import sys
 
 sys.path.append('/app')
+
+# Import authentication
+from auth_integration import validate_session, AuthenticatedSession
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/onboarding", tags=["onboarding"])
@@ -360,6 +363,7 @@ except Exception as e:
 @router.post("/start")
 async def start_onboarding(session: AuthenticatedSession = Depends(validate_session)):
     """Start onboarding process for a new user"""
+    user_id = session.user_id
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -378,7 +382,6 @@ async def start_onboarding(session: AuthenticatedSession = Depends(validate_sess
             else:
                 # Resume existing onboarding
                 cursor.execute("""
-                    user_id = session.user_id
                     SELECT current_phase, phase_progress
                     FROM user_onboarding WHERE user_id = ?
                 """, (user_id,))
@@ -431,15 +434,21 @@ async def start_onboarding(session: AuthenticatedSession = Depends(validate_sess
 
 @router.post("/answer")
 async def submit_answer(
-    session: AuthenticatedSession = Depends(validate_session),
+    response: OnboardingResponse,
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """Submit an answer to an onboarding question"""
+    user_id = session.user_id
+    question_id = response.question_id
+    answer = response.response
+    metadata = response.metadata or {}
+    
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         # Get current onboarding state
         cursor.execute("""
-            user_id = session.user_id
             SELECT current_phase, responses, phase_progress
             FROM user_onboarding WHERE user_id = ?
         """, (user_id,))
@@ -455,8 +464,8 @@ async def submit_answer(
         
         # Store the response
         responses[question_id] = {
-            "response": response,
-            "metadata": json.loads(metadata) if metadata else {},
+            "response": answer,
+            "metadata": metadata,
             "answered_at": datetime.now().isoformat()
         }
         
@@ -551,12 +560,12 @@ async def submit_answer(
 @router.get("/progress")
 async def get_progress(session: AuthenticatedSession = Depends(validate_session)):
     """Get onboarding progress for a user"""
+    user_id = session.user_id
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         cursor.execute("""
-            user_id = session.user_id
             SELECT current_phase, phase_progress, responses, is_complete
             FROM user_onboarding WHERE user_id = ?
         """, (user_id,))
@@ -592,12 +601,12 @@ async def get_progress(session: AuthenticatedSession = Depends(validate_session)
 @router.get("/profile")
 async def get_user_profile(session: AuthenticatedSession = Depends(validate_session)):
     """Get user's compatibility profile"""
+    user_id = session.user_id
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
         cursor.execute("""
-            user_id = session.user_id
             SELECT profile_data, profile_completeness, confidence_score, last_updated
             FROM user_compatibility_profiles WHERE user_id = ?
         """, (user_id,))
