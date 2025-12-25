@@ -1,5 +1,0 @@
-Model|Gen (tok/s)|Prompt (tok/s)|Notes
-SmolLM2-1.7B|29.3|444.7|Stable, best speed now
-Llama 3.2 3B|14.3|33.6|Safe params to avoid OOM
-Phi-3.5-Mini|N/A|N/A|Crashed (double free), archived
-Nemotron-4B|N/A|N/A|Corrupted, archived

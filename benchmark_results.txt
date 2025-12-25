@@ -1,1 +1,0 @@
-Model|Gen Speed (tok/s)|Prompt Speed (tok/s)|50-token Latency|Memory

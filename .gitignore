@@ -97,7 +97,7 @@ aider_env/
 !scripts/maintenance/*.sh
 !scripts/permanent/*.sh
 !scripts/setup/*.sh
-!verify_updates.sh
+!RESTART_SERVICES.sh
 !start-zoe.sh
 !stop-zoe.sh
 
@@ -123,6 +123,8 @@ credentials/
 !package.json
 !tsconfig.json
 !*.config.json
+!.zoe/manifest.json
+!services/zoe-litellm/minimal_config.yaml
 
 # API Keys and Secrets
 *.env

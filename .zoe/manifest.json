@@ -1,0 +1,145 @@
+{
+  "version": "2.0",
+  "updated": "2025-12-25",
+  "description": "Zoe AI Assistant file manifest - defines approved files and patterns",
+  
+  "critical_files": {
+    "css": [
+      "services/zoe-ui/dist/css/glass.css",
+      "services/zoe-ui/dist/css/memories-enhanced.css"
+    ],
+    "core_js": [
+      "services/zoe-ui/dist/js/auth.js",
+      "services/zoe-ui/dist/js/common.js",
+      "services/zoe-ui/dist/js/widget-base.js",
+      "services/zoe-ui/dist/js/widget-system.js"
+    ],
+    "important_js": [
+      "services/zoe-ui/dist/js/ai-processor.js",
+      "services/zoe-ui/dist/js/journal-api.js",
+      "services/zoe-ui/dist/js/journal-ui-enhancements.js",
+      "services/zoe-ui/dist/js/memory-graph.js",
+      "services/zoe-ui/dist/js/memory-search.js",
+      "services/zoe-ui/dist/js/memory-timeline.js",
+      "services/zoe-ui/dist/js/settings.js",
+      "services/zoe-ui/dist/js/wikilink-parser.js",
+      "services/zoe-ui/dist/js/zoe-orb.js"
+    ],
+    "widgets": [
+      "services/zoe-ui/dist/js/widgets/core/events.js",
+      "services/zoe-ui/dist/js/widgets/core/home.js",
+      "services/zoe-ui/dist/js/widgets/core/notes.js",
+      "services/zoe-ui/dist/js/widgets/core/system.js",
+      "services/zoe-ui/dist/js/widgets/core/tasks.js",
+      "services/zoe-ui/dist/js/widgets/core/time.js",
+      "services/zoe-ui/dist/js/widgets/core/weather.js",
+      "services/zoe-ui/dist/js/widgets/core/zoe-orb.js",
+      "services/zoe-ui/dist/js/widgets/core/shopping.js",
+      "services/zoe-ui/dist/js/widgets/core/music.js"
+    ],
+    "components": [
+      "services/zoe-ui/dist/components/zoe-orb-complete.html",
+      "services/zoe-ui/dist/components/zoe-orb.html"
+    ],
+    "html_pages": [
+      "services/zoe-ui/dist/auth.html",
+      "services/zoe-ui/dist/calendar.html",
+      "services/zoe-ui/dist/chat.html",
+      "services/zoe-ui/dist/dashboard.html",
+      "services/zoe-ui/dist/index.html",
+      "services/zoe-ui/dist/journal.html",
+      "services/zoe-ui/dist/lists.html",
+      "services/zoe-ui/dist/memories.html",
+      "services/zoe-ui/dist/settings.html",
+      "services/zoe-ui/dist/music.html",
+      "services/zoe-ui/dist/people.html"
+    ],
+    "backend": [
+      "services/zoe-auth/main.py",
+      "services/zoe-core/ai_client.py",
+      "services/zoe-core/main.py",
+      "services/zoe-core/routers/chat.py"
+    ],
+    "config": [
+      "docker-compose.yml",
+      "services/zoe-ui/nginx.conf"
+    ]
+  },
+  
+  "approved_patterns": {
+    "services": "services/**/*",
+    "docs": "docs/**/*",
+    "tests": "tests/**/*",
+    "scripts": "scripts/**/*",
+    "tools": "tools/**/*",
+    "data": "data/**/*",
+    "config": "config/**/*",
+    "homeassistant": "homeassistant/**/*",
+    "ssl": "ssl/**/*",
+    "checkpoints": "checkpoints/**/*",
+    "models": "models/**/*",
+    "zoe_config": ".zoe/**/*",
+    "backups": "backups/**/*",
+    "demos": "demos/**/*"
+  },
+  
+  "approved_root_files": [
+    "README.md",
+    "CHANGELOG.md",
+    "QUICK-START.md",
+    "HARDWARE_COMPATIBILITY.md",
+    "PROJECT_STRUCTURE_RULES.md",
+    "DATABASE_PROTECTION_RULES.md",
+    "QUALITY_MAINTENANCE_GUIDE.md",
+    "AI_ASSISTANT_PROMPT.md",
+    "docker-compose.yml",
+    "docker-compose.jetson.yml",
+    "docker-compose.pi.yml",
+    "docker-compose.mem-agent.yml",
+    "docker-compose.override.yml",
+    "docker-compose.secure.yml",
+    "pytest.ini",
+    "LICENSE",
+    ".gitignore",
+    ".dockerignore",
+    ".env",
+    ".env.example",
+    ".cursorrules",
+    "RESTART_SERVICES.sh",
+    "warmup_models.py"
+  ],
+  
+  "safe_to_delete_patterns": [
+    "**/*.pyc",
+    "**/__pycache__/**",
+    "**/.DS_Store",
+    "**/._*",
+    "**/*.log",
+    "**/*.tmp",
+    "**/*_backup.*",
+    "**/*_old.*",
+    "**/*_v2.*",
+    "**/*_new.*",
+    "**/*_fixed.*"
+  ],
+  
+  "prohibited_in_root": [
+    "test_*.py",
+    "*_STATUS*.md",
+    "*_REPORT*.md",
+    "*_COMPLETE*.md",
+    "*_SUMMARY*.md",
+    "*_PHASE*.md",
+    "*_FIX*.md",
+    "*.log",
+    "*.tmp",
+    "*.pyc"
+  ],
+  
+  "notes": {
+    "max_root_md_files": 10,
+    "llm_backend": "llama.cpp via zoe-llamacpp container (Ollama retired Dec 2025)",
+    "primary_model": "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+  }
+}
+
