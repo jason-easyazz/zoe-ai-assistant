@@ -129,10 +129,18 @@ class YouTubeMusicProvider:
             # ytmusicapi 1.5.0+ requires OAuthCredentials when using OAuth JSON
             from ytmusicapi.auth.oauth import OAuthCredentials
             
-            # Create OAuth credentials with Google's client info (used by ytmusicapi)
+            # Create OAuth credentials from environment variables
+            # These are the YouTube Music TV client credentials
+            oauth_client_id = os.getenv("YTMUSIC_CLIENT_ID", "")
+            oauth_client_secret = os.getenv("YTMUSIC_CLIENT_SECRET", "")
+            
+            if not oauth_client_id or not oauth_client_secret:
+                logger.warning("YouTube Music OAuth credentials not configured in environment")
+                return None
+            
             oauth_creds = OAuthCredentials(
-                client_id="REDACTED_CLIENT_ID",
-                client_secret="REDACTED_CLIENT_SECRET"
+                client_id=oauth_client_id,
+                client_secret=oauth_client_secret
             )
             
             # Create YTMusic client with both auth dict and oauth_credentials
