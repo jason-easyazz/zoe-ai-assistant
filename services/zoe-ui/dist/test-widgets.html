@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Widget Loading</title>
+</head>
+<body>
+    <h1>Widget Loading Test</h1>
+    <div id="output"></div>
+    
+    <script src="js/auth.js"></script>
+    <script src="js/widget-base.js"></script>
+    <script src="js/lib/mcp-client.js"></script>
+    <script src="js/lib/widget-registry.js"></script>
+    <script src="js/lib/module-widget-loader.js"></script>
+    
+    <script>
+        const output = document.getElementById('output');
+        function log(msg) {
+            output.innerHTML += '<div>' + msg + '</div>';
+            console.log(msg);
+        }
+        
+        (async function() {
+            try {
+                log('🚀 Starting test...');
+                
+                // Initialize loader
+                window.moduleWidgetLoader = new ModuleWidgetLoader();
+                await window.moduleWidgetLoader.init();
+                log('✅ Loader initialized');
+                
+                // Get widgets
+                const widgets = window.moduleWidgetLoader.getAvailableWidgets();
+                log(`📦 Found ${widgets.length} widgets: ${widgets.map(w => w.id).join(', ')}`);
+                
+                // Try to load music-search widget
+                log('📥 Loading music-search widget...');
+                await window.moduleWidgetLoader.loadWidget('music-search');
+                log('✅ music-search loaded');
+                
+                // Check if class exists
+                if (typeof MusicSearchWidget !== 'undefined') {
+                    log('✅ MusicSearchWidget class is available!');
+                    const instance = new MusicSearchWidget();
+                    log(`✅ Created instance: ${instance.type}`);
+                } else {
+                    log('❌ MusicSearchWidget class NOT found');
+                }
+                
+            } catch (error) {
+                log('❌ Error: ' + error.message);
+                console.error(error);
+            }
+        })();
+    </script>
+</body>
+</html>

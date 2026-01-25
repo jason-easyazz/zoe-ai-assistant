@@ -43,6 +43,7 @@ class ToolCategory(str, Enum):
     MEMORY = "memory"
     HOMEASSISTANT = "homeassistant"
     NOTIFICATION = "notification"
+    MUSIC = "music"
     CUSTOM = "custom"
 
 class ToolPermission(str, Enum):
@@ -339,6 +340,117 @@ class ToolRegistry:
             ],
             function=self._ha_play_music,
             requires_confirmation=True
+        ))
+        
+        # 🎵 Music control tools
+        self.register_tool(ToolDefinition(
+            tool_id="music_play",
+            name="Play Music",
+            description="Search for and play music. Use for requests like 'play some jazz' or 'play Celine Dion'.",
+            category=ToolCategory.MUSIC,
+            permissions=[ToolPermission.EXECUTE],
+            parameters=[
+                ToolParameter("query", "string", True, "Search query - artist name, song title, genre, or mood"),
+                ToolParameter("user_id", "string", False, "User ID", "default")
+            ],
+            function=self._music_play,
+            requires_confirmation=False
+        ))
+        
+        self.register_tool(ToolDefinition(
+            tool_id="music_pause",
+            name="Pause Music",
+            description="Pause the currently playing music.",
+            category=ToolCategory.MUSIC,
+            permissions=[ToolPermission.EXECUTE],
+            parameters=[
+                ToolParameter("user_id", "string", False, "User ID", "default")
+            ],
+            function=self._music_pause,
+            requires_confirmation=False
+        ))
+        
+        self.register_tool(ToolDefinition(
+            tool_id="music_resume",
+            name="Resume Music",
+            description="Resume paused music playback.",
+            category=ToolCategory.MUSIC,
+            permissions=[ToolPermission.EXECUTE],
+            parameters=[
+                ToolParameter("user_id", "string", False, "User ID", "default")
+            ],
+            function=self._music_resume,
+            requires_confirmation=False
+        ))
+        
+        self.register_tool(ToolDefinition(
+            tool_id="music_skip",
+            name="Skip Track",
+            description="Skip to the next track in the queue.",
+            category=ToolCategory.MUSIC,
+            permissions=[ToolPermission.EXECUTE],
+            parameters=[
+                ToolParameter("user_id", "string", False, "User ID", "default")
+            ],
+            function=self._music_skip,
+            requires_confirmation=False
+        ))
+        
+        self.register_tool(ToolDefinition(
+            tool_id="music_queue_add",
+            name="Add to Queue",
+            description="Add a song to the music queue without interrupting current playback.",
+            category=ToolCategory.MUSIC,
+            permissions=[ToolPermission.EXECUTE],
+            parameters=[
+                ToolParameter("query", "string", True, "Search query for the song to add"),
+                ToolParameter("user_id", "string", False, "User ID", "default")
+            ],
+            function=self._music_queue_add,
+            requires_confirmation=False
+        ))
+        
+        self.register_tool(ToolDefinition(
+            tool_id="music_search",
+            name="Search Music",
+            description="Search for music without playing it. Returns a list of matching tracks.",
+            category=ToolCategory.MUSIC,
+            permissions=[ToolPermission.READ],
+            parameters=[
+                ToolParameter("query", "string", True, "Search query"),
+                ToolParameter("limit", "integer", False, "Maximum results to return", 5),
+                ToolParameter("user_id", "string", False, "User ID", "default")
+            ],
+            function=self._music_search,
+            requires_confirmation=False
+        ))
+        
+        self.register_tool(ToolDefinition(
+            tool_id="music_recommend",
+            name="Get Music Recommendations",
+            description="Get personalized music recommendations based on listening history.",
+            category=ToolCategory.MUSIC,
+            permissions=[ToolPermission.READ],
+            parameters=[
+                ToolParameter("type", "string", False, "Recommendation type: 'radio', 'discover', or 'similar'", "radio"),
+                ToolParameter("limit", "integer", False, "Maximum results to return", 10),
+                ToolParameter("user_id", "string", False, "User ID", "default")
+            ],
+            function=self._music_recommend,
+            requires_confirmation=False
+        ))
+        
+        self.register_tool(ToolDefinition(
+            tool_id="music_now_playing",
+            name="Now Playing",
+            description="Get information about the currently playing track.",
+            category=ToolCategory.MUSIC,
+            permissions=[ToolPermission.READ],
+            parameters=[
+                ToolParameter("user_id", "string", False, "User ID", "default")
+            ],
+            function=self._music_now_playing,
+            requires_confirmation=False
         ))
         
         logger.info(f"Registered {len(self.tools)} default tools")
@@ -734,6 +846,208 @@ class ToolRegistry:
             }
         except Exception as e:
             raise Exception(f"Failed to play music on {entity_id}: {e}")
+    
+    # 🎵 Music tool implementations
+    async def _music_play(self, query: str, user_id: str = "default") -> Dict[str, Any]:
+        """Search for and play music"""
+        try:
+            from services.music.youtube_provider import YouTubeMusicProvider
+            from services.music.media_controller import MediaController
+            
+            provider = YouTubeMusicProvider()
+            controller = MediaController(provider)
+            
+            # Search for tracks
+            results = await provider.search(query, user_id, limit=1)
+            if not results:
+                return {"success": False, "error": f"No results found for '{query}'"}
+            
+            track = results[0]
+            # Play the first result
+            result = await controller.play(
+                track_id=track.get("videoId") or track.get("id"),
+                target_device_id=None,
+                user_id=user_id,
+                track_info=track
+            )
+            
+            return {
+                "success": result.get("success", False),
+                "track": {
+                    "title": track.get("title", "Unknown"),
+                    "artist": track.get("artists", [{}])[0].get("name", "Unknown") if track.get("artists") else "Unknown"
+                },
+                "message": f"Now playing '{track.get('title', 'Unknown')}'"
+            }
+        except Exception as e:
+            logger.error(f"Music play failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _music_pause(self, user_id: str = "default") -> Dict[str, Any]:
+        """Pause music playback"""
+        try:
+            from services.music.youtube_provider import YouTubeMusicProvider
+            from services.music.media_controller import MediaController
+            
+            provider = YouTubeMusicProvider()
+            controller = MediaController(provider)
+            
+            result = await controller.pause(user_id)
+            return {"success": True, "message": "Music paused"}
+        except Exception as e:
+            logger.error(f"Music pause failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _music_resume(self, user_id: str = "default") -> Dict[str, Any]:
+        """Resume music playback"""
+        try:
+            from services.music.youtube_provider import YouTubeMusicProvider
+            from services.music.media_controller import MediaController
+            
+            provider = YouTubeMusicProvider()
+            controller = MediaController(provider)
+            
+            result = await controller.resume(user_id)
+            return {"success": True, "message": "Music resumed"}
+        except Exception as e:
+            logger.error(f"Music resume failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _music_skip(self, user_id: str = "default") -> Dict[str, Any]:
+        """Skip to next track"""
+        try:
+            from services.music.youtube_provider import YouTubeMusicProvider
+            from services.music.media_controller import MediaController
+            
+            provider = YouTubeMusicProvider()
+            controller = MediaController(provider)
+            
+            result = await controller.skip(user_id)
+            if result.get("queue_empty"):
+                return {"success": True, "message": "Queue is empty, playback stopped"}
+            
+            track_info = result.get("track_info", {})
+            return {
+                "success": True,
+                "message": f"Skipped to '{track_info.get('title', 'next track')}'"
+            }
+        except Exception as e:
+            logger.error(f"Music skip failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _music_queue_add(self, query: str, user_id: str = "default") -> Dict[str, Any]:
+        """Add a song to the queue"""
+        try:
+            from services.music.youtube_provider import YouTubeMusicProvider
+            from services.music.media_controller import MediaController
+            
+            provider = YouTubeMusicProvider()
+            controller = MediaController(provider)
+            
+            # Search for tracks
+            results = await provider.search(query, user_id, limit=1)
+            if not results:
+                return {"success": False, "error": f"No results found for '{query}'"}
+            
+            track = results[0]
+            # Add to queue
+            await controller.add_to_queue(
+                track_id=track.get("videoId") or track.get("id"),
+                user_id=user_id,
+                track_info=track
+            )
+            
+            return {
+                "success": True,
+                "message": f"Added '{track.get('title', 'Unknown')}' to queue"
+            }
+        except Exception as e:
+            logger.error(f"Music queue add failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _music_search(self, query: str, limit: int = 5, user_id: str = "default") -> Dict[str, Any]:
+        """Search for music"""
+        try:
+            from services.music.youtube_provider import YouTubeMusicProvider
+            
+            provider = YouTubeMusicProvider()
+            results = await provider.search(query, user_id, limit=limit)
+            
+            tracks = [
+                {
+                    "id": r.get("videoId") or r.get("id"),
+                    "title": r.get("title", "Unknown"),
+                    "artist": r.get("artists", [{}])[0].get("name", "Unknown") if r.get("artists") else "Unknown",
+                    "album": r.get("album", {}).get("name") if r.get("album") else None
+                }
+                for r in results
+            ]
+            
+            return {"success": True, "results": tracks, "count": len(tracks)}
+        except Exception as e:
+            logger.error(f"Music search failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _music_recommend(self, type: str = "radio", limit: int = 10, user_id: str = "default") -> Dict[str, Any]:
+        """Get music recommendations"""
+        try:
+            from services.music.youtube_provider import YouTubeMusicProvider
+            from services.music.recommendation_engine import MetadataRecommendationEngine
+            
+            provider = YouTubeMusicProvider()
+            engine = MetadataRecommendationEngine(provider)
+            
+            if type == "radio":
+                results = await engine.get_radio(user_id, limit=limit)
+            elif type == "discover":
+                results = await engine.get_discover(user_id, limit=limit)
+            elif type == "similar":
+                results = await engine.get_mood_based(user_id, limit=limit)
+            else:
+                results = await engine.get_radio(user_id, limit=limit)
+            
+            tracks = [
+                {
+                    "id": r.get("videoId") or r.get("id"),
+                    "title": r.get("title", "Unknown"),
+                    "artist": r.get("artists", [{}])[0].get("name", "Unknown") if r.get("artists") else "Unknown"
+                }
+                for r in results
+            ]
+            
+            return {"success": True, "recommendations": tracks, "type": type}
+        except Exception as e:
+            logger.error(f"Music recommend failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _music_now_playing(self, user_id: str = "default") -> Dict[str, Any]:
+        """Get currently playing track"""
+        try:
+            from services.music.youtube_provider import YouTubeMusicProvider
+            from services.music.media_controller import MediaController
+            
+            provider = YouTubeMusicProvider()
+            controller = MediaController(provider)
+            
+            state = await controller.get_state(user_id)
+            if not state or not state.get("track_title"):
+                return {"success": True, "is_playing": False, "message": "Nothing is currently playing"}
+            
+            return {
+                "success": True,
+                "is_playing": state.get("is_playing", False),
+                "track": {
+                    "id": state.get("track_id"),
+                    "title": state.get("track_title"),
+                    "artist": state.get("artist"),
+                    "album": state.get("album"),
+                    "position_ms": state.get("position_ms"),
+                    "duration_ms": state.get("duration_ms")
+                }
+            }
+        except Exception as e:
+            logger.error(f"Music now playing failed: {e}")
+            return {"success": False, "error": str(e)}
 
 # Initialize tool registry
 tool_registry = ToolRegistry()

@@ -58,16 +58,18 @@ class MusicPlayerWidget extends WidgetModule {
                            min="0" max="100" value="80">
                 </div>
                 
-                <!-- Mode & Zone -->
+                <!-- Mode & Output Device -->
                 <div class="mp-footer">
                     <div class="mp-mode-toggle">
                         <button class="mp-mode-btn active" id="mp-mode-audio" title="Audio">🎵</button>
                         <button class="mp-mode-btn" id="mp-mode-video" title="Video">🎬</button>
                     </div>
-                    <div class="mp-zone-select">
-                        <select id="mp-zone-selector" class="mp-zone-dropdown">
-                            <option value="">This Device</option>
+                    <div class="mp-output-select">
+                        <span class="mp-output-icon" title="Output device">📢</span>
+                        <select id="mp-output-selector" class="mp-output-dropdown">
+                            <option value="browser">This Device</option>
                         </select>
+                        <button class="mp-output-refresh" id="mp-output-refresh" title="Refresh devices">↻</button>
                     </div>
                 </div>
                 
@@ -299,6 +301,50 @@ class MusicPlayerWidget extends WidgetModule {
                     max-width: 120px;
                 }
                 
+                .mp-output-select {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                }
+                
+                .mp-output-icon {
+                    font-size: 14px;
+                }
+                
+                .mp-output-dropdown {
+                    background: rgba(0, 0, 0, 0.05);
+                    border: none;
+                    border-radius: 6px;
+                    padding: 6px 10px;
+                    font-size: 11px;
+                    cursor: pointer;
+                    outline: none;
+                    max-width: 140px;
+                }
+                
+                .mp-output-refresh {
+                    background: none;
+                    border: none;
+                    padding: 4px 6px;
+                    cursor: pointer;
+                    font-size: 12px;
+                    opacity: 0.6;
+                    transition: all 0.3s ease;
+                }
+                
+                .mp-output-refresh:hover {
+                    opacity: 1;
+                }
+                
+                .mp-output-refresh.spinning {
+                    animation: spin 0.5s linear;
+                }
+                
+                @keyframes spin {
+                    from { transform: rotate(0deg); }
+                    to { transform: rotate(360deg); }
+                }
+                
                 .mp-actions {
                     display: flex;
                     justify-content: center;
@@ -475,12 +521,26 @@ class MusicPlayerWidget extends WidgetModule {
         });
         
         // Zone selector
-        el.querySelector('#mp-zone-selector')?.addEventListener('change', (e) => {
-            const zoneId = e.target.value;
-            const zone = MusicState.state.availableZones.find(z => z.id === zoneId);
-            if (zone) {
-                MusicState.selectZone(zone);
+        // Output device selector
+        el.querySelector('#mp-output-selector')?.addEventListener('change', (e) => {
+            const deviceId = e.target.value;
+            if (deviceId === 'browser') {
+                MusicState.selectOutputDevice(null);
+            } else {
+                const device = MusicState.state.availableDevices.find(d => d.id === deviceId);
+                if (device) {
+                    MusicState.selectOutputDevice(device);
+                }
             }
+        });
+        
+        // Refresh output devices
+        el.querySelector('#mp-output-refresh')?.addEventListener('click', async () => {
+            const btn = el.querySelector('#mp-output-refresh');
+            btn.classList.add('spinning');
+            await MusicState.loadOutputDevices();
+            this.updateOutputDevices(MusicState.state.availableDevices);
+            setTimeout(() => btn.classList.remove('spinning'), 500);
         });
         
         // Quick actions
@@ -533,8 +593,13 @@ class MusicPlayerWidget extends WidgetModule {
             MusicState.on('progress', () => this.updateProgress()),
             MusicState.on('volumeChanged', (vol) => this.updateVolume(vol)),
             MusicState.on('playModeChanged', () => this.updateModeButtons()),
-            MusicState.on('zonesUpdated', (zones) => this.updateZoneSelector(zones))
+            MusicState.on('zonesUpdated', (zones) => this.updateZoneSelector(zones)),
+            MusicState.on('devicesUpdated', (devices) => this.updateOutputDevices(devices)),
+            MusicState.on('outputDeviceChanged', () => this.updateOutputDevices(MusicState.state.availableDevices))
         );
+        
+        // Initial device list update
+        this.updateOutputDevices(MusicState.state.availableDevices);
     }
     
     updateUI() {
@@ -643,6 +708,24 @@ class MusicPlayerWidget extends WidgetModule {
             (zones || []).map(zone => 
                 `<option value="${zone.id}" ${zone.id === currentZoneId ? 'selected' : ''}>${zone.name}</option>`
             ).join('');
+    }
+    
+    updateOutputDevices(devices) {
+        const el = this.element;
+        if (!el) return;
+        
+        const selector = el.querySelector('#mp-output-selector');
+        if (!selector) return;
+        
+        const currentDeviceId = MusicState.state.targetDevice?.id || 'browser';
+        
+        selector.innerHTML = '<option value="browser">This Device</option>' +
+            (devices || []).filter(d => d.id !== 'browser').map(device => {
+                const icon = device.type === 'Chromecast' ? '📺' : 
+                             device.type === 'AirPlay' ? '🔊' : 
+                             device.type === 'Home Assistant' ? '🏠' : '📢';
+                return `<option value="${device.id}" ${device.id === currentDeviceId ? 'selected' : ''}>${icon} ${device.name}</option>`;
+            }).join('');
     }
     
     showVideoOverlay() {

@@ -68,8 +68,8 @@ class IntentExecutor:
             weather_handlers,
             time_handlers,
             greeting_handlers,
-            homeassistant_handlers,
-            music_handlers
+            homeassistant_handlers
+            # music_handlers now loaded from modules via auto-discovery
         )
         
         # Register list handlers
@@ -115,25 +115,8 @@ class IntentExecutor:
         self.register_handler("HassLockDoor", homeassistant_handlers.handle_lock_door)
         self.register_handler("HassUnlockDoor", homeassistant_handlers.handle_unlock_door)
         
-        # Register Music handlers
-        self.register_handler("MusicPlay", music_handlers.handle_music_play)
-        self.register_handler("MusicPause", music_handlers.handle_music_pause)
-        self.register_handler("MusicResume", music_handlers.handle_music_resume)
-        self.register_handler("MusicSkip", music_handlers.handle_music_skip)
-        self.register_handler("MusicPrevious", music_handlers.handle_music_previous)
-        self.register_handler("MusicVolume", music_handlers.handle_music_volume)
-        self.register_handler("MusicQueue", music_handlers.handle_music_queue)
-        self.register_handler("MusicQueueAdd", music_handlers.handle_music_queue_add)
-        self.register_handler("MusicNowPlaying", music_handlers.handle_music_now_playing)
-        self.register_handler("MusicSearch", music_handlers.handle_music_search)
-        
-        # Register Music Recommendation handlers
-        self.register_handler("MusicSimilar", music_handlers.handle_music_similar)
-        self.register_handler("MusicRadio", music_handlers.handle_music_radio)
-        self.register_handler("MusicDiscover", music_handlers.handle_music_discover)
-        self.register_handler("MusicMood", music_handlers.handle_music_mood)
-        self.register_handler("MusicLike", music_handlers.handle_music_like)
-        self.register_handler("MusicStats", music_handlers.handle_music_stats)
+        # Music handlers now registered from modules via auto-discovery
+        # See: services/zoe-core/intent_system/module_intent_loader.py
         
         logger.info(f"Registered {len(self.handlers)} intent handlers")
     

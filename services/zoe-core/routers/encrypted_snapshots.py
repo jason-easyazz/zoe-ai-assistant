@@ -50,6 +50,7 @@ class SnapshotManager:
         self.encryption_key = None
         self.is_running = False
         self.scheduler_thread = None
+        self._last_schedule_config = None
         
         # Initialize database
         self.init_database()
@@ -160,13 +161,27 @@ class SnapshotManager:
                 self.load_config()
                 
                 # Schedule backup based on config
-                if self.config.enabled:
-                    if self.config.schedule_interval == "daily":
-                        schedule.every().day.at(self.config.schedule_time).do(self._run_scheduled_backup)
-                    elif self.config.schedule_interval == "weekly":
-                        schedule.every().week.at(self.config.schedule_time).do(self._run_scheduled_backup)
-                    elif self.config.schedule_interval == "monthly":
-                        schedule.every().month.at(self.config.schedule_time).do(self._run_scheduled_backup)
+                schedule_config = (
+                    self.config.enabled,
+                    self.config.schedule_interval,
+                    self.config.schedule_time,
+                )
+                if schedule_config != self._last_schedule_config:
+                    schedule.clear("snapshots")
+                    if self.config.enabled:
+                        if self.config.schedule_interval == "daily":
+                            schedule.every().day.at(self.config.schedule_time).do(
+                                self._run_scheduled_backup
+                            ).tag("snapshots")
+                        elif self.config.schedule_interval == "weekly":
+                            schedule.every().week.at(self.config.schedule_time).do(
+                                self._run_scheduled_backup
+                            ).tag("snapshots")
+                        elif self.config.schedule_interval == "monthly":
+                            schedule.every().month.at(self.config.schedule_time).do(
+                                self._run_scheduled_backup
+                            ).tag("snapshots")
+                    self._last_schedule_config = schedule_config
                 
                 # Run pending jobs
                 schedule.run_pending()
@@ -184,6 +199,7 @@ class SnapshotManager:
             logger.info("🔄 Running scheduled backup...")
             snapshot_id = self.create_snapshot()
             if snapshot_id:
+                self.cleanup_old_snapshots()
                 logger.info(f"✅ Scheduled backup completed: {snapshot_id}")
             else:
                 logger.error("❌ Scheduled backup failed")

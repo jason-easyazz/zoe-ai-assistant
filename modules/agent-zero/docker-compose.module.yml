@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # Agent Zero original container (UI + agent)
+  zoe-agent0:
+    image: agent0ai/agent-zero:latest
+    container_name: zoe-agent0
+    ports:
+      - "50001:80"
+    environment:
+      - ALLOWED_ORIGINS=*://localhost:*,*://127.0.0.1:*,*://0.0.0.0:*,*://192.168.1.*:*
+    volumes:
+      - agent0-data:/app/data
+      - agent0-memory:/app/memory
+      - agent0-logs:/app/logs
+    networks:
+      - zoe-network
+    restart: unless-stopped
+
+  # Bridge service (exposes HTTP endpoints for Zoe)
+  agent-zero-bridge:
+    build: .
+    container_name: agent-zero-bridge
+    ports:
+      - "8101:8101"
+    volumes:
+      - .:/app
+      - ../../data:/app/data
+    environment:
+      - PYTHONUNBUFFERED=1
+      - AGENT_ZERO_URL=http://zoe-agent0:80
+      - DATABASE_PATH=/app/data/zoe.db
+      - SAFETY_MODE=${AGENT_ZERO_SAFETY_MODE:-grandma}
+    networks:
+      - zoe-network
+    depends_on:
+      - zoe-agent0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8101/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+networks:
+  zoe-network:
+    name: zoe-network
+    external: true
+
+volumes:
+  agent0-data:
+  agent0-memory:
+  agent0-logs:

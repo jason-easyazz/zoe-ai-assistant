@@ -1,0 +1,32 @@
+# Zoe Music MCP Module - Dependencies
+
+# Web framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.4.2
+httpx==0.25.0
+
+# YouTube Music integration
+ytmusicapi==1.5.0
+yt-dlp==2023.11.16
+
+# Spotify integration (optional)
+spotipy==2.23.0
+
+# Database
+aiosqlite==0.19.0
+
+# Security/Encryption
+cryptography==41.0.7
+
+# Audio processing (Jetson only, optional)
+# essentia==2.1b6.dev1110  # Uncomment for Jetson
+# librosa==0.10.1           # Uncomment for Jetson
+
+# ML/Embeddings (Jetson only, optional)
+# sentence-transformers==2.2.2  # Uncomment for Jetson
+# faiss-gpu==1.7.2              # Uncomment for Jetson
+
+# Utilities
+python-dotenv==1.0.0
+psutil==5.9.6

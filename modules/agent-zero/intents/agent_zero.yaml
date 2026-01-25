@@ -1,0 +1,65 @@
+# Agent Zero Intent Patterns
+# Auto-discovered by zoe-core when agent-zero module is enabled
+
+intents:
+  AgentZeroResearch:
+    data:
+      - sentences:
+          - research {query}
+          - look up {query}
+          - find information about {query}
+          - what do you know about {query}
+          - tell me about {query}
+          - investigate {query}
+          - study {query}
+          - learn about {query}
+          - search for information on {query}
+        slots:
+          query:
+            type: free_text
+  
+  AgentZeroPlan:
+    data:
+      - sentences:
+          - plan {task}
+          - how do i {task}
+          - help me {task}
+          - create a plan to {task}
+          - break down {task}
+          - what are the steps to {task}
+          - guide me through {task}
+          - show me how to {task}
+        slots:
+          task:
+            type: free_text
+  
+  AgentZeroAnalyze:
+    data:
+      - sentences:
+          - analyze {target}
+          - review {target}
+          - check {target}
+          - audit {target}
+          - examine {target}
+          - what do you think about {target}
+          - evaluate {target}
+          - assess {target}
+        slots:
+          target:
+            type: free_text
+  
+  AgentZeroCompare:
+    data:
+      - sentences:
+          - compare {item_a} and {item_b}
+          - compare {item_a} with {item_b}
+          - "what's the difference between {item_a} and {item_b}"
+          - which is better {item_a} or {item_b}
+          - "{item_a} versus {item_b}"
+          - "{item_a} vs {item_b}"
+          - difference between {item_a} and {item_b}
+        slots:
+          item_a:
+            type: free_text
+          item_b:
+            type: free_text

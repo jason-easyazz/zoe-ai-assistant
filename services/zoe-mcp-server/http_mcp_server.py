@@ -90,8 +90,35 @@ class SetMatrixPresenceRequest(ToolRequest):
     presence: str  # "online", "offline", "unavailable"
     status_msg: Optional[str] = ""
 
+# Music Module Requests
+class MusicSearchRequest(ToolRequest):
+    query: str
+    filter_type: str = "songs"  # songs, albums, artists, playlists
+    limit: int = 10
+
+class MusicPlayRequest(ToolRequest):
+    query: Optional[str] = None
+    track_id: Optional[str] = None
+    source: str = "youtube"
+    zone: Optional[str] = None
+
+class MusicVolumeRequest(ToolRequest):
+    volume: int  # 0-100
+    zone: Optional[str] = None
+
+class MusicQueueRequest(ToolRequest):
+    track_id: str
+    title: Optional[str] = None
+    artist: Optional[str] = None
+
+class MusicContextRequest(ToolRequest):
+    pass  # Just needs user_id from ToolRequest
+
 # Initialize the advanced MCP server
 mcp_server = ZoeMCPServer()
+
+# Music module URL
+MUSIC_MODULE_URL = os.getenv("MUSIC_MODULE_URL", "http://zoe-music:8100")
 
 @app.get("/health")
 async def health_check():
@@ -143,7 +170,19 @@ async def list_tools(request: ToolRequest):
             {"name": "create_matrix_room", "description": "Create a new Matrix room"},
             {"name": "join_matrix_room", "description": "Join a Matrix room"},
             {"name": "get_matrix_messages", "description": "Get recent messages from a Matrix room"},
-            {"name": "set_matrix_presence", "description": "Set Matrix presence status"}
+            {"name": "set_matrix_presence", "description": "Set Matrix presence status"},
+            
+            # Music Module
+            {"name": "music_search", "description": "Search for music (songs, albums, artists, playlists)"},
+            {"name": "music_play_song", "description": "Play a song, album, or playlist"},
+            {"name": "music_pause", "description": "Pause current playback"},
+            {"name": "music_resume", "description": "Resume playback"},
+            {"name": "music_skip", "description": "Skip to next track"},
+            {"name": "music_set_volume", "description": "Set playback volume (0-100)"},
+            {"name": "music_get_queue", "description": "Get current playback queue"},
+            {"name": "music_add_to_queue", "description": "Add track to playback queue"},
+            {"name": "music_get_recommendations", "description": "Get personalized music recommendations"},
+            {"name": "music_get_context", "description": "Get music context for conversation"}
         ]
         
         return {
@@ -155,7 +194,8 @@ async def list_tools(request: ToolRequest):
                 "home_assistant": len([t for t in tools if "home_assistant" in t["name"]]),
                 "n8n": len([t for t in tools if "n8n" in t["name"]]),
                 "developer": len([t for t in tools if "developer" in t["name"]]),
-                "matrix": len([t for t in tools if "matrix" in t["name"]])
+                "matrix": len([t for t in tools if "matrix" in t["name"]]),
+                "music": len([t for t in tools if "music" in t["name"]])
             }
         }
         
@@ -671,6 +711,281 @@ async def set_matrix_presence(request: SetMatrixPresenceRequest):
     except Exception as e:
         logger.error(f"Error setting Matrix presence: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==============================================
+# MUSIC MODULE TOOLS
+# ==============================================
+
+import httpx
+
+@app.post("/tools/music_search")
+async def music_search(request: MusicSearchRequest):
+    """Search for music"""
+    try:
+        user_id = request.user_id or "default"
+        logger.info(f"✅ music_search: query={request.query}, user_id={user_id}")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{MUSIC_MODULE_URL}/tools/search",
+                json={
+                    "query": request.query,
+                    "filter_type": request.filter_type,
+                    "limit": request.limit,
+                    "user_id": user_id
+                },
+                timeout=10.0
+            )
+            result = response.json()
+        
+        return {
+            "success": result.get("success", True),
+            "results": result.get("results", []),
+            "count": result.get("count", 0),
+            "tool_name": "music_search"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error searching music: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/tools/music_play_song")
+async def music_play_song(request: MusicPlayRequest):
+    """Play a song"""
+    try:
+        user_id = request.user_id or "default"
+        logger.info(f"✅ music_play_song: query={request.query}, user_id={user_id}")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{MUSIC_MODULE_URL}/tools/play_song",
+                json={
+                    "query": request.query,
+                    "track_id": request.track_id,
+                    "source": request.source,
+                    "zone": request.zone,
+                    "user_id": user_id
+                },
+                timeout=10.0
+            )
+            result = response.json()
+        
+        return {
+            "success": result.get("success", True),
+            "status": result.get("status", ""),
+            "track": result.get("track", {}),
+            "tool_name": "music_play_song"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error playing song: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/tools/music_pause")
+async def music_pause(request: ToolRequest):
+    """Pause playback"""
+    try:
+        logger.info("✅ music_pause")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{MUSIC_MODULE_URL}/tools/pause",
+                timeout=10.0
+            )
+            result = response.json()
+        
+        return {
+            "success": result.get("success", True),
+            "status": result.get("status", "paused"),
+            "tool_name": "music_pause"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error pausing music: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/tools/music_resume")
+async def music_resume(request: ToolRequest):
+    """Resume playback"""
+    try:
+        logger.info("✅ music_resume")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{MUSIC_MODULE_URL}/tools/resume",
+                timeout=10.0
+            )
+            result = response.json()
+        
+        return {
+            "success": result.get("success", True),
+            "status": result.get("status", "playing"),
+            "tool_name": "music_resume"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error resuming music: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/tools/music_skip")
+async def music_skip(request: ToolRequest):
+    """Skip to next track"""
+    try:
+        logger.info("✅ music_skip")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{MUSIC_MODULE_URL}/tools/skip",
+                timeout=10.0
+            )
+            result = response.json()
+        
+        return {
+            "success": result.get("success", True),
+            "status": result.get("status", "skipped"),
+            "next_track": result.get("next_track"),
+            "tool_name": "music_skip"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error skipping track: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/tools/music_set_volume")
+async def music_set_volume(request: MusicVolumeRequest):
+    """Set playback volume"""
+    try:
+        logger.info(f"✅ music_set_volume: volume={request.volume}")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{MUSIC_MODULE_URL}/tools/set_volume",
+                json={
+                    "volume": request.volume,
+                    "zone": request.zone
+                },
+                timeout=10.0
+            )
+            result = response.json()
+        
+        return {
+            "success": result.get("success", True),
+            "volume": result.get("volume", request.volume),
+            "tool_name": "music_set_volume"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error setting volume: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/tools/music_get_queue")
+async def music_get_queue(request: ToolRequest):
+    """Get playback queue"""
+    try:
+        user_id = request.user_id or "default"
+        logger.info(f"✅ music_get_queue: user_id={user_id}")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{MUSIC_MODULE_URL}/tools/get_queue",
+                params={"user_id": user_id},
+                timeout=10.0
+            )
+            result = response.json()
+        
+        return {
+            "success": result.get("success", True),
+            "queue": result.get("queue", []),
+            "count": result.get("count", 0),
+            "tool_name": "music_get_queue"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting queue: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/tools/music_add_to_queue")
+async def music_add_to_queue(request: MusicQueueRequest):
+    """Add track to queue"""
+    try:
+        user_id = request.user_id or "default"
+        logger.info(f"✅ music_add_to_queue: track_id={request.track_id}, user_id={user_id}")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{MUSIC_MODULE_URL}/tools/add_to_queue",
+                json={
+                    "track_id": request.track_id,
+                    "title": request.title,
+                    "artist": request.artist,
+                    "user_id": user_id
+                },
+                timeout=10.0
+            )
+            result = response.json()
+        
+        return {
+            "success": result.get("success", True),
+            "message": result.get("message", "Added to queue"),
+            "tool_name": "music_add_to_queue"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error adding to queue: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/tools/music_get_recommendations")
+async def music_get_recommendations(request: ToolRequest):
+    """Get music recommendations"""
+    try:
+        user_id = request.user_id or "default"
+        logger.info(f"✅ music_get_recommendations: user_id={user_id}")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{MUSIC_MODULE_URL}/tools/get_recommendations",
+                params={"user_id": user_id, "limit": 10},
+                timeout=10.0
+            )
+            result = response.json()
+        
+        return {
+            "success": result.get("success", True),
+            "recommendations": result.get("recommendations", []),
+            "count": result.get("count", 0),
+            "tool_name": "music_get_recommendations"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting recommendations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/tools/music_get_context")
+async def music_get_context(request: MusicContextRequest):
+    """Get music context for conversation"""
+    try:
+        user_id = request.user_id or "default"
+        logger.info(f"✅ music_get_context: user_id={user_id}")
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{MUSIC_MODULE_URL}/tools/get_context",
+                json={"user_id": user_id},
+                timeout=10.0
+            )
+            result = response.json()
+        
+        return {
+            "success": result.get("success", True),
+            "context": result.get("context", ""),
+            "tool_name": "music_get_context"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting music context: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn

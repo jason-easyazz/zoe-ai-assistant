@@ -1788,6 +1788,7 @@
             <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
+            <a href="music.html" class="mobile-nav-item">🎵 Music</a>
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
             <div class="mobile-nav-divider"></div>
@@ -1901,7 +1902,18 @@
     <script src="js/widgets/core/music.js"></script>
     
     <!-- Music Widgets (Advanced) -->
-    <script src="js/widgets/music/music-state.js"></script>
+    <!-- MCP Client (modular architecture) -->
+    <script src="js/lib/mcp-client.js"></script>
+    
+    <!-- Music system (MCP-based) -->
+    <script src="js/widgets/music/music-state-mcp.js"></script>
+    
+    <!-- Alias for backward compatibility -->
+    <script>
+        // Alias new MCP-based manager to expected name
+        window.MusicStateManager = window.MCPMusicStateManager;
+        window.MusicState = null; // Will be initialized by widgets
+    </script>
     <script src="js/widgets/music/player.js"></script>
     <script src="js/widgets/music/library.js"></script>
     

@@ -272,10 +272,13 @@
             audioElement.volume = volume / 100;
             
             audioElement.addEventListener('timeupdate', () => {
-                const progress = audioElement.duration > 0 
-                    ? (audioElement.currentTime / audioElement.duration) * 100 
-                    : 0;
-                document.getElementById('zmp-progress-fill').style.width = progress + '%';
+                const progressFill = document.getElementById('zmp-progress-fill');
+                if (progressFill) {
+                    const progress = audioElement.duration > 0 
+                        ? (audioElement.currentTime / audioElement.duration) * 100 
+                        : 0;
+                    progressFill.style.width = progress + '%';
+                }
                 saveState();
             });
             
@@ -334,13 +337,47 @@
         broadcastState('toggle');
     }
 
-    // Next track
-    function next() {
+    // Next track - call server queue API
+    async function next() {
+        try {
+            const response = await fetch('/api/music/queue/next', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_id: 'default' })
+            });
+            const data = await response.json();
+            if (data.success && data.stream_url) {
+                currentTrack = {
+                    id: data.track_id,
+                    title: data.track_info?.title || 'Unknown',
+                    artist: data.track_info?.artist || '',
+                    thumbnail: data.track_info?.thumbnail_url || data.track_info?.album_art_url || null
+                };
+                const audio = getAudio();
+                audio.src = data.stream_url;
+                audio.play().catch(e => console.error('Play failed:', e));
+                isPlaying = true;
+                updateUI();
+                saveState();
+            } else {
+                console.log('No more tracks in queue');
+            }
+        } catch (e) {
+            console.error('Next track failed:', e);
+        }
         broadcastState('next');
     }
 
-    // Previous track
+    // Previous track - restart or go back
     function previous() {
+        const audio = getAudio();
+        if (audio.currentTime > 3) {
+            // If more than 3 seconds in, restart current track
+            audio.currentTime = 0;
+        } else {
+            // Just restart for now
+            audio.currentTime = 0;
+        }
         broadcastState('previous');
     }
 

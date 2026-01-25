@@ -8,6 +8,8 @@ services:
     volumes:
     - ./services/zoe-core:/app
     - ./data:/app/data
+    - ./modules:/app/modules:ro
+    - ./config:/app/config:ro
     - /var/run/docker.sock:/var/run/docker.sock
     - /home/zoe/assistant:/home/zoe/assistant:rw
     - /usr/bin/docker:/usr/bin/docker:ro

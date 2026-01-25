@@ -67,11 +67,12 @@ class MusicStateManager {
             this.getAudioElement();
         }, 50);
         
-        // Check auth and load zones in parallel for faster init
+        // Check auth and load zones/devices in parallel for faster init
         await Promise.all([
             this.checkAuth(),
             this.loadZones(),
-            this.loadPlaybackState()
+            this.loadPlaybackState(),
+            this.loadOutputDevices()
         ]);
         
         this.initialized = true;
@@ -250,6 +251,12 @@ class MusicStateManager {
     }
     
     getSessionId() {
+        // Use zoeAuth from auth.js (localStorage) - consistent with other pages
+        if (window.zoeAuth && window.zoeAuth.getSession) {
+            const session = window.zoeAuth.getSession();
+            if (session) return session;
+        }
+        // Fallback to cookie for legacy support
         const cookies = document.cookie.split(';');
         for (const cookie of cookies) {
             const [name, value] = cookie.trim().split('=');
@@ -291,6 +298,58 @@ class MusicStateManager {
             this.setState({ availableDevices: data });
             this.emit('devicesUpdated', data);
         }
+    }
+    
+    /**
+     * Load available output devices (Chromecast, AirPlay, HA)
+     */
+    async loadOutputDevices() {
+        const data = await this.apiRequest('/api/music/outputs');
+        if (data?.devices) {
+            // Merge with existing devices, add browser as first option
+            const devices = [
+                { id: 'browser', name: 'This Device', type: 'Browser', available: true },
+                ...data.devices
+            ];
+            this.setState({ availableDevices: devices });
+            this.emit('devicesUpdated', devices);
+        }
+    }
+    
+    /**
+     * Select output device for playback
+     */
+    selectOutputDevice(device) {
+        if (!device || device.id === 'browser') {
+            // Browser playback - clear target device
+            this.setState({ targetDevice: null });
+            this.emit('outputDeviceChanged', null);
+            console.log('🎵 Output: Browser (local)');
+        } else {
+            // Cast to external device
+            this.setState({ targetDevice: device });
+            this.emit('outputDeviceChanged', device);
+            console.log(`🎵 Output: ${device.name} (${device.type})`);
+        }
+        
+        // Save preference
+        this.saveOutputPreference(device?.id || 'browser');
+    }
+    
+    async saveOutputPreference(deviceId) {
+        await this.apiRequest('/api/music/preferences', {
+            method: 'PUT',
+            body: { default_output_device: deviceId === 'browser' ? null : deviceId }
+        });
+    }
+    
+    /**
+     * Get current output device name
+     */
+    getCurrentOutputName() {
+        const device = this.state.targetDevice;
+        if (!device) return 'This Device';
+        return device.name || device.id;
     }
     
     selectZone(zone) {

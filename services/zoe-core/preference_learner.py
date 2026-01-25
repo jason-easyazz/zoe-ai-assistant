@@ -34,9 +34,32 @@ class PreferenceLearner:
                 detail_level TEXT DEFAULT 'balanced',
                 technical_level TEXT DEFAULT 'moderate',
                 preferences_json TEXT,
-                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                -- 🎵 Music preferences
+                preferred_music_provider TEXT DEFAULT 'youtube_music',
+                default_output_device TEXT,
+                audio_quality TEXT DEFAULT 'high',
+                autoplay_recommendations INTEGER DEFAULT 1
             )
         """)
+        
+        # Add music columns if table already exists (migration)
+        try:
+            cursor.execute("ALTER TABLE user_preferences ADD COLUMN preferred_music_provider TEXT DEFAULT 'youtube_music'")
+        except:
+            pass  # Column already exists
+        try:
+            cursor.execute("ALTER TABLE user_preferences ADD COLUMN default_output_device TEXT")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE user_preferences ADD COLUMN audio_quality TEXT DEFAULT 'high'")
+        except:
+            pass
+        try:
+            cursor.execute("ALTER TABLE user_preferences ADD COLUMN autoplay_recommendations INTEGER DEFAULT 1")
+        except:
+            pass
         
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS preference_signals (
@@ -355,6 +378,89 @@ class PreferenceLearner:
         except Exception as e:
             logger.error(f"Archive learning failed: {e}")
             return {"learned": False, "error": str(e)}
+
+
+    # 🎵 Music preference methods
+    async def get_music_preferences(self, user_id: str) -> Dict:
+        """Get user's music preferences"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("""
+                SELECT preferred_music_provider, default_output_device,
+                       audio_quality, autoplay_recommendations
+                FROM user_preferences
+                WHERE user_id = ?
+            """, (user_id,))
+            
+            row = cursor.fetchone()
+            
+            if not row:
+                # Return defaults
+                return {
+                    "preferred_provider": "youtube_music",
+                    "default_output_device": None,
+                    "audio_quality": "high",
+                    "autoplay_recommendations": True
+                }
+            
+            return {
+                "preferred_provider": row[0] or "youtube_music",
+                "default_output_device": row[1],
+                "audio_quality": row[2] or "high",
+                "autoplay_recommendations": bool(row[3]) if row[3] is not None else True
+            }
+        finally:
+            conn.close()
+    
+    async def set_music_preferences(self, user_id: str, preferences: Dict) -> bool:
+        """Set user's music preferences"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            # Ensure user row exists
+            cursor.execute("""
+                INSERT OR IGNORE INTO user_preferences (user_id)
+                VALUES (?)
+            """, (user_id,))
+            
+            # Update music preferences
+            updates = []
+            values = []
+            
+            if "preferred_provider" in preferences:
+                updates.append("preferred_music_provider = ?")
+                values.append(preferences["preferred_provider"])
+            if "default_output_device" in preferences:
+                updates.append("default_output_device = ?")
+                values.append(preferences["default_output_device"])
+            if "audio_quality" in preferences:
+                updates.append("audio_quality = ?")
+                values.append(preferences["audio_quality"])
+            if "autoplay_recommendations" in preferences:
+                updates.append("autoplay_recommendations = ?")
+                values.append(1 if preferences["autoplay_recommendations"] else 0)
+            
+            if updates:
+                updates.append("last_updated = CURRENT_TIMESTAMP")
+                values.append(user_id)
+                
+                cursor.execute(f"""
+                    UPDATE user_preferences
+                    SET {', '.join(updates)}
+                    WHERE user_id = ?
+                """, values)
+            
+            conn.commit()
+            logger.info(f"✅ Updated music preferences for {user_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set music preferences: {e}")
+            return False
+        finally:
+            conn.close()
 
 
 # Global instance

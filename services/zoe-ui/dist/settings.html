@@ -1261,6 +1261,139 @@
                 </div>
             </div>
 
+            <!-- Music Settings -->
+            <div class="settings-section">
+                <div class="section-header" onclick="toggleSection('music')">
+                    <div class="section-title">🎵 Music Settings</div>
+                    <div class="section-subtitle">Configure music providers, playback preferences, and output devices</div>
+                </div>
+                <div class="section-content" id="music">
+                    <!-- Provider Connections -->
+                    <div class="setting-item" style="flex-direction: column; align-items: flex-start; gap: 15px;">
+                        <div class="setting-info">
+                            <div class="setting-name">Music Providers</div>
+                            <div class="setting-description">Connect your music streaming accounts</div>
+                        </div>
+                        <div style="width: 100%; display: flex; flex-direction: column; gap: 12px;">
+                            <!-- YouTube Music -->
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(255, 0, 0, 0.05); border-radius: 10px; border: 1px solid rgba(255, 0, 0, 0.1);">
+                                <div style="display: flex; align-items: center; gap: 12px;">
+                                    <div style="width: 40px; height: 40px; background: #FF0000; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">YT</div>
+                                    <div>
+                                        <div style="font-weight: 500;">YouTube Music</div>
+                                        <div id="ytMusicStatus" style="font-size: 12px; color: #666;">Checking...</div>
+                                    </div>
+                                </div>
+                                <button class="btn" id="ytMusicConnectBtn" onclick="connectYouTubeMusic()">Connect</button>
+                            </div>
+                            <!-- Spotify -->
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(30, 215, 96, 0.05); border-radius: 10px; border: 1px solid rgba(30, 215, 96, 0.1);">
+                                <div style="display: flex; align-items: center; gap: 12px;">
+                                    <div style="width: 40px; height: 40px; background: #1ED760; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">S</div>
+                                    <div>
+                                        <div style="font-weight: 500;">Spotify</div>
+                                        <div id="spotifyStatus" style="font-size: 12px; color: #666;">Coming soon</div>
+                                    </div>
+                                </div>
+                                <button class="btn" disabled style="opacity: 0.5;">Connect</button>
+                            </div>
+                            <!-- Apple Music -->
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(252, 60, 68, 0.05); border-radius: 10px; border: 1px solid rgba(252, 60, 68, 0.1);">
+                                <div style="display: flex; align-items: center; gap: 12px;">
+                                    <div style="width: 40px; height: 40px; background: linear-gradient(135deg, #FC3C44, #FA233B); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">♫</div>
+                                    <div>
+                                        <div style="font-weight: 500;">Apple Music</div>
+                                        <div id="appleMusicStatus" style="font-size: 12px; color: #666;">Coming soon</div>
+                                    </div>
+                                </div>
+                                <button class="btn" disabled style="opacity: 0.5;">Connect</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Default Provider -->
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Default Provider</div>
+                            <div class="setting-description">Primary music source for playback</div>
+                        </div>
+                        <div class="setting-control">
+                            <select class="form-select" id="musicDefaultProvider" onchange="saveMusicPreference('preferred_provider', this.value)">
+                                <option value="youtube_music">YouTube Music</option>
+                                <option value="spotify" disabled>Spotify (coming soon)</option>
+                                <option value="apple_music" disabled>Apple Music (coming soon)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Audio Quality -->
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Audio Quality</div>
+                            <div class="setting-description">Streaming quality (affects data usage)</div>
+                        </div>
+                        <div class="setting-control">
+                            <select class="form-select" id="musicAudioQuality" onchange="saveMusicPreference('audio_quality', this.value)">
+                                <option value="low">Low (128 kbps)</option>
+                                <option value="medium">Medium (192 kbps)</option>
+                                <option value="high">High (256 kbps)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Default Output Device -->
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Default Output</div>
+                            <div class="setting-description">Where music plays by default</div>
+                        </div>
+                        <div class="setting-control">
+                            <select class="form-select" id="musicDefaultOutput" onchange="saveMusicPreference('default_output_device', this.value)">
+                                <option value="">This Device (Browser)</option>
+                                <!-- Populated dynamically -->
+                            </select>
+                            <button class="btn" onclick="refreshOutputDevices()" style="margin-left: 8px;">↻</button>
+                        </div>
+                    </div>
+
+                    <!-- Autoplay Recommendations -->
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Autoplay Recommendations</div>
+                            <div class="setting-description">Automatically play similar tracks when queue ends</div>
+                        </div>
+                        <div class="setting-control">
+                            <label class="switch">
+                                <input type="checkbox" id="musicAutoplay" onchange="saveMusicPreference('autoplay_recommendations', this.checked)">
+                                <span class="slider round"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Listening Stats -->
+                    <div class="setting-item" style="flex-direction: column; align-items: flex-start; gap: 15px;">
+                        <div class="setting-info">
+                            <div class="setting-name">Listening Stats</div>
+                            <div class="setting-description">Your music listening overview</div>
+                        </div>
+                        <div id="musicStats" style="width: 100%; display: flex; gap: 15px; flex-wrap: wrap;">
+                            <div style="flex: 1; min-width: 120px; padding: 15px; background: rgba(123, 97, 255, 0.05); border-radius: 10px; text-align: center;">
+                                <div style="font-size: 24px; font-weight: 600; color: #7B61FF;" id="statUniqueTracks">-</div>
+                                <div style="font-size: 12px; color: #666;">Unique Tracks</div>
+                            </div>
+                            <div style="flex: 1; min-width: 120px; padding: 15px; background: rgba(90, 224, 224, 0.05); border-radius: 10px; text-align: center;">
+                                <div style="font-size: 24px; font-weight: 600; color: #5AE0E0;" id="statCompletedPlays">-</div>
+                                <div style="font-size: 12px; color: #666;">Completed Plays</div>
+                            </div>
+                            <div style="flex: 1; min-width: 120px; padding: 15px; background: rgba(239, 68, 68, 0.05); border-radius: 10px; text-align: center;">
+                                <div style="font-size: 24px; font-weight: 600; color: #ef4444;" id="statSkips">-</div>
+                                <div style="font-size: 12px; color: #666;">Skips</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Calendar Settings -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('calendar')">
@@ -2698,8 +2831,177 @@
             // Open clicked section if it wasn't active
             if (!isActive) {
                 content.classList.add('active');
+                
+                // Load music settings when section opens
+                if (sectionId === 'music') {
+                    loadMusicSettings();
+                }
             }
         }
+        
+        // ========================================
+        // 🎵 MUSIC SETTINGS FUNCTIONS
+        // ========================================
+        
+        async function loadMusicSettings() {
+            try {
+                // Load preferences
+                const prefsResp = await apiRequest('/music/preferences');
+                if (prefsResp) {
+                    document.getElementById('musicDefaultProvider').value = prefsResp.preferred_provider || 'youtube_music';
+                    document.getElementById('musicAudioQuality').value = prefsResp.audio_quality || 'high';
+                    document.getElementById('musicAutoplay').checked = prefsResp.autoplay_recommendations !== false;
+                    
+                    if (prefsResp.default_output_device) {
+                        document.getElementById('musicDefaultOutput').value = prefsResp.default_output_device;
+                    }
+                }
+                
+                // Check YouTube Music connection
+                checkYouTubeMusicStatus();
+                
+                // Load listening stats
+                loadMusicStats();
+                
+                // Load output devices
+                refreshOutputDevices();
+            } catch (error) {
+                console.error('Failed to load music settings:', error);
+            }
+        }
+        
+        async function checkYouTubeMusicStatus() {
+            const statusEl = document.getElementById('ytMusicStatus');
+            const btnEl = document.getElementById('ytMusicConnectBtn');
+            
+            try {
+                const resp = await apiRequest('/music/auth/status');
+                if (resp && resp.authenticated) {
+                    statusEl.textContent = 'Connected';
+                    statusEl.style.color = '#22c55e';
+                    btnEl.textContent = 'Disconnect';
+                    btnEl.onclick = disconnectYouTubeMusic;
+                } else {
+                    statusEl.textContent = 'Not connected';
+                    statusEl.style.color = '#ef4444';
+                    btnEl.textContent = 'Connect';
+                    btnEl.onclick = connectYouTubeMusic;
+                }
+            } catch (error) {
+                statusEl.textContent = 'Error checking status';
+                statusEl.style.color = '#ea580c';
+            }
+        }
+        
+        async function connectYouTubeMusic() {
+            try {
+                const resp = await apiRequest('/music/auth/init');
+                if (resp && resp.auth_url) {
+                    // Show instructions
+                    showNotification('Opening YouTube Music authorization...', 'info');
+                    window.open(resp.auth_url, '_blank');
+                    
+                    // Poll for completion
+                    const pollInterval = setInterval(async () => {
+                        const status = await apiRequest('/music/auth/status');
+                        if (status && status.authenticated) {
+                            clearInterval(pollInterval);
+                            showNotification('YouTube Music connected!', 'success');
+                            checkYouTubeMusicStatus();
+                        }
+                    }, 2000);
+                    
+                    // Stop polling after 5 minutes
+                    setTimeout(() => clearInterval(pollInterval), 300000);
+                } else if (resp && resp.requires_code) {
+                    // Need manual code entry
+                    const code = prompt('Enter the authorization code from YouTube Music:');
+                    if (code) {
+                        const authResp = await apiRequest('/music/auth/complete', {
+                            method: 'POST',
+                            body: JSON.stringify({ code })
+                        });
+                        if (authResp && authResp.success) {
+                            showNotification('YouTube Music connected!', 'success');
+                            checkYouTubeMusicStatus();
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('YouTube Music connection failed:', error);
+                showNotification('Failed to connect YouTube Music', 'error');
+            }
+        }
+        
+        async function disconnectYouTubeMusic() {
+            if (!confirm('Are you sure you want to disconnect YouTube Music?')) return;
+            
+            try {
+                await apiRequest('/music/auth/disconnect', { method: 'POST' });
+                showNotification('YouTube Music disconnected', 'info');
+                checkYouTubeMusicStatus();
+            } catch (error) {
+                showNotification('Failed to disconnect', 'error');
+            }
+        }
+        
+        async function saveMusicPreference(key, value) {
+            try {
+                await apiRequest('/music/preferences', {
+                    method: 'PUT',
+                    body: JSON.stringify({ [key]: value })
+                });
+                showNotification('Music preference saved', 'success');
+            } catch (error) {
+                console.error('Failed to save music preference:', error);
+                showNotification('Failed to save preference', 'error');
+            }
+        }
+        
+        async function loadMusicStats() {
+            try {
+                const resp = await apiRequest('/music/stats');
+                if (resp) {
+                    document.getElementById('statUniqueTracks').textContent = resp.unique_tracks || 0;
+                    document.getElementById('statCompletedPlays').textContent = resp.completed_plays || 0;
+                    document.getElementById('statSkips').textContent = resp.skips || 0;
+                }
+            } catch (error) {
+                console.log('Could not load music stats');
+            }
+        }
+        
+        async function refreshOutputDevices() {
+            const select = document.getElementById('musicDefaultOutput');
+            const currentValue = select.value;
+            
+            try {
+                const resp = await apiRequest('/music/outputs');
+                if (resp && resp.devices) {
+                    // Keep browser option
+                    select.innerHTML = '<option value="">This Device (Browser)</option>';
+                    
+                    // Add discovered devices
+                    resp.devices.forEach(device => {
+                        const option = document.createElement('option');
+                        option.value = device.id;
+                        option.textContent = `${device.name} (${device.type})`;
+                        select.appendChild(option);
+                    });
+                    
+                    // Restore selection
+                    if (currentValue) {
+                        select.value = currentValue;
+                    }
+                }
+            } catch (error) {
+                console.log('Could not refresh output devices');
+            }
+        }
+        
+        // ========================================
+        // END MUSIC SETTINGS
+        // ========================================
 
         // Toggle setting
         function toggleSetting(settingId) {

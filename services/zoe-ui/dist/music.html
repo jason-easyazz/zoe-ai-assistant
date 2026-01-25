@@ -155,6 +155,8 @@
         }
         .mobile-nav-item:active { background: rgba(123, 97, 255, 0.1); color: #7B61FF; }
         .mobile-nav-item.active { background: rgba(123, 97, 255, 0.15); color: #7B61FF; font-weight: 600; }
+        .mobile-nav-item.logout { color: #ff4444; }
+        .mobile-nav-divider { height: 1px; background: rgba(255, 255, 255, 0.3); margin: 10px 0; }
         .mobile-nav-overlay {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
             background: rgba(0, 0, 0, 0.3); z-index: 1999; opacity: 0;
@@ -267,6 +269,165 @@
 
         body.edit-mode .widget-remove-btn {
             display: flex;
+        }
+
+        /* FAB Add Widget Button */
+        .fab-add-widget {
+            position: fixed;
+            bottom: 32px;
+            right: 32px;
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: none;
+            color: white;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            z-index: 1000;
+            box-shadow: 0 8px 24px rgba(123, 97, 255, 0.4);
+            transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .fab-add-widget:hover {
+            transform: scale(1.1);
+            box-shadow: 0 12px 32px rgba(123, 97, 255, 0.6);
+        }
+
+        body.edit-mode .fab-add-widget {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        /* Widget Library Overlay */
+        .widget-library-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(8px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+
+        .widget-library-overlay.active {
+            display: flex;
+            opacity: 1;
+        }
+
+        .widget-library {
+            background: white;
+            border-radius: 20px;
+            padding: 24px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+
+        .library-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .library-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .close-library {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.1);
+            color: #333;
+            cursor: pointer;
+            font-size: 18px;
+        }
+
+        .close-library:hover {
+            background: #ff4757;
+            color: white;
+        }
+
+        .library-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 12px;
+        }
+
+        .library-widget-item {
+            background: rgba(0, 0, 0, 0.03);
+            border: 1px solid rgba(0, 0, 0, 0.08);
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .library-widget-item:hover {
+            background: rgba(123, 97, 255, 0.1);
+            border-color: #7B61FF;
+            transform: translateY(-2px);
+        }
+
+        .library-widget-icon {
+            font-size: 32px;
+            margin-bottom: 8px;
+        }
+
+        .library-widget-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: #333;
+        }
+
+        .library-widget-desc {
+            font-size: 11px;
+            color: #666;
+            margin-top: 4px;
+        }
+
+        /* Resize handle visibility in edit mode */
+        .grid-stack-item > .ui-resizable-handle {
+            background: transparent !important;
+        }
+
+        .grid-stack-item > .ui-resizable-se::after {
+            content: '';
+            position: absolute;
+            bottom: 4px;
+            right: 4px;
+            width: 0;
+            height: 0;
+            border-style: solid;
+            border-width: 0 0 8px 8px;
+            border-color: transparent transparent rgba(123, 97, 255, 0.4) transparent;
+        }
+
+        body.edit-mode .grid-stack-item:hover .ui-resizable-se::after {
+            border-color: transparent transparent rgba(123, 97, 255, 0.8) transparent;
+        }
+
+        body.edit-mode .grid-stack-item {
+            cursor: move;
         }
 
         /* Auth Required Overlay */
@@ -436,11 +597,14 @@
         <div class="mobile-nav-content">
             <a href="chat.html" class="mobile-nav-item">💬 Chat</a>
             <a href="dashboard.html" class="mobile-nav-item">📊 Dashboard</a>
-            <a href="lists.html" class="mobile-nav-item">📋 Lists</a>
+            <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
-            <a href="journal.html" class="mobile-nav-item">📓 Journal</a>
+            <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
             <a href="music.html" class="mobile-nav-item active">🎵 Music</a>
+            <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
+            <div class="mobile-nav-divider"></div>
+            <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
         </div>
     </div>
     <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
@@ -476,30 +640,126 @@
     <!-- Status Toast -->
     <div class="status-toast" id="statusToast"></div>
 
+    <!-- Add Widget FAB -->
+    <button class="fab-add-widget" onclick="openWidgetLibrary()" title="Add Widget">
+        <span>+</span>
+    </button>
+
+    <!-- Widget Library Overlay -->
+    <div class="widget-library-overlay" id="widgetLibraryOverlay">
+        <div class="widget-library">
+            <div class="library-header">
+                <h2 class="library-title">Add Music Widget</h2>
+                <button class="close-library" onclick="closeWidgetLibrary()">×</button>
+            </div>
+            <div class="library-grid" id="musicWidgetLibraryGrid">
+                <!-- Widgets will be populated here -->
+            </div>
+        </div>
+    </div>
+
     <!-- Core Scripts -->
+    <script src="js/auth.js"></script>
     <script src="js/common.js"></script>
     <script src="js/mini-player.js"></script>
-    <script src="js/widgets/music/music-state.js"></script>
+    <script src="js/widget-base.js"></script>
+    
+    <!-- MCP Client (modular architecture) -->
+    <script src="js/lib/mcp-client.js"></script>
+    
+    <!-- Widget System (dynamic module loading) -->
+    <script src="js/lib/widget-registry.js"></script>
+    <script src="js/lib/module-widget-loader.js"></script>
+    
+    <!-- Initialize Widget System -->
+    <script>
+        // Initialize dynamic widget loading from modules
+        (async function() {
+            console.log('🚀 Initializing module widget system...');
+            
+            try {
+                // Create module widget loader
+                window.moduleWidgetLoader = new ModuleWidgetLoader();
+                await window.moduleWidgetLoader.init();
+                
+                // Register discovered widget metadata
+                const widgets = window.moduleWidgetLoader.getAvailableWidgets();
+                for (const widget of widgets) {
+                    window.WidgetRegistry.registerMetadata(widget);
+                }
+                
+                console.log(`✅ Module widget system initialized: ${widgets.length} widgets available`);
+                console.log('📦 Available widgets:', widgets.map(w => w.id).join(', '));
+                
+                // Load music-state dependency first (required by all widgets)
+                console.log('📥 Loading music-state dependency...');
+                const musicModule = window.moduleWidgetLoader.modules.get('music');
+                if (musicModule && musicModule.dependencies) {
+                    for (const dep of musicModule.dependencies) {
+                        console.log(`📥 Loading dependency: ${dep.name}`);
+                        await window.moduleWidgetLoader.loadDependency('music', dep);
+                    }
+                }
+                console.log('✅ Music state loaded');
+                
+                // Pre-load all music widgets for this page
+                console.log('📥 Pre-loading music widgets...');
+                const musicWidgets = widgets.filter(w => w.module === 'music');
+                for (const widget of musicWidgets) {
+                    try {
+                        await window.moduleWidgetLoader.loadWidget(widget.id);
+                        console.log(`✅ Loaded widget: ${widget.id}`);
+                    } catch (error) {
+                        console.error(`❌ Failed to load widget ${widget.id}:`, error);
+                    }
+                }
+                console.log('✅ All music widgets loaded');
+                
+                // Initialize Music State Manager
+                if (typeof MCPMusicStateManager !== 'undefined') {
+                    window.MusicState = new MCPMusicStateManager();
+                    await window.MusicState.init();
+                    console.log('✅ MCP Music State Manager initialized');
+                } else {
+                    console.error('❌ MCPMusicStateManager not loaded from dependency');
+                }
+                
+            } catch (error) {
+                console.error('❌ Module widget system initialization failed:', error);
+                // Show error to user if MusicState failed
+                if (!window.MusicState || !window.MusicState.initialized) {
+                    document.getElementById('apiStatus').textContent = 'Music Offline';
+                    document.getElementById('apiStatus').className = 'api-indicator offline';
+                }
+            }
+        })();
+    </script>
 
     <script>
         // ============================================================
         // Music Page Controller
         // ============================================================
         
-        const STORAGE_KEY = 'zoe_music_layout';
+        const STORAGE_KEY = 'zoe_music_layout_v4'; // Compact widget sizes
         let grid = null;
         let isEditMode = false;
 
-        // Default layout
+        // Default layout - compact view
         const DEFAULT_LAYOUT = [
-            { id: 'music-player', x: 0, y: 0, w: 3, h: 5 },
-            { id: 'music-library', x: 3, y: 0, w: 5, h: 5 }
+            { id: 'music-player', x: 0, y: 0, w: 2, h: 4 },
+            { id: 'music-search', x: 2, y: 0, w: 3, h: 4 },
+            { id: 'music-queue', x: 5, y: 0, w: 3, h: 4 },
+            { id: 'music-playlists', x: 0, y: 4, w: 3, h: 3 },
+            { id: 'music-suggestions', x: 3, y: 4, w: 5, h: 3 }
         ];
 
         // Mobile layout
         const MOBILE_LAYOUT = [
-            { id: 'music-player', x: 0, y: 0, w: 12, h: 5 },
-            { id: 'music-library', x: 0, y: 5, w: 12, h: 5 }
+            { id: 'music-player', x: 0, y: 0, w: 12, h: 4 },
+            { id: 'music-search', x: 0, y: 4, w: 12, h: 3 },
+            { id: 'music-queue', x: 0, y: 7, w: 12, h: 3 },
+            { id: 'music-playlists', x: 0, y: 10, w: 12, h: 3 },
+            { id: 'music-suggestions', x: 0, y: 13, w: 12, h: 3 }
         ];
 
         // ============================================================
@@ -551,25 +811,44 @@
 
         async function checkAuth() {
             try {
-                const response = await fetch('/api/music/auth/status', {
-                    headers: { 'X-Session-ID': getSessionId() }
-                });
+                // auth.js interceptor automatically adds X-Session-ID header
+                console.log('🔐 Music auth check starting...');
+                
+                const response = await fetch('/api/music/auth/status');
+                
+                if (!response.ok) {
+                    console.error('🔐 Auth status request failed:', response.status);
+                    return; // Don't show overlay on network errors
+                }
+                
                 const data = await response.json();
+                console.log('🔐 Music auth response:', data);
                 
                 if (!data.authenticated || data.api_working === false) {
+                    console.log('🔐 Showing auth overlay - authenticated:', data.authenticated, 'api_working:', data.api_working);
                     document.getElementById('authOverlay').style.display = 'flex';
                     if (data.authenticated && !data.api_working) {
                         document.getElementById('authTitle').textContent = 'Reconnect YouTube Music';
                         document.getElementById('authMessage').textContent = 'Your connection has expired. Please reconnect.';
                         document.getElementById('authBtn').textContent = 'Reconnect';
                     }
+                } else {
+                    console.log('🔐 Auth OK - hiding overlay');
+                    document.getElementById('authOverlay').style.display = 'none';
                 }
             } catch (e) {
                 console.error('Auth check failed:', e);
+                // Don't show overlay on errors - might be network issue
             }
         }
 
         function getSessionId() {
+            // Use zoeAuth from auth.js (localStorage) - consistent with other pages
+            if (window.zoeAuth && window.zoeAuth.getSession) {
+                const session = window.zoeAuth.getSession();
+                if (session) return session;
+            }
+            // Fallback to cookie for legacy support
             const cookies = document.cookie.split(';');
             for (const cookie of cookies) {
                 const [name, value] = cookie.trim().split('=');
@@ -636,6 +915,26 @@
                 'music-library': {
                     minW: 3, minH: 4, maxW: 8, maxH: 10,
                     template: getLibraryTemplate()
+                },
+                'music-search': {
+                    minW: 2, minH: 3, maxW: 6, maxH: 6,
+                    template: '<div class="widget-content" id="music-search-container"></div>',
+                    widgetClass: 'MusicSearchWidget'
+                },
+                'music-queue': {
+                    minW: 2, minH: 3, maxW: 4, maxH: 6,
+                    template: '<div class="widget-content" id="music-queue-container"></div>',
+                    widgetClass: 'MusicQueueWidget'
+                },
+                'music-suggestions': {
+                    minW: 2, minH: 2, maxW: 6, maxH: 5,
+                    template: '<div class="widget-content" id="music-suggestions-container"></div>',
+                    widgetClass: 'MusicSuggestionsWidget'
+                },
+                'music-playlists': {
+                    minW: 2, minH: 2, maxW: 4, maxH: 5,
+                    template: '<div class="widget-content" id="music-playlists-container"></div>',
+                    widgetClass: 'MusicPlaylistsWidget'
                 }
             };
 
@@ -783,11 +1082,60 @@
         // ============================================================
 
         function initWidgetLogic(widgetId, element) {
-            if (widgetId === 'music-player') {
-                initPlayerWidget(element);
+            // Try to use dynamically loaded widget first
+            const widgetClassNames = {
+                'music-player': 'MusicPlayerWidget',
+                'music-search': 'MusicSearchWidget',
+                'music-queue': 'MusicQueueWidget',
+                'music-suggestions': 'MusicSuggestionsWidget',
+                'music-playlists': 'MusicPlaylistsWidget',
+                'music-library': null // Uses old hardcoded template
+            };
+            
+            const className = widgetClassNames[widgetId];
+            
+            if (className) {
+                // Use new dynamic widget system
+                initNewWidget(className, element);
             } else if (widgetId === 'music-library') {
+                // Fallback to old hardcoded widgets (legacy support)
                 initLibraryWidget(element);
+            } else {
+                console.warn(`Unknown widget: ${widgetId}`);
             }
+        }
+        
+        function initNewWidget(widgetClassName, containerElement) {
+            console.log(`🔧 initNewWidget: ${widgetClassName}`);
+            let attempts = 0;
+            const maxAttempts = 50; // 5 seconds max wait
+            
+            // Wait for widget class to be available
+            const checkWidget = () => {
+                attempts++;
+                
+                if (typeof window[widgetClassName] !== 'undefined') {
+                    console.log(`✅ Found ${widgetClassName} class after ${attempts} attempts`);
+                    try {
+                        const widgetInstance = new window[widgetClassName]();
+                        // Insert the widget template
+                        containerElement.innerHTML = widgetInstance.getTemplate();
+                        // Initialize the widget
+                        widgetInstance.init(containerElement);
+                        console.log(`✅ ${widgetClassName} initialized successfully`);
+                    } catch (error) {
+                        console.error(`❌ Failed to initialize ${widgetClassName}:`, error);
+                        containerElement.innerHTML = `<div style="padding:20px;text-align:center;color:#666;">Failed to load widget: ${widgetClassName}<br><small>${error.message}</small></div>`;
+                    }
+                } else if (attempts >= maxAttempts) {
+                    console.error(`❌ ${widgetClassName} not found after ${attempts} attempts`);
+                    containerElement.innerHTML = `<div style="padding:20px;text-align:center;color:#666;">Widget not available: ${widgetClassName}<br><small>Check console for errors</small></div>`;
+                } else {
+                    // Retry in 100ms
+                    setTimeout(checkWidget, 100);
+                }
+            };
+            checkWidget();
         }
 
         function initPlayerWidget(el) {
@@ -1354,6 +1702,63 @@
         }
 
         // ============================================================
+        // Widget Library
+        // ============================================================
+
+        function openWidgetLibrary() {
+            const overlay = document.getElementById('widgetLibraryOverlay');
+            const grid = document.getElementById('musicWidgetLibraryGrid');
+            
+            // Available music widgets
+            const widgets = [
+                { id: 'music-player', icon: '🎵', name: 'Player', desc: 'Now playing controls' },
+                { id: 'music-search', icon: '🔍', name: 'Search', desc: 'Search for music' },
+                { id: 'music-queue', icon: '📋', name: 'Queue', desc: 'Playback queue' },
+                { id: 'music-playlists', icon: '📁', name: 'Playlists', desc: 'Your playlists' },
+                { id: 'music-suggestions', icon: '✨', name: 'Suggestions', desc: 'Personalized recommendations' }
+            ];
+            
+            // Check which widgets already exist
+            const existingWidgets = new Set();
+            document.querySelectorAll('.grid-stack-item').forEach(item => {
+                existingWidgets.add(item.getAttribute('gs-id'));
+            });
+            
+            grid.innerHTML = widgets.map(w => `
+                <div class="library-widget-item ${existingWidgets.has(w.id) ? 'exists' : ''}" 
+                     onclick="addWidgetFromLibrary('${w.id}')"
+                     ${existingWidgets.has(w.id) ? 'title="Already on page - click to add another"' : ''}>
+                    <div class="library-widget-icon">${w.icon}</div>
+                    <div class="library-widget-name">${w.name}</div>
+                    <div class="library-widget-desc">${w.desc}</div>
+                    ${existingWidgets.has(w.id) ? '<div style="font-size:10px;color:#7B61FF;margin-top:4px">✓ Added</div>' : ''}
+                </div>
+            `).join('');
+            
+            overlay.classList.add('active');
+        }
+
+        function closeWidgetLibrary() {
+            document.getElementById('widgetLibraryOverlay').classList.remove('active');
+        }
+
+        function addWidgetFromLibrary(widgetId) {
+            // Find empty spot
+            const items = grid.getGridItems();
+            let maxY = 0;
+            items.forEach(item => {
+                const y = parseInt(item.getAttribute('gs-y') || 0);
+                const h = parseInt(item.getAttribute('gs-h') || 1);
+                maxY = Math.max(maxY, y + h);
+            });
+            
+            addWidget(widgetId, { x: 0, y: maxY });
+            saveLayout();
+            closeWidgetLibrary();
+            showToast(`Added ${widgetId.replace('music-', '')} widget`);
+        }
+
+        // ============================================================
         // Auth
         // ============================================================
 
@@ -1438,6 +1843,15 @@
             if (window.innerWidth > 768) { window.location.href = 'chat.html'; return; }
             document.getElementById('mobileNavMenu')?.classList.toggle('open');
             document.getElementById('mobileNavOverlay')?.classList.toggle('open');
+        }
+        
+        function handleLogout() {
+            if (window.zoeAuth) {
+                window.zoeAuth.logout();
+            } else {
+                localStorage.removeItem('zoe_session');
+                window.location.href = '/';
+            }
         }
 
         function openMoreOverlay() {

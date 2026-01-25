@@ -1,6 +1,12 @@
 """
-Music Service Module
-====================
+Music Service Module - DEPRECATED
+===================================
+
+⚠️  DEPRECATION NOTICE:
+This music service has been extracted to the zoe-music module.
+Location: modules/zoe-music/
+This code will be removed in a future version.
+Please use the module via MCP tools instead.
 
 Platform-aware music system with:
 - YouTube Music provider (all platforms)
@@ -17,8 +23,18 @@ Jetson-only ML features (lazy loaded):
 """
 
 import logging
+import warnings
 
 logger = logging.getLogger(__name__)
+
+# Issue deprecation warning
+warnings.warn(
+    "services.music has been moved to the zoe-music module. "
+    "This import will be removed in a future version. "
+    "Update to use MCP tools via zoe-mcp-server instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 # ============================================================
 # Platform Detection

@@ -1,5 +1,7 @@
 # Music Intent Patterns
 # Voice commands for music playback control
+# 
+# These intents are auto-discovered by zoe-core when the music module is enabled
 
 intents:
   MusicPlay:
@@ -211,4 +213,3 @@ intents:
           - what are my top songs
           - what are my favorite artists
           - my listening history
-

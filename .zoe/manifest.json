@@ -68,6 +68,7 @@
   
   "approved_patterns": {
     "services": "services/**/*",
+    "modules": "modules/**/*",
     "docs": "docs/**/*",
     "tests": "tests/**/*",
     "scripts": "scripts/**/*",
@@ -92,10 +93,13 @@
     "DATABASE_PROTECTION_RULES.md",
     "QUALITY_MAINTENANCE_GUIDE.md",
     "AI_ASSISTANT_PROMPT.md",
+    "README_MODULE_SYSTEM.md",
+    "START_HERE.md",
     "docker-compose.yml",
     "docker-compose.jetson.yml",
     "docker-compose.pi.yml",
     "docker-compose.mem-agent.yml",
+    "docker-compose.modules.yml",
     "docker-compose.override.yml",
     "docker-compose.secure.yml",
     "pytest.ini",
@@ -137,9 +141,11 @@
   ],
   
   "notes": {
-    "max_root_md_files": 10,
+    "max_root_md_files": 12,
     "llm_backend": "llama.cpp via zoe-llamacpp container (Ollama retired Dec 2025)",
-    "primary_model": "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+    "primary_model": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    "module_system": "Self-contained modules with docker-compose orchestration",
+    "recent_additions": "Module system (zoe-music), MCP tool integration, voice services"
   }
 }
 

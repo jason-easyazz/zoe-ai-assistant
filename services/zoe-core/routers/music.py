@@ -1,6 +1,12 @@
 """
-Music Router
-============
+Music Router - DEPRECATED
+==========================
+
+⚠️  DEPRECATION NOTICE:
+This router has been moved to the zoe-music module.
+Location: modules/zoe-music/
+This code will be removed in a future version.
+Please use the module via MCP tools instead.
 
 API endpoints for music playback, search, and authentication.
 Integrates with YouTube Music and routes playback to devices.
@@ -20,8 +26,18 @@ import logging
 import os
 
 from auth_integration import validate_session, AuthenticatedSession
+import warnings
 
 logger = logging.getLogger(__name__)
+
+# Issue deprecation warning
+warnings.warn(
+    "routers.music has been moved to the zoe-music module. "
+    "This router will be removed in a future version. "
+    "Music functionality now available via zoe-music module and MCP tools.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 router = APIRouter(prefix="/api/music", tags=["music"])
 
@@ -124,6 +140,43 @@ async def get_track(
         raise
     except Exception as e:
         logger.error(f"Get track failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/library/liked")
+async def get_liked_songs(
+    limit: int = Query(100, ge=1, le=500),
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    """Get user's liked songs from YouTube Music."""
+    youtube, _, _ = get_services()
+    
+    if not youtube:
+        raise HTTPException(status_code=503, detail="YouTube Music unavailable")
+    
+    try:
+        tracks = await youtube.get_liked_songs(session.user_id, limit)
+        return {"tracks": tracks, "count": len(tracks)}
+    except Exception as e:
+        logger.error(f"Failed to get liked songs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/library/sync")
+async def sync_library(
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    """Sync YouTube Music library to local database."""
+    youtube, _, _ = get_services()
+    
+    if not youtube:
+        raise HTTPException(status_code=503, detail="YouTube Music unavailable")
+    
+    try:
+        summary = await youtube.sync_library_to_local(session.user_id)
+        return {"success": True, "summary": summary}
+    except Exception as e:
+        logger.error(f"Library sync failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -575,17 +628,21 @@ async def get_queue(
 @router.delete("/queue/{track_id}")
 async def remove_from_queue(
     track_id: str,
+    position: Optional[int] = Query(None, description="Position in queue (for removing duplicates)"),
     session: AuthenticatedSession = Depends(validate_session),
     x_device_id: Optional[str] = Header(None)
 ):
-    """Remove a track from the queue."""
+    """Remove a track from the queue.
+    
+    Use position parameter to remove a specific instance when duplicates exist.
+    """
     _, controller, _ = get_services()
     
     if not controller:
         raise HTTPException(status_code=503, detail="Music service unavailable")
     
     try:
-        result = await controller.remove_from_queue(session.user_id, track_id, x_device_id)
+        result = await controller.remove_from_queue(session.user_id, track_id, x_device_id, position)
         return result
     except Exception as e:
         logger.error(f"Remove from queue failed: {e}")
@@ -1881,4 +1938,128 @@ async def refresh_devices(
             logger.warning(f"AirPlay refresh failed: {e}")
     
     return {"success": True, "refreshed": results}
+
+
+# ============================================================
+# User Preferences
+# ============================================================
+
+class MusicPreferencesUpdate(BaseModel):
+    """Request to update music preferences"""
+    preferred_provider: Optional[str] = None
+    default_output_device: Optional[str] = None
+    audio_quality: Optional[str] = None
+    autoplay_recommendations: Optional[bool] = None
+
+
+@router.get("/preferences")
+async def get_music_preferences(
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    """Get user's music preferences."""
+    try:
+        from preference_learner import preference_learner
+        
+        prefs = await preference_learner.get_music_preferences(session.user_id)
+        return prefs
+    except Exception as e:
+        logger.error(f"Failed to get music preferences: {e}")
+        return {
+            "preferred_provider": "youtube_music",
+            "default_output_device": None,
+            "audio_quality": "high",
+            "autoplay_recommendations": True
+        }
+
+
+@router.put("/preferences")
+async def update_music_preferences(
+    request: MusicPreferencesUpdate,
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    """Update user's music preferences."""
+    try:
+        from preference_learner import preference_learner
+        
+        updates = {}
+        if request.preferred_provider is not None:
+            updates["preferred_provider"] = request.preferred_provider
+        if request.default_output_device is not None:
+            updates["default_output_device"] = request.default_output_device
+        if request.audio_quality is not None:
+            updates["audio_quality"] = request.audio_quality
+        if request.autoplay_recommendations is not None:
+            updates["autoplay_recommendations"] = request.autoplay_recommendations
+        
+        success = await preference_learner.set_music_preferences(session.user_id, updates)
+        return {"success": success}
+    except Exception as e:
+        logger.error(f"Failed to update music preferences: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/outputs")
+async def get_output_devices(
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    """Get available output devices for music playback."""
+    devices = []
+    
+    # Get Chromecast devices
+    cast_svc = get_cast_service()
+    if cast_svc and cast_svc._initialized:
+        try:
+            cast_devices = await cast_svc.discover_devices()
+            for d in cast_devices:
+                devices.append({
+                    "id": f"chromecast:{d.id}",
+                    "name": d.friendly_name,
+                    "type": "Chromecast",
+                    "available": d.is_available
+                })
+        except Exception as e:
+            logger.warning(f"Failed to get Chromecast devices: {e}")
+    
+    # Get AirPlay devices
+    airplay_svc = get_airplay_service()
+    if airplay_svc and airplay_svc._initialized:
+        try:
+            airplay_devices = await airplay_svc.discover_devices()
+            for d in airplay_devices:
+                devices.append({
+                    "id": f"airplay:{d.id}",
+                    "name": d.name,
+                    "type": "AirPlay",
+                    "available": d.is_available
+                })
+        except Exception as e:
+            logger.warning(f"Failed to get AirPlay devices: {e}")
+    
+    # Get Home Assistant media players
+    try:
+        import httpx
+        ha_url = os.getenv("HOMEASSISTANT_URL")
+        ha_token = os.getenv("HOMEASSISTANT_TOKEN")
+        
+        if ha_url and ha_token:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{ha_url}/api/states",
+                    headers={"Authorization": f"Bearer {ha_token}"},
+                    timeout=5.0
+                )
+                if resp.status_code == 200:
+                    states = resp.json()
+                    for state in states:
+                        if state["entity_id"].startswith("media_player."):
+                            devices.append({
+                                "id": f"ha:{state['entity_id']}",
+                                "name": state["attributes"].get("friendly_name", state["entity_id"]),
+                                "type": "Home Assistant",
+                                "available": state["state"] not in ["unavailable", "unknown"]
+                            })
+    except Exception as e:
+        logger.warning(f"Failed to get HA media players: {e}")
+    
+    return {"devices": devices}
 

@@ -1,62 +1,94 @@
-import os
+"""
+Pytest Configuration
+====================
+
+Shared fixtures and configuration for all tests.
+"""
+
 import pytest
-from fastapi.testclient import TestClient
-import jwt
-from datetime import datetime, timedelta
+import asyncio
 import sys
-from pathlib import Path
+import os
 
-# Auto-detect project root
-PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
-
-# Add zoe-core to path for all tests to import modules like light_rag_memory, self_awareness
-ZOE_CORE_PATH = str(PROJECT_ROOT / "services/zoe-core")
-if ZOE_CORE_PATH not in sys.path:
-    sys.path.insert(0, ZOE_CORE_PATH)
-
-SECRET_KEY = os.getenv("ZOE_AUTH_SECRET_KEY", "change-me-in-prod")
-ALGORITHM = "HS256"
-
-
-def generate_test_jwt(user_id: str = "test_user", username: str = "test_user") -> str:
-    """Generate valid JWT token for testing"""
-    payload = {
-        "user_id": user_id,
-        "username": username,
-        "exp": datetime.utcnow() + timedelta(hours=1),
-    }
-    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+# Add source paths
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../services/zoe-core'))
 
 
 @pytest.fixture(scope="session")
-def app():
-    """FastAPI app instance"""
-    from main import app
-    return app
+def event_loop():
+    """Create event loop for async tests."""
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    yield loop
+    loop.close()
 
 
 @pytest.fixture
-def client(app):
-    """Test client for API requests"""
-    return TestClient(app)
+def mock_db():
+    """Create a mock database connection."""
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix='.db')
+    os.close(fd)
+    yield path
+    os.unlink(path)
 
 
 @pytest.fixture
-def auth_headers():
-    """Valid JWT token headers for authenticated requests"""
-    token = generate_test_jwt()
-    return {"Authorization": f"Bearer {token}"}
-
-
-@pytest.fixture
-def mock_memory_data():
-    """Sample memory data for tests"""
+def mock_user():
+    """Return a mock user for testing."""
     return {
-        "people": [
-            {"name": "Sarah", "relationship": "friend"},
-            {"name": "John", "relationship": "colleague"}
-        ],
-        "conversations": [
-            {"person": "Sarah", "topic": "Arduino", "date": "2024-05-12"}
+        "id": "test_user_123",
+        "username": "testuser",
+        "email": "test@example.com"
+    }
+
+
+@pytest.fixture
+def mock_track():
+    """Return a mock track for testing."""
+    return {
+        "track_id": "test_track_123",
+        "provider": "youtube_music",
+        "title": "Test Song",
+        "artist": "Test Artist",
+        "album": "Test Album",
+        "duration_ms": 180000,
+        "album_art_url": "https://example.com/art.jpg"
+    }
+
+
+@pytest.fixture
+def mock_playlist():
+    """Return a mock playlist for testing."""
+    return {
+        "id": "test_playlist_123",
+        "name": "Test Playlist",
+        "track_count": 10,
+        "user_id": "test_user_123"
+    }
+
+
+@pytest.fixture
+def mock_device():
+    """Return a mock device for testing."""
+    return {
+        "id": "test_device_123",
+        "name": "Test Speaker",
+        "type": "speaker",
+        "room": "Living Room",
+        "is_online": True,
+        "capabilities": ["audio"]
+    }
+
+
+@pytest.fixture
+def mock_household():
+    """Return a mock household for testing."""
+    return {
+        "id": "test_household_123",
+        "name": "Test Family",
+        "owner_id": "test_user_123",
+        "members": [
+            {"user_id": "test_user_123", "role": "owner"},
+            {"user_id": "test_user_456", "role": "member"}
         ]
     }

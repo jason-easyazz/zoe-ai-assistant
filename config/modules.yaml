@@ -1,0 +1,10 @@
+enabled_modules:
+  - zoe-music
+  - agent-zero
+module_config:
+  zoe-music:
+    apple_enabled: false
+    default_source: youtube
+    default_zone: main
+    spotify_enabled: true
+    youtube_enabled: true

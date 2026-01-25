@@ -90,11 +90,65 @@ from intent_system.temperature_manager import TemperatureManager
 from grounding_validator import GroundingValidator, FastGroundingValidator
 from behavioral_memory import behavioral_memory
 
+# Music context integration - NOW via MCP module
+# OLD: from services.music.context import get_music_context, format_music_for_prompt
+# NEW: Music context fetched via MCP call (see get_music_context_via_mcp below)
+
+# MCP Server URL for music context
+MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://zoe-mcp-server:8003")
+
+async def get_music_context_via_mcp(user_id: str) -> Optional[Dict]:
+    """Get music context via MCP module."""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{MCP_SERVER_URL}/tools/music_get_context",
+                json={"user_id": user_id},
+                timeout=5.0
+            )
+            result = response.json()
+            
+            if result.get("success"):
+                # Return the raw_context which has the same structure as old get_music_context
+                return result.get("raw_context", {})
+            return None
+    except Exception as e:
+        logger.warning(f"Failed to get music context via MCP: {e}")
+        return None
+
+def format_music_for_prompt(music_ctx: Dict) -> str:
+    """Format music context for LLM prompt (kept for compatibility)."""
+    if not music_ctx:
+        return ""
+    
+    lines = []
+    if music_ctx.get("is_playing"):
+        track = music_ctx.get("current_track", {})
+        lines.append(f"🎵 Currently playing: {track.get('title', 'Unknown')} by {track.get('artist', 'Unknown')}")
+    
+    if music_ctx.get("recent_tracks"):
+        lines.append(f"Recent listening history: {', '.join([t.get('title', '') for t in music_ctx['recent_tracks'][:3]])}")
+    
+    return "\n".join(lines) if lines else ""
+
 # Initialize intent system
 USE_INTENT_SYSTEM = os.getenv("USE_INTENT_CHAT", "true").lower() == "true"
 intent_classifier = UnifiedIntentClassifier(intents_dir="intent_system/intents/en") if USE_INTENT_SYSTEM else None
 intent_executor = IntentExecutor() if USE_INTENT_SYSTEM else None
 context_manager = get_context_manager() if USE_INTENT_SYSTEM else None
+
+# 🎯 Auto-discover and integrate module intents
+if USE_INTENT_SYSTEM and intent_classifier and intent_executor:
+    try:
+        from intent_system.module_intent_loader import integrate_module_intents
+        module_count = integrate_module_intents(intent_classifier, intent_executor)
+        if module_count > 0:
+            logger.info(f"✅ Loaded intents from {module_count} modules")
+        else:
+            logger.info("ℹ️  No module intents found (modules may only provide MCP tools)")
+    except Exception as e:
+        logger.error(f"Failed to load module intents: {e}")
+        logger.exception(e)
 
 # Initialize P0/P1 validators
 grounding_validator = GroundingValidator() if FeatureFlags.PLATFORM == "jetson" else FastGroundingValidator()
@@ -554,7 +608,8 @@ async def get_user_context(user_id: str, query: str = "") -> Dict:
         "people": [],
         "projects": [],
         "self_facts": [],  # 🔥 NEW: Add self-facts
-        "consolidated_summary": ""
+        "consolidated_summary": "",
+        "music": {}  # 🎵 Music context integration
     }
     
     try:
@@ -665,6 +720,16 @@ async def get_user_context(user_id: str, query: str = "") -> Dict:
         conn.close()
     except Exception as e:
         logger.error(f"Context fetch error: {e}")
+    
+    # 🎵 Music context integration - via MCP module
+    try:
+        music_ctx = await get_music_context_via_mcp(user_id)
+        if music_ctx:
+            context["music"] = music_ctx
+            if music_ctx.get("is_playing"):
+                logger.info(f"🎵 Music playing: {music_ctx.get('current_track', {}).get('title', 'Unknown')}")
+    except Exception as e:
+        logger.warning(f"Music context fetch failed (MCP): {e}")
     
     # ✅ CRITICAL FIX: Add Light RAG semantic search for memory retrieval
     if query:
@@ -1049,6 +1114,15 @@ async def build_system_prompt(memories: Dict, user_context: Dict, routing_type: 
     else:
         logger.warning(f"⚠️  No self-facts found in user_context for {user_id}")
     
+    # 🎵 Music context section
+    music_section = ""
+    music_ctx = user_context.get("music", {})
+    if music_ctx:
+        music_info = format_music_for_prompt(music_ctx)
+        if music_info:
+            music_section = f"\n# CURRENT ACTIVITY\n{music_info}\n"
+            logger.info(f"🎵 Including music context in prompt")
+    
     # 🔥 PHASE 2: USER IDENTITY SECTION - ALWAYS FIRST
     user_identity_section = f"""
 # WHO YOU'RE TALKING TO
@@ -1080,9 +1154,9 @@ User ID: {user_id}
     # ✅ NEW: Use enhanced prompts with examples, preferences, and conversation history
     base_prompt = build_enhanced_prompt(memories, user_context, routing_type, user_preferences, recent_episodes)
     
-    # 🔥 PHASE 2: Return with identity section FIRST
-    full_prompt = user_identity_section + "\n\n" + base_prompt
-    logger.info(f"📝 Full prompt length: {len(full_prompt)} chars (identity: {len(user_identity_section)} chars)")
+    # 🔥 PHASE 2: Return with identity section FIRST, plus music context
+    full_prompt = user_identity_section + music_section + "\n\n" + base_prompt
+    logger.info(f"📝 Full prompt length: {len(full_prompt)} chars (identity: {len(user_identity_section)} chars, music: {len(music_section)} chars)")
     
     # 🔍 DEBUG: Log first 800 chars of prompt to verify facts are included (use INFO for visibility)
     logger.info(f"🔍 Prompt preview (first 800 chars):\n{full_prompt[:800]}")
