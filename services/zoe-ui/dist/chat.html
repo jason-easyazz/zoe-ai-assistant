@@ -1895,6 +1895,8 @@
                         user_id: userId,
                         context: { 
                             mode: 'main_chat',
+                            channel: 'web',
+                            source: window.location.pathname,
                             onboarding_mode: isOnboardingMode
                         },
                         session_id: currentSessionId || `session_${Date.now()}`
@@ -1933,6 +1935,14 @@
                                     loadSessions().catch(err => {
                                         console.warn('⚠️ Failed to reload sessions (non-critical):', err);
                                     });
+                                } else if (data.type === 'skill_matched') {
+                                    console.log('🎯 Skill matched:', data.data, 'Tier', data.tier);
+                                    // Show skill badge above the assistant message
+                                    const badge = document.createElement('div');
+                                    badge.className = 'skill-badge';
+                                    badge.style.cssText = 'font-size:0.75em;color:#64b5f6;margin-bottom:4px;opacity:0.85;';
+                                    badge.textContent = `🎯 ${data.data} (Tier ${data.tier || '?'})`;
+                                    group.insertBefore(badge, contentEl);
                                 } else if (data.type === 'agent_state_delta') {
                                     console.log('🔄 Agent state:', data.state);
                                     // Update thinking indicator based on state
@@ -1992,6 +2002,15 @@
                                             tokens: data.final_state.tokens,
                                             complete: data.final_state.complete
                                         });
+                                        // Show skill badge from final state if present
+                                        const si = data.final_state.skill_info;
+                                        if (si && si.name && !group.querySelector('.skill-badge')) {
+                                            const badge = document.createElement('div');
+                                            badge.className = 'skill-badge';
+                                            badge.style.cssText = 'font-size:0.75em;color:#64b5f6;margin-bottom:4px;opacity:0.85;';
+                                            badge.textContent = `🎯 ${si.name} (Tier ${si.tier || '?'})`;
+                                            group.insertBefore(badge, contentEl);
+                                        }
                                     }
                                     contentEl.innerHTML = streamingText.replace(/\n/g, '<br>');
                                     // Backend already saved messages, no need to save here
@@ -2764,6 +2783,8 @@
                 if (isOnboardingMode) {
                     handleOnboardingMode();
                 }
+                // Handle setup_channel URL parameter (from settings page link)
+                handleSetupChannelParam();
             });
         } else {
             updateTimeDate();
@@ -2772,6 +2793,21 @@
             
             if (isOnboardingMode) {
                 handleOnboardingMode();
+            }
+            handleSetupChannelParam();
+        }
+
+        function handleSetupChannelParam() {
+            const params = new URLSearchParams(window.location.search);
+            const setupChannel = params.get('setup_channel');
+            if (setupChannel) {
+                const input = document.getElementById('messageInput');
+                if (input) {
+                    input.value = `Connect ${setupChannel}`;
+                    input.focus();
+                }
+                // Clean URL
+                window.history.replaceState({}, '', window.location.pathname);
             }
         }
         

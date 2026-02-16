@@ -1219,6 +1219,14 @@ async def generate_streaming_response(message: str, context: Dict, memories: Dic
             # AG-UI Event: session_start
             yield f"data: {json.dumps({'type': 'session_start', 'session_id': session_id, 'timestamp': datetime.now().isoformat()})}\n\n"
             
+            # AG-UI Event: skill_matched (if a skill was matched during routing)
+            matched_skill = context.get("matched_skill") or (context.get("skills_context") or {}).get("matched_skill")
+            if matched_skill:
+                skill_name = matched_skill if isinstance(matched_skill, str) else matched_skill.get("name", "")
+                skill_tier = matched_skill.get("tier", "?") if isinstance(matched_skill, dict) else "?"
+                if skill_name:
+                    yield f"data: {json.dumps({'type': 'skill_matched', 'data': skill_name, 'tier': skill_tier, 'timestamp': datetime.now().isoformat()})}\n\n"
+            
             # AG-UI Event: agent_state_delta (context enrichment)
             context_breakdown = {
                 "events": len(user_context.get("calendar_events", [])),
@@ -1413,52 +1421,26 @@ async def generate_streaming_response(message: str, context: Dict, memories: Dic
             
             logger.info(f"🤖 Streaming with model: {selected_model} (using /api/chat for KV cache)")
             
-            # Check if TensorRT is available and model should use it
-            use_tensorrt = False
-            tensorrt_url = os.getenv("TENSORRT_URL", "http://zoe-tensorrt:8011")
-            if "hermes3" in selected_model.lower():
-                try:
-                    async with httpx.AsyncClient(timeout=2.0) as trt_client:
-                        trt_health = await trt_client.get(f"{tensorrt_url}/health")
-                        if trt_health.status_code == 200 and trt_health.json().get("tensorrt_loaded"):
-                            use_tensorrt = True
-                            logger.info("🚀 Using TensorRT GPU acceleration")
-                except:
-                    pass
-            
             # AG-UI Event: agent_state_delta (model selected)
-            engine_type = "tensorrt-gpu" if use_tensorrt else "llm-inference"
-            yield f"data: {json.dumps({'type': 'agent_state_delta', 'state': {'model': selected_model, 'engine': engine_type, 'status': 'generating'}, 'timestamp': datetime.now().isoformat()})}\n\n"
+            yield f"data: {json.dumps({'type': 'agent_state_delta', 'state': {'model': selected_model, 'engine': 'llm-inference', 'status': 'generating'}, 'timestamp': datetime.now().isoformat()})}\n\n"
             
             # Check if this requires tool calls via MCP (for AG-UI events)
             if tools_context and routing.get("requires_tools"):
                 # AG-UI Event: action (tool call)
                 yield f"data: {json.dumps({'type': 'action', 'name': 'mcp_tools', 'arguments': {{'query': message}}, 'status': 'running', 'timestamp': datetime.now().isoformat()})}\n\n"
             
-            async with httpx.AsyncClient(timeout=60.0) as client:  # Increased timeout for model loading
-                # Route to TensorRT or LLM inference server
-                if use_tensorrt:
-                    # TensorRT endpoint - OpenAI compatible
-                    endpoint_url = f"{tensorrt_url}/api/generate"
-                    request_json = {
-                        "prompt": messages[-1]["content"] if messages else message,
-                        "max_tokens": model_config.num_predict,
-                        "temperature": model_config.temperature,
-                        "top_p": model_config.top_p,
-                        "stream": False  # TensorRT doesn't support streaming yet
-                    }
-                else:
-                    # LLM inference server endpoint (OpenAI-compatible format)
-                    endpoint_url = llm_url
-                    request_json = {
-                        "model": selected_model,
-                        "messages": messages,
-                        "stream": True,
-                        "temperature": model_config.temperature,
-                        "top_p": model_config.top_p,
-                        "max_tokens": model_config.num_predict,
-                        "stop": model_config.stop_tokens if model_config.stop_tokens else []
-                    }
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                # LLM inference server endpoint (OpenAI-compatible format)
+                endpoint_url = llm_url
+                request_json = {
+                    "model": selected_model,
+                    "messages": messages,
+                    "stream": True,
+                    "temperature": model_config.temperature,
+                    "top_p": model_config.top_p,
+                    "max_tokens": model_config.num_predict,
+                    "stop": model_config.stop_tokens if model_config.stop_tokens else []
+                }
                 
                 # LiteLLM requires authentication
                 headers = {}
@@ -3803,13 +3785,27 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
                 "timestamp": datetime.now().isoformat()
             })
             
+            # Build skill_info if a skill was matched
+            skill_info = None
+            matched_skill = context.get("matched_skill") or (context.get("skills_context") or {}).get("matched_skill")
+            if matched_skill:
+                if isinstance(matched_skill, str):
+                    skill_info = {"name": matched_skill, "tier": "?", "match_type": "keyword"}
+                elif isinstance(matched_skill, dict):
+                    skill_info = {
+                        "name": matched_skill.get("name", ""),
+                        "tier": matched_skill.get("tier", "?"),
+                        "match_type": matched_skill.get("match_type", "unknown"),
+                    }
+
             return {
                 "response": clean_llm_response(response),
-                "interaction_id": interaction_id,  # ✅ NEW: For feedback tracking
+                "interaction_id": interaction_id,
                 "response_time": response_time,
                 "routing": routing.get("type"),
                 "memories_used": memory_count,
                 "episode_id": episode_id,
+                "skill_info": skill_info,
                 "context_breakdown": {
                     "events": len(user_context.get("calendar_events", [])),
                     "journals": len(user_context.get("recent_journal", [])),
