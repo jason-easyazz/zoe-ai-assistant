@@ -307,6 +307,15 @@ async def startup_event():
     except Exception as e:
         logger.error(f"❌ Failed to start scheduler: {e}")
 
+    # Reload skills registry (bind mounts may not be ready during import)
+    try:
+        from skills.registry import skills_registry
+        skills_registry.load()
+        active = sum(1 for s in skills_registry.get_all_skills() if s.active)
+        logger.info(f"✅ Skills registry reloaded: {active} active skills")
+    except Exception as e:
+        logger.error(f"❌ Failed to reload skills registry: {e}")
+
     logger.info("🎉 All services started successfully")
 
 @app.on_event("shutdown")

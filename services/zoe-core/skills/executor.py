@@ -1,242 +1,406 @@
 """
-Skills Executor
-================
+Skill Executor
+===============
 
-Phase 1a: Safe API-only skill execution with endpoint whitelisting.
+Executes matched skills by calling their API endpoints directly,
+instead of relying on the LLM to generate text about the action.
 
-The executor enforces security rules:
-- Skills can ONLY call API endpoints listed in their allowed_endpoints
-- No shell, file, or process access
-- Only localhost/Docker network endpoints
-- All calls are logged for audit
+When a Tier 3 skill match occurs, the executor:
+1. Determines the correct endpoint to call based on the message
+2. Extracts parameters from the user's natural language
+3. Calls the endpoint internally via the FastAPI app
+4. Returns a formatted result for the user
 
-This is the runtime enforcement layer that prevents a compromised or
-malicious skill from accessing APIs it shouldn't.
+This closes the gap between "skill matched" and "action executed."
 """
 
 import re
 import logging
-import httpx
+import time
 from typing import Optional, Dict, Any, Tuple
-from urllib.parse import urlparse
-
-from skills.loader import Skill
 
 logger = logging.getLogger(__name__)
 
-# Allowed URL hosts (only internal services)
-ALLOWED_HOSTS = {
-    "localhost",
-    "127.0.0.1",
-    "zoe-core",
-    "zoe-auth",
-    "zoe-n8n",
-    "zoe-llamacpp",
-    "zoe-litellm",
-    "zoe-mem-agent",
-    "zoe-mcp-server",
-    "zoe-agent0",
-    "agent-zero-bridge",
-    "zoe-ollama",
-    "homeassistant",
-}
 
-# HTTP methods allowed for skills
-ALLOWED_METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH"}
+# Mapping of skill names to action handlers.
+# Each handler takes (message, user_id, context) and returns (response_text, metadata).
+# If a handler returns None, execution falls back to the LLM.
+
+CHANNEL_NAMES = ["telegram", "discord", "whatsapp"]
 
 
-class SkillExecutor:
-    """Execute skill API calls with endpoint whitelisting."""
+def _extract_channel(message: str) -> Optional[str]:
+    """Extract channel name from message."""
+    msg = message.lower()
+    for ch in CHANNEL_NAMES:
+        if ch in msg:
+            return ch
+    return None
 
-    def __init__(self):
-        self._client = httpx.AsyncClient(timeout=30.0)
-        self._call_log: list = []  # Recent calls for audit
 
-    def check_endpoint_allowed(
-        self,
-        skill: Skill,
-        method: str,
-        path: str,
-    ) -> Tuple[bool, str]:
-        """Check if an API call is allowed by the skill's whitelist.
+async def execute_skill(
+    skill_name: str,
+    message: str,
+    user_id: str,
+    context: dict,
+) -> Optional[Dict[str, Any]]:
+    """
+    Attempt to execute a matched skill directly.
 
-        Args:
-            skill: The skill attempting the call
-            method: HTTP method (GET, POST, etc.)
-            path: API path (e.g., "/api/homeassistant/control")
+    Returns a dict with:
+        - response: str (the text to show the user)
+        - executed: bool (whether a real action was performed)
+        - skill: str (skill name)
+        - action: str (what was done)
+        - data: dict (raw result data)
 
-        Returns:
-            (allowed, reason) tuple
-        """
-        method = method.upper()
+    Returns None if the skill can't be executed directly
+    (falls back to LLM).
+    """
+    handler = SKILL_HANDLERS.get(skill_name)
+    if not handler:
+        return None
 
-        if method not in ALLOWED_METHODS:
-            return False, f"HTTP method {method} not allowed"
+    try:
+        start = time.time()
+        result = await handler(message, user_id, context)
+        elapsed_ms = (time.time() - start) * 1000
 
-        # Check against skill's allowed_endpoints
-        endpoint_str = f"{method} {path}"
+        if result is None:
+            return None
 
-        for allowed in skill.allowed_endpoints:
-            # Parse allowed endpoint: "POST /api/homeassistant/control"
-            parts = allowed.strip().split(" ", 1)
-            if len(parts) != 2:
-                continue
+        result["skill"] = skill_name
+        result["execution_time_ms"] = round(elapsed_ms, 1)
+        logger.info(
+            f"Skill executed: {skill_name} -> {result.get('action', '?')} "
+            f"in {elapsed_ms:.0f}ms"
+        )
+        return result
 
-            allowed_method, allowed_path = parts[0].upper(), parts[1]
+    except Exception as e:
+        logger.error(f"Skill execution failed ({skill_name}): {e}")
+        return None
 
-            # Exact match or prefix match (for /api/homeassistant/* patterns)
-            if method == allowed_method:
-                if path == allowed_path:
-                    return True, f"Exact match: {endpoint_str}"
-                if allowed_path.endswith("*") and path.startswith(allowed_path[:-1]):
-                    return True, f"Prefix match: {endpoint_str} matches {allowed}"
 
-        return False, (
-            f"Endpoint {endpoint_str} not in skill's allowed_endpoints: "
-            f"{skill.allowed_endpoints}"
+# ============================================================
+# Channel Setup Skill Handler
+# ============================================================
+
+async def _handle_channel_setup(message: str, user_id: str, context: dict) -> Optional[dict]:
+    """Handle channel-setup skill actions."""
+    from channels.setup_orchestrator import channel_orchestrator
+
+    msg = message.lower().strip()
+    channel = _extract_channel(message)
+
+    # Disconnect flow
+    if any(word in msg for word in ["disconnect", "remove", "unlink", "delete"]):
+        if not channel:
+            return {
+                "response": "Which channel would you like to disconnect? (Telegram, Discord, or WhatsApp)",
+                "executed": False,
+                "action": "ask_channel",
+            }
+        result = await channel_orchestrator.disconnect(channel)
+        return {
+            "response": result.message,
+            "executed": result.success,
+            "action": f"disconnect_{channel}",
+            "data": {"channel": channel},
+        }
+
+    # Status check
+    if any(word in msg for word in ["status", "check", "is it working", "connected"]):
+        if not channel:
+            from channels.setup_orchestrator import get_all_channel_configs
+            configs = get_all_channel_configs()
+            if configs:
+                lines = ["Here's the status of your channels:\n"]
+                for c in configs:
+                    status_icon = "connected" if c.get("status") == "active" else c.get("status", "unknown")
+                    lines.append(f"- **{c['channel'].title()}**: {status_icon}")
+                return {
+                    "response": "\n".join(lines),
+                    "executed": True,
+                    "action": "list_channel_status",
+                    "data": {"configs": configs},
+                }
+            return {
+                "response": "No channels are configured yet. Would you like to connect one? (Telegram, Discord, or WhatsApp)",
+                "executed": True,
+                "action": "no_channels",
+            }
+
+        status = await channel_orchestrator.get_status(channel)
+        if status.get("configured"):
+            return {
+                "response": (
+                    f"**{channel.title()}** is {status.get('status', 'configured')}."
+                    + (f" Bot: @{status['bot_username']}" if status.get("bot_username") else "")
+                ),
+                "executed": True,
+                "action": f"status_{channel}",
+                "data": status,
+            }
+        return {
+            "response": f"{channel.title()} is not configured yet. Would you like to set it up?",
+            "executed": True,
+            "action": f"status_{channel}_not_configured",
+        }
+
+    # Setup / connect flow
+    if any(word in msg for word in ["connect", "setup", "set up", "add", "link", "configure"]):
+        if not channel:
+            return {
+                "response": "Which channel would you like to connect? I support **Telegram**, **Discord**, and **WhatsApp**.",
+                "executed": False,
+                "action": "ask_channel",
+            }
+
+        result = await channel_orchestrator.auto_setup(
+            channel=channel,
+            bot_name="Zoe",
+            user_id=user_id,
         )
 
-    async def execute_api_call(
-        self,
-        skill: Skill,
-        method: str,
-        url: str,
-        body: Optional[Dict] = None,
-        headers: Optional[Dict] = None,
-    ) -> Dict[str, Any]:
-        """Execute an API call on behalf of a skill.
-
-        Enforces:
-        1. URL host must be an internal service
-        2. Method + path must be in skill's allowed_endpoints
-        3. api_only must be true
-
-        Args:
-            skill: The skill making the call
-            method: HTTP method
-            url: Full URL (e.g., "http://localhost:8000/api/homeassistant/control")
-            body: Optional request body
-            headers: Optional headers
-
-        Returns:
-            Dict with success status and response data
-        """
-        # Enforce api_only
-        if not skill.api_only:
+        if result.success:
+            steps = "\n".join(f"- {s}" for s in result.next_steps) if result.next_steps else ""
             return {
-                "success": False,
-                "error": "Skill is not API-only -- execution blocked",
-                "skill": skill.name,
+                "response": f"{result.message}\n\n{steps}".strip(),
+                "executed": True,
+                "action": f"setup_{channel}",
+                "data": result.credentials,
+            }
+        else:
+            steps = "\n".join(f"{i+1}. {s}" for i, s in enumerate(result.next_steps)) if result.next_steps else ""
+            response = result.message
+            if steps:
+                response += f"\n\n{steps}"
+            if result.error:
+                response += f"\n\nOnce you have the credentials, just tell me and I'll configure it."
+            return {
+                "response": response,
+                "executed": False,
+                "action": f"setup_{channel}_manual",
+                "data": {"next_steps": result.next_steps},
             }
 
-        # Validate URL host
-        parsed = urlparse(url)
-        hostname = parsed.hostname or ""
-        if hostname not in ALLOWED_HOSTS:
-            logger.warning(
-                f"Skill {skill.name} tried to call external host: {hostname} -- BLOCKED"
+    return None
+
+
+# ============================================================
+# Agent Zero Research Skill Handler
+# ============================================================
+
+async def _handle_research(message: str, user_id: str, context: dict) -> Optional[dict]:
+    """Handle agent-zero research/analysis/deep-dive actions."""
+    import httpx
+
+    msg = message.lower().strip()
+
+    # Extract the research topic (remove trigger words)
+    topic = message
+    for prefix in ["research", "investigate", "deep dive into", "deep dive", "find out about", "find out", "look into", "look up", "what do you know about"]:
+        if msg.startswith(prefix):
+            topic = message[len(prefix):].strip()
+            break
+
+    if not topic or len(topic) < 3:
+        return None  # Fall back to LLM
+
+    # Determine depth
+    depth = "thorough"
+    if any(w in msg for w in ["quick", "brief", "short"]):
+        depth = "quick"
+    elif any(w in msg for w in ["comprehensive", "exhaustive", "detailed", "in-depth"]):
+        depth = "comprehensive"
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                "http://zoe-agent0-bridge:8101/tools/research",
+                json={"query": topic, "depth": depth, "user_id": user_id},
             )
-            self._log_call(skill, method, url, blocked=True, reason=f"External host: {hostname}")
-            return {
-                "success": False,
-                "error": f"Host '{hostname}' is not an allowed internal service",
-                "skill": skill.name,
-            }
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("success"):
+                    summary = data.get("summary", "")
+                    details = data.get("details", "")
+                    sources = data.get("sources", [])
 
-        # Validate endpoint against whitelist
-        path = parsed.path
-        allowed, reason = self.check_endpoint_allowed(skill, method, path)
+                    response = summary or details[:500]
+                    if sources:
+                        response += "\n\n**Sources:**\n" + "\n".join(f"- {s}" for s in sources[:5])
 
-        if not allowed:
-            logger.warning(
-                f"Skill {skill.name} tried to call {method} {path} -- BLOCKED: {reason}"
+                    return {
+                        "response": response,
+                        "executed": True,
+                        "action": "research",
+                        "data": {"topic": topic, "depth": depth, "sources": sources},
+                    }
+    except Exception as e:
+        logger.debug(f"Agent Zero research unavailable: {e}")
+
+    return None  # Fall back to LLM
+
+
+# ============================================================
+# Agent Zero Comparison Skill Handler
+# ============================================================
+
+async def _handle_comparison(message: str, user_id: str, context: dict) -> Optional[dict]:
+    """Handle comparison requests via Agent Zero."""
+    import httpx
+
+    msg = message.lower().strip()
+
+    # Try to extract "X vs Y" or "compare X and Y"
+    vs_match = re.search(r'(.+?)\s+(?:vs\.?|versus|or)\s+(.+)', message, re.IGNORECASE)
+    compare_match = re.search(r'compare\s+(.+?)\s+(?:and|with|to|against)\s+(.+)', message, re.IGNORECASE)
+
+    match = compare_match or vs_match
+    if not match:
+        return None
+
+    item_a = match.group(1).strip()
+    item_b = match.group(2).strip()
+
+    if len(item_a) < 2 or len(item_b) < 2:
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                "http://zoe-agent0-bridge:8101/tools/compare",
+                json={"item_a": item_a, "item_b": item_b, "user_id": user_id},
             )
-            self._log_call(skill, method, url, blocked=True, reason=reason)
-            return {
-                "success": False,
-                "error": reason,
-                "skill": skill.name,
-            }
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("success"):
+                    response = data.get("comparison", "")
+                    if data.get("recommendation"):
+                        response += f"\n\n**Recommendation:** {data['recommendation']}"
+                    return {
+                        "response": response,
+                        "executed": True,
+                        "action": "compare",
+                        "data": {"item_a": item_a, "item_b": item_b},
+                    }
+    except Exception as e:
+        logger.debug(f"Agent Zero comparison unavailable: {e}")
 
-        # Execute the call
-        try:
-            response = await self._client.request(
-                method=method,
-                url=url,
-                json=body,
-                headers=headers or {},
+    return None
+
+
+# ============================================================
+# Agent Zero Planning Skill Handler
+# ============================================================
+
+async def _handle_planning(message: str, user_id: str, context: dict) -> Optional[dict]:
+    """Handle planning requests via Agent Zero."""
+    import httpx
+
+    msg = message.lower().strip()
+
+    # Extract the task
+    task = message
+    for prefix in ["plan", "create a plan for", "help me plan", "break down", "steps to", "how should i", "strategy for"]:
+        if msg.startswith(prefix):
+            task = message[len(prefix):].strip()
+            break
+
+    if not task or len(task) < 5:
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                "http://zoe-agent0-bridge:8101/tools/plan",
+                json={"task": task, "user_id": user_id},
             )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("success"):
+                    steps = data.get("steps", [])
+                    response = f"Here's a plan for: **{task}**\n\n"
+                    if steps:
+                        response += "\n".join(f"{i+1}. {s}" for i, s in enumerate(steps))
+                    else:
+                        response += data.get("details", "Plan created.")
+                    if data.get("estimated_time"):
+                        response += f"\n\n**Estimated time:** {data['estimated_time']}"
+                    return {
+                        "response": response,
+                        "executed": True,
+                        "action": "plan",
+                        "data": {"task": task, "steps": steps},
+                    }
+    except Exception as e:
+        logger.debug(f"Agent Zero planning unavailable: {e}")
 
-            self._log_call(
-                skill, method, url, blocked=False,
-                status_code=response.status_code
-            )
+    return None
 
-            if response.status_code < 400:
-                try:
-                    data = response.json()
-                except Exception:
-                    data = response.text
 
-                return {
-                    "success": True,
-                    "status_code": response.status_code,
-                    "data": data,
-                    "skill": skill.name,
-                }
-            else:
-                return {
-                    "success": False,
-                    "status_code": response.status_code,
-                    "error": response.text[:500],
-                    "skill": skill.name,
-                }
+# ============================================================
+# Smart Home Skill Handler
+# ============================================================
 
-        except httpx.TimeoutException:
-            logger.error(f"Skill {skill.name} API call timed out: {method} {url}")
-            self._log_call(skill, method, url, blocked=False, reason="timeout")
-            return {
-                "success": False,
-                "error": "Request timed out",
-                "skill": skill.name,
-            }
-        except Exception as e:
-            logger.error(f"Skill {skill.name} API call failed: {e}")
-            self._log_call(skill, method, url, blocked=False, reason=str(e))
-            return {
-                "success": False,
-                "error": str(e),
-                "skill": skill.name,
-            }
+async def _handle_smart_home(message: str, user_id: str, context: dict) -> Optional[dict]:
+    """Handle smart home commands via Home Assistant.
+    
+    Note: Most smart home commands are already handled by the intent system
+    (Tier 0/1). This handler is a fallback for messages that match the
+    smart-home skill triggers but weren't caught by the intent system.
+    """
+    # The intent system already handles smart home well.
+    # Return None to let the LLM handle edge cases with the skill context.
+    return None
 
-    def _log_call(
-        self,
-        skill: Skill,
-        method: str,
-        url: str,
-        blocked: bool = False,
-        reason: str = "",
-        status_code: int = 0,
-    ):
-        """Log an API call for audit."""
+
+# ============================================================
+# Handler Registry
+# ============================================================
+
+SKILL_HANDLERS = {
+    "channel-setup": _handle_channel_setup,
+    "agent-zero-research": _handle_research,
+    "agent-zero-deep-research": _handle_research,
+    "agent-zero-comparison": _handle_comparison,
+    "agent-zero-planning": _handle_planning,
+    "smart-home": _handle_smart_home,
+}
+
+
+# ============================================================
+# Singleton executor with call log (for audit API)
+# ============================================================
+
+class SkillExecutor:
+    """Tracks skill execution calls for auditing."""
+
+    def __init__(self):
+        self._call_log: list = []
+        self._max_log_size = 200
+
+    async def run(self, skill_name: str, message: str, user_id: str, context: dict) -> Optional[Dict[str, Any]]:
+        """Execute a skill and log the call."""
+        result = await execute_skill(skill_name, message, user_id, context)
         entry = {
-            "skill": skill.name,
-            "method": method,
-            "url": url,
-            "blocked": blocked,
-            "reason": reason,
-            "status_code": status_code,
+            "skill": skill_name,
+            "message": message[:100],
+            "user_id": user_id,
+            "executed": result.get("executed", False) if result else False,
+            "action": result.get("action", "none") if result else "no_handler",
+            "timestamp": time.time(),
         }
         self._call_log.append(entry)
+        if len(self._call_log) > self._max_log_size:
+            self._call_log = self._call_log[-self._max_log_size:]
+        return result
 
-        # Keep last 100 entries
-        if len(self._call_log) > 100:
-            self._call_log = self._call_log[-100:]
-
-    def get_call_log(self, limit: int = 50) -> list:
-        """Get recent API call log for audit."""
-        return self._call_log[-limit:]
+    def get_call_log(self) -> list:
+        """Get recent skill execution audit log."""
+        return list(reversed(self._call_log))
 
 
-# Singleton instance
 skill_executor = SkillExecutor()

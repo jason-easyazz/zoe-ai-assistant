@@ -1,29 +1,39 @@
+---
+name: personal-facts
+description: Store and recall personal facts and preferences about the user
+version: 1.0.0
+author: zoe-team
+api_only: true
+priority: 5
+tags:
+  - memory
+  - preferences
+  - personal
+triggers:
+  - "my favorite"
+  - "my favourite"
+  - "my name is"
+  - "i live in"
+  - "i work as"
+  - "i work at"
+  - "my birthday is"
+  - "i was born"
+  - "my email is"
+  - "my phone number is"
+  - "what's my"
+  - "what is my"
+  - "do you remember my"
+allowed_endpoints:
+  - "GET /api/memories/facts"
+  - "POST /api/memories/facts"
+  - "GET /api/memories/facts/{key}"
+  - "DELETE /api/memories/facts/{key}"
+  - "GET /api/user-data/preferences"
+  - "PUT /api/user-data/preferences"
+---
 # Personal Facts Skill
 
 Store and recall personal facts and preferences about the user.
-
-Replaces hardcoded regex patterns in chat.py for personal information management.
-
-## Triggers
-
-- my favorite
-- my favourite
-- my name is
-- i live in
-- i work as
-- i work at
-- my birthday is
-- i was born
-- my email is
-- my phone number is
-- what's my
-- what is my
-- do you remember my
-- remember that i
-- i prefer
-- i like
-- i don't like
-- i hate
 
 ## Behavior
 
@@ -31,15 +41,6 @@ Replaces hardcoded regex patterns in chat.py for personal information management
 2. For storage: extract the key-value pair and save via API
 3. For recall: look up the fact and present it naturally
 4. For preferences: store under user preferences category
-
-## API Endpoints (api_only)
-
-- `GET /api/memories/facts` - List all stored facts for user
-- `POST /api/memories/facts` - Store a new fact
-- `GET /api/memories/facts/{key}` - Get specific fact
-- `DELETE /api/memories/facts/{key}` - Remove a fact
-- `GET /api/user-data/preferences` - Get user preferences
-- `PUT /api/user-data/preferences` - Update user preferences
 
 ## Response Style
 

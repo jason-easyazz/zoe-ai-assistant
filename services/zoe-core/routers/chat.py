@@ -3184,12 +3184,63 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
             matched_skill = skills_registry.match_triggers(msg.message)
             if matched_skill:
                 logger.info(f"🎯 Tier 3 SKILL MATCH: {matched_skill.name} for message: {msg.message[:60]}")
-                # Inject skill context into the LLM context for Tier 4 handling
-                # The skill instructions tell the LLM which API to call
                 context["matched_skill"] = matched_skill.name
                 context["skill_instructions"] = matched_skill.instructions
                 context["skill_endpoints"] = matched_skill.allowed_endpoints
-        
+
+                # 🚀 TIER 3 EXECUTION: Try to execute the skill directly
+                try:
+                    from skills.executor import execute_skill
+                    skill_result = await execute_skill(
+                        skill_name=matched_skill.name,
+                        message=msg.message,
+                        user_id=actual_user_id,
+                        context=context,
+                    )
+                    if skill_result and skill_result.get("response"):
+                        skill_response = skill_result["response"]
+                        skill_action = skill_result.get("action", "executed")
+                        logger.info(f"🚀 Skill executed: {matched_skill.name} -> {skill_action}")
+
+                        # Save the message and response
+                        await save_chat_message(session_id, actual_user_id, "assistant", skill_response, {
+                            "routing": "skill_execution",
+                            "skill": matched_skill.name,
+                            "action": skill_action,
+                            "executed": skill_result.get("executed", False),
+                            "timestamp": datetime.now().isoformat(),
+                        })
+
+                        if stream:
+                            async def skill_stream():
+                                import json as json_module
+                                session_id_local = msg.session_id or f"session_{int(time.time() * 1000)}"
+                                yield f"data: {json_module.dumps({'type': 'session_start', 'session_id': session_id_local, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                yield f"data: {json_module.dumps({'type': 'skill_matched', 'data': matched_skill.name, 'tier': 3, 'timestamp': datetime.now().isoformat()})}\n\n"
+                                yield f"data: {json_module.dumps({'type': 'agent_state_delta', 'state': {'routing': 'skill_execution', 'skill': matched_skill.name, 'action': skill_action}, 'timestamp': datetime.now().isoformat()})}\n\n"
+
+                                words = skill_response.split(' ')
+                                for i, word in enumerate(words):
+                                    yield f"data: {json_module.dumps({'type': 'message_delta', 'delta': word + (' ' if i < len(words) - 1 else ''), 'timestamp': datetime.now().isoformat()})}\n\n"
+                                    await asyncio.sleep(0.02)
+
+                                yield f"data: {json_module.dumps({'type': 'session_end', 'session_id': session_id_local, 'final_state': {'complete': True, 'skill_info': {'name': matched_skill.name, 'tier': 3, 'action': skill_action, 'executed': skill_result.get('executed', False)}}, 'timestamp': datetime.now().isoformat()})}\n\n"
+
+                            return StreamingResponse(skill_stream(), media_type="text/event-stream")
+                        else:
+                            return {
+                                "response": skill_response,
+                                "skill_info": {
+                                    "name": matched_skill.name,
+                                    "tier": 3,
+                                    "action": skill_action,
+                                    "executed": skill_result.get("executed", False),
+                                },
+                                "routing": "skill_execution",
+                            }
+                except Exception as e:
+                    logger.warning(f"Skill execution failed, falling back to LLM: {e}")
+
         # Inject skills context into LLM for Tier 4 (fuzzy/semantic skill matching)
         skills_llm_context = skills_registry.get_llm_context(msg.message)
         if skills_llm_context:
