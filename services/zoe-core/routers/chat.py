@@ -1222,7 +1222,11 @@ async def generate_streaming_response(message: str, context: Dict, memories: Dic
             yield f"data: {json.dumps({'type': 'session_start', 'session_id': session_id, 'timestamp': datetime.now().isoformat()})}\n\n"
             
             # AG-UI Event: skill_matched (if a skill was matched during routing)
-            matched_skill = context.get("matched_skill") or (context.get("skills_context") or {}).get("matched_skill")
+            matched_skill = context.get("matched_skill")
+            if not matched_skill:
+                sc = context.get("skills_context")
+                if isinstance(sc, dict):
+                    matched_skill = sc.get("matched_skill")
             if matched_skill:
                 skill_name = matched_skill if isinstance(matched_skill, str) else matched_skill.get("name", "")
                 skill_tier = matched_skill.get("tier", "?") if isinstance(matched_skill, dict) else "?"
@@ -3789,7 +3793,11 @@ async def _chat_handler(msg: ChatMessage, user_id: str, stream: bool, start_time
             
             # Build skill_info if a skill was matched
             skill_info = None
-            matched_skill = context.get("matched_skill") or (context.get("skills_context") or {}).get("matched_skill")
+            matched_skill = context.get("matched_skill")
+            if not matched_skill:
+                sc = context.get("skills_context")
+                if isinstance(sc, dict):
+                    matched_skill = sc.get("matched_skill")
             if matched_skill:
                 if isinstance(matched_skill, str):
                     skill_info = {"name": matched_skill, "tier": "?", "match_type": "keyword"}
