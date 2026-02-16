@@ -868,7 +868,9 @@ async def intelligent_routing(message: str, context: Dict) -> Dict:
         model = routing_decision.get("model", "zoe-chat")
         requires_memory = routing_decision.get("requires_memory", False)
         
-        # Enhanced action detection with MCP integration
+        # DEPRECATED: Keyword fallback routing -- to be replaced by Skills system
+        # Replacement skills: shopping-list, calendar-events, personal-facts
+        # These patterns remain as fallback until skills are fully integrated
         message_lower = message.lower()
         
         # Comprehensive action patterns including natural language variants
