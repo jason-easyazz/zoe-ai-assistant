@@ -66,6 +66,10 @@ class SafetyGuardrails:
         """Allow system command execution."""
         return self.mode == SafetyMode.DEVELOPER
     
+    def allow_browser_automation(self) -> bool:
+        """Allow browser automation (navigating sites, filling forms)."""
+        return self.mode == SafetyMode.DEVELOPER
+    
     def get_enabled_capabilities(self) -> List[str]:
         """
         Get list of enabled capabilities.
@@ -79,7 +83,8 @@ class SafetyGuardrails:
             capabilities.extend([
                 "code_execution_sandboxed",
                 "file_operations_limited",
-                "system_commands_whitelisted"
+                "system_commands_whitelisted",
+                "browser_automation"
             ])
         
         return capabilities
@@ -127,6 +132,12 @@ class SafetyGuardrails:
                     return False, "System command not in whitelist"
             else:
                 return False, "System commands are not allowed in grandma mode"
+        
+        elif capability == "browser_automation":
+            if self.mode == SafetyMode.DEVELOPER:
+                return True, "Browser automation allowed in developer mode"
+            else:
+                return False, "Browser automation is not allowed in grandma mode. I can provide manual instructions instead."
         
         else:
             return False, f"Unknown capability: {capability}"

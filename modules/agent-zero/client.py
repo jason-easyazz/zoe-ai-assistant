@@ -483,6 +483,89 @@ Be objective and consider multiple use cases."""
                 "error": str(e)
             }
     
+    async def browse_and_extract(
+        self,
+        url: str,
+        actions: list[str],
+        extract_fields: list[str],
+        user_id: str = "system",
+        timeout: int = 120
+    ) -> Dict[str, Any]:
+        """
+        Use Agent Zero's browser automation to navigate a website,
+        perform actions, and extract structured data.
+        
+        Args:
+            url: Starting URL to navigate to
+            actions: Ordered list of actions (e.g., "click Create Bot", "fill token field with X")
+            extract_fields: Data fields to extract from the page (e.g., "bot_token", "bot_username")
+            user_id: User identifier for context management
+            timeout: Request timeout in seconds
+            
+        Returns:
+            Dict with extracted data, screenshots, and status
+        """
+        logger.info(f"🌐 Browse request: {url} with {len(actions)} actions")
+        
+        try:
+            actions_text = "\n".join(f"  {i+1}. {a}" for i, a in enumerate(actions))
+            fields_text = ", ".join(extract_fields)
+            
+            prompt = f"""I need you to use your browser tool to complete this task:
+
+1. Navigate to: {url}
+2. Perform these actions in order:
+{actions_text}
+3. Extract these fields from the page: {fields_text}
+
+IMPORTANT: Return the extracted data as a JSON block like this:
+```json
+{{"field_name": "value", ...}}
+```
+
+If any step fails, describe the error and what you see on the page."""
+
+            result = await self.send_message(prompt, user_id)
+            response_text = result.get("response", "")
+            
+            extracted = {}
+            json_match = re.search(r'```json\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+            if json_match:
+                try:
+                    extracted = json.loads(json_match.group(1))
+                except json.JSONDecodeError:
+                    pass
+            
+            if not extracted:
+                for field in extract_fields:
+                    pattern = rf'["\']?{re.escape(field)}["\']?\s*[:=]\s*["\']([^"\']+)["\']'
+                    match = re.search(pattern, response_text, re.IGNORECASE)
+                    if match:
+                        extracted[field] = match.group(1)
+            
+            success = len(extracted) > 0
+            
+            return {
+                "success": success,
+                "extracted": extracted,
+                "raw_response": response_text,
+                "url": url,
+                "actions_performed": len(actions),
+                "context_id": result.get("context_id"),
+                "status": "success" if success else "partial"
+            }
+            
+        except Exception as e:
+            logger.error(f"Browse and extract failed: {e}")
+            return {
+                "success": False,
+                "extracted": {},
+                "raw_response": str(e),
+                "url": url,
+                "status": "error",
+                "error": str(e)
+            }
+
     def clear_context(self, user_id: str) -> None:
         """
         Clear stored context for a user.

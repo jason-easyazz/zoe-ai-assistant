@@ -99,6 +99,14 @@ class CompareRequest(BaseModel):
     user_id: str = "default"
 
 
+class BrowseRequest(BaseModel):
+    """Request model for browser automation endpoint."""
+    url: str
+    actions: List[str] = []
+    extract_fields: List[str] = []
+    user_id: str = "default"
+
+
 # ============================================================
 # Health & Status Endpoints
 # ============================================================
@@ -328,6 +336,55 @@ async def compare(request: CompareRequest):
             "success": False,
             "error": str(e),
             "message": "Comparison task failed. Agent Zero might be unavailable."
+        }
+
+
+@app.post("/tools/browse")
+async def browse(request: BrowseRequest):
+    """
+    Browser automation endpoint - navigates websites and extracts data.
+    
+    Uses Agent Zero's browser capability to:
+      1. Navigate to a URL
+      2. Perform ordered actions (click, fill, submit)
+      3. Extract structured data from the page
+    
+    Allowed in: DEVELOPER_MODE only
+    
+    Args:
+        request: Browse request with URL, actions, and fields to extract
+        
+    Returns:
+        Extracted data and raw response
+    """
+    allowed, reason = safety.validate_request("browser_automation", {})
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
+    
+    logger.info(f"🌐 Browse request from user {request.user_id}: {request.url}")
+    
+    try:
+        result = await client.browse_and_extract(
+            url=request.url,
+            actions=request.actions,
+            extract_fields=request.extract_fields,
+            user_id=request.user_id
+        )
+        
+        return {
+            "success": result.get("success", False),
+            "extracted": result.get("extracted", {}),
+            "raw_response": result.get("raw_response", ""),
+            "url": request.url,
+            "status": result.get("status", "complete")
+        }
+        
+    except Exception as e:
+        logger.error(f"Browse failed: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "message": "Browser automation failed. Agent Zero might be unavailable."
         }
 
 
