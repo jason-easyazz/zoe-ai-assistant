@@ -29,6 +29,8 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - AGENT_ZERO_URL=http://zoe-agent0:80
+      - AGENT_ZERO_API_KEY=${AGENT_ZERO_API_KEY:-}
+      - A0_PERSISTENT_RUNTIME_ID=${A0_PERSISTENT_RUNTIME_ID:-c13febd01bf518de389462d4d48b2285}
       - DATABASE_PATH=/app/data/zoe.db
       - SAFETY_MODE=${AGENT_ZERO_SAFETY_MODE:-grandma}
     networks:

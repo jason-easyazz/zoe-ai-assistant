@@ -216,9 +216,9 @@ async def _handle_research(message: str, user_id: str, context: dict) -> Optiona
         depth = "comprehensive"
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
-                "http://zoe-agent0-bridge:8101/tools/research",
+                "http://agent-zero-bridge:8101/tools/research",
                 json={"query": topic, "depth": depth, "user_id": user_id},
             )
             if resp.status_code == 200:
@@ -269,9 +269,9 @@ async def _handle_comparison(message: str, user_id: str, context: dict) -> Optio
         return None
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
-                "http://zoe-agent0-bridge:8101/tools/compare",
+                "http://agent-zero-bridge:8101/tools/compare",
                 json={"item_a": item_a, "item_b": item_b, "user_id": user_id},
             )
             if resp.status_code == 200:
@@ -313,9 +313,9 @@ async def _handle_planning(message: str, user_id: str, context: dict) -> Optiona
         return None
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
-                "http://zoe-agent0-bridge:8101/tools/plan",
+                "http://agent-zero-bridge:8101/tools/plan",
                 json={"task": task, "user_id": user_id},
             )
             if resp.status_code == 200:

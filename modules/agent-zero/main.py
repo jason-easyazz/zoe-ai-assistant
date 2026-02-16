@@ -52,6 +52,7 @@ app.add_middleware(
 
 # Configuration from environment
 AGENT_ZERO_URL = os.getenv("AGENT_ZERO_URL", "http://zoe-agent0:80")
+AGENT_ZERO_API_KEY = os.getenv("AGENT_ZERO_API_KEY", "")
 SAFETY_MODE = os.getenv("SAFETY_MODE", "grandma")
 DATABASE_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 
@@ -59,8 +60,8 @@ DATABASE_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 from client import AgentZeroClient
 from safety import SafetyGuardrails
 
-# Initialize
-client = AgentZeroClient(AGENT_ZERO_URL)
+# Initialize with API key
+client = AgentZeroClient(AGENT_ZERO_URL, api_key=AGENT_ZERO_API_KEY or None)
 safety = SafetyGuardrails(mode=SAFETY_MODE)
 
 logger.info(f"🚀 Agent Zero Bridge starting...")

@@ -3,6 +3,18 @@
     "sha256": "35e862f84bada46a78c4170432275e3e3ff488cd7a727987251cb4e49f9ff079",
     "approved_at": "2026-02-15T13:28:22.747193Z"
   },
+  "calendar-events": {
+    "sha256": "c40dbba5e4c124a575e496f0707bb0ffaef2fd428aff06c3a3fc5f7e5d2afee3",
+    "approved_at": "2026-02-16T12:40:11.017727Z"
+  },
+  "channel-setup": {
+    "sha256": "191c882d04e3ef9d533c4d1a52e6f946043d4210248c676659a5c017d59df16e",
+    "approved_at": "2026-02-16T12:40:11.017730Z"
+  },
+  "personal-facts": {
+    "sha256": "1033123ac14ecb3501997cd0707d34e988211a3b6afa3078c211325bf6a69624",
+    "approved_at": "2026-02-16T12:40:11.017733Z"
+  },
   "proactive-agent": {
     "sha256": "7c91e5952d2aa53afefbf5c0f754187090546652f14953476d02cb43a908e97c",
     "approved_at": "2026-02-15T13:35:19.750037Z"
@@ -10,6 +22,10 @@
   "self-improvement": {
     "sha256": "160c0bce689595a3fb8e0c3adaecf87abe69e49b472f89231cd1e287589c7ae8",
     "approved_at": "2026-02-15T13:34:07.872912Z"
+  },
+  "shopping-list": {
+    "sha256": "b8d7889817908809b62be3ef4c6ef6e255dfaac00ab98401a8115503de22338c",
+    "approved_at": "2026-02-16T12:40:11.017739Z"
   },
   "smart-home": {
     "sha256": "f8925a0553145951ceb3d5734ad42081148b254a0c84790a34405ead9828d6ec",

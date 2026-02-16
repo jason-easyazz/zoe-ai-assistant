@@ -5,10 +5,19 @@ Agent Zero Client
 Client for communicating with Agent Zero's HTTP API.
 
 Implements the full Agent Zero API protocol for autonomous agent capabilities.
+
+Agent Zero exposes endpoints as /{handler_name} where handler_name is the
+Python module name in python/api/ (e.g., api_message.py -> /api_message).
+
+The api_message endpoint requires an X-API-KEY header. The key is derived
+from Agent Zero's persistent runtime ID using:
+    sha256(runtime_id:username:password) -> base64url[:16]
 """
 
 import asyncio
 import logging
+import hashlib
+import base64
 import httpx
 from typing import Dict, Any, Optional
 import json
@@ -18,11 +27,25 @@ import os
 logger = logging.getLogger(__name__)
 
 
+def _compute_agent_zero_api_key(
+    runtime_id: str, username: str = "", password: str = ""
+) -> str:
+    """
+    Compute the API key that Agent Zero expects, using the same algorithm
+    as its create_auth_token() in python/helpers/settings.py.
+    """
+    hash_bytes = hashlib.sha256(
+        f"{runtime_id}:{username}:{password}".encode()
+    ).digest()
+    b64_token = base64.urlsafe_b64encode(hash_bytes).decode().replace("=", "")
+    return b64_token[:16]
+
+
 class AgentZeroClient:
     """
     Client for Agent Zero HTTP API.
     
-    Handles communication with the Agent Zero container via /api/message endpoint.
+    Handles communication with the Agent Zero container via /api_message endpoint.
     """
     
     def __init__(self, base_url: str = "http://zoe-agent0:80", api_key: Optional[str] = None):
@@ -36,7 +59,45 @@ class AgentZeroClient:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or os.getenv("AGENT_ZERO_API_KEY")
         self.contexts = {}  # user_id -> context_id mapping
+        self._key_fetched = False
         logger.info(f"🤖 Agent Zero client initialized: {self.base_url}")
+
+    async def _ensure_api_key(self) -> None:
+        """
+        Compute the API key if not already set.
+        
+        Priority:
+          1. AGENT_ZERO_API_KEY env var (explicit override)
+          2. Computed from A0_PERSISTENT_RUNTIME_ID env var
+        """
+        if self.api_key and self._key_fetched:
+            return
+
+        if self.api_key:
+            self._key_fetched = True
+            logger.info("🔑 Using explicitly configured Agent Zero API key")
+            return
+
+        try:
+            runtime_id = os.getenv("A0_PERSISTENT_RUNTIME_ID", "")
+            auth_login = os.getenv("A0_AUTH_LOGIN", "")
+            auth_password = os.getenv("A0_AUTH_PASSWORD", "")
+
+            if runtime_id:
+                self.api_key = _compute_agent_zero_api_key(
+                    runtime_id, auth_login, auth_password
+                )
+                logger.info("🔑 Computed Agent Zero API key from A0_PERSISTENT_RUNTIME_ID")
+            else:
+                logger.warning(
+                    "⚠️ No Agent Zero API key available. Set AGENT_ZERO_API_KEY "
+                    "or A0_PERSISTENT_RUNTIME_ID environment variable."
+                )
+
+        except Exception as e:
+            logger.warning(f"Failed to compute Agent Zero API key: {e}")
+
+        self._key_fetched = True
     
     def get_or_create_context(self, user_id: str) -> Optional[str]:
         """
@@ -88,23 +149,25 @@ class AgentZeroClient:
         """
         Send a message to Agent Zero and get response.
         
+        Uses the /api_message endpoint (underscore, not slash) which is
+        Agent Zero's programmatic API -- no CSRF required, API key auth only.
+        
         Args:
             message: Message/prompt to send
             user_id: User identifier for context
             lifetime_hours: Context lifetime (default: 24 hours)
             
         Returns:
-            Response from Agent Zero with context_id and response text
-            
-        Raises:
-            HTTPException: If request fails
+            Response dict with 'message' (response text) and 'context' (context_id).
+            Normalized to {'response': ..., 'context_id': ...} for backward compat.
         """
+        await self._ensure_api_key()
+
         try:
             headers = {
                 "Content-Type": "application/json"
             }
             
-            # Add API key if configured
             if self.api_key:
                 headers["X-API-KEY"] = self.api_key
             
@@ -118,25 +181,35 @@ class AgentZeroClient:
             if context_id:
                 payload["context_id"] = context_id
             
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=180.0) as client:
                 response = await client.post(
-                    f"{self.base_url}/api/message",
+                    f"{self.base_url}/api_message",
                     headers=headers,
                     json=payload
                 )
                 response.raise_for_status()
                 result = response.json()
                 
-                # Store context_id for future requests from this user
-                if "context_id" in result:
-                    self.contexts[user_id] = result["context_id"]
+                # Agent Zero returns {"message": "...", "context": "..."}
+                # Normalize to {"response": "...", "context_id": "..."} for our code
+                normalized = {
+                    "response": result.get("message", result.get("response", "")),
+                    "context_id": result.get("context", result.get("context_id", "")),
+                }
                 
-                return result
+                # Store context_id for future requests from this user
+                if normalized["context_id"]:
+                    self.contexts[user_id] = normalized["context_id"]
+                
+                return normalized
                 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
-                logger.error("Agent Zero API key missing or invalid")
-                raise Exception("Unauthorized: Check AGENT_ZERO_API_KEY")
+                logger.error(
+                    "Agent Zero API key rejected -- key may need recomputation "
+                    "(set AGENT_ZERO_API_KEY or A0_PERSISTENT_RUNTIME_ID)"
+                )
+                raise Exception("Unauthorized: Agent Zero API key invalid")
             elif e.response.status_code == 404:
                 logger.error(f"Agent Zero endpoint not found: {e.request.url}")
                 raise Exception("Agent Zero API endpoint not found")
@@ -144,7 +217,7 @@ class AgentZeroClient:
                 logger.error(f"Agent Zero HTTP error: {e}")
                 raise
         except httpx.TimeoutException:
-            logger.error("Agent Zero request timeout (> 120s)")
+            logger.error("Agent Zero request timeout (> 180s)")
             raise Exception("Agent Zero timeout - task may be too complex")
         except Exception as e:
             logger.error(f"Agent Zero request failed: {e}")
