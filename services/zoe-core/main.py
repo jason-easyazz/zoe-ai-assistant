@@ -298,6 +298,15 @@ async def startup_event():
     except Exception as e:
         logger.error(f"❌ Failed to start timer service: {e}")
     
+    # Start the proactive scheduler (cron jobs)
+    try:
+        from scheduler.cron_manager import cron_manager
+        import asyncio
+        asyncio.create_task(cron_manager.start())
+        logger.info("✅ Proactive scheduler (CronManager) started")
+    except Exception as e:
+        logger.error(f"❌ Failed to start scheduler: {e}")
+
     logger.info("🎉 All services started successfully")
 
 @app.on_event("shutdown")

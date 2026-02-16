@@ -14,7 +14,6 @@ ARCHITECTURE (2025-11-17):
 Supported providers:
   - LiteLLM (PRIMARY - unified gateway for all models)
   - llama.cpp (LEGACY - direct access if needed)
-  - vLLM (LEGACY - fallback option)
 """
 import httpx
 import json
@@ -38,62 +37,6 @@ class LLMProvider(ABC):
     async def generate_stream(self, prompt: str, **kwargs) -> AsyncGenerator[str, None]:
         """Stream tokens from the LLM"""
         pass
-
-
-class VLLMProvider(LLMProvider):
-    """
-    vLLM Provider for Jetson Orin NX
-    Production-ready with streaming support
-    """
-    
-    def __init__(self, base_url: str = "http://zoe-vllm:11434"):
-        self.base_url = base_url
-        logger.info("🚀 Using vLLM provider (production mode)")
-    
-    async def generate(self, prompt: str, model: str = "auto", **kwargs) -> str:
-        """Generate with vLLM (routing handled server-side)"""
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    f"{self.base_url}/v1/chat/completions",
-                    json={
-                        "messages": [{"role": "user", "content": prompt}],
-                        "stream": False,
-                        "context": kwargs.get("context", {})
-                    }
-                )
-                result = response.json()
-                return result["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.error(f"❌ vLLM generation error: {e}")
-            raise
-    
-    async def generate_stream(self, prompt: str, **kwargs) -> AsyncGenerator[str, None]:
-        """Stream tokens for voice UX"""
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                async with client.stream(
-                    "POST",
-                    f"{self.base_url}/v1/chat/completions",
-                    json={
-                        "messages": [{"role": "user", "content": prompt}],
-                        "stream": True,
-                        "context": kwargs.get("context", {})
-                    }
-                ) as response:
-                    async for line in response.aiter_lines():
-                        if line.startswith("data: "):
-                            data = line[6:]
-                            if data == "[DONE]":
-                                break
-                            try:
-                                token_data = json.loads(data)
-                                yield token_data.get("token", "")
-                            except:
-                                continue
-        except Exception as e:
-            logger.error(f"❌ vLLM streaming error: {e}")
-            raise
 
 
 class LiteLLMProvider(LLMProvider):
@@ -346,7 +289,7 @@ def get_llm_provider(force_provider: Optional[str] = None) -> LLMProvider:
       - To use direct providers, set LLM_PROVIDER env var or force_provider
     
     Args:
-        force_provider: Optional["litellm", "llamacpp", "vllm", "ollama"] to override default
+        force_provider: Optional["litellm", "llamacpp", "ollama"] to override default
     
     Returns:
         LLMProvider instance (default: LiteLLMProvider)
@@ -362,7 +305,7 @@ def get_llm_provider(force_provider: Optional[str] = None) -> LLMProvider:
     
     if force_provider:
         provider_type = force_provider.lower()
-    elif env_provider in ["litellm", "llamacpp", "vllm", "ollama"]:
+    elif env_provider in ["litellm", "llamacpp", "ollama"]:
         provider_type = env_provider
     else:
         # ALWAYS default to LiteLLM Gateway (production standard)
@@ -375,14 +318,11 @@ def get_llm_provider(force_provider: Optional[str] = None) -> LLMProvider:
     elif provider_type == "llamacpp":
         _provider_instance = LlamaCppProvider()
         logger.warning("⚠️ Direct llamacpp access - consider using LiteLLM gateway")
-    elif provider_type == "vllm":
-        _provider_instance = VLLMProvider()
-        logger.warning("⚠️ Direct vLLM access - consider using LiteLLM gateway")
     elif provider_type == "ollama":
         _provider_instance = OllamaProvider()
         logger.warning("⚠️ Ollama compatibility mode - consider using LiteLLM gateway")
     else:
-        raise ValueError(f"Unknown provider type: {provider_type}. Use: litellm, llamacpp, vllm, ollama")
+        raise ValueError(f"Unknown provider type: {provider_type}. Use: litellm, llamacpp, ollama")
     
     return _provider_instance
 
