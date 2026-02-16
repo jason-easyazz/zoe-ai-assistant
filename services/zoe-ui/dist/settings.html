@@ -2605,6 +2605,274 @@
                 </div>
             </div>
 
+            <!-- ========== ADMIN: Trust Gate ========== -->
+            <div class="settings-section" id="trustGateSection" style="display:none;">
+                <div class="section-header" onclick="toggleSection('trustGateContent')">
+                    <div class="section-title">🛡️ Trust Gate</div>
+                    <div class="section-subtitle">Allowlist and audit log for message security</div>
+                </div>
+                <div class="section-content" id="trustGateContent">
+                    <h4 style="margin:0 0 10px">Allowlist</h4>
+                    <div id="trustGateAllowlist" style="margin-bottom:15px;"><em>Loading...</em></div>
+                    <h4 style="margin:0 0 10px">Recent Audit Log</h4>
+                    <div id="trustGateAudit" style="max-height:300px;overflow-y:auto;"><em>Loading...</em></div>
+                </div>
+            </div>
+
+            <!-- ========== ADMIN: Skills ========== -->
+            <div class="settings-section" id="skillsSection" style="display:none;">
+                <div class="section-header" onclick="toggleSection('skillsContent')">
+                    <div class="section-title">⚡ Skills</div>
+                    <div class="section-subtitle">View and manage loaded skills</div>
+                </div>
+                <div class="section-content" id="skillsContent">
+                    <div id="skillsList"><em>Loading...</em></div>
+                    <div style="margin-top:10px;">
+                        <button class="btn" onclick="reloadSkills()">Reload All</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ========== ADMIN: Learnings ========== -->
+            <div class="settings-section" id="learningsSection" style="display:none;">
+                <div class="section-header" onclick="toggleSection('learningsContent')">
+                    <div class="section-title">📖 Learnings</div>
+                    <div class="section-subtitle">User preference learnings from conversations</div>
+                </div>
+                <div class="section-content" id="learningsContent">
+                    <h4 style="margin:0 0 10px">Pending Learnings</h4>
+                    <div id="pendingLearnings"><em>Loading...</em></div>
+                    <h4 style="margin:15px 0 10px">Confirmed Learnings</h4>
+                    <div id="confirmedLearnings"><em>Loading...</em></div>
+                </div>
+            </div>
+
+            <!-- ========== ADMIN: Scheduler ========== -->
+            <div class="settings-section" id="schedulerSection" style="display:none;">
+                <div class="section-header" onclick="toggleSection('schedulerContent')">
+                    <div class="section-title">⏰ Scheduler</div>
+                    <div class="section-subtitle">Manage scheduled jobs and cron tasks</div>
+                </div>
+                <div class="section-content" id="schedulerContent">
+                    <div id="schedulerJobs"><em>Loading...</em></div>
+                </div>
+            </div>
+
+            <!-- ========== ADMIN: Self-Creation ========== -->
+            <div class="settings-section" id="selfCreationSection" style="display:none;">
+                <div class="section-header" onclick="toggleSection('selfCreationContent')">
+                    <div class="section-title">🔧 Self-Creation</div>
+                    <div class="section-subtitle">Approve or reject auto-proposed skills and widgets</div>
+                </div>
+                <div class="section-content" id="selfCreationContent">
+                    <h4 style="margin:0 0 10px">Pending Proposals</h4>
+                    <div id="selfCreationProposals"><em>Loading...</em></div>
+                    <h4 style="margin:15px 0 10px">User-Created Widgets</h4>
+                    <div id="selfCreationWidgets"><em>Loading...</em></div>
+                    <div style="margin-top:10px;">
+                        <button class="btn" onclick="scanForPatterns()">Scan for Patterns</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ========== ADMIN: Connected Channels ========== -->
+            <div class="settings-section" id="channelsSection" style="display:none;">
+                <div class="section-header" onclick="toggleSection('channelsContent')">
+                    <div class="section-title">💬 Connected Channels</div>
+                    <div class="section-subtitle">Manage Telegram, Discord, WhatsApp connections</div>
+                </div>
+                <div class="section-content" id="channelsContent">
+                    <div id="channelsList"><em>Loading...</em></div>
+                </div>
+            </div>
+
+            <script>
+            /* ---- Admin section visibility (show for admin users) ---- */
+            (function(){
+                const adminSections = ['trustGateSection','skillsSection','learningsSection','schedulerSection','selfCreationSection','channelsSection'];
+                function showAdminSections(){
+                    adminSections.forEach(id => {
+                        const el = document.getElementById(id);
+                        if(el) el.style.display = '';
+                    });
+                }
+                // Show admin sections after a short delay (session must be loaded)
+                setTimeout(showAdminSections, 500);
+
+                // Lazy-load data when section is expanded
+                const observer = new MutationObserver(mutations => {
+                    mutations.forEach(m => {
+                        if(m.target.style && m.target.style.display !== 'none'){
+                            const id = m.target.id;
+                            if(id === 'trustGateContent') loadTrustGate();
+                            if(id === 'skillsContent') loadSkillsList();
+                            if(id === 'learningsContent') loadLearnings();
+                            if(id === 'schedulerContent') loadSchedulerJobs();
+                            if(id === 'selfCreationContent') loadSelfCreation();
+                            if(id === 'channelsContent') loadChannelsList();
+                        }
+                    });
+                });
+                adminSections.forEach(id => {
+                    const contentId = id.replace('Section','Content');
+                    const el = document.getElementById(contentId);
+                    if(el) observer.observe(el, {attributes: true, attributeFilter: ['style']});
+                });
+            })();
+
+            /* ---- Trust Gate ---- */
+            async function loadTrustGate(){
+                try{
+                    const res = await fetch('/api/trust-gate/allowlist');
+                    if(res.ok){
+                        const data = await res.json();
+                        const list = data.allowlist || [];
+                        document.getElementById('trustGateAllowlist').innerHTML = list.length
+                            ? list.map(e => `<div class="setting-item"><div class="setting-info"><div class="setting-name">${e.name||e.user_id}</div><div class="setting-description">${e.permissions||'default'}</div></div></div>`).join('')
+                            : '<em>No entries</em>';
+                    }
+                }catch(e){console.warn('Trust gate load failed',e);}
+                try{
+                    const res = await fetch('/api/trust-gate/audit?limit=20');
+                    if(res.ok){
+                        const data = await res.json();
+                        const logs = data.entries || [];
+                        document.getElementById('trustGateAudit').innerHTML = logs.length
+                            ? logs.map(l => `<div style="padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.1);font-size:0.85em"><span style="opacity:0.6">${l.timestamp||''}</span> ${l.action||''} - ${l.result||''}</div>`).join('')
+                            : '<em>No audit entries</em>';
+                    }
+                }catch(e){console.warn('Audit log load failed',e);}
+            }
+
+            /* ---- Skills ---- */
+            async function loadSkillsList(){
+                try{
+                    const res = await fetch('/api/skills');
+                    if(res.ok){
+                        const data = await res.json();
+                        const skills = data.skills || [];
+                        document.getElementById('skillsList').innerHTML = skills.length
+                            ? skills.map(s => `<div class="setting-item"><div class="setting-info"><div class="setting-name">${s.name} <span style="opacity:0.5;font-size:0.8em">v${s.version||'1.0'}</span></div><div class="setting-description">Triggers: ${(s.triggers||[]).slice(0,3).join(', ')}${(s.triggers||[]).length>3?'...':''}</div></div><div class="setting-control">${s.active===false?'<button class="btn" onclick="approveSkill(\''+s.name+'\')">Activate</button>':'<span style="color:#4caf50">Active</span>'}</div></div>`).join('')
+                            : '<em>No skills loaded</em>';
+                    }
+                }catch(e){console.warn('Skills load failed',e);}
+            }
+            async function reloadSkills(){
+                try{await fetch('/api/skills/reload',{method:'POST'});loadSkillsList();}catch(e){}
+            }
+            async function approveSkill(name){
+                try{await fetch('/api/skills/'+name+'/activate',{method:'POST'});loadSkillsList();}catch(e){}
+            }
+
+            /* ---- Learnings ---- */
+            async function loadLearnings(){
+                try{
+                    const res = await fetch('/api/learnings');
+                    if(res.ok){
+                        const data = await res.json();
+                        const pending = (data.learnings||[]).filter(l=>!l.confirmed);
+                        const confirmed = (data.learnings||[]).filter(l=>l.confirmed);
+                        document.getElementById('pendingLearnings').innerHTML = pending.length
+                            ? pending.map(l => `<div class="setting-item"><div class="setting-info"><div class="setting-name">${l.summary||l.content}</div><div class="setting-description">${l.source||''}</div></div><div class="setting-control"><button class="btn" onclick="confirmLearning(${l.id})">Confirm</button> <button class="btn" onclick="dismissLearning(${l.id})">Dismiss</button></div></div>`).join('')
+                            : '<em>None pending</em>';
+                        document.getElementById('confirmedLearnings').innerHTML = confirmed.length
+                            ? confirmed.map(l => `<div class="setting-item"><div class="setting-info"><div class="setting-name">${l.summary||l.content}</div></div></div>`).join('')
+                            : '<em>No confirmed learnings</em>';
+                    }
+                }catch(e){console.warn('Learnings load failed',e);}
+            }
+            async function confirmLearning(id){
+                try{await fetch('/api/learnings/'+id+'/confirm',{method:'POST'});loadLearnings();}catch(e){}
+            }
+            async function dismissLearning(id){
+                try{await fetch('/api/learnings/'+id,{method:'DELETE'});loadLearnings();}catch(e){}
+            }
+
+            /* ---- Scheduler ---- */
+            async function loadSchedulerJobs(){
+                try{
+                    const res = await fetch('/api/scheduler/jobs');
+                    if(res.ok){
+                        const data = await res.json();
+                        const jobs = data.jobs || [];
+                        document.getElementById('schedulerJobs').innerHTML = jobs.length
+                            ? jobs.map(j => `<div class="setting-item"><div class="setting-info"><div class="setting-name">${j.name||j.id}</div><div class="setting-description">Schedule: ${j.schedule||j.cron||'—'} | Next: ${j.next_run||'—'}</div></div><div class="setting-control"><button class="btn" onclick="deleteJob('${j.id}')">Delete</button></div></div>`).join('')
+                            : '<em>No scheduled jobs</em>';
+                    }
+                }catch(e){console.warn('Scheduler load failed',e);}
+            }
+            async function deleteJob(id){
+                try{await fetch('/api/scheduler/jobs/'+id,{method:'DELETE'});loadSchedulerJobs();}catch(e){}
+            }
+
+            /* ---- Self-Creation ---- */
+            async function loadSelfCreation(){
+                try{
+                    const res = await fetch('/api/self-creation/proposals');
+                    if(res.ok){
+                        const data = await res.json();
+                        const proposals = data.proposals || [];
+                        document.getElementById('selfCreationProposals').innerHTML = proposals.length
+                            ? proposals.map(p => `<div class="setting-item"><div class="setting-info"><div class="setting-name">${p.name} (${p.type||'skill'})</div><div class="setting-description">${p.reason||''}</div></div><div class="setting-control"><button class="btn" onclick="approveProposal(${p.id})">Approve</button> <button class="btn" onclick="rejectProposal(${p.id})">Reject</button></div></div>`).join('')
+                            : '<em>No pending proposals</em>';
+                    }
+                }catch(e){console.warn('Self-creation load failed',e);}
+                try{
+                    const res = await fetch('/api/self-creation/widgets');
+                    if(res.ok){
+                        const data = await res.json();
+                        const widgets = data.widgets || [];
+                        document.getElementById('selfCreationWidgets').innerHTML = widgets.length
+                            ? widgets.map(w => `<div class="setting-item"><div class="setting-info"><div class="setting-name">${w.name}</div><div class="setting-description">Created: ${w.created_at||'—'}</div></div></div>`).join('')
+                            : '<em>No user-created widgets</em>';
+                    }
+                }catch(e){console.warn('Widgets load failed',e);}
+            }
+            async function approveProposal(id){
+                try{await fetch('/api/self-creation/proposals/'+id+'/approve',{method:'POST'});loadSelfCreation();}catch(e){}
+            }
+            async function rejectProposal(id){
+                try{await fetch('/api/self-creation/proposals/'+id+'/reject',{method:'POST'});loadSelfCreation();}catch(e){}
+            }
+            async function scanForPatterns(){
+                try{await fetch('/api/self-creation/scan',{method:'POST'});alert('Pattern scan initiated');loadSelfCreation();}catch(e){}
+            }
+
+            /* ---- Connected Channels ---- */
+            async function loadChannelsList(){
+                try{
+                    const res = await fetch('/api/channels');
+                    if(res.ok){
+                        const data = await res.json();
+                        const channels = data.channels || [];
+                        document.getElementById('channelsList').innerHTML = channels.filter(c=>c.id!=='web').map(ch => {
+                            const statusBadge = ch.configured
+                                ? `<span style="color:#4caf50">Connected${ch.bot_username?' (@'+ch.bot_username+')':''}</span>`
+                                : '<span style="color:#ff9800">Not configured</span>';
+                            const actions = ch.configured
+                                ? `<button class="btn" onclick="testChannel('${ch.id}')">Test</button> <button class="btn" onclick="disconnectChannel('${ch.id}')">Disconnect</button>`
+                                : `<button class="btn" onclick="window.location.href='chat.html?setup_channel=${ch.id}'">Setup in Chat</button>`;
+                            return `<div class="setting-item"><div class="setting-info"><div class="setting-name">${ch.label}</div><div class="setting-description">${statusBadge}</div></div><div class="setting-control">${actions}</div></div>`;
+                        }).join('') || '<em>No external channels available</em>';
+                    }
+                }catch(e){console.warn('Channels load failed',e);}
+            }
+            async function testChannel(id){
+                try{
+                    const res = await fetch('/api/channels/'+id+'/test',{method:'POST'});
+                    const data = await res.json();
+                    alert(data.success ? 'Connection OK!' : 'Connection failed: '+(data.error||'Unknown'));
+                }catch(e){alert('Test failed');}
+            }
+            async function disconnectChannel(id){
+                if(!confirm('Disconnect '+id+'?')) return;
+                try{
+                    await fetch('/api/channels/'+id+'/config',{method:'DELETE'});
+                    loadChannelsList();
+                }catch(e){alert('Disconnect failed');}
+            }
+            </script>
+
             <script>
             async function loadIntelligenceSettingsUI(){
                 try{
