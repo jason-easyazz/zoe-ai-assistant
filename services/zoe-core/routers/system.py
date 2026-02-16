@@ -2,6 +2,10 @@ from auth_integration import require_permission, validate_session
 """
 System Status and Monitoring
 Provides system information and health status
+
+Phase -1 Fix 5: Replaced mock service statuses and fake logs with real HTTP
+health endpoint checks. Does NOT use Docker socket (security concern). Instead
+checks each service's HTTP health endpoint on the internal Docker network.
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -11,10 +15,64 @@ import psutil
 import os
 import platform
 import logging
+import asyncio
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/system", tags=["system"])
+
+# Service health endpoints on the internal Docker network (zoe-network).
+# Each service exposes an HTTP endpoint that returns 200 when healthy.
+# No Docker socket required -- pure HTTP checks.
+SERVICE_HEALTH_ENDPOINTS = {
+    "zoe-core": {"url": "http://localhost:8000/health", "display": "Zoe Core API"},
+    "zoe-auth": {"url": "http://zoe-auth:8002/health", "display": "Auth Service"},
+    "zoe-mcp-server": {"url": "http://zoe-mcp-server:8003/health", "display": "MCP Server"},
+    "zoe-mem-agent": {"url": "http://zoe-mem-agent:8000/health", "display": "Memory Agent"},
+    "zoe-litellm": {"url": "http://zoe-litellm:8001/health", "display": "LiteLLM Proxy"},
+    "zoe-llamacpp": {"url": "http://zoe-llamacpp:11434/api/tags", "display": "LLM Engine"},
+    "zoe-code-execution": {"url": "http://zoe-code-execution:8010/health", "display": "Code Sandbox"},
+    "homeassistant-mcp-bridge": {"url": "http://homeassistant-mcp-bridge:8007/", "display": "HA Bridge"},
+    "n8n-mcp-bridge": {"url": "http://n8n-mcp-bridge:8009/", "display": "N8N Bridge"},
+    "zoe-n8n": {"url": "http://zoe-n8n:5678/healthz/readiness", "display": "N8N Workflows"},
+    "livekit": {"url": "http://livekit:7880", "display": "LiveKit"},
+}
+
+
+async def _check_service_health(service_name: str, config: dict) -> dict:
+    """Check a single service's health via HTTP. Returns status dict."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            response = await client.get(config["url"])
+            return {
+                "name": config["display"],
+                "service": service_name,
+                "status": "running" if response.status_code < 500 else "degraded",
+                "http_status": response.status_code,
+            }
+    except httpx.ConnectError:
+        return {
+            "name": config["display"],
+            "service": service_name,
+            "status": "stopped",
+            "http_status": None,
+        }
+    except httpx.TimeoutException:
+        return {
+            "name": config["display"],
+            "service": service_name,
+            "status": "timeout",
+            "http_status": None,
+        }
+    except Exception as e:
+        return {
+            "name": config["display"],
+            "service": service_name,
+            "status": "error",
+            "http_status": None,
+            "error": str(e),
+        }
 
 class SystemStatus(BaseModel):
     status: str
@@ -28,32 +86,39 @@ class SystemStatus(BaseModel):
 
 @router.get("/status")
 async def get_system_status():
-    """Get system status and health information"""
+    """Get system status and health information.
+
+    Phase -1 Fix 5: Services are checked via real HTTP health endpoints,
+    not hardcoded mock data. Each service is queried in parallel with a
+    3-second timeout.
+    """
     try:
         # Get system information
         uptime_seconds = psutil.boot_time()
         uptime = datetime.now().timestamp() - uptime_seconds
-        
+
         # Format uptime
         days = int(uptime // 86400)
         hours = int((uptime % 86400) // 3600)
         minutes = int((uptime % 3600) // 60)
         uptime_str = f"{days}d {hours}h {minutes}m"
-        
+
         # Get resource usage
-        cpu_usage = psutil.cpu_percent(interval=1)
+        cpu_usage = psutil.cpu_percent(interval=0.5)
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage('/')
-        
-        # Mock services status (in a real system, you'd check actual services)
-        services = [
-            {"name": "Database", "status": "running", "uptime": "2h 15m"},
-            {"name": "API Server", "status": "running", "uptime": "1h 30m"},
-            {"name": "Background Tasks", "status": "running", "uptime": "2h 15m"},
-            {"name": "Weather Service", "status": "running", "uptime": "1h 30m"},
-            {"name": "Home Assistant", "status": "connected", "uptime": "5h 20m"}
+
+        # Check all services in parallel via HTTP health endpoints
+        health_tasks = [
+            _check_service_health(name, config)
+            for name, config in SERVICE_HEALTH_ENDPOINTS.items()
         ]
-        
+        services = await asyncio.gather(*health_tasks)
+
+        # Count healthy vs unhealthy
+        running_count = sum(1 for s in services if s["status"] == "running")
+        total_count = len(services)
+
         return {
             "status": {
                 "api_online": True,
@@ -64,16 +129,17 @@ async def get_system_status():
                 "disk_usage": round(disk.percent, 1),
                 "platform": platform.system(),
                 "python_version": platform.python_version(),
-                "services": services
+                "services": services,
+                "services_summary": f"{running_count}/{total_count} healthy"
             },
             "timestamp": datetime.now().isoformat()
         }
-        
+
     except Exception as e:
-        # Fallback to basic status if psutil fails
+        logger.error(f"System status check failed: {e}")
         return {
             "status": {
-                "api_online": False,
+                "api_online": True,
                 "uptime": "unknown",
                 "version": "5.0",
                 "cpu_usage": 0.0,
@@ -81,9 +147,8 @@ async def get_system_status():
                 "disk_usage": 0.0,
                 "platform": platform.system(),
                 "python_version": platform.python_version(),
-                "services": [
-                    {"name": "API Server", "status": "running", "uptime": "unknown"}
-                ]
+                "services": [],
+                "services_summary": "check failed"
             },
             "timestamp": datetime.now().isoformat(),
             "error": str(e)
@@ -97,6 +162,35 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0"
     }
+
+
+@router.get("/intent-stats")
+async def get_intent_tier_stats():
+    """Get intent classification tier hit rates.
+
+    Phase -1 Fix 3: Measurement endpoint to verify deterministic coverage
+    before/after module intent registration fix.
+    """
+    try:
+        # Import the classifier that was initialized in chat.py at module level
+        from routers.chat import intent_classifier
+        if intent_classifier and hasattr(intent_classifier, 'get_tier_stats'):
+            return {
+                "tier_stats": intent_classifier.get_tier_stats(),
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            return {
+                "tier_stats": None,
+                "message": "Intent system not active or no stats available",
+                "timestamp": datetime.now().isoformat()
+            }
+    except Exception as e:
+        return {
+            "tier_stats": None,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 @router.get("/info")
 async def get_system_info():
@@ -142,31 +236,71 @@ async def get_system_info():
 
 @router.get("/logs")
 async def get_system_logs(limit: int = 50):
-    """Get recent system logs"""
-    # In a real system, this would read from log files
-    # For now, return mock log entries
-    mock_logs = [
-        {
-            "timestamp": datetime.now().isoformat(),
-            "level": "INFO",
-            "message": "System started successfully",
-            "service": "main"
-        },
-        {
-            "timestamp": datetime.now().isoformat(),
-            "level": "INFO", 
-            "message": "All routers loaded",
-            "service": "main"
-        },
-        {
-            "timestamp": datetime.now().isoformat(),
-            "level": "INFO",
-            "message": "Database connection established",
-            "service": "database"
-        }
+    """Get recent system logs from the actual log file.
+
+    Phase -1 Fix 5: Reads real log entries from zoe-core's log file instead
+    of returning hardcoded mock entries.
+    """
+    log_paths = [
+        "/app/data/zoe.log",
+        "/app/logs/zoe.log",
+        "/tmp/zoe.log",
     ]
-    
-    return {"logs": mock_logs[:limit]}
+
+    log_file = None
+    for path in log_paths:
+        if os.path.exists(path):
+            log_file = path
+            break
+
+    if not log_file:
+        # No log file found -- return empty with explanation
+        return {
+            "logs": [],
+            "message": "No log file found. Logs are available via Docker: docker logs zoe-core",
+            "searched_paths": log_paths
+        }
+
+    try:
+        # Read the last N lines from the log file efficiently
+        entries = []
+        with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
+            # Read all lines and take the last `limit` lines
+            lines = f.readlines()
+            recent_lines = lines[-limit:] if len(lines) > limit else lines
+
+        for line in recent_lines:
+            line = line.strip()
+            if not line:
+                continue
+            # Parse common log format: "2025-01-29 10:30:15 - module - LEVEL - message"
+            entry = {"raw": line}
+            parts = line.split(" - ", 3)
+            if len(parts) >= 4:
+                entry = {
+                    "timestamp": parts[0].strip(),
+                    "service": parts[1].strip(),
+                    "level": parts[2].strip(),
+                    "message": parts[3].strip(),
+                }
+            elif len(parts) >= 3:
+                entry = {
+                    "timestamp": parts[0].strip(),
+                    "level": parts[1].strip(),
+                    "message": parts[2].strip(),
+                    "service": "main",
+                }
+            entries.append(entry)
+
+        return {"logs": entries, "source": log_file, "count": len(entries)}
+
+    except Exception as e:
+        logger.error(f"Failed to read logs: {e}")
+        return {
+            "logs": [],
+            "error": str(e),
+            "message": "Failed to read log file. Use: docker logs zoe-core"
+        }
 
 # ------------------------------------------------------------------
 # Response quality feedback logging

@@ -1,6 +1,9 @@
 """
 Home Assistant Integration
 Basic integration for home automation control
+
+Phase -1 Fix 1: Replaced mock endpoints with proper error responses.
+When HA is not configured, endpoints return a clear error instead of fake data.
 """
 from fastapi import APIRouter, HTTPException, Query
 from auth_integration import require_permission, validate_session
@@ -8,12 +11,41 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import requests
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/homeassistant", tags=["homeassistant"])
 
 # Home Assistant configuration
 HA_BASE_URL = os.getenv("HOMEASSISTANT_URL", "http://homeassistant.local:8123")
 HA_TOKEN = os.getenv("HOMEASSISTANT_TOKEN", "")
+
+
+def _check_ha_configured() -> bool:
+    """Check if Home Assistant is properly configured with a real token."""
+    return bool(HA_TOKEN) and not HA_TOKEN.startswith("your-")
+
+
+def _ha_not_configured_error():
+    """Return a consistent error when HA is not configured."""
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "error": "Home Assistant not configured",
+            "message": "Set HOMEASSISTANT_TOKEN in .env to connect to Home Assistant. "
+                       "No mock data is returned -- this endpoint requires a real HA instance.",
+            "help": "Get a long-lived access token from HA: Settings > User > Long-Lived Access Tokens"
+        }
+    )
+
+
+def _ha_headers() -> dict:
+    """Get standard HA API headers."""
+    return {
+        "Authorization": f"Bearer {HA_TOKEN}",
+        "Content-Type": "application/json"
+    }
 
 class ServiceCall(BaseModel):
     service: str
@@ -23,38 +55,17 @@ class ServiceCall(BaseModel):
 @router.get("/states")
 async def get_states():
     """Get all Home Assistant states"""
-    if not HA_TOKEN or HA_TOKEN.startswith("your-"):
-        # Return mock data if no HA token or placeholder token
-        return {
-            "states": {
-                "lights": [
-                    {"entity_id": "light.living_room", "state": "off", "attributes": {"friendly_name": "Living Room"}},
-                    {"entity_id": "light.kitchen", "state": "on", "attributes": {"friendly_name": "Kitchen"}},
-                    {"entity_id": "light.bedroom", "state": "off", "attributes": {"friendly_name": "Bedroom"}},
-                    {"entity_id": "light.office", "state": "off", "attributes": {"friendly_name": "Office"}},
-                    {"entity_id": "light.outdoor", "state": "on", "attributes": {"friendly_name": "Outdoor"}},
-                    {"entity_id": "light.garage", "state": "off", "attributes": {"friendly_name": "Garage"}}
-                ],
-                "sensors": [
-                    {"entity_id": "sensor.solar_output", "state": "2.4", "attributes": {"unit_of_measurement": "kW"}},
-                    {"entity_id": "sensor.battery_level", "state": "85", "attributes": {"unit_of_measurement": "%"}},
-                    {"entity_id": "sensor.temperature", "state": "22", "attributes": {"unit_of_measurement": "°C"}},
-                    {"entity_id": "sensor.security_status", "state": "secure", "attributes": {"friendly_name": "Security"}}
-                ]
-            }
-        }
-    
+    if not _check_ha_configured():
+        _ha_not_configured_error()
+
     try:
-        headers = {
-            "Authorization": f"Bearer {HA_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        
-        response = requests.get(f"{HA_BASE_URL}/api/states", headers=headers, timeout=5)
+        response = requests.get(
+            f"{HA_BASE_URL}/api/states", headers=_ha_headers(), timeout=10
+        )
         response.raise_for_status()
-        
+
         states = response.json()
-        
+
         # Organize states by domain
         organized_states = {
             "lights": [s for s in states if s["entity_id"].startswith("light.")],
@@ -63,151 +74,144 @@ async def get_states():
             "covers": [s for s in states if s["entity_id"].startswith("cover.")],
             "climate": [s for s in states if s["entity_id"].startswith("climate.")]
         }
-        
+
         return {"states": organized_states}
-        
+
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Cannot connect to Home Assistant at {HA_BASE_URL}. Is it running?"
+        )
+    except requests.exceptions.Timeout:
+        raise HTTPException(
+            status_code=504,
+            detail=f"Home Assistant at {HA_BASE_URL} timed out"
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to connect to Home Assistant: {str(e)}")
 
 @router.post("/service")
 async def call_service(service_call: ServiceCall):
     """Call a Home Assistant service"""
-    if not HA_TOKEN or HA_TOKEN.startswith("your-"):
-        # Mock response for testing
-        return {"message": f"Mock call to {service_call.service} on {service_call.entity_id}"}
-    
+    if not _check_ha_configured():
+        _ha_not_configured_error()
+
     try:
-        headers = {
-            "Authorization": f"Bearer {HA_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        
         data = {
             "entity_id": service_call.entity_id,
             **(service_call.data or {})
         }
-        
+
         response = requests.post(
             f"{HA_BASE_URL}/api/services/{service_call.service.replace('.', '/')}",
-            headers=headers,
+            headers=_ha_headers(),
             json=data,
-            timeout=5
+            timeout=10
         )
         response.raise_for_status()
-        
+
         return {"message": "Service called successfully", "response": response.json()}
-        
+
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Cannot connect to Home Assistant at {HA_BASE_URL}. Is it running?"
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to call service: {str(e)}")
 
 @router.get("/entities")
 async def get_entities(domain: Optional[str] = None):
     """Get entities by domain"""
-    if not HA_TOKEN:
-        # Return mock entities
-        mock_entities = {
-            "light": [
-                {"entity_id": "light.living_room", "friendly_name": "Living Room", "state": "off"},
-                {"entity_id": "light.kitchen", "friendly_name": "Kitchen", "state": "on"},
-                {"entity_id": "light.bedroom", "friendly_name": "Bedroom", "state": "off"},
-                {"entity_id": "light.office", "friendly_name": "Office", "state": "off"},
-                {"entity_id": "light.outdoor", "friendly_name": "Outdoor", "state": "on"},
-                {"entity_id": "light.garage", "friendly_name": "Garage", "state": "off"}
-            ],
-            "sensor": [
-                {"entity_id": "sensor.solar_output", "friendly_name": "Solar Output", "state": "2.4"},
-                {"entity_id": "sensor.battery_level", "friendly_name": "Battery Level", "state": "85"},
-                {"entity_id": "sensor.temperature", "friendly_name": "Temperature", "state": "22"},
-                {"entity_id": "sensor.security_status", "friendly_name": "Security Status", "state": "secure"}
-            ]
-        }
-        
-        if domain:
-            return {"entities": mock_entities.get(domain, [])}
-        return {"entities": mock_entities}
-    
+    if not _check_ha_configured():
+        _ha_not_configured_error()
+
     try:
-        headers = {
-            "Authorization": f"Bearer {HA_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        
+        response = requests.get(
+            f"{HA_BASE_URL}/api/states", headers=_ha_headers(), timeout=10
+        )
+        response.raise_for_status()
+
+        states = response.json()
+
         if domain:
-            response = requests.get(f"{HA_BASE_URL}/api/states", headers=headers, timeout=5)
-            response.raise_for_status()
-            
-            states = response.json()
             entities = [s for s in states if s["entity_id"].startswith(f"{domain}.")]
-            
             return {"entities": entities}
         else:
             # Get all entities grouped by domain
-            response = requests.get(f"{HA_BASE_URL}/api/states", headers=headers, timeout=5)
-            response.raise_for_status()
-            
-            states = response.json()
             entities_by_domain = {}
-            
             for state in states:
-                domain = state["entity_id"].split(".")[0]
-                if domain not in entities_by_domain:
-                    entities_by_domain[domain] = []
-                entities_by_domain[domain].append(state)
-            
+                d = state["entity_id"].split(".")[0]
+                if d not in entities_by_domain:
+                    entities_by_domain[d] = []
+                entities_by_domain[d].append(state)
             return {"entities": entities_by_domain}
-            
+
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Cannot connect to Home Assistant at {HA_BASE_URL}. Is it running?"
+        )
     except Exception as e:
-        # Return a proper error response instead of raising an exception
-        return {
-            "entities": [],
-            "count": 0,
-            "error": f"Failed to get entities: {str(e)}",
-            "status": 500
-        }
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get entities: {str(e)}"
+        )
 
 @router.get("/config")
 async def get_config():
     """Get Home Assistant configuration"""
-    if not HA_TOKEN:
-        return {
-            "config": {
-                "location_name": "Home",
-                "time_zone": "UTC",
-                "version": "Mock",
-                "unit_system": "metric"
-            }
-        }
-    
+    if not _check_ha_configured():
+        _ha_not_configured_error()
+
     try:
-        headers = {
-            "Authorization": f"Bearer {HA_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        
-        response = requests.get(f"{HA_BASE_URL}/api/config", headers=headers, timeout=5)
+        response = requests.get(
+            f"{HA_BASE_URL}/api/config", headers=_ha_headers(), timeout=10
+        )
         response.raise_for_status()
-        
         return {"config": response.json()}
-        
+
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Cannot connect to Home Assistant at {HA_BASE_URL}. Is it running?"
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get config: {str(e)}")
 
 @router.get("/health")
 async def health_check():
-    """Check Home Assistant connectivity"""
-    if not HA_TOKEN:
-        return {"status": "mock", "message": "Running in mock mode"}
-    
-    try:
-        headers = {
-            "Authorization": f"Bearer {HA_TOKEN}",
-            "Content-Type": "application/json"
+    """Check Home Assistant connectivity. This endpoint always returns 200 with status info."""
+    if not _check_ha_configured():
+        return {
+            "status": "not_configured",
+            "message": "Home Assistant token not set. Set HOMEASSISTANT_TOKEN in .env.",
+            "configured": False
         }
-        
-        response = requests.get(f"{HA_BASE_URL}/api/", headers=headers, timeout=5)
+
+    try:
+        response = requests.get(
+            f"{HA_BASE_URL}/api/", headers=_ha_headers(), timeout=5
+        )
         response.raise_for_status()
-        
-        return {"status": "connected", "message": "Connected to Home Assistant"}
-        
+        return {
+            "status": "connected",
+            "message": "Connected to Home Assistant",
+            "configured": True,
+            "base_url": HA_BASE_URL
+        }
+
+    except requests.exceptions.ConnectionError:
+        return {
+            "status": "disconnected",
+            "message": f"Cannot reach Home Assistant at {HA_BASE_URL}",
+            "configured": True,
+            "base_url": HA_BASE_URL
+        }
     except Exception as e:
-        return {"status": "disconnected", "message": f"Failed to connect: {str(e)}"}
+        return {
+            "status": "error",
+            "message": f"Failed to connect: {str(e)}",
+            "configured": True,
+            "base_url": HA_BASE_URL
+        }

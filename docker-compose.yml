@@ -10,6 +10,7 @@ services:
     - ./data:/app/data
     - ./modules:/app/modules:ro
     - ./config:/app/config:ro
+    - ./skills:/app/core-skills:ro
     - /var/run/docker.sock:/var/run/docker.sock
     - /home/zoe/assistant:/home/zoe/assistant:rw
     - /usr/bin/docker:/usr/bin/docker:ro
@@ -22,6 +23,7 @@ services:
     - FULL_ACCESS=true
     - ZOE_DEV_MODE=true
     - DATABASE_PATH=/app/data/zoe.db
+    - CORE_SKILLS_DIR=/app/core-skills
     - USE_CONTEXT_VALIDATION=${USE_CONTEXT_VALIDATION:-true}
     - USE_CONFIDENCE_FORMATTING=${USE_CONFIDENCE_FORMATTING:-true}
     - USE_DYNAMIC_TEMPERATURE=${USE_DYNAMIC_TEMPERATURE:-true}

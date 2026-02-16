@@ -61,17 +61,29 @@ class ModuleWidgetLoader {
      * Discover widgets from all enabled modules
      */
     async discoverWidgets() {
-        // Known modules with widget support (TODO: Make this dynamic via MCP endpoint)
-        const moduleConfig = {
-            'music': { port: 8100, name: 'zoe-music' }
-            // Add more modules as they're created
-        };
+        // Phase 1b: Dynamic module discovery via API
+        let enabledModules = [];
+        try {
+            const modulesResp = await fetch('/api/modules/enabled', {
+                headers: { 'X-Session-ID': window.sessionId || 'dev-localhost' }
+            });
+            if (modulesResp.ok) {
+                const data = await modulesResp.json();
+                enabledModules = (data.modules || []).filter(m => m.has_widgets);
+                console.log(`🔍 Dynamic discovery: ${enabledModules.length} modules with widgets`);
+            } else {
+                console.warn('⚠️ Module discovery API unavailable, using fallback');
+            }
+        } catch (e) {
+            console.warn('⚠️ Module discovery failed:', e);
+        }
         
-        const enabledModules = Object.keys(moduleConfig);
-        console.log('🔍 Discovering widgets from modules:', enabledModules);
+        // Fallback: no hardcoded modules needed
+        console.log('🔍 Discovering widgets from modules:', enabledModules.map(m => m.name));
         
-        for (const moduleName of enabledModules) {
-            const config = moduleConfig[moduleName];
+        for (const mod of enabledModules) {
+            const moduleName = mod.name;
+            const config = { port: mod.port, name: moduleName };
             
             try {
                 // Fetch manifest through nginx proxy (not direct localhost)

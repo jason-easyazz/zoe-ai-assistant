@@ -206,22 +206,227 @@ async def create_reminder_action(match: dict, message: str, user_id: str, contex
         }
 
 async def create_event_action(match: dict, message: str, user_id: str) -> dict:
-    """Create a calendar event"""
-    # Placeholder for event creation
-    return {
-        'success': False,
-        'action': 'event_creation',
-        'message': 'Event creation not yet implemented'
-    }
+    """Create a calendar event via the calendar API.
+
+    Phase -1 Fix 4: Replaced placeholder with real calendar event creation.
+    Uses POST /api/calendar/events to create events.
+    """
+    try:
+        # Extract event details from the message using simple NLP
+        event_info = _extract_event_details(message)
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                "http://localhost:8000/api/calendar/events",
+                json={
+                    "title": event_info.get("title", "New Event"),
+                    "description": f"Created by Zoe from: {message[:200]}",
+                    "start_date": event_info.get("start_date", ""),
+                    "start_time": event_info.get("start_time"),
+                    "duration": event_info.get("duration", 60),
+                    "category": "personal",
+                },
+                headers={"X-User-ID": user_id}
+            )
+
+            if response.status_code in [200, 201]:
+                result = response.json()
+                return {
+                    'success': True,
+                    'action': 'event_created',
+                    'title': event_info.get("title", "New Event"),
+                    'start_date': event_info.get("start_date", ""),
+                    'start_time': event_info.get("start_time", ""),
+                    'event_id': result.get('id')
+                }
+            else:
+                logger.error(f"Failed to create event: {response.status_code} - {response.text}")
+                return {
+                    'success': False,
+                    'action': 'event_creation',
+                    'error': f"Calendar API error: {response.status_code}"
+                }
+
+    except Exception as e:
+        logger.error(f"Event creation error: {e}")
+        return {
+            'success': False,
+            'action': 'event_creation',
+            'error': str(e)
+        }
+
+
+def _extract_event_details(message: str) -> dict:
+    """Extract event title, date, time, and duration from a message.
+
+    Uses regex patterns to find common date/time expressions.
+    Falls back to reasonable defaults when details aren't specified.
+    """
+    details = {}
+
+    # Extract title: text after "create event", "schedule meeting", etc.
+    title_patterns = [
+        r'(?:create|schedule|add)\s+(?:an?\s+)?(?:event|meeting|appointment)\s+(?:for|called|named|about)?\s*["\']?(.+?)(?:["\']?\s+(?:on|at|for|tomorrow|today|next)|$)',
+        r'(?:create|schedule|add)\s+(?:an?\s+)?(?:event|meeting|appointment)\s+(.+?)(?:\s+(?:on|at|for|tomorrow|today|next)|$)',
+    ]
+    for pattern in title_patterns:
+        title_match = re.search(pattern, message, re.IGNORECASE)
+        if title_match:
+            details["title"] = title_match.group(1).strip().rstrip('.')
+            break
+    if "title" not in details:
+        details["title"] = "New Event"
+
+    # Extract date
+    today = datetime.now()
+    if "tomorrow" in message.lower():
+        event_date = today + timedelta(days=1)
+        details["start_date"] = event_date.strftime("%Y-%m-%d")
+    elif "today" in message.lower():
+        details["start_date"] = today.strftime("%Y-%m-%d")
+    else:
+        # Look for explicit dates like "on January 15", "on 2/15", "on Feb 20"
+        date_match = re.search(
+            r'on\s+(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)',
+            message, re.IGNORECASE
+        )
+        if date_match:
+            details["start_date"] = date_match.group(1)
+        else:
+            # Default to tomorrow
+            event_date = today + timedelta(days=1)
+            details["start_date"] = event_date.strftime("%Y-%m-%d")
+
+    # Extract time: "at 3pm", "at 15:00", "at 3:30 pm"
+    time_match = re.search(
+        r'at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm|AM|PM)?',
+        message
+    )
+    if time_match:
+        hour = int(time_match.group(1))
+        minute = int(time_match.group(2) or 0)
+        ampm = (time_match.group(3) or "").lower()
+        if ampm == "pm" and hour < 12:
+            hour += 12
+        elif ampm == "am" and hour == 12:
+            hour = 0
+        details["start_time"] = f"{hour:02d}:{minute:02d}"
+
+    # Extract duration: "for 2 hours", "for 30 minutes"
+    dur_match = re.search(
+        r'for\s+(\d+)\s*(hour|hours|hr|hrs|minute|minutes|min|mins)',
+        message, re.IGNORECASE
+    )
+    if dur_match:
+        amount = int(dur_match.group(1))
+        unit = dur_match.group(2).lower()
+        if unit.startswith("hour") or unit.startswith("hr"):
+            details["duration"] = amount * 60
+        else:
+            details["duration"] = amount
+    else:
+        details["duration"] = 60  # Default 1 hour
+
+    return details
+
 
 async def create_task_action(match: dict, message: str, user_id: str) -> dict:
-    """Create a task"""
-    # Placeholder for task creation
-    return {
-        'success': False,
-        'action': 'task_creation',
-        'message': 'Task creation not yet implemented'
-    }
+    """Create a task via the lists API.
+
+    Phase -1 Fix 4: Replaced placeholder with real task creation.
+    Uses POST /api/lists/personal_todos/{list_id}/items to create tasks.
+    Falls back to creating in the first available todo list.
+    """
+    try:
+        # Extract task text from message
+        task_text = _extract_task_text(message)
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # First find a personal todos list to add the task to
+            response = await client.get("http://localhost:8000/api/lists")
+
+            if response.status_code != 200:
+                return {
+                    'success': False,
+                    'action': 'task_creation',
+                    'error': f"Failed to fetch lists: {response.status_code}"
+                }
+
+            data = response.json()
+            lists = data.get('lists', [])
+
+            # Find a personal todo list, or any todo-type list
+            target_list = None
+            for lst in lists:
+                list_type = lst.get('list_type', '')
+                if list_type in ['personal_todos', 'work_todos']:
+                    target_list = lst
+                    break
+
+            # If no todo list found, try to use any available list
+            if not target_list and lists:
+                target_list = lists[0]
+
+            if not target_list:
+                return {
+                    'success': False,
+                    'action': 'task_creation',
+                    'error': 'No lists found. Create a list first.'
+                }
+
+            list_id = target_list['id']
+            list_type = target_list.get('list_type', 'personal_todos')
+
+            # Create the task item
+            create_response = await client.post(
+                f"http://localhost:8000/api/lists/{list_type}/{list_id}/items",
+                params={
+                    "task_text": task_text,
+                    "priority": "medium"
+                },
+                headers={"X-User-ID": user_id}
+            )
+
+            if create_response.status_code in [200, 201]:
+                result = create_response.json()
+                return {
+                    'success': True,
+                    'action': 'task_created',
+                    'task_text': task_text,
+                    'list_name': target_list.get('name', 'Tasks'),
+                    'item_id': result.get('id')
+                }
+            else:
+                logger.error(f"Failed to create task: {create_response.status_code}")
+                return {
+                    'success': False,
+                    'action': 'task_creation',
+                    'error': f"API error: {create_response.status_code}"
+                }
+
+    except Exception as e:
+        logger.error(f"Task creation error: {e}")
+        return {
+            'success': False,
+            'action': 'task_creation',
+            'error': str(e)
+        }
+
+
+def _extract_task_text(message: str) -> str:
+    """Extract the task description from a message."""
+    # Remove common prefixes
+    patterns = [
+        r'(?:add|create)\s+(?:a\s+)?task\s+(?:to\s+)?(?:do\s+)?(.+)',
+        r'(?:remind\s+me\s+)?to\s+do\s+(.+)',
+        r'(?:i\s+need\s+to|i\s+have\s+to)\s+(.+)',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, message, re.IGNORECASE)
+        if match:
+            return match.group(1).strip().rstrip('.')
+    # Fallback: use the whole message
+    return message.strip()
 
 async def add_to_list_action(match: dict, message: str, user_id: str) -> dict:
     """Add item to an existing list"""

@@ -141,19 +141,51 @@ async def analyze_workflow_request(description: str):
 
 @router.post("/deploy")
 async def deploy_workflow(workflow: Dict[str, Any]):
-    """Deploy workflow to n8n (placeholder - requires n8n API authentication)"""
+    """Deploy workflow to n8n via the N8N API.
+
+    Phase -1 Fix 2: Actually deploys workflow to N8N instead of returning
+    a placeholder. Uses the n8n REST API to create the workflow.
+    """
     try:
-        # This would integrate with n8n's API to actually create the workflow
-        # For now, return success with workflow data
-        
-        return {
-            "success": True,
-            "message": "Workflow structure created (n8n API integration pending)",
-            "workflow_id": workflow.get("id"),
-            "name": workflow.get("name"),
-            "note": "To deploy: Copy JSON and import manually in n8n UI"
+        # Import auth helpers from the n8n integration router
+        from .n8n_integration import _n8n_request
+
+        # Create workflow in N8N via API
+        workflow_payload = {
+            "name": workflow.get("name", "Zoe Generated Workflow"),
+            "nodes": workflow.get("nodes", []),
+            "connections": workflow.get("connections", {}),
+            "settings": workflow.get("settings", {}),
+            "active": workflow.get("activate", False),
         }
-        
+
+        response = await _n8n_request("POST", "/workflows", json=workflow_payload)
+
+        if response.status_code in [200, 201]:
+            result = response.json()
+            return {
+                "success": True,
+                "message": "Workflow deployed to N8N",
+                "workflow_id": result.get("id"),
+                "name": result.get("name"),
+                "active": result.get("active", False),
+            }
+        else:
+            logger.error(f"N8N deployment failed: {response.status_code} - {response.text}")
+            return {
+                "success": False,
+                "message": f"N8N API returned {response.status_code}",
+                "error": response.text[:500],
+                "fallback": "Copy the workflow JSON and import manually in N8N UI"
+            }
+
+    except ImportError:
+        logger.error("Cannot import _n8n_request from n8n_integration")
+        return {
+            "success": False,
+            "message": "N8N integration module not available",
+            "fallback": "Copy the workflow JSON and import manually in N8N UI"
+        }
     except Exception as e:
         logger.error(f"Deployment failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))

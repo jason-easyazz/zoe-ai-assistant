@@ -1,6 +1,10 @@
 """
 Workflows Management System
 Handles automation workflows, triggers, and execution
+
+Phase -1 Fix 2: Replaced time.sleep(1) simulation with real action execution.
+Workflow actions are dispatched to appropriate services (HTTP calls, HA service
+calls, notifications) instead of being simulated.
 """
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
@@ -9,9 +13,12 @@ from datetime import datetime
 import sqlite3
 import json
 import os
+import logging
+import httpx
 
 from auth_integration import validate_session, AuthenticatedSession
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
 # Database path
@@ -303,6 +310,116 @@ async def toggle_workflow(workflow_id: int, session: AuthenticatedSession = Depe
     
     return {"message": "Workflow status toggled successfully"}
 
+
+# ---- Workflow Action Execution Engine (Phase -1 Fix 2) ----
+
+async def _execute_workflow_actions(actions: list, user_id: str) -> list:
+    """Execute a list of workflow actions sequentially.
+
+    Each action is a dict with at minimum a 'type' key. Supported types:
+    - http_request: Make an HTTP request to an internal or external URL
+    - ha_service: Call a Home Assistant service
+    - notification: Send a notification (log for now)
+    - n8n_trigger: Trigger an N8N workflow
+    - delay: Wait for a specified number of seconds
+    """
+    results = []
+
+    for i, action in enumerate(actions):
+        action_type = action.get("type", "unknown")
+        logger.info(f"  Executing action {i+1}/{len(actions)}: {action_type}")
+
+        try:
+            if action_type == "http_request":
+                result = await _exec_http_request(action)
+            elif action_type == "ha_service":
+                result = await _exec_ha_service(action)
+            elif action_type == "notification":
+                result = _exec_notification(action, user_id)
+            elif action_type == "n8n_trigger":
+                result = await _exec_n8n_trigger(action)
+            elif action_type == "delay":
+                import asyncio
+                seconds = min(action.get("seconds", 1), 30)  # Cap at 30s
+                await asyncio.sleep(seconds)
+                result = {"success": True, "message": f"Delayed {seconds}s"}
+            else:
+                result = {"success": False, "error": f"Unknown action type: {action_type}"}
+
+            results.append({"action": action_type, "index": i, **result})
+
+        except Exception as e:
+            logger.error(f"  Action {i+1} ({action_type}) failed: {e}")
+            results.append({"action": action_type, "index": i, "success": False, "error": str(e)})
+            # Continue executing remaining actions (don't abort the whole workflow)
+
+    return results
+
+
+async def _exec_http_request(action: dict) -> dict:
+    """Execute an HTTP request action."""
+    url = action.get("url", "")
+    method = action.get("method", "GET").upper()
+    headers = action.get("headers", {})
+    body = action.get("body")
+    timeout = min(action.get("timeout", 10), 30)
+
+    if not url:
+        return {"success": False, "error": "No URL specified"}
+
+    async with httpx.AsyncClient(timeout=float(timeout)) as client:
+        response = await client.request(method, url, headers=headers, json=body)
+        return {
+            "success": response.status_code < 400,
+            "status_code": response.status_code,
+            "body": response.text[:500]  # Truncate response
+        }
+
+
+async def _exec_ha_service(action: dict) -> dict:
+    """Execute a Home Assistant service call via the HA router."""
+    service = action.get("service", "")
+    entity_id = action.get("entity_id", "")
+    data = action.get("data", {})
+
+    if not service:
+        return {"success": False, "error": "No service specified"}
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.post(
+            "http://localhost:8000/api/homeassistant/service",
+            json={"service": service, "entity_id": entity_id, "data": data}
+        )
+        return {
+            "success": response.status_code < 400,
+            "status_code": response.status_code,
+            "message": f"Called {service} on {entity_id}"
+        }
+
+
+def _exec_notification(action: dict, user_id: str) -> dict:
+    """Execute a notification action (logged + stored for UI pickup)."""
+    message = action.get("message", "Workflow notification")
+    logger.info(f"📢 Workflow notification for {user_id}: {message}")
+    return {"success": True, "message": message}
+
+
+async def _exec_n8n_trigger(action: dict) -> dict:
+    """Trigger an N8N workflow by ID."""
+    workflow_id = action.get("n8n_workflow_id", "")
+    if not workflow_id:
+        return {"success": False, "error": "No N8N workflow ID specified"}
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"http://localhost:8000/api/n8n/workflows/{workflow_id}/execute"
+        )
+        return {
+            "success": response.status_code < 400,
+            "status_code": response.status_code,
+        }
+
+
 @router.post("/{workflow_id}/run")
 async def run_workflow(workflow_id: int, session: AuthenticatedSession = Depends(validate_session)):
     user_id = session.user_id
@@ -343,54 +460,70 @@ async def run_workflow(workflow_id: int, session: AuthenticatedSession = Depends
     conn.commit()
     conn.close()
     
-    # TODO: Implement actual workflow execution logic here
-    # For now, just simulate success
+    # Phase -1 Fix 2: Execute workflow actions instead of simulating with time.sleep(1)
     try:
-        # Simulate workflow execution
-        import time
-        time.sleep(1)  # Simulate processing time
-        
-        # Update run status to completed
+        actions = json.loads(row[2]) if isinstance(row[2], str) else row[2]
+        results = await _execute_workflow_actions(actions, user_id)
+
+        # Determine success: all actions succeeded or at least one completed
+        all_success = all(r.get("success", False) for r in results)
+        status = "completed" if all_success else "partial"
+        result_json = json.dumps(results)
+
+        # Update run status
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        
+
         cursor.execute("""
             UPDATE workflow_runs 
-            SET status = 'completed', completed_at = CURRENT_TIMESTAMP
+            SET status = ?, completed_at = CURRENT_TIMESTAMP, result_data = ?
             WHERE id = ?
-        """, (run_id,))
-        
-        cursor.execute("""
-            UPDATE workflows 
-            SET success_count = success_count + 1
-            WHERE id = ?
-        """, (workflow_id,))
-        
+        """, (status, result_json, run_id))
+
+        if all_success:
+            cursor.execute("""
+                UPDATE workflows 
+                SET success_count = success_count + 1
+                WHERE id = ?
+            """, (workflow_id,))
+        else:
+            cursor.execute("""
+                UPDATE workflows 
+                SET error_count = error_count + 1
+                WHERE id = ?
+            """, (workflow_id,))
+
         conn.commit()
         conn.close()
-        
-        return {"message": "Workflow executed successfully", "run_id": run_id}
-        
+
+        return {
+            "message": f"Workflow executed: {status}",
+            "run_id": run_id,
+            "status": status,
+            "action_results": results
+        }
+
     except Exception as e:
+        logger.error(f"Workflow execution failed: {e}")
         # Update run status to failed
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        
+
         cursor.execute("""
             UPDATE workflow_runs 
             SET status = 'failed', completed_at = CURRENT_TIMESTAMP, error_message = ?
             WHERE id = ?
         """, (str(e), run_id))
-        
+
         cursor.execute("""
             UPDATE workflows 
             SET error_count = error_count + 1
             WHERE id = ?
         """, (workflow_id,))
-        
+
         conn.commit()
         conn.close()
-        
+
         raise HTTPException(status_code=500, detail=f"Workflow execution failed: {str(e)}")
 
 @router.get("/{workflow_id}/runs")

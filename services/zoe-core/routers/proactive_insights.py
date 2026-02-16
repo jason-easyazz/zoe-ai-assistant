@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Query, Depends
 import os
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
 import sqlite3
 
+from auth_integration import AuthenticatedSession, validate_session
 from .notifications import send_notification, NotificationPriority
 
 router = APIRouter(prefix="/api/proactive", tags=["proactive"])

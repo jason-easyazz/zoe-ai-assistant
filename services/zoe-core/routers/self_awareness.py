@@ -13,7 +13,7 @@ from datetime import datetime
 import sys
 sys.path.append('/app')
 from self_awareness import self_awareness, SelfIdentity, SelfReflection, ConsciousnessState
-from auth import AuthenticatedSession, validate_session
+from auth_integration import AuthenticatedSession, validate_session
 
 router = APIRouter(prefix="/api/self-awareness", tags=["self-awareness"])
 

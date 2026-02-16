@@ -7,34 +7,44 @@
 # ============================================================
 
 services:
-  zoe-music:
-    build: .
-    container_name: zoe-music
-    restart: unless-stopped
+  zoe-agent0:
+    image: agent0ai/agent-zero:v0.9.7
+    container_name: zoe-agent0
     ports:
-    - 8100:8100
+    - 50001:80
+    environment:
+    - ALLOWED_ORIGINS=*://localhost:*,*://127.0.0.1:*,*://0.0.0.0:*,*://192.168.1.*:*
+    volumes:
+    - agent0-data:/app/data
+    - agent0-memory:/app/memory
+    - agent0-logs:/app/logs
+    networks:
+    - zoe-network
+    restart: unless-stopped
+  agent-zero-bridge:
+    build: .
+    container_name: agent-zero-bridge
+    ports:
+    - 8101:8101
     volumes:
     - .:/app
     - ../../data:/app/data
     environment:
     - PYTHONUNBUFFERED=1
+    - AGENT_ZERO_URL=http://zoe-agent0:80
     - DATABASE_PATH=/app/data/zoe.db
-    - MCP_SERVER_URL=http://zoe-mcp-server:8003
-    - PLATFORM=${PLATFORM:-unknown}
-    - SPOTIFY_CLIENT_ID=${SPOTIFY_CLIENT_ID:-}
-    - SPOTIFY_CLIENT_SECRET=${SPOTIFY_CLIENT_SECRET:-}
-    - YOUTUBE_API_KEY=${YOUTUBE_API_KEY:-}
-    - APPLE_MUSIC_KEY=${APPLE_MUSIC_KEY:-}
-    - YTMUSIC_CLIENT_ID=${YTMUSIC_CLIENT_ID:-}
-    - YTMUSIC_CLIENT_SECRET=${YTMUSIC_CLIENT_SECRET:-}
+    - SAFETY_MODE=${AGENT_ZERO_SAFETY_MODE:-grandma}
     networks:
     - zoe-network
+    depends_on:
+    - zoe-agent0
+    restart: unless-stopped
     healthcheck:
       test:
       - CMD
       - curl
       - -f
-      - http://localhost:8100/health
+      - http://localhost:8101/health
       interval: 30s
       timeout: 10s
       retries: 3
@@ -43,3 +53,7 @@ networks:
   zoe-network:
     name: zoe-network
     external: true
+volumes:
+  agent0-data: null
+  agent0-memory: null
+  agent0-logs: null

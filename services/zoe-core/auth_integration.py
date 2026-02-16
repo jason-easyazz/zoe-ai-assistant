@@ -141,6 +141,13 @@ async def validate_session(
         raise HTTPException(status_code=502, detail="Auth service unavailable")
 
 
+async def get_current_user(
+    session: AuthenticatedSession = Depends(validate_session),
+) -> str:
+    """Convenience dependency that returns just the user_id string."""
+    return session.user_id
+
+
 def require_permission(required: str):
     def _dep(session: AuthenticatedSession = Depends(validate_session)) -> AuthenticatedSession:
         # Dev bypass has all permissions

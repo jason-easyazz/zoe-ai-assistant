@@ -646,6 +646,9 @@ class UnifiedIntentClassifier:
         """
         self.hassil = HassilIntentClassifier(intents_dir)
         self.keywords = KeywordFallbackClassifier()
+
+        # Phase -1 Fix 3: Tier hit rate counters for measuring deterministic coverage
+        self._tier_counts = {"tier_0": 0, "tier_1": 0, "tier_context": 0, "tier_llm": 0, "total": 0}
         
         logger.info("Initialized UnifiedIntentClassifier with Tier 0 (HassIL) and Tier 1 (Keywords)")
     
@@ -672,27 +675,70 @@ class UnifiedIntentClassifier:
             return None
         
         text = text.strip()
+        self._tier_counts["total"] += 1
         
         # Tier 0: HassIL pattern matching
         intent = self.hassil.classify(text)
         if intent and intent.confidence >= min_confidence:
+            self._tier_counts["tier_0"] += 1
+            self._log_tier_rates()
             return intent
         
         # Tier 1: Keyword fallback
         intent = self.keywords.classify(text)
         if intent and intent.confidence >= min_confidence:
+            self._tier_counts["tier_1"] += 1
+            self._log_tier_rates()
             return intent
         
         # Tier 1.5: Context-aware continuation (e.g., "and eggs" → ListAdd)
         if user_id and session_id:
             intent = self._classify_with_context(text, user_id, session_id)
             if intent and intent.confidence >= min_confidence:
+                self._tier_counts["tier_context"] += 1
+                self._log_tier_rates()
                 return intent
         
         # Tier 2/3: Return None → caller handles LLM
+        self._tier_counts["tier_llm"] += 1
+        self._log_tier_rates()
         logger.debug(f"No intent match for: '{text}' (will use LLM)")
         return None
     
+    def _log_tier_rates(self):
+        """Log tier hit rates every 50 classifications for monitoring."""
+        total = self._tier_counts["total"]
+        if total > 0 and total % 50 == 0:
+            t0 = self._tier_counts["tier_0"]
+            t1 = self._tier_counts["tier_1"]
+            tc = self._tier_counts["tier_context"]
+            tl = self._tier_counts["tier_llm"]
+            logger.info(
+                f"📊 Intent tier hit rates ({total} total): "
+                f"Tier 0 (HassIL): {t0} ({100*t0/total:.1f}%), "
+                f"Tier 1 (Keywords): {t1} ({100*t1/total:.1f}%), "
+                f"Tier 1.5 (Context): {tc} ({100*tc/total:.1f}%), "
+                f"LLM fallback: {tl} ({100*tl/total:.1f}%)"
+            )
+
+    def get_tier_stats(self) -> dict:
+        """Return current tier hit rate statistics.
+        
+        Phase -1 Fix 3: Measurement endpoint for tier rates so we can verify
+        the 85-90% deterministic coverage claim before/after module intent fix.
+        """
+        total = self._tier_counts["total"]
+        if total == 0:
+            return {"total": 0, "message": "No classifications yet"}
+        return {
+            "total": total,
+            "tier_0_hassil": {"count": self._tier_counts["tier_0"], "pct": round(100 * self._tier_counts["tier_0"] / total, 1)},
+            "tier_1_keywords": {"count": self._tier_counts["tier_1"], "pct": round(100 * self._tier_counts["tier_1"] / total, 1)},
+            "tier_context": {"count": self._tier_counts["tier_context"], "pct": round(100 * self._tier_counts["tier_context"] / total, 1)},
+            "tier_llm_fallback": {"count": self._tier_counts["tier_llm"], "pct": round(100 * self._tier_counts["tier_llm"] / total, 1)},
+            "deterministic_pct": round(100 * (self._tier_counts["tier_0"] + self._tier_counts["tier_1"] + self._tier_counts["tier_context"]) / total, 1),
+        }
+
     def _classify_with_context(
         self,
         text: str,

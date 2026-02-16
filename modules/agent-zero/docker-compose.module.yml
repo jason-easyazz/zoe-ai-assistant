@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # Agent Zero original container (UI + agent)
   zoe-agent0:
-    image: agent0ai/agent-zero:latest
+    image: agent0ai/agent-zero:v0.9.7  # Pinned for stability (was :latest)
     container_name: zoe-agent0
     ports:
       - "50001:80"

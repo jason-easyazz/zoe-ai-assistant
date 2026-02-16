@@ -1,0 +1,30 @@
+{
+  "agent-zero-research": {
+    "sha256": "35e862f84bada46a78c4170432275e3e3ff488cd7a727987251cb4e49f9ff079",
+    "approved_at": "2026-02-15T13:28:22.747193Z"
+  },
+  "proactive-agent": {
+    "sha256": "7c91e5952d2aa53afefbf5c0f754187090546652f14953476d02cb43a908e97c",
+    "approved_at": "2026-02-15T13:35:19.750037Z"
+  },
+  "self-improvement": {
+    "sha256": "160c0bce689595a3fb8e0c3adaecf87abe69e49b472f89231cd1e287589c7ae8",
+    "approved_at": "2026-02-15T13:34:07.872912Z"
+  },
+  "smart-home": {
+    "sha256": "f8925a0553145951ceb3d5734ad42081148b254a0c84790a34405ead9828d6ec",
+    "approved_at": "2026-02-15T13:28:22.747210Z"
+  },
+  "agent-zero-comparison": {
+    "sha256": "7ff3e33016185574e7f327562c916c7fa6abac54f43f11f4c2bf92369b2abd31",
+    "approved_at": "2026-02-15T13:31:16.628671Z"
+  },
+  "agent-zero-planning": {
+    "sha256": "5f7713b18d818bc4ddb879a8f27455e88fbda8c708e3c25bb1f44e12cf08d87f",
+    "approved_at": "2026-02-15T13:31:16.628674Z"
+  },
+  "agent-zero-deep-research": {
+    "sha256": "d66a70b55bacbb05cce91c9a2c3b752bb45bea4e62374889b6fea9e19c1d3939",
+    "approved_at": "2026-02-15T13:30:25.641129Z"
+  }
+}

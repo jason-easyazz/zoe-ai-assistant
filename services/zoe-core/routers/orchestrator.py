@@ -4,7 +4,7 @@ API router for the Life Orchestrator.
 from fastapi import APIRouter, Depends, Query
 from typing import Dict, Any
 from life_orchestrator import life_orchestrator
-from auth import AuthenticatedSession, validate_session
+from auth_integration import AuthenticatedSession, validate_session
 # Assuming a dependency for getting the current user_id
 # from ..dependencies import get_current_user_id 
 

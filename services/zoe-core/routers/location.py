@@ -2,13 +2,15 @@
 Location Services Router
 Provides geocoding, reverse geocoding, and location search for journal entries
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import httpx
 import os
 import asyncio
 from datetime import datetime
+
+from auth_integration import AuthenticatedSession, validate_session
 
 router = APIRouter(prefix="/api/location", tags=["location"])
 
@@ -169,6 +171,7 @@ async def find_nearby_entries(
     lng: float = Query(..., description="Longitude"),
     radius: int = Query(5000, description="Search radius in meters"),
     session: AuthenticatedSession = Depends(validate_session)
+):
     """
     Find journal entries or journey stops near a location
     Uses Haversine formula for distance calculation

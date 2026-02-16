@@ -1,10 +1,7 @@
 enabled_modules:
-  - zoe-music
   - agent-zero
 module_config:
-  zoe-music:
-    apple_enabled: false
-    default_source: youtube
-    default_zone: main
-    spotify_enabled: true
-    youtube_enabled: true
+  agent-zero:
+    safety_mode: grandma
+    # Pin version note: update modules/agent-zero/docker-compose.module.yml
+    # Current pin: v0.9.7

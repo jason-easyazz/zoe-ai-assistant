@@ -209,7 +209,12 @@ def load_module_intents() -> List[Dict[str, Any]]:
 def register_module_intents_with_hassil(loaded_intents: List[Dict[str, Any]], hassil_classifier):
     """
     Register module intents with the Hassil classifier.
-    
+
+    Phase -1 Fix 3: Actually registers module intents with Hassil instead of
+    being a placeholder. Module intent YAML (e.g., agent_zero.yaml) uses the
+    same format as core intents -- they get merged into hassil_classifier.intents.intents
+    so that `hassil.recognize()` can match them at Tier 0.
+
     Args:
         loaded_intents: Output from load_module_intents()
         hassil_classifier: HassilClassifier instance to register with
@@ -217,25 +222,51 @@ def register_module_intents_with_hassil(loaded_intents: List[Dict[str, Any]], ha
     if not loaded_intents:
         logger.debug("No module intents to register with Hassil")
         return
-    
+
     logger.info(f"📝 Registering module intents with Hassil classifier...")
-    
+
+    # The hassil_classifier may be a UnifiedIntentClassifier (which wraps
+    # HassilIntentClassifier as .hassil) or a direct HassilIntentClassifier.
+    # Get the inner HassilIntentClassifier either way.
+    inner_classifier = getattr(hassil_classifier, 'hassil', hassil_classifier)
+
+    # If the classifier doesn't have an intents object yet, create one
+    if inner_classifier.intents is None:
+        try:
+            from hassil import Intents
+            inner_classifier.intents = Intents.from_dict({"language": "en", "intents": {}})
+            logger.info("  Created new Hassil Intents object for module intents")
+        except Exception as e:
+            logger.error(f"  ✗ Cannot create Hassil Intents object: {e}")
+            return
+
+    registered_count = 0
+    before_count = len(inner_classifier.intents.intents)
+
     for module_data in loaded_intents:
         module_name = module_data['module_name']
         intents = module_data['intents']
-        
+
         try:
-            # Hassil classifier expects intent definitions in its format
-            # The YAML we load should already be in this format
             for intent_name, intent_data in intents.items():
-                logger.debug(f"  Registering {intent_name} from {module_name}")
-                # The actual registration would depend on Hassil's API
-                # This is a placeholder for the integration point
-            
+                # Merge module intent into the classifier's intents dict.
+                # This is the same pattern used in HassilClassifier._load_intents()
+                # (line 120 of hassil_classifier.py): self.intents.intents[name] = def
+                inner_classifier.intents.intents[intent_name] = intent_data
+                registered_count += 1
+                logger.debug(f"  Registered {intent_name} from {module_name}")
+
             logger.info(f"  ✓ Registered {len(intents)} intents from {module_name}")
-        
+
         except Exception as e:
             logger.error(f"  ✗ Failed to register intents from {module_name}: {e}")
+
+    after_count = len(inner_classifier.intents.intents)
+    logger.info(
+        f"📊 Module intent registration complete: {registered_count} intents registered. "
+        f"Hassil total: {before_count} -> {after_count} intents. "
+        f"(Tier 0 now covers {after_count} intent patterns)"
+    )
 
 
 def register_module_handlers_with_executor(loaded_intents: List[Dict[str, Any]], intent_executor):

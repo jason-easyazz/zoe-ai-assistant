@@ -2,13 +2,15 @@
 Journey Management Router
 Handles bucket list journeys with stops/stages and check-ins
 """
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date
 import sqlite3
 import json
 import os
+
+from auth_integration import AuthenticatedSession, validate_session
 
 router = APIRouter(prefix="/api/journeys", tags=["journeys"])
 
@@ -114,13 +116,14 @@ class CheckInCreate(BaseModel):
 async def create_journey_from_bucket_item(
     item_id: int,
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Convert a bucket list item to a journey"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     # Get bucket list item
+    user_id = session.user_id
     cursor.execute("""
-        user_id = session.user_id
         SELECT li.task_text, l.id as list_id, l.name as list_name
         FROM list_items li
         JOIN lists l ON li.list_id = l.id
@@ -170,12 +173,13 @@ async def create_journey_from_bucket_item(
 async def create_journey(
     journey: JourneyCreate,
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Create a new journey"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
+    user_id = session.user_id
     cursor.execute("""
-        user_id = session.user_id
         INSERT INTO journeys (
             user_id, title, description, start_date, end_date,
             cover_photo, bucket_list_id, status
@@ -201,12 +205,13 @@ async def create_journey(
 async def get_journeys(
     status: Optional[str] = Query(None, description="Filter by status"),
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Get all journeys for a user"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
+    user_id = session.user_id
     query = """
-        user_id = session.user_id
         SELECT j.id, j.title, j.description, j.start_date, j.end_date,
                j.status, j.cover_photo, j.bucket_list_id, j.created_at, j.updated_at,
                (SELECT COUNT(*) FROM journey_stops WHERE journey_id = j.id) as stop_count,
@@ -253,13 +258,14 @@ async def get_journeys(
 async def get_journey(
     journey_id: int,
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Get journey details with all stops and entries"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     # Get journey
+    user_id = session.user_id
     cursor.execute("""
-        user_id = session.user_id
         SELECT id, title, description, start_date, end_date,
                status, cover_photo, bucket_list_id, created_at, updated_at
         FROM journeys
@@ -347,11 +353,13 @@ async def add_journey_stop(
     journey_id: int,
     stop: JourneyStopCreate,
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Add a stop to a journey"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     # Verify journey exists
+    user_id = session.user_id
     cursor.execute("SELECT id FROM journeys WHERE id = ? AND user_id = ?", (journey_id, user_id))
     if not cursor.fetchone():
         conn.close()
@@ -364,7 +372,6 @@ async def add_journey_stop(
     
     # Insert stop
     cursor.execute("""
-        user_id = session.user_id
         INSERT INTO journey_stops (
             journey_id, stop_order, title, location, location_coords,
             planned_date, emoji, notes, status
@@ -392,13 +399,14 @@ async def update_journey_stop(
     stop_id: int,
     stop_update: JourneyStopUpdate,
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Update a journey stop"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     # Verify journey and stop exist
+    user_id = session.user_id
     cursor.execute("""
-        user_id = session.user_id
         SELECT js.id FROM journey_stops js
         JOIN journeys j ON js.journey_id = j.id
         WHERE js.id = ? AND js.journey_id = ? AND j.user_id = ?
@@ -435,13 +443,14 @@ async def journey_checkin(
     journey_id: int,
     checkin: CheckInCreate,
     session: AuthenticatedSession = Depends(validate_session)
+):
     """Create a journal entry for current journey stop and advance"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     # Get current stop
+    user_id = session.user_id
     cursor.execute("""
-        user_id = session.user_id
         SELECT id, title FROM journey_stops
         WHERE journey_id = ? AND status = 'current'
         ORDER BY stop_order
