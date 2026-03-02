@@ -27,7 +27,9 @@ RUN apt-get update && apt-get install -y \
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip "setuptools<70" wheel && \
+    echo "setuptools<70" > /tmp/pip-constraints.txt && \
+    PIP_CONSTRAINT=/tmp/pip-constraints.txt pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
