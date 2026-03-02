@@ -542,6 +542,7 @@ async def delete_journey(
     session: AuthenticatedSession = Depends(validate_session)
 ):
     """Delete a journey and all its stops"""
+    user_id = session.user_id
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     

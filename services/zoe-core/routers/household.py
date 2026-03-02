@@ -15,7 +15,7 @@ from services.household import (
     get_device_binding_manager,
     get_family_mix_generator
 )
-from auth_integration import get_current_user
+from auth_integration import validate_session, AuthenticatedSession
 
 logger = logging.getLogger(__name__)
 
@@ -101,9 +101,10 @@ class AddToPlaylistRequest(BaseModel):
 @router.post("/create")
 async def create_household(
     request: CreateHouseholdRequest,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Create a new household with the current user as owner."""
+    user_id = session.user_id
     manager = await get_household_manager()
     
     household = await manager.create_household(
@@ -121,8 +122,9 @@ async def create_household(
 
 
 @router.get("/mine")
-async def get_my_households(user_id: str = Depends(get_current_user)):
+async def get_my_households(session: AuthenticatedSession = Depends(validate_session)):
     """Get all households the current user belongs to."""
+    user_id = session.user_id
     manager = await get_household_manager()
     
     households = await manager.get_user_households(user_id)
@@ -147,9 +149,10 @@ async def get_my_households(user_id: str = Depends(get_current_user)):
 @router.get("/{household_id}")
 async def get_household(
     household_id: str,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get household details."""
+    user_id = session.user_id
     manager = await get_household_manager()
     
     household = await manager.get_household(household_id)
@@ -183,9 +186,10 @@ async def get_household(
 async def update_household(
     household_id: str,
     request: UpdateHouseholdRequest,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Update household details. Requires owner or admin role."""
+    user_id = session.user_id
     manager = await get_household_manager()
     
     household = await manager.get_household(household_id)
@@ -210,9 +214,10 @@ async def update_household(
 @router.delete("/{household_id}")
 async def delete_household(
     household_id: str,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Delete a household. Requires owner role."""
+    user_id = session.user_id
     manager = await get_household_manager()
     
     household = await manager.get_household(household_id)
@@ -236,9 +241,10 @@ async def delete_household(
 async def add_member(
     household_id: str,
     request: AddMemberRequest,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Add a member to a household."""
+    user_id = session.user_id
     manager = await get_household_manager()
     
     household = await manager.get_household(household_id)
@@ -271,9 +277,10 @@ async def update_member(
     household_id: str,
     member_user_id: str,
     request: UpdateMemberRequest,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Update a member's settings."""
+    user_id = session.user_id
     manager = await get_household_manager()
     
     household = await manager.get_household(household_id)
@@ -309,9 +316,10 @@ async def update_member(
 async def remove_member(
     household_id: str,
     member_user_id: str,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Remove a member from a household."""
+    user_id = session.user_id
     manager = await get_household_manager()
     
     household = await manager.get_household(household_id)
@@ -339,7 +347,7 @@ async def remove_member(
 @router.get("/{household_id}/devices")
 async def get_household_devices(
     household_id: str,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get all devices in a household."""
     device_manager = await get_device_binding_manager()
@@ -365,7 +373,7 @@ async def get_household_devices(
 async def register_device(
     household_id: str,
     request: RegisterDeviceRequest,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Register a new device in a household."""
     device_manager = await get_device_binding_manager()
@@ -393,7 +401,7 @@ async def register_device(
 async def bind_device_to_user(
     device_id: str,
     request: BindDeviceRequest,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Bind a device to a user."""
     device_manager = await get_device_binding_manager()
@@ -416,7 +424,7 @@ async def bind_device_to_user(
 @router.get("/devices/{device_id}/active-user")
 async def get_active_user_for_device(
     device_id: str,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get the currently active user for a device."""
     device_manager = await get_device_binding_manager()
@@ -431,8 +439,9 @@ async def get_active_user_for_device(
 # ========================================
 
 @router.get("/preferences/music")
-async def get_music_preferences(user_id: str = Depends(get_current_user)):
+async def get_music_preferences(session: AuthenticatedSession = Depends(validate_session)):
     """Get user's music preferences."""
+    user_id = session.user_id
     manager = await get_household_manager()
     
     preferences = await manager.get_user_music_preferences(user_id)
@@ -443,9 +452,10 @@ async def get_music_preferences(user_id: str = Depends(get_current_user)):
 @router.put("/preferences/music")
 async def update_music_preferences(
     request: MusicPreferencesRequest,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Update user's music preferences."""
+    user_id = session.user_id
     manager = await get_household_manager()
     
     success = await manager.update_user_music_preferences(
@@ -464,7 +474,7 @@ async def update_music_preferences(
 async def get_family_mix(
     household_id: str,
     force_regenerate: bool = False,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get the family mix for a household."""
     generator = await get_family_mix_generator()
@@ -496,7 +506,7 @@ async def get_family_mix(
 @router.post("/{household_id}/family-mix/regenerate")
 async def regenerate_family_mix(
     household_id: str,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Force regenerate the family mix."""
     generator = await get_family_mix_generator()
@@ -516,7 +526,7 @@ async def regenerate_family_mix(
 @router.get("/{household_id}/playlists")
 async def get_shared_playlists(
     household_id: str,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get all shared playlists for a household."""
     generator = await get_family_mix_generator()
@@ -530,9 +540,10 @@ async def get_shared_playlists(
 async def create_shared_playlist(
     household_id: str,
     request: CreateSharedPlaylistRequest,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Create a new shared playlist."""
+    user_id = session.user_id
     generator = await get_family_mix_generator()
     
     playlist_id = await generator.create_shared_playlist(
@@ -549,7 +560,7 @@ async def create_shared_playlist(
 @router.get("/playlists/{playlist_id}/tracks")
 async def get_shared_playlist_tracks(
     playlist_id: str,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get tracks in a shared playlist."""
     generator = await get_family_mix_generator()
@@ -563,9 +574,10 @@ async def get_shared_playlist_tracks(
 async def add_to_shared_playlist(
     playlist_id: str,
     request: AddToPlaylistRequest,
-    user_id: str = Depends(get_current_user)
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Add a track to a shared playlist."""
+    user_id = session.user_id
     generator = await get_family_mix_generator()
     
     success = await generator.add_to_shared_playlist(

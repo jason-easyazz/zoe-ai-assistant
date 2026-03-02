@@ -60,6 +60,7 @@ async def relationship_check(
     max_suggestions: int = Query(5, ge=1, le=20),
 ):
     """Scan people for overdue contacts and emit suggestions as notifications."""
+    user_id = session.user_id
     try:
         conn = sqlite3.connect(DB_PATH)
         people = _fetch_people(conn, user_id)

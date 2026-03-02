@@ -45,7 +45,7 @@ class PerformanceMetrics(BaseModel):
 async def get_identity(session: AuthenticatedSession = Depends(validate_session)):
     """Get Zoe's current identity and self-concept for the specified user"""
     try:
-        # Set user context for privacy isolation
+        user_id = session.user_id
         self_awareness.set_user_context(user_id)
         
         identity_data = {
@@ -99,6 +99,7 @@ async def update_identity(identity_update: IdentityUpdate, session: Authenticate
 @router.get("/self-description")
 async def get_self_description(session: AuthenticatedSession = Depends(validate_session)):
     try:
+        user_id = session.user_id
         self_awareness.set_user_context(user_id)
         description = await self_awareness.get_self_description()
         return {"self_description": description}
@@ -131,6 +132,7 @@ async def reflect_on_interaction(interaction_data: InteractionData, session: Aut
 @router.post("/reflect/performance")
 async def reflect_on_performance(performance_metrics: PerformanceMetrics, session: AuthenticatedSession = Depends(validate_session)):
     try:
+        user_id = session.user_id
         self_awareness.set_user_context(user_id)
         metrics_dict = performance_metrics.dict()
         reflection = await self_awareness.reflect_on_performance(metrics_dict)
@@ -152,7 +154,8 @@ async def reflect_on_performance(performance_metrics: PerformanceMetrics, sessio
 @router.get("/reflections")
 async def get_reflections(
     limit: int = Query(10, description="Number of reflections to return"),
-    reflection_type: Optional[str] = Query(None, description="Filter by reflection type")
+    reflection_type: Optional[str] = Query(None, description="Filter by reflection type"),
+    session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get recent self-reflections"""
     user_id = session.user_id

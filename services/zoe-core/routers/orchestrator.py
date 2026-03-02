@@ -5,18 +5,19 @@ from fastapi import APIRouter, Depends, Query
 from typing import Dict, Any
 from life_orchestrator import life_orchestrator
 from auth_integration import AuthenticatedSession, validate_session
-# Assuming a dependency for getting the current user_id
-# from ..dependencies import get_current_user_id 
 
-router = APIRouter()
+router = APIRouter(prefix="/api/orchestrator", tags=["orchestrator"])
 
-# This is a placeholder for a real dependency injection for user_id
-async def get_current_user_id(session: AuthenticatedSession = Depends(validate_session)) -> str:
+
+@router.get("/analyze")
+async def analyze_everything(
+    session: AuthenticatedSession = Depends(validate_session)
+):
     """
     Provides a comprehensive analysis of the user's life, generating
     actionable insights and suggestions.
     """
     user_id = session.user_id
-    context = {} # context can be expanded later
+    context = {}
     insights = await life_orchestrator.analyze_everything(user_id, context)
     return insights

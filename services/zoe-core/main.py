@@ -304,17 +304,28 @@ async def startup_event():
         import asyncio
         asyncio.create_task(cron_manager.start())
         logger.info("✅ Proactive scheduler (CronManager) started")
-    except Exception as e:
-        logger.error(f"❌ Failed to start scheduler: {e}")
+    except BaseException as e:
+        logger.error(f"❌ Failed to start scheduler: {type(e).__name__}: {e}")
 
-    # Reload skills registry (bind mounts may not be ready during import)
+    # Reload skills registry immediately + schedule a delayed reload
+    # (bind mounts may not have all files at first boot)
     try:
         from skills.registry import skills_registry
         skills_registry.load()
         active = sum(1 for s in skills_registry.get_all_skills() if s.active)
-        logger.info(f"✅ Skills registry reloaded: {active} active skills")
-    except Exception as e:
-        logger.error(f"❌ Failed to reload skills registry: {e}")
+        logger.info(f"✅ Skills registry loaded: {active} active skills")
+
+        if active < 11:
+            import asyncio
+            async def _deferred_skills_reload():
+                await asyncio.sleep(5)
+                skills_registry.load()
+                active = sum(1 for s in skills_registry.get_all_skills() if s.active)
+                logger.info(f"✅ Skills deferred reload: {active} active skills")
+            asyncio.create_task(_deferred_skills_reload())
+            logger.info("⏳ Scheduled deferred skills reload in 5s")
+    except BaseException as e:
+        logger.error(f"❌ Failed to reload skills registry: {type(e).__name__}: {e}")
 
     logger.info("🎉 All services started successfully")
 

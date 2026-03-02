@@ -6,6 +6,10 @@ Handles subscription management and notification sending
 from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional
 import logging
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.push_subscription import (
     PushSubscriptionRequest,
