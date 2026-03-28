@@ -1113,47 +1113,6 @@
         .current-time { font-size: 16px; font-weight: 500; color: #333; line-height: 1.2; }
         .current-date { font-size: 11px; color: #666; line-height: 1.2; }
 
-        /* More Overlay */
-        .more-overlay {
-            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
-            display: none; align-items: center; justify-content: center; z-index: 3000;
-            opacity: 0; transition: all 0.3s ease;
-        }
-        .more-overlay.active { display: flex; opacity: 1; }
-        .more-content {
-            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
-            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
-            padding: 40px; max-width: 500px; width: 90%; position: relative;
-            transform: scale(0.8); transition: transform 0.3s ease;
-        }
-        .more-overlay.active .more-content { transform: scale(1); }
-        .more-header { text-align: center; margin-bottom: 30px; }
-        .more-title {
-            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        }
-        .more-close {
-            position: absolute; top: 15px; right: 15px; 
-            background: rgba(255, 255, 255, 0.6); border: none;
-            border-radius: 50%; width: 36px; height: 36px;
-            font-size: 18px; cursor: pointer; color: #666;
-        }
-        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
-        .more-item {
-            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
-            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
-            transition: all 0.3s ease; min-height: 120px; display: flex;
-            flex-direction: column; align-items: center; justify-content: center;
-        }
-        .more-item:hover {
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            color: white; transform: translateY(-4px);
-        }
-        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
-        .more-item-label { font-size: 15px; font-weight: 500; }
-
         /* Notifications Panel */
         .notifications-panel {
             position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
@@ -1215,7 +1174,7 @@
         <div class="nav-left">
             <div class="mini-orb" onclick="toggleMobileMenu()"></div>
             <div class="nav-menu">
-                <a href="index.html" class="nav-item">Chat</a>
+                <a href="chat.html" class="nav-item">Chat</a>
                 <a href="dashboard.html" class="nav-item">Dashboard</a>
                 <a href="lists.html" class="nav-item">Lists</a>
                 <a href="calendar.html" class="nav-item">Calendar</a>
@@ -1230,8 +1189,8 @@
             
             <!-- Time/Date Display -->
             <div class="time-date-display">
-                <div class="current-time" id="currentTime">Loading...</div>
-                <div class="current-date" id="currentDate">Loading...</div>
+                <div class="current-time" id="navCurrentTime">--:--</div>
+                <div class="current-date" id="navCurrentDate"></div>
             </div>
         </div>
     </div>
@@ -1318,6 +1277,8 @@
             <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
+            <a href="music.html" class="mobile-nav-item">🎵 Music</a>
+            <a href="games.html" class="mobile-nav-item">🎮 Games</a>
             <a href="people.html" class="mobile-nav-item">👥 People</a>
             <a href="memories.html" class="mobile-nav-item active">🧠 Memories</a>
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
@@ -1354,17 +1315,21 @@
                     <div class="more-item-icon">🧠</div>
                     <div class="more-item-label">Memories</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('workflows.html')">
-                    <div class="more-item-icon">⚡</div>
-                    <div class="more-item-label">Workflows</div>
-                </div>
                 <div class="more-item" onclick="navigateToPage('music.html')">
                     <div class="more-item-icon">🎵</div>
                     <div class="more-item-label">Music</div>
                 </div>
+                <div class="more-item" onclick="navigateToPage('games.html')">
+                    <div class="more-item-icon">🎮</div>
+                    <div class="more-item-label">Games</div>
+                </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
                     <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
                 </div>
             </div>
         </div>
@@ -1374,6 +1339,7 @@
     
     <script src="js/auth.js"></script>
     <script src="js/common.js"></script>
+    <script src="/js/notifications-panel.js"></script>
     <script src="js/ai-processor.js"></script>
     <script>
         const canvas = document.getElementById('memoryCanvas');
@@ -2302,7 +2268,7 @@
 
         // Mobile menu toggle
         function toggleMobileMenu() {
-            if (window.innerWidth > 768) { window.location.href = 'index.html'; return; }
+            if (window.innerWidth > 768) { window.location.href = 'chat.html'; return; }
             const menu = document.getElementById('mobileNavMenu');
             const overlay = document.getElementById('mobileNavOverlay');
             if (menu && overlay) {
@@ -2315,7 +2281,15 @@
             if (window.innerWidth <= 768) {
                 toggleMobileMenu();
             }
-            logout();
+            if (window.zoeAuth && typeof window.zoeAuth.logout === 'function') {
+                window.zoeAuth.logout();
+            } else if (typeof logout === 'function') {
+                logout();
+            } else {
+                console.error('logout function not found');
+                localStorage.removeItem('zoe_session');
+                window.location.href = 'chat.html';
+            }
         }
 
         async function loadNotifications() {
@@ -2406,17 +2380,12 @@
         }
 
 
-        // Time/Date Update Functions
-        function updateTimeDate() {
+        function updateNavTime() {
             const now = new Date();
-            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-            
-            const timeElement = document.getElementById('currentTime');
-            const dateElement = document.getElementById('currentDate');
-            
-            if (timeElement) timeElement.textContent = timeString;
-            if (dateElement) dateElement.textContent = dateString;
+            const timeEl = document.getElementById('navCurrentTime');
+            const dateEl = document.getElementById('navCurrentDate');
+            if (timeEl) timeEl.textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            if (dateEl) dateEl.textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
         }
 
         // Initialize authentication and notifications on page load
@@ -2434,9 +2403,8 @@
             updateSidebar();
             updateLegend();
             
-            // Update time/date immediately and every minute
-            updateTimeDate();
-            setInterval(updateTimeDate, 60000);
+            updateNavTime();
+            setInterval(updateNavTime, 30000);
         });
 
         async function updateAPIStatus() {
@@ -2482,6 +2450,7 @@
         };
         document.head.appendChild(orbScript);
     </script>
+    <script src="/js/websocket-sync.js"></script>
     <!-- Mini Player for persistent music playback -->
     <script src="js/mini-player.js"></script>
 </body>

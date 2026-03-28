@@ -1832,8 +1832,8 @@
             
             <!-- Time/Date Display -->
             <div class="time-date-display">
-                <div class="current-time" id="currentTime">Loading...</div>
-                <div class="current-date" id="currentDate">Loading...</div>
+                <div class="current-time" id="navCurrentTime">--:--</div>
+                <div class="current-date" id="navCurrentDate">Loading...</div>
             </div>
         </div>
     </div>
@@ -1854,13 +1854,13 @@
                     <div class="more-item-icon">🧠</div>
                     <div class="more-item-label">Memories</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('workflows.html')">
-                    <div class="more-item-icon">⚡</div>
-                    <div class="more-item-label">Workflows</div>
-                </div>
                 <div class="more-item" onclick="navigateToPage('music.html')">
                     <div class="more-item-icon">🎵</div>
                     <div class="more-item-label">Music</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('games.html')">
+                    <div class="more-item-icon">🎮</div>
+                    <div class="more-item-label">Games</div>
                 </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
@@ -1886,6 +1886,8 @@
             <a href="lists.html" class="mobile-nav-item active">✅ Lists</a>
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
+            <a href="music.html" class="mobile-nav-item">🎵 Music</a>
+            <a href="games.html" class="mobile-nav-item">🎮 Games</a>
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
             <div class="mobile-nav-divider"></div>
@@ -1970,6 +1972,7 @@
     </div>
 
     <script src="js/common.js"></script>
+    <script src="/js/notifications-panel.js"></script>
     <script src="js/websocket-sync.js"></script>
     
     <!-- Widget System Core -->
@@ -2233,12 +2236,18 @@
             window.location.href = page;
         }
         
+        function updateNavTime() {
+            const now = new Date();
+            document.getElementById('navCurrentTime').textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            document.getElementById('navCurrentDate').textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+        }
+
         // Mobile menu toggle
         function toggleMobileMenu() {
             if (window.innerWidth > 768) { 
                 // On desktop, go to home
                 if (window.location.pathname !== '/lists.html' && window.location.pathname !== '/dashboard.html') {
-                    window.location.href = 'index.html';
+                    window.location.href = 'chat.html';
                 }
                 return; 
             }
@@ -2252,21 +2261,16 @@
         }
 
         function handleLogout() {
-            if (window.innerWidth <= 768) {
-                toggleMobileMenu();
-            }
-            // Use zoeAuth.logout() if available, otherwise try window.logout
-            if (window.zoeAuth && typeof window.zoeAuth.logout === 'function') {
+            if (window.zoeAuth) {
                 window.zoeAuth.logout();
-            } else if (typeof logout === 'function') {
-                logout();
             } else {
-                console.error('logout function not found');
-                // Fallback: clear session and redirect
                 localStorage.removeItem('zoe_session');
-                window.location.href = 'index.html';
+                window.location.href = '/';
             }
         }
+
+        updateNavTime();
+        setInterval(updateNavTime, 30000);
     </script>
 
     <!-- Gridstack.js Library (Local for Offline Support) -->
@@ -2299,6 +2303,7 @@
             }
         })();
     </script>
+    <script src="/js/orb-loader.js"></script>
     <!-- Mini Player for persistent music playback -->
     <script src="js/mini-player.js"></script>
 </body>

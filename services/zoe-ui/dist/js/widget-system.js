@@ -228,15 +228,12 @@ async function registerAllWidgets() {
                 missingWidgets.push({ name: manifestName, className, error: error.message });
             }
         } else {
-            console.warn(`⚠️ Widget class not found: ${className} (manifest name: ${manifestName})`);
-            console.debug(`   Checking window.${className}, available: ${typeof window[className]}`);
             missingWidgets.push({ name: manifestName, className });
         }
     }
     
     if (missingWidgets.length > 0) {
-        console.warn(`⚠️ ${missingWidgets.length} widgets failed to register:`, missingWidgets.map(w => w.name).join(', '));
-        console.debug('Missing widget details:', missingWidgets);
+        console.debug(`Widget scripts not loaded on this page: ${missingWidgets.map(w => w.name).join(', ')}`);
     }
     
     console.log(`✅ Registered ${registered}/${widgetManifest.length} widget modules`);

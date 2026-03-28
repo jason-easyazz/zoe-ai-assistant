@@ -5,11 +5,12 @@
 
 // Orb Chat System
 let orbChatOpen = false;
-let orbChatContext = null; // Store context for deep conversations
+let orbChatContext = null;
 let intelligenceWS = null;
 let wsRetries = 0;
 const MAX_WS_RETRIES = 2;
 let orbWebSocket = null;
+let orbSessionId = localStorage.getItem('orbSessionId') || null;
 
 /**
  * Initialize Orb Chat functionality
@@ -141,43 +142,46 @@ async function sendOrbMessage() {
     showOrbTyping();
     
     try {
-        // Use apiRequest if available, otherwise use fetch
-        let response;
+        var currentPage = location.pathname.replace(/\.html$/, '').replace(/^\//, '') || 'dashboard';
+        var chatPayload = {
+            message: message,
+            context: orbChatContext,
+            mode: 'orb_chat',
+            page_context: { page: currentPage, url: location.pathname }
+        };
+        if (orbSessionId) chatPayload.session_id = orbSessionId;
+
+        var response;
         if (typeof apiRequest === 'function') {
-            response = await apiRequest('/chat/', {
+            response = await apiRequest('/api/chat/?stream=false', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    message: message,
-                    context: orbChatContext,
-                    mode: 'orb_chat' // Special mode for orb conversations
-                })
+                body: JSON.stringify(chatPayload)
             });
         } else {
-            // Fallback to direct fetch
-            const session = window.zoeAuth?.getCurrentSession();
-            const apiBase = window.API_BASE || '/api';
-            const res = await fetch(`${apiBase}/chat/`, {
+            var session = window.zoeAuth ? window.zoeAuth.getCurrentSession() : null;
+            var res = await fetch('/api/chat/?stream=false', {
                 method: 'POST',
-                headers: { 
+                headers: {
                     'Content-Type': 'application/json',
                     ...(session ? { 'X-Session-ID': session.session_id } : {})
                 },
-                body: JSON.stringify({
-                    message: message,
-                    context: orbChatContext,
-                    mode: 'orb_chat'
-                })
+                body: JSON.stringify(chatPayload)
             });
             response = await res.json();
         }
-        
-        // Remove typing indicator
+
         hideOrbTyping();
-        
+
+        if (response && response.session_id) {
+            orbSessionId = response.session_id;
+            localStorage.setItem('orbSessionId', orbSessionId);
+        }
+
         if (response && response.response) {
             addOrbMessage(response.response, 'assistant');
             orbChatContext = response.context || orbChatContext;
+            handleOrbUiCommands(response);
         } else {
             addOrbMessage('Sorry, I had trouble processing that. Could you try again?', 'assistant');
         }
@@ -252,9 +256,8 @@ function initIntelligenceWS() {
         return;
     }
     
-    // Use relative WebSocket URL - nginx will proxy
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${location.host}/api/ws/intelligence`;
+    const wsUrl = `${protocol}//${location.host}/ws/push?channel=all`;
     
     try {
         intelligenceWS = new WebSocket(wsUrl);
@@ -303,44 +306,29 @@ function initIntelligenceWS() {
 }
 
 /**
- * Initialize Intelligence SSE (fallback)
+ * Initialize Intelligence Polling (fallback when WebSocket unavailable)
  */
 function initIntelligenceSSE() {
     const orb = document.getElementById('zoeOrb');
     if (!orb) return;
-    
-    // Use relative URL for SSE
-    const url = '/api/intelligence/stream';
-    
-    try {
-        const es = new EventSource(url);
-        
-        es.onopen = () => { 
-            orb.classList.remove('error', 'connecting'); 
-            orb.classList.add('connected');
-            orb.title = 'Connected (SSE)';
-            console.log('✅ Intelligence SSE connected');
-        };
-        
-        es.onmessage = (evt) => {
-            try { 
-                const msg = JSON.parse(evt.data); 
-                handleIntelligenceEvent(msg); 
-            } catch(e) {
-                console.warn('Failed to parse SSE message:', e);
+
+    orb.classList.remove('error', 'connecting');
+    orb.classList.add('connected');
+    orb.title = 'Connected (polling)';
+
+    setInterval(async () => {
+        try {
+            const res = await fetch('/api/notifications/pending');
+            if (res.ok) {
+                const items = await res.json();
+                if (Array.isArray(items) && items.length > 0) {
+                    items.forEach(n => handleIntelligenceEvent({
+                        type: 'proactive_suggestion', data: n
+                    }));
+                }
             }
-        };
-        
-        es.onerror = () => { 
-            orb.classList.add('error'); 
-            orb.title = 'SSE error';
-            console.warn('SSE connection error');
-        };
-    } catch(e) { 
-        orb.classList.add('error'); 
-        orb.title = 'No realtime channel';
-        console.error('Failed to create SSE:', e);
-    }
+        } catch(e) { /* silent */ }
+    }, 60000);
 }
 
 /**
@@ -359,6 +347,23 @@ function handleIntelligenceEvent(event) {
         orb.classList.add('thinking');
         showOrbToast(`Context updated • events: ${event.data?.context?.events ?? 0}`, false, false);
         setTimeout(() => { orb.classList.remove('thinking'); }, 1200);
+        return;
+    }
+    if (event.type === 'ui_action') {
+        const action = event.data || {};
+        const actionType = action.action_type || 'action';
+        orb.classList.add('thinking');
+        showOrbToast(`Zoe is working: ${actionType}`, false, false);
+        setTimeout(() => { orb.classList.remove('thinking'); }, 1600);
+        return;
+    }
+    if (event.type === 'ui_action_status') {
+        const result = event.data || {};
+        if (result.status === 'success') {
+            showOrbToast('Action completed', false, false);
+        } else if (result.status === 'failed' || result.status === 'blocked') {
+            showOrbToast(`Action ${result.status}: ${result.error_message || 'check details'}`, false, false);
+        }
         return;
     }
     if (event.type === 'proactive_suggestion' || event.type === 'ambient_notification') {
@@ -495,6 +500,130 @@ async function suggestionAction(notificationId, action) {
         }
     } catch (e) { 
         console.warn('Suggestion action failed', e); 
+    }
+}
+
+/**
+ * Handle UI commands from orb chat responses (navigate, notify, etc.)
+ */
+function handleOrbUiCommands(response) {
+    if (!response) return;
+    var session = window.zoeAuth ? window.zoeAuth.getCurrentSession() : null;
+    var headers = { 'Content-Type': 'application/json' };
+    if (session && session.session_id) headers['X-Session-ID'] = session.session_id;
+    var localHandlers = [];
+
+    if (response.ui_commands) {
+        response.ui_commands.forEach(function(cmd) {
+            var actionType = null;
+            if (cmd.command === 'navigate') actionType = 'navigate';
+            else if (cmd.command === 'notify') actionType = 'notify';
+            else if (cmd.command === 'refresh_data') actionType = 'refresh';
+            else actionType = 'highlight';
+
+            fetch('/api/ui/actions', {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify({
+                    action_type: actionType,
+                    payload: cmd.params || {},
+                    requested_by: 'orb',
+                    session_id: orbSessionId || null
+                })
+            }).catch(function() {
+                // Fallback to local execution if orchestration endpoint is unavailable.
+                localHandlers.push(cmd);
+            });
+        });
+    }
+
+    if (localHandlers.length > 0) {
+        localHandlers.forEach(function(cmd) {
+            if (cmd.command === 'navigate' && cmd.params && cmd.params.page) {
+                showOrbToast('Navigating to ' + cmd.params.page + '...');
+                setTimeout(function() { window.location.href = cmd.params.page; }, 1500);
+            } else if (cmd.command === 'notify' && cmd.params) {
+                showOrbToast(cmd.params.message || '');
+            } else if (cmd.command === 'refresh_data') {
+                window.location.reload();
+            }
+        });
+    }
+}
+
+/**
+ * Web Speech API - Voice Input for Orb
+ */
+let orbRecognition = null;
+let orbIsListening = false;
+
+function initOrbVoice() {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+        const btn = document.getElementById('orbVoiceBtn');
+        if (btn) btn.style.display = 'none';
+        return;
+    }
+    orbRecognition = new SpeechRecognition();
+    orbRecognition.continuous = false;
+    orbRecognition.interimResults = true;
+    orbRecognition.lang = 'en-AU';
+    orbRecognition.maxAlternatives = 1;
+
+    orbRecognition.onresult = function(event) {
+        const input = document.getElementById('orbChatInput');
+        if (!input) return;
+        let final = '', interim = '';
+        for (let i = 0; i < event.results.length; i++) {
+            if (event.results[i].isFinal) {
+                final += event.results[i][0].transcript;
+            } else {
+                interim += event.results[i][0].transcript;
+            }
+        }
+        input.value = final || interim;
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+    };
+
+    orbRecognition.onend = function() {
+        orbIsListening = false;
+        const btn = document.getElementById('orbVoiceBtn');
+        if (btn) btn.classList.remove('listening');
+        const input = document.getElementById('orbChatInput');
+        if (input && input.value.trim()) {
+            sendOrbMessage();
+        }
+    };
+
+    orbRecognition.onerror = function(event) {
+        orbIsListening = false;
+        const btn = document.getElementById('orbVoiceBtn');
+        if (btn) btn.classList.remove('listening');
+        if (event.error !== 'no-speech' && event.error !== 'aborted') {
+            console.warn('Speech recognition error:', event.error);
+        }
+    };
+}
+
+function toggleOrbVoice() {
+    if (!orbRecognition) initOrbVoice();
+    if (!orbRecognition) return;
+
+    if (!orbChatOpen) openOrbChat();
+
+    if (orbIsListening) {
+        orbRecognition.stop();
+        orbIsListening = false;
+        const btn = document.getElementById('orbVoiceBtn');
+        if (btn) btn.classList.remove('listening');
+    } else {
+        const input = document.getElementById('orbChatInput');
+        if (input) input.value = '';
+        orbRecognition.start();
+        orbIsListening = true;
+        const btn = document.getElementById('orbVoiceBtn');
+        if (btn) btn.classList.add('listening');
     }
 }
 

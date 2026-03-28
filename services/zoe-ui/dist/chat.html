@@ -18,43 +18,6 @@
             overflow: hidden; height: 100vh;
         }
         
-        /* Navigation Bar - matching calendar.html */
-        .nav-bar {
-            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
-            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
-            align-items: center; height: 60px;
-        }
-        .nav-left { display: flex; align-items: center; gap: 15px; }
-        .mini-orb { 
-            width: 32px; height: 32px; border-radius: 50%; 
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
-            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
-        }
-        .mini-orb:hover { transform: scale(1.1); }
-        .nav-menu { display: flex; gap: 20px; }
-        .nav-item { 
-            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
-            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
-            min-height: 44px; display: flex; align-items: center;
-        }
-        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
-        .nav-right { display: flex; align-items: center; gap: 10px; }
-        
-        .api-indicator { 
-            font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 8px; 
-            display: flex; align-items: center; gap: 6px; 
-        }
-        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
-        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-        .api-indicator.online::before { background: #22c55e; }
-        
-        .time-date-display {
-            display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
-        }
-        .current-time { font-size: 16px; font-weight: 500; color: #333; line-height: 1.2; }
-        .current-date { font-size: 11px; color: #666; line-height: 1.2; }
-        
         /* Main Layout */
         .app-container {
             display: grid;
@@ -469,6 +432,92 @@
             opacity: 0.5;
             cursor: not-allowed;
         }
+
+        .stop-stream-btn {
+            width: 48px;
+            height: 48px;
+            border: none;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #f87171 0%, #ef4444 100%);
+            color: white;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            flex-shrink: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .stop-stream-btn.visible {
+            display: flex;
+        }
+
+        .tool-trace-panel {
+            margin: 0 0 8px 32px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .tool-call-card {
+            background: rgba(123, 97, 255, 0.06);
+            border: 1px solid rgba(123, 97, 255, 0.2);
+            border-radius: 10px;
+            padding: 8px 12px;
+            font-size: 12px;
+        }
+
+        .tool-call-card summary {
+            cursor: pointer;
+            font-weight: 600;
+            color: #444;
+        }
+
+        .tool-call-card pre {
+            margin: 8px 0 0;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-size: 11px;
+            max-height: 160px;
+            overflow: auto;
+        }
+
+        .reasoning-panel {
+            margin: 0 0 8px 32px;
+            padding: 8px 12px;
+            background: rgba(155, 89, 182, 0.08);
+            border: 1px solid rgba(155, 89, 182, 0.25);
+            border-radius: 10px;
+            font-size: 12px;
+            color: #6b4d7a;
+        }
+
+        .reasoning-panel summary {
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .message-content pre {
+            position: relative;
+        }
+
+        .code-copy-btn {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            font-size: 11px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.3);
+            background: rgba(0,0,0,0.35);
+            color: #fff;
+            cursor: pointer;
+        }
+
+        .code-copy-btn:hover {
+            background: rgba(123, 97, 255, 0.5);
+        }
         
         /* Sessions Panel */
         .sessions-panel {
@@ -572,6 +621,13 @@
             background: linear-gradient(135deg, rgba(123, 97, 255, 0.15) 0%, rgba(90, 224, 224, 0.1) 100%);
             border-color: #7B61FF;
         }
+        .session-delete-btn {
+            background: none; border: none; color: #94a3b8; font-size: 16px;
+            cursor: pointer; padding: 0 4px; line-height: 1; border-radius: 4px;
+            opacity: 0; transition: all 0.2s;
+        }
+        .session-item:hover .session-delete-btn { opacity: 1; }
+        .session-delete-btn:hover { color: #ef4444; background: rgba(239,68,68,0.1); }
         
         .session-title {
             font-size: 14px;
@@ -719,17 +775,22 @@
             font-weight: 500;
         }
         
-        /* Responsive */
+        .mobile-sessions-toggle {
+            display: none; position: fixed; bottom: 16px; left: 16px; z-index: 200;
+            background: linear-gradient(135deg, #7B61FF, #8B5CF6); color: white;
+            border: none; border-radius: 50%; width: 44px; height: 44px;
+            font-size: 18px; cursor: pointer; box-shadow: 0 4px 12px rgba(123,97,255,0.4);
+        }
         @media (max-width: 968px) {
-            .app-container {
-                grid-template-columns: 1fr;
-            }
+            .app-container { grid-template-columns: 1fr; }
             .sessions-panel {
-                display: none;
+                display: none; position: fixed; top: 60px; left: 0; bottom: 0;
+                width: 280px; z-index: 150; background: rgba(255,255,255,0.98);
+                backdrop-filter: blur(20px); box-shadow: 4px 0 20px rgba(0,0,0,0.1);
             }
-            .expand-btn {
-                display: none !important;
-            }
+            .sessions-panel.mobile-open { display: flex; }
+            .expand-btn { display: none !important; }
+            .mobile-sessions-toggle { display: flex; align-items: center; justify-content: center; }
         }
         
         /* Action Cards Styling */
@@ -1161,6 +1222,106 @@
             .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
         }
 
+        /* UI Component Catalog Styles */
+        .ui-component { margin: 12px 0; }
+        
+        .qr-wrapper { 
+            display: flex; flex-direction: column; align-items: center; 
+            background: white; border-radius: 16px; padding: 20px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08); max-width: 280px;
+        }
+        .qr-label { margin-top: 12px; font-size: 13px; color: #666; text-align: center; }
+        
+        .info-card {
+            background: rgba(255,255,255,0.9); border: 1px solid rgba(123,97,255,0.15);
+            border-radius: 14px; padding: 16px; display: flex; align-items: flex-start; gap: 12px;
+        }
+        .info-card-icon { font-size: 28px; }
+        .info-card-title { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
+        .info-card-desc { font-size: 13px; color: #666; }
+        .info-card-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+        .info-card-actions .card-action-btn {
+            padding: 6px 14px; border-radius: 8px; border: 1px solid rgba(123,97,255,0.3);
+            background: rgba(123,97,255,0.05); color: #7B61FF; font-size: 13px; cursor: pointer;
+        }
+        .info-card-actions .card-action-btn:hover { background: rgba(123,97,255,0.15); }
+        
+        .confirmation-component {
+            background: rgba(255,255,255,0.95); border: 1px solid #fbbf24;
+            border-radius: 14px; padding: 16px; text-align: center;
+        }
+        .confirmation-icon { font-size: 32px; margin-bottom: 8px; }
+        .confirmation-text { font-size: 14px; color: #333; margin-bottom: 12px; }
+        .confirmation-actions { display: flex; gap: 10px; justify-content: center; }
+        .confirm-btn { padding: 8px 20px; border-radius: 8px; border: none; font-size: 14px; cursor: pointer; font-weight: 500; }
+        .confirm-btn.yes { background: #7B61FF; color: white; }
+        .confirm-btn.no { background: #f1f3f6; color: #666; }
+        
+        .progress-component { display: flex; gap: 4px; align-items: center; padding: 12px 0; }
+        .progress-step { display: flex; flex-direction: column; align-items: center; flex: 1; opacity: 0.4; }
+        .progress-step.done, .progress-step.active { opacity: 1; }
+        .step-number { 
+            width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+            font-size: 12px; font-weight: 600; margin-bottom: 4px;
+            background: #f1f3f6; color: #666;
+        }
+        .progress-step.active .step-number { background: #7B61FF; color: white; }
+        .progress-step.done .step-number { background: #10b981; color: white; }
+        .step-label { font-size: 11px; color: #666; text-align: center; }
+        
+        .status-component {
+            display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+            border-radius: 10px; font-size: 14px;
+        }
+        .status-component.success { background: rgba(16,185,129,0.1); color: #059669; }
+        .status-component.error { background: rgba(239,68,68,0.1); color: #dc2626; }
+        .status-component.warning { background: rgba(251,191,36,0.1); color: #d97706; }
+        .status-component.info { background: rgba(123,97,255,0.1); color: #7B61FF; }
+        
+        .form-component {
+            background: rgba(255,255,255,0.95); border-radius: 14px; padding: 16px;
+            border: 1px solid rgba(123,97,255,0.15);
+        }
+        .form-title { font-weight: 600; font-size: 15px; margin-bottom: 12px; }
+        .form-field { margin-bottom: 10px; }
+        .form-field label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
+        .form-field input {
+            width: 100%; padding: 8px 12px; border: 1px solid #e1e5e9; border-radius: 8px;
+            font-size: 14px; outline: none;
+        }
+        .form-field input:focus { border-color: #7B61FF; box-shadow: 0 0 0 3px rgba(123,97,255,0.1); }
+        .form-submit {
+            width: 100%; padding: 10px; background: #7B61FF; color: white; border: none;
+            border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; margin-top: 4px;
+        }
+        .form-submit:hover { background: #6b51ef; }
+        
+        .link-preview {
+            display: flex; gap: 12px; background: rgba(255,255,255,0.9);
+            border: 1px solid #e1e5e9; border-radius: 12px; padding: 12px; text-decoration: none; color: inherit;
+        }
+        .link-preview-img { width: 80px; height: 60px; border-radius: 8px; object-fit: cover; }
+        .link-preview-title { font-weight: 600; font-size: 14px; }
+        .link-preview-desc { font-size: 12px; color: #666; margin-top: 2px; }
+        .link-preview-url { font-size: 11px; color: #999; margin-top: 4px; }
+        
+        .image-component { text-align: center; }
+        .image-caption { font-size: 12px; color: #666; margin-top: 8px; }
+        
+        .chat-toast {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(20px);
+            padding: 10px 20px; border-radius: 10px; font-size: 14px; z-index: 9999;
+            opacity: 0; transition: all 0.3s ease; pointer-events: none;
+            background: #333; color: white;
+        }
+        .chat-toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+        .chat-toast.success { background: #059669; }
+        .chat-toast.error { background: #dc2626; }
+        .chat-toast.warning { background: #d97706; }
+        .chat-toast.info { background: #7B61FF; }
+        
+        .ui-component-fallback { color: #999; font-style: italic; font-size: 13px; }
+
     </style>
 <!-- PWA Meta Tags -->
     <meta name="application-name" content="Zoe AI">
@@ -1184,6 +1345,19 @@
     
     <!-- Service Worker Registration -->
     <script src="/js/sw-registration.js" defer></script>
+    <!-- Markdown + XSS sanitization -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/plugins/autoloader/prism-autoloader.min.js"></script>
+    <script>
+        if (window.Prism && Prism.plugins && Prism.plugins.autoloader) {
+            Prism.plugins.autoloader.languages_path =
+                'https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/';
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js"></script>
 </head>
 <body>
     <!-- Navigation -->
@@ -1206,8 +1380,8 @@
             
             <!-- Time/Date Display -->
             <div class="time-date-display">
-                <div class="current-time" id="currentTime">Loading...</div>
-                <div class="current-date" id="currentDate">Loading...</div>
+                <div class="current-time" id="navCurrentTime">--:--</div>
+                <div class="current-date" id="navCurrentDate">Loading...</div>
             </div>
         </div>
     </div>
@@ -1228,13 +1402,13 @@
                     <div class="more-item-icon">🧠</div>
                     <div class="more-item-label">Memories</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('workflows.html')">
-                    <div class="more-item-icon">⚡</div>
-                    <div class="more-item-label">Workflows</div>
-                </div>
                 <div class="more-item" onclick="navigateToPage('music.html')">
                     <div class="more-item-icon">🎵</div>
                     <div class="more-item-label">Music</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('games.html')">
+                    <div class="more-item-icon">🎮</div>
+                    <div class="more-item-label">Games</div>
                 </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
@@ -1260,6 +1434,8 @@
             <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
+            <a href="music.html" class="mobile-nav-item">🎵 Music</a>
+            <a href="games.html" class="mobile-nav-item">🎮 Games</a>
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
             <div class="mobile-nav-divider"></div>
@@ -1278,7 +1454,6 @@
             <div class="no-notifications">No notifications</div>
         </div>
     </div>
-            </div>
             
     <!-- Expand Button (shown when collapsed) -->
     <button class="expand-btn" onclick="toggleSessions()">📋</button>
@@ -1324,11 +1499,13 @@
                         onkeydown="handleKeyDown(event)"
                         oninput="adjustTextareaHeight(this)"
                     ></textarea>
+                    <button type="button" class="stop-stream-btn" id="stopStreamBtn" title="Stop">■</button>
                     <button class="send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
                 </div>
                 </div>
             </div>
 
+        <button class="mobile-sessions-toggle" onclick="document.querySelector('.sessions-panel').classList.toggle('mobile-open')" title="Chat History">☰</button>
         <!-- Sessions Panel -->
         <div class="sessions-panel">
             <div class="sessions-header">
@@ -1370,24 +1547,353 @@
         </div>
     </div>
 
-    <script src="js/auth.js?v=9.0&t=1760020000"></script>
+    <script src="js/auth.js?v=9.1&t=1764032000"></script>
     <script src="js/common.js?v=9.0&t=1760020000"></script>
+    <script src="/js/notifications-panel.js"></script>
         <script src="js/chat-sessions.js?v=2.1"></script>
     <script>
         // Cache buster - force browser to reload this script
-        console.log('🔄 Chat.html v10.1 - WITH SESSION HISTORY UI!');
+        console.log('🔄 Chat.html v11 — canonical AG-UI SSE + stop / regenerate / tool trace');
     </script>
     <script>
+        function renderMarkdown(text) {
+            if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+                return DOMPurify.sanitize(marked.parse(text));
+            }
+            const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            return escaped.replace(/\n/g, '<br>');
+        }
+
+        function escapeHtml(text) {
+            return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g, '<br>');
+        }
+
+        function enhanceCodeBlocks(rootEl) {
+            if (!rootEl || typeof rootEl.querySelectorAll !== 'function') return;
+            rootEl.querySelectorAll('pre code').forEach((code) => {
+                const pre = code.parentElement;
+                if (!pre || pre.querySelector('.code-copy-btn')) return;
+                pre.style.position = 'relative';
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'code-copy-btn';
+                btn.textContent = 'Copy';
+                btn.addEventListener('click', () => {
+                    const t = code.textContent || '';
+                    navigator.clipboard.writeText(t).then(() => {
+                        btn.textContent = 'Copied';
+                        setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+                    }).catch(() => {});
+                });
+                pre.appendChild(btn);
+                if (window.Prism) {
+                    try { Prism.highlightElement(code); } catch (e) { /* autoloader may lag */ }
+                }
+            });
+        }
+
+        function ensureToolCallCard(ctx, toolCallId, toolCallName) {
+            if (!ctx.toolTraceEl || !toolCallId) return null;
+            ctx.toolTraceEl.style.display = 'flex';
+            let card = ctx.toolTraceEl.querySelector('[data-tool-call-id="' + toolCallId + '"]');
+            if (!card) {
+                card = document.createElement('details');
+                card.className = 'tool-call-card';
+                card.dataset.toolCallId = toolCallId;
+                card.open = true;
+                card.innerHTML = '<summary class="tool-call-summary"><span class="tool-call-name"></span></summary>' +
+                    '<div class="tool-call-body"><div class="tool-call-args"></div><div class="tool-call-result"></div></div>';
+                ctx.toolTraceEl.appendChild(card);
+            }
+            const nameEl = card.querySelector('.tool-call-name');
+            if (toolCallName && nameEl) nameEl.textContent = toolCallName;
+            return card;
+        }
+
+        function ingestSseDataLines(bufferChunk, streamCtx) {
+            const lines = bufferChunk.split('\n');
+            for (const lineUntrimmed of lines) {
+                const line = lineUntrimmed.replace(/\r$/, '');
+                if (!line.startsWith('data: ')) continue;
+                const payload = line.slice(6).trim();
+                if (!payload || payload === '[DONE]') continue;
+                try {
+                    const data = JSON.parse(payload);
+                    dispatchChatStreamEvent(streamCtx, data);
+                } catch (e) {
+                    console.error('Failed to parse stream event:', e, line);
+                }
+            }
+        }
+
+        /**
+         * Central dispatcher: canonical AG-UI types + legacy Zoe SSE aliases.
+         */
+        function dispatchChatStreamEvent(ctx, data) {
+            if (!data || data.type == null) return;
+            const t = data.type;
+            if (t !== 'TEXT_MESSAGE_CHUNK' && t !== 'TEXT_MESSAGE_CONTENT') {
+                console.log('📡 Stream event:', t, data);
+            }
+            const { group, contentEl, thinkingIndicator, stream } = ctx;
+
+            if (t === 'RUN_STARTED') {
+                if (data.threadId) currentSessionId = data.threadId;
+                return;
+            }
+            if (t === 'CUSTOM' && data.name === 'zoe.session') {
+                const v = data.value || {};
+                if (v.sessionId) currentSessionId = v.sessionId;
+                if (v.messageId) group.dataset.messageId = v.messageId;
+                loadSessions().catch((err) => console.warn('sessions reload:', err));
+                return;
+            }
+            if (t === 'STATE_SNAPSHOT') {
+                const snap = data.snapshot || {};
+                if (snap.status === 'generating' && thinkingIndicator && thinkingIndicator.parentNode) {
+                    const el = thinkingIndicator.querySelector('span:last-child');
+                    if (el) el.textContent = 'Generating response with ' + (snap.model || 'AI') + '...';
+                }
+                return;
+            }
+            if (t === 'STEP_STARTED') {
+                const step = data.stepName || data.step_name || 'Skill';
+                const badge = document.createElement('div');
+                badge.className = 'skill-badge';
+                badge.style.cssText = 'font-size:0.75em;color:#64b5f6;margin-bottom:4px;opacity:0.85;';
+                badge.textContent = '🎯 ' + step;
+                group.insertBefore(badge, ctx.toolTraceEl || contentEl);
+                return;
+            }
+            if (t === 'TOOL_CALL_START') {
+                if (thinkingIndicator && thinkingIndicator.parentNode) {
+                    thinkingIndicator.className = 'activity-indicator executing';
+                    const ic = thinkingIndicator.querySelector('span:first-child');
+                    const tx = thinkingIndicator.querySelector('span:last-child');
+                    if (ic) ic.textContent = '🔧';
+                    if (tx) tx.textContent = 'Executing: ' + (data.toolCallName || data.tool_call_name || 'tool') + '...';
+                }
+                ensureToolCallCard(ctx, data.toolCallId || data.tool_call_id, data.toolCallName || data.tool_call_name);
+                scrollToBottom();
+                return;
+            }
+            if (t === 'TOOL_CALL_ARGS') {
+                const id = data.toolCallId || data.tool_call_id;
+                const card = ensureToolCallCard(ctx, id, null);
+                const box = card && card.querySelector('.tool-call-args');
+                if (box) box.textContent = (box.textContent || '') + (data.delta || '');
+                return;
+            }
+            if (t === 'TOOL_CALL_END') {
+                return;
+            }
+            if (t === 'TOOL_CALL_RESULT') {
+                const id = data.toolCallId || data.tool_call_id;
+                const card = ensureToolCallCard(ctx, id, null);
+                const box = card && card.querySelector('.tool-call-result');
+                if (box) box.textContent = data.content != null ? String(data.content) : '';
+                if (thinkingIndicator && thinkingIndicator.parentNode) {
+                    thinkingIndicator.className = 'activity-indicator thinking';
+                    const ic = thinkingIndicator.querySelector('span:first-child');
+                    const tx = thinkingIndicator.querySelector('span:last-child');
+                    if (ic) ic.textContent = '🧠';
+                    if (tx) tx.textContent = 'Processing results...';
+                }
+                return;
+            }
+            if (t === 'TEXT_MESSAGE_CHUNK') {
+                const delta = data.delta || '';
+                if (stream.text.length === 0 && thinkingIndicator && thinkingIndicator.parentNode) {
+                    thinkingIndicator.remove();
+                }
+                stream.text += delta;
+                contentEl.innerHTML = escapeHtml(stream.text) + '<span class="streaming-cursor"></span>';
+                scrollToBottom();
+                return;
+            }
+            if (t === 'TEXT_MESSAGE_CONTENT') {
+                const delta = data.delta || '';
+                if (stream.text.length === 0 && thinkingIndicator && thinkingIndicator.parentNode) {
+                    thinkingIndicator.remove();
+                }
+                stream.text += delta;
+                contentEl.innerHTML = escapeHtml(stream.text) + '<span class="streaming-cursor"></span>';
+                scrollToBottom();
+                return;
+            }
+            if (t === 'REASONING_MESSAGE_CHUNK' || t === 'REASONING_MESSAGE_CONTENT') {
+                const delta = data.delta || '';
+                if (ctx.reasoningPanel) {
+                    ctx.reasoningPanel.style.display = 'block';
+                    if (ctx.reasoningBody) ctx.reasoningBody.textContent += delta;
+                }
+                return;
+            }
+            if (t === 'REASONING_START' || t === 'REASONING_MESSAGE_START') {
+                if (ctx.reasoningPanel) ctx.reasoningPanel.style.display = 'block';
+                return;
+            }
+            if (t === 'RUN_FINISHED') {
+                ctx.finalized = true;
+                contentEl.innerHTML = renderMarkdown(stream.text);
+                enhanceCodeBlocks(contentEl);
+                isStreaming = false;
+                document.getElementById('sendBtn').disabled = false;
+                const stopBtn = document.getElementById('stopStreamBtn');
+                if (stopBtn) { stopBtn.classList.remove('visible'); stopBtn.disabled = false; }
+                streamAbortController = null;
+                if (currentSessionId && stream.text) {
+                    saveMessageToSession('user', ctx.originalMessage);
+                    saveMessageToSession('assistant', stream.text);
+                }
+                return;
+            }
+            if (t === 'RUN_ERROR') {
+                ctx.finalized = true;
+                const msg = data.message || data.error?.message || 'Unknown error';
+                contentEl.innerHTML = '<span style="color: #ef4444;">Error: ' + escapeHtml(msg) + '</span>';
+                if (thinkingIndicator && thinkingIndicator.parentNode) thinkingIndicator.remove();
+                isStreaming = false;
+                document.getElementById('sendBtn').disabled = false;
+                const stopBtn = document.getElementById('stopStreamBtn');
+                if (stopBtn) { stopBtn.classList.remove('visible'); stopBtn.disabled = false; }
+                streamAbortController = null;
+                return;
+            }
+            if (t === 'CUSTOM' && data.name === 'zoe.ui_component') {
+                renderChatComponent(data.value || {}, contentEl, group);
+                return;
+            }
+            if (t === 'CUSTOM' && data.name === 'zoe.ui_command') {
+                executeDashboardCommand(data.value || {});
+                return;
+            }
+
+            // —— Legacy Zoe SSE (pre–AG-UI encoder) ——
+            if (t === 'session_start') {
+                if (data.session_id) currentSessionId = data.session_id;
+                if (data.message_id) group.dataset.messageId = data.message_id;
+                loadSessions().catch((err) => console.warn('sessions reload:', err));
+                return;
+            }
+            if (t === 'skill_matched') {
+                const badge = document.createElement('div');
+                badge.className = 'skill-badge';
+                badge.style.cssText = 'font-size:0.75em;color:#64b5f6;margin-bottom:4px;opacity:0.85;';
+                badge.textContent = '🎯 ' + (data.data || '') + ' (Tier ' + (data.tier || '?') + ')';
+                group.insertBefore(badge, ctx.toolTraceEl || contentEl);
+                return;
+            }
+            if (t === 'agent_state_delta') {
+                const st = data.state || {};
+                if (st.status === 'generating' && thinkingIndicator && thinkingIndicator.parentNode) {
+                    const el = thinkingIndicator.querySelector('span:last-child');
+                    if (el) el.textContent = 'Generating response with ' + (st.model || 'AI') + '...';
+                }
+                return;
+            }
+            if (t === 'action') {
+                if (thinkingIndicator && thinkingIndicator.parentNode) {
+                    thinkingIndicator.className = 'activity-indicator executing';
+                    const ic = thinkingIndicator.querySelector('span:first-child');
+                    const tx = thinkingIndicator.querySelector('span:last-child');
+                    if (ic) ic.textContent = '🔧';
+                    if (tx) tx.textContent = 'Executing: ' + (data.name || '') + '...';
+                }
+                scrollToBottom();
+                return;
+            }
+            if (t === 'action_result') {
+                if (thinkingIndicator && thinkingIndicator.parentNode) {
+                    thinkingIndicator.className = 'activity-indicator thinking';
+                    const ic = thinkingIndicator.querySelector('span:first-child');
+                    const tx = thinkingIndicator.querySelector('span:last-child');
+                    if (ic) ic.textContent = '🧠';
+                    if (tx) tx.textContent = 'Processing results...';
+                }
+                return;
+            }
+            if (t === 'message_delta') {
+                if (stream.text.length === 0 && thinkingIndicator && thinkingIndicator.parentNode) {
+                    thinkingIndicator.remove();
+                }
+                stream.text += data.delta || '';
+                contentEl.innerHTML = escapeHtml(stream.text) + '<span class="streaming-cursor"></span>';
+                scrollToBottom();
+                return;
+            }
+            if (t === 'action_cards') {
+                const cardsHtml = renderActionCards(data.cards);
+                stream.text += cardsHtml;
+                contentEl.innerHTML = renderMarkdown(stream.text);
+                scrollToBottom();
+                return;
+            }
+            if (t === 'ui_component') {
+                renderChatComponent(data, contentEl, group);
+                return;
+            }
+            if (t === 'ui_command') {
+                executeDashboardCommand(data);
+                return;
+            }
+            if (t === 'session_end') {
+                ctx.finalized = true;
+                contentEl.innerHTML = renderMarkdown(stream.text);
+                enhanceCodeBlocks(contentEl);
+                isStreaming = false;
+                document.getElementById('sendBtn').disabled = false;
+                const stopBtn = document.getElementById('stopStreamBtn');
+                if (stopBtn) { stopBtn.classList.remove('visible'); stopBtn.disabled = false; }
+                streamAbortController = null;
+                if (data.final_state) {
+                    const si = data.final_state.skill_info;
+                    if (si && si.name && !group.querySelector('.skill-badge')) {
+                        const badge = document.createElement('div');
+                        badge.className = 'skill-badge';
+                        badge.style.cssText = 'font-size:0.75em;color:#64b5f6;margin-bottom:4px;opacity:0.85;';
+                        badge.textContent = si.name + ' (Tier ' + (si.tier || '?') + ')';
+                        group.insertBefore(badge, ctx.toolTraceEl || contentEl);
+                    }
+                }
+                if (currentSessionId && stream.text) {
+                    saveMessageToSession('user', ctx.originalMessage);
+                    saveMessageToSession('assistant', stream.text);
+                }
+                return;
+            }
+            if (t === 'error') {
+                ctx.finalized = true;
+                const msg = (data.error && data.error.message) ? data.error.message : 'Unknown error';
+                contentEl.innerHTML = '<span style="color: #ef4444;">Error: ' + escapeHtml(msg) + '</span>';
+                if (thinkingIndicator && thinkingIndicator.parentNode) thinkingIndicator.remove();
+                isStreaming = false;
+                document.getElementById('sendBtn').disabled = false;
+                const stopBtn = document.getElementById('stopStreamBtn');
+                if (stopBtn) { stopBtn.classList.remove('visible'); stopBtn.disabled = false; }
+                streamAbortController = null;
+                return;
+            }
+        }
+
         // State
         let isStreaming = false;
         let currentSessionId = null;
         let messageCount = 0;
+        let streamAbortController = null;
+        let lastSubmittedUserMessage = '';
 
         // Initialize
         function init() {
-            updateTimeDate();
-            setInterval(updateTimeDate, 60000);
+            updateNavTime();
+            setInterval(updateNavTime, 60000);
             document.getElementById('chatInput').focus();
+            const stopBtn = document.getElementById('stopStreamBtn');
+            if (stopBtn) {
+                stopBtn.addEventListener('click', () => {
+                    try { streamAbortController?.abort(); } catch (e) {}
+                });
+            }
             
             // Load sessions from backend (but don't auto-load messages)
             loadSessions();
@@ -1401,13 +1907,10 @@
             // generateDynamicSuggestions();
         }
 
-        // Time/Date
-        function updateTimeDate() {
+        function updateNavTime() {
             const now = new Date();
-            document.getElementById('currentTime').textContent = 
-                now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            document.getElementById('currentDate').textContent = 
-                now.toLocaleDateString([], { month: 'short', day: 'numeric' });
+            document.getElementById('navCurrentTime').textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            document.getElementById('navCurrentDate').textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
         }
 
         // Sessions Panel Toggle
@@ -1441,8 +1944,11 @@
                     `;
                 } else {
                     sessionsList.innerHTML = sessions.map((s, idx) => `
-                        <div class="session-item ${s.id === currentSessionId ? 'active' : ''}" onclick="loadSession('${s.id}')">
-                            <div class="session-title">${s.title}</div>
+                        <div class="session-item ${s.id === currentSessionId ? 'active' : ''}" onclick="loadSession('${s.id}', event)">
+                            <div style="display:flex;justify-content:space-between;align-items:start;">
+                                <div class="session-title" style="flex:1;min-width:0;">${s.title}</div>
+                                <button class="session-delete-btn" onclick="event.stopPropagation();deleteSession('${s.id}')" title="Delete">×</button>
+                            </div>
                             <div class="session-meta">
                                 <span>${s.message_count} messages</span>
                                 <span>${formatSessionTime(s.updated_at)}</span>
@@ -1535,17 +2041,18 @@
             }
         }
 
-        async function loadSession(sessionId) {
+        async function loadSession(sessionId, clickEvent) {
             try {
                 currentSessionId = sessionId;
                 
-                // Update UI to show active session
                 document.querySelectorAll('.session-item').forEach(item => {
                     item.classList.remove('active');
                 });
-                event.target.closest('.session-item').classList.add('active');
+                if (clickEvent && clickEvent.target) {
+                    const sessionItem = clickEvent.target.closest('.session-item');
+                    if (sessionItem) sessionItem.classList.add('active');
+                }
                 
-                // Load session messages
                 await loadSessionMessages(sessionId);
             } catch (error) {
                 console.error('Failed to load session:', error);
@@ -1608,6 +2115,26 @@
             }
         }
 
+        async function deleteSession(sessionId) {
+            if (!confirm('Delete this conversation?')) return;
+            try {
+                await apiRequest(`/api/chat/sessions/${sessionId}`, { method: 'DELETE' });
+                if (currentSessionId === sessionId) {
+                    currentSessionId = null;
+                    document.getElementById('messagesContainer').innerHTML = `
+                        <div class="welcome-section" id="welcomeSection">
+                            <h1 class="welcome-title">Chat with Zoe</h1>
+                            <p class="welcome-subtitle">Intelligent AI Assistant</p>
+                        </div>
+                    `;
+                }
+                await loadSessions();
+                showNotification('Session deleted', 'success');
+            } catch (e) {
+                showNotification('Failed to delete session', 'error');
+            }
+        }
+
         function formatSessionTime(timestamp) {
             const date = new Date(timestamp);
             const now = new Date();
@@ -1653,6 +2180,7 @@
             input.value = '';
             adjustTextareaHeight(input);
             messageCount++;
+            lastSubmittedUserMessage = message;
 
             // Process with real chat (backend will save messages)
             await processWithSubgraphs(message);
@@ -1668,7 +2196,7 @@
                     <div class="message-name">You</div>
                     <div class="message-time">just now</div>
                 </div>
-                <div class="message-content">${text.replace(/\n/g, '<br>')}</div>
+                <div class="message-content">${escapeHtml(text).replace(/\n/g, '<br>')}</div>
             `;
             container.appendChild(group);
             scrollToBottom();
@@ -1682,175 +2210,11 @@
         async function processWithSubgraphs(message) {
             isStreaming = true;
             document.getElementById('sendBtn').disabled = true;
-
-            // All messages go through real chat API (no demo functions)
-            // The backend handles intent detection and routing
             await executeGeneralResponse(message);
-
-            // Button re-enabled in executeGeneralResponse on session_end
-            messageCount++;
-        }
-
-        // Subgraph Executors
-        async function executePlanDaySubgraph() {
-            const container = document.getElementById('messagesContainer');
-            
-            // Assistant message
-            addAssistantMessage("I'll help you plan your day! Let me analyze your schedule.");
-            await sleep(500);
-
-            // Subgraph card
-            const subgraph = createSubgraphCard('📅', 'Day Planning Subgraph', 'Analyzing your schedule and priorities...');
-            container.appendChild(subgraph);
-            scrollToBottom();
-
-            // Execute steps
-            const steps = [
-                { icon: '📅', text: 'Fetching calendar events', delay: 800 },
-                { icon: '✓', text: 'Found 5 events today', delay: 600 },
-                { icon: '📋', text: 'Loading task list', delay: 700 },
-                { icon: '✓', text: 'Found 8 pending tasks', delay: 600 },
-                { icon: '🎯', text: 'Analyzing priorities', delay: 900 },
-                { icon: '✓', text: 'Generated optimized schedule', delay: 500 }
-            ];
-
-            await executeSteps(subgraph, steps);
-            completeSubgraph(subgraph);
-
-            // Add result
-            const result = `
-                <strong>Morning (8-12pm):</strong><br>
-                • Team standup (9am) - 30min<br>
-                • Focus: Complete project proposal (high priority)<br>
-                • Quick break at 11am<br><br>
-                
-                <strong>Afternoon (12-5pm):</strong><br>
-                • Lunch with Sarah (12:30pm)<br>
-                • Review pull requests (2-3pm)<br>
-                • Doctor appointment (4:30pm)<br><br>
-                
-                <strong>Evening:</strong><br>
-                • Dinner with friends (7pm)<br>
-                • Light reading before bed
-            `;
-            addSubgraphResult(subgraph, '✨ Your Optimized Day Plan', result);
-        }
-
-        async function executeWorkflowDesignSubgraph(message) {
-            const container = document.getElementById('messagesContainer');
-            
-            addAssistantMessage("I'll design an N8N workflow for you! Analyzing your requirements...");
-            await sleep(500);
-
-            const subgraph = createSubgraphCard('🔧', 'Workflow Design Subgraph', 'Creating N8N workflow architecture...');
-            container.appendChild(subgraph);
-            scrollToBottom();
-
-            const steps = [
-                { icon: '🧠', text: 'Analyzing workflow requirements', delay: 800 },
-                { icon: '✓', text: 'Identified key automation points', delay: 700 },
-                { icon: '🔗', text: 'Designing node connections', delay: 900 },
-                { icon: '✓', text: 'Generated 6-node workflow', delay: 600 },
-                { icon: '📤', text: 'Exporting to N8N format', delay: 500 }
-            ];
-
-            await executeSteps(subgraph, steps);
-            completeSubgraph(subgraph);
-
-            const result = `
-                <strong>Daily Summary Email Workflow</strong><br><br>
-                
-                <strong>Trigger:</strong> Schedule (Daily at 8:00 AM)<br><br>
-                
-                <strong>Nodes:</strong><br>
-                1️⃣ Get today's calendar events<br>
-                2️⃣ Fetch pending tasks<br>
-                3️⃣ Check weather forecast<br>
-                4️⃣ Format email template<br>
-                5️⃣ Send email (Gmail)<br>
-                6️⃣ Log execution<br><br>
-                
-                <a href="/n8n" target="_blank" style="color: #7B61FF; text-decoration: none;">→ Open in N8N Editor</a>
-            `;
-            addSubgraphResult(subgraph, '✨ Workflow Created', result);
-        }
-
-        async function executeProductivitySubgraph() {
-            const container = document.getElementById('messagesContainer');
-            
-            addAssistantMessage("Let me analyze your productivity patterns!");
-            await sleep(500);
-
-            const subgraph = createSubgraphCard('🧠', 'Intelligence Analysis', 'Examining your patterns...');
-            container.appendChild(subgraph);
-            scrollToBottom();
-
-            const steps = [
-                { icon: '📈', text: 'Loading activity data (30 days)', delay: 800 },
-                { icon: '✓', text: 'Processed 247 tasks', delay: 600 },
-                { icon: '🕐', text: 'Analyzing time patterns', delay: 900 },
-                { icon: '✓', text: 'Identified peak hours: 9-11am', delay: 700 },
-                { icon: '🎯', text: 'Generating recommendations', delay: 800 }
-            ];
-
-            await executeSteps(subgraph, steps);
-            completeSubgraph(subgraph);
-
-            const result = `
-                <strong>Peak Performance:</strong> 9-11am (85% completion)<br>
-                <strong>Average Focus Time:</strong> 2.5 hours/day<br>
-                <strong>Task Completion Rate:</strong> 78%<br><br>
-                
-                <strong>Recommendations:</strong><br>
-                • Schedule deep work for morning hours<br>
-                • Take breaks every 90 minutes<br>
-                • Batch similar tasks together<br>
-                • Reduce afternoon meetings
-            `;
-            addSubgraphResult(subgraph, '✨ Productivity Insights', result);
-        }
-
-        async function executeShoppingSubgraph() {
-            const container = document.getElementById('messagesContainer');
-            
-            addAssistantMessage("I'll help you create a smart shopping list!");
-            await sleep(500);
-
-            const subgraph = createSubgraphCard('🛒', 'Shopping List Subgraph', 'Analyzing your needs...');
-            container.appendChild(subgraph);
-            scrollToBottom();
-
-            const steps = [
-                { icon: '🍽️', text: 'Checking meal plan', delay: 700 },
-                { icon: '✓', text: 'Found 5 planned meals', delay: 600 },
-                { icon: '📦', text: 'Checking pantry inventory', delay: 800 },
-                { icon: '✓', text: 'Identified missing items', delay: 600 },
-                { icon: '🏪', text: 'Optimizing shopping route', delay: 700 }
-            ];
-
-            await executeSteps(subgraph, steps);
-            completeSubgraph(subgraph);
-
-            const result = `
-                <strong>Produce:</strong><br>
-                • Tomatoes (4)<br>
-                • Lettuce (1 head)<br>
-                • Bananas (6)<br><br>
-                
-                <strong>Dairy:</strong><br>
-                • Milk (1 gallon)<br>
-                • Eggs (dozen)<br>
-                • Cheese (cheddar)<br><br>
-                
-                <strong>Pantry:</strong><br>
-                • Pasta<br>
-                • Coffee<br>
-                • Rice
-            `;
-            addSubgraphResult(subgraph, '✨ Your Shopping List', result);
         }
 
         async function executeGeneralResponse(message) {
+            const originalMessage = message;
             const container = document.getElementById('messagesContainer');
             
             // Show thinking indicator
@@ -1865,28 +2229,60 @@
             container.appendChild(thinkingIndicator);
             scrollToBottom();
             
-            // Create assistant message group
+            // Create assistant message group (tool trace + reasoning + content)
             const group = document.createElement('div');
             group.className = 'message-group assistant';
-            group.innerHTML = `
-                <div class="message-header">
-                    <div class="message-avatar">🤖</div>
-                    <div class="message-name">Zoe</div>
-                    <div class="message-time">just now</div>
-                    </div>
-                <div class="message-content"></div>
+            const header = document.createElement('div');
+            header.className = 'message-header';
+            header.innerHTML = `
+                <div class="message-avatar">🤖</div>
+                <div class="message-name">Zoe</div>
+                <div class="message-time">just now</div>
             `;
+            const toolTraceEl = document.createElement('div');
+            toolTraceEl.className = 'tool-trace-panel';
+            toolTraceEl.style.display = 'none';
+            const reasoningPanel = document.createElement('details');
+            reasoningPanel.className = 'reasoning-panel';
+            reasoningPanel.style.display = 'none';
+            reasoningPanel.innerHTML = '<summary>Model reasoning</summary><div class="reasoning-body"></div>';
+            const reasoningBody = reasoningPanel.querySelector('.reasoning-body');
+            const contentEl = document.createElement('div');
+            contentEl.className = 'message-content';
+            group.appendChild(header);
+            group.appendChild(toolTraceEl);
+            group.appendChild(reasoningPanel);
+            group.appendChild(contentEl);
             container.appendChild(group);
 
-            const contentEl = group.querySelector('.message-content');
+            const stream = { text: '' };
+            const streamCtx = {
+                group,
+                contentEl,
+                thinkingIndicator,
+                stream,
+                toolTraceEl,
+                reasoningPanel,
+                reasoningBody,
+                originalMessage,
+                finalized: false
+            };
 
             try {
                 const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_info?.user_id || session?.user_id;
+                const userId = session?.user_info?.user_id || session?.user_id || 'default';
                 
-                // Call REAL streaming API with AG-UI protocol
+                streamAbortController = new AbortController();
+                const stopBtn = document.getElementById('stopStreamBtn');
+                if (stopBtn) {
+                    stopBtn.classList.add('visible');
+                    stopBtn.disabled = false;
+                }
+
                 const response = await fetch(`/api/chat/?user_id=${userId}&stream=true`, {
                     method: 'POST',
+                    cache: 'no-store',
+                    signal: streamAbortController.signal,
                     headers: {
                         'Content-Type': 'application/json'
                     },
@@ -1907,147 +2303,89 @@
                     throw new Error(`HTTP ${response.status}`);
                 }
 
-                // Read SSE stream
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = '';
-                let streamingText = '';
 
                 while (true) {
-                    const {value, done} = await reader.read();
-                    if (done) break;
-                    
-                    buffer += decoder.decode(value, {stream: true});
+                    const { value, done } = await reader.read();
+                    if (value) {
+                        buffer += decoder.decode(value, { stream: true });
+                    }
                     const lines = buffer.split('\n');
-                    buffer = lines.pop();
-                    
-                    for (const line of lines) {
-                        if (line.startsWith('data: ')) {
-                            try {
-                                const data = JSON.parse(line.slice(6));
-                                console.log('📡 AG-UI Event:', data.type, data);
-                                
-                                // AG-UI Protocol Event Handlers
-                                if (data.type === 'session_start') {
-                                    console.log('🎯 Session started:', data.session_id);
-                                    currentSessionId = data.session_id;
-                                    // Reload sessions list to show new session (non-blocking)
-                                    loadSessions().catch(err => {
-                                        console.warn('⚠️ Failed to reload sessions (non-critical):', err);
-                                    });
-                                } else if (data.type === 'skill_matched') {
-                                    console.log('🎯 Skill matched:', data.data, 'Tier', data.tier);
-                                    // Show skill badge above the assistant message
-                                    const badge = document.createElement('div');
-                                    badge.className = 'skill-badge';
-                                    badge.style.cssText = 'font-size:0.75em;color:#64b5f6;margin-bottom:4px;opacity:0.85;';
-                                    badge.textContent = `🎯 ${data.data} (Tier ${data.tier || '?'})`;
-                                    group.insertBefore(badge, contentEl);
-                                } else if (data.type === 'agent_state_delta') {
-                                    console.log('🔄 Agent state:', data.state);
-                                    // Update thinking indicator based on state
-                                    if (data.state?.status === 'generating') {
-                                        thinkingIndicator.querySelector('span:last-child').textContent = 
-                                            `Generating response with ${data.state.model || 'AI'}...`;
-                                    }
-                                    // Show context information if available
-                                    if (data.state?.context) {
-                                        const ctx = data.state.context;
-                                        const ctxInfo = [];
-                                        if (ctx.events) ctxInfo.push(`${ctx.events} events`);
-                                        if (ctx.memories_found) ctxInfo.push(`${ctx.memories_found} memories`);
-                                        if (ctxInfo.length > 0) {
-                                            console.log('📊 Context:', ctxInfo.join(', '));
-                                        }
-                                    }
-                                    // Show routing information
-                                    if (data.state?.routing) {
-                                        console.log('🎯 Routing type:', data.state.routing);
-                                    }
-                                } else if (data.type === 'action') {
-                                    console.log('🔧 Tool executing:', data.name);
-                                    // Show tool execution indicator
-                                    thinkingIndicator.className = 'activity-indicator executing';
-                                    thinkingIndicator.querySelector('span:first-child').textContent = '🔧';
-                                    thinkingIndicator.querySelector('span:last-child').textContent = 
-                                        `Executing: ${data.name}...`;
-                                    scrollToBottom();
-                                } else if (data.type === 'action_result') {
-                                    console.log('✅ Tool completed');
-                                    thinkingIndicator.className = 'activity-indicator thinking';
-                                    thinkingIndicator.querySelector('span:first-child').textContent = '🧠';
-                                    thinkingIndicator.querySelector('span:last-child').textContent = 
-                                        'Processing results...';
-                                } else if (data.type === 'message_delta') {
-                                    // Remove thinking indicator on first content
-                                    if (streamingText.length === 0 && thinkingIndicator.parentNode) {
-                                        thinkingIndicator.remove();
-                                    }
-                                    // AG-UI standard: message_delta for content streaming
-                                    streamingText += data.delta;
-                                    contentEl.innerHTML = streamingText.replace(/\n/g, '<br>') + 
-                                                        '<span class="streaming-cursor"></span>';
-                                    scrollToBottom();
-                                } else if (data.type === 'action_cards') {
-                                    console.log('💡 Rendering action cards:', data.cards);
-                                    // Render interactive action cards
-                                    const cardsHtml = renderActionCards(data.cards);
-                                    streamingText += cardsHtml;
-                                    contentEl.innerHTML = streamingText.replace(/\n/g, '<br>');
-                                    scrollToBottom();
-                                } else if (data.type === 'session_end') {
-                                    console.log('✅ Session ended:', data.session_id);
-                                    if (data.final_state) {
-                                        console.log('📊 Final state:', {
-                                            tokens: data.final_state.tokens,
-                                            complete: data.final_state.complete
-                                        });
-                                        // Show skill badge from final state if present
-                                        const si = data.final_state.skill_info;
-                                        if (si && si.name && !group.querySelector('.skill-badge')) {
-                                            const badge = document.createElement('div');
-                                            badge.className = 'skill-badge';
-                                            badge.style.cssText = 'font-size:0.75em;color:#64b5f6;margin-bottom:4px;opacity:0.85;';
-                                            badge.textContent = `🎯 ${si.name} (Tier ${si.tier || '?'})`;
-                                            group.insertBefore(badge, contentEl);
-                                        }
-                                    }
-                                    contentEl.innerHTML = streamingText.replace(/\n/g, '<br>');
-                                    // Backend already saved messages, no need to save here
-                                    // Re-enable send button
-                                    isStreaming = false;
-                                    document.getElementById('sendBtn').disabled = false;
-                                    // Remove thinking indicator
-                                    if (thinkingIndicator && thinkingIndicator.parentNode) {
-                                        thinkingIndicator.remove();
-                                    }
-                                } else if (data.type === 'error') {
-                                    console.error('❌ AG-UI Error:', data.error);
-                                    contentEl.innerHTML = `<span style="color: #ef4444;">Error: ${data.error.message}</span>`;
-                                    if (thinkingIndicator.parentNode) {
-                                        thinkingIndicator.remove();
-                                    }
-                                }
-                            } catch (e) {
-                                console.error('Failed to parse AG-UI event:', e, line);
-                            }
+                    buffer = lines.pop() || '';
+                    const completeBlock = lines.join('\n');
+                    if (completeBlock) {
+                        ingestSseDataLines(completeBlock, streamCtx);
+                    }
+                    if (done) {
+                        if (buffer.trim()) {
+                            ingestSseDataLines(buffer, streamCtx);
                         }
+                        break;
                     }
                 }
+                if (!streamCtx.finalized) {
+                    console.warn('Chat stream ended without terminal event; finalizing client-side');
+                    if (stream.text) {
+                        contentEl.innerHTML = renderMarkdown(stream.text);
+                        enhanceCodeBlocks(contentEl);
+                    }
+                    if (currentSessionId && stream.text) {
+                        saveMessageToSession('user', originalMessage);
+                        saveMessageToSession('assistant', stream.text);
+                    }
+                    streamCtx.finalized = true;
+                }
             } catch (error) {
-                console.error('Chat error:', error);
-                contentEl.innerHTML = 'Sorry, I encountered an error. Please try again.';
-                // Remove thinking indicator on error
+                if (error && error.name === 'AbortError') {
+                    if (stream.text) {
+                        contentEl.innerHTML = renderMarkdown(stream.text);
+                        enhanceCodeBlocks(contentEl);
+                    } else {
+                        contentEl.innerHTML = '<span style="color:#64748b;">Generation stopped.</span>';
+                    }
+                    if (currentSessionId && stream.text) {
+                        saveMessageToSession('user', originalMessage);
+                        saveMessageToSession('assistant', stream.text);
+                    }
+                } else {
+                    console.error('Chat error:', error);
+                    if (stream.text) {
+                        contentEl.innerHTML = renderMarkdown(stream.text);
+                        enhanceCodeBlocks(contentEl);
+                    } else {
+                        contentEl.innerHTML = 'Sorry, I encountered an error. Please try again.';
+                    }
+                    if (currentSessionId && stream.text) {
+                        saveMessageToSession('user', originalMessage);
+                        saveMessageToSession('assistant', stream.text);
+                    }
+                }
+            } finally {
                 if (thinkingIndicator && thinkingIndicator.parentNode) {
                     thinkingIndicator.remove();
                 }
-                // Re-enable send button
                 isStreaming = false;
                 document.getElementById('sendBtn').disabled = false;
+                const stopBtn = document.getElementById('stopStreamBtn');
+                if (stopBtn) {
+                    stopBtn.classList.remove('visible');
+                    stopBtn.disabled = false;
+                }
+                streamAbortController = null;
             }
 
-            // Add actions
-            addMessageActions(group);
+            addMessageActions(group, group.dataset.messageId || null);
+        }
+
+        function regenerateLastResponse(btn) {
+            if (isStreaming || !lastSubmittedUserMessage) return;
+            const group = btn && btn.closest ? btn.closest('.message-group') : null;
+            if (group) group.remove();
+            isStreaming = true;
+            document.getElementById('sendBtn').disabled = true;
+            executeGeneralResponse(lastSubmittedUserMessage).catch((e) => console.error(e));
         }
 
         // Helper Functions
@@ -2061,74 +2399,280 @@
                     <div class="message-name">Zoe</div>
                     <div class="message-time">just now</div>
                 </div>
-                <div class="message-content">${text}</div>
+                <div class="message-content">${renderMarkdown(text)}</div>
             `;
             container.appendChild(group);
             scrollToBottom();
         }
 
-        function createSubgraphCard(icon, title, description) {
-            const card = document.createElement('div');
-            card.className = 'subgraph-card';
-            card.innerHTML = `
-                <div class="subgraph-header">
-                    <div class="subgraph-title">
-                        <div class="subgraph-icon">${icon}</div>
-                        <span>${title}</span>
-                </div>
-                    <div class="subgraph-status running">Running...</div>
-                    </div>
-                <div class="subgraph-body">${description}</div>
-                <div class="subgraph-steps"></div>
-            `;
-            return card;
-        }
-
-        async function executeSteps(subgraph, steps) {
-            const stepsContainer = subgraph.querySelector('.subgraph-steps');
-            
-            for (let step of steps) {
-                await sleep(step.delay);
-                const stepEl = document.createElement('div');
-                stepEl.className = step.icon === '✓' ? 'subgraph-step complete' : 'subgraph-step running';
-                stepEl.innerHTML = `<span class="subgraph-step-icon">${step.icon}</span><span>${step.text}</span>`;
-                stepsContainer.appendChild(stepEl);
-                
-                if (step.icon === '✓') {
-                    stepEl.className = 'subgraph-step complete';
-                }
-                scrollToBottom();
-            }
-        }
-
-        function completeSubgraph(subgraph) {
-            const status = subgraph.querySelector('.subgraph-status');
-            status.textContent = 'Complete';
-            status.className = 'subgraph-status complete';
-        }
-
-        function addSubgraphResult(subgraph, title, content) {
-            const result = document.createElement('div');
-            result.className = 'subgraph-result';
-            result.innerHTML = `
-                <div class="subgraph-result-title">${title}</div>
-                <div class="subgraph-result-content">${content}</div>
-            `;
-            subgraph.appendChild(result);
-            scrollToBottom();
-        }
-
         function addMessageActions(group, interactionId = null) {
+            const container = document.getElementById('messagesContainer');
+            const assistants = container.querySelectorAll('.message-group.assistant');
+            const isLastAssistant = assistants.length && assistants[assistants.length - 1] === group;
+            const regenBtn = (isLastAssistant && lastSubmittedUserMessage)
+                ? '<button type="button" class="action-btn" onclick="regenerateLastResponse(this)">↻ Regenerate</button>'
+                : '';
             const actions = document.createElement('div');
             actions.className = 'message-actions';
             actions.setAttribute('data-interaction-id', interactionId || 'unknown');
             actions.innerHTML = `
-                <button class="action-btn" onclick="copyMessage(this)">📋 Copy</button>
-                <button class="action-btn" onclick="feedbackPositive(this)">👍 Good</button>
-                <button class="action-btn" onclick="feedbackNegative(this)">👎 Bad</button>
-                <button class="action-btn" onclick="correctResponse(this)">✏️ Correct</button>
+                <button type="button" class="action-btn" onclick="copyMessage(this)">📋 Copy</button>
+                <button type="button" class="action-btn" onclick="feedbackPositive(this)">👍 Good</button>
+                <button type="button" class="action-btn" onclick="feedbackNegative(this)">👎 Bad</button>
+                <button type="button" class="action-btn" onclick="correctResponse(this)">✏️ Correct</button>
+                ${regenBtn}
             `;
             group.appendChild(actions);
+        }
+
+        // ===== UI COMPONENT CATALOG =====
+        
+        function renderChatComponent(data, contentEl, messageGroup) {
+            const container = document.createElement('div');
+            container.className = 'ui-component';
+            
+            switch (data.component) {
+                case 'qr_code':
+                    renderQRCode(container, data.props || {});
+                    break;
+                case 'card':
+                    renderInfoCard(container, data.props || {});
+                    break;
+                case 'confirmation':
+                    renderConfirmation(container, data.props || {});
+                    break;
+                case 'progress':
+                    renderProgress(container, data.props || {});
+                    break;
+                case 'status':
+                    renderStatus(container, data.props || {});
+                    break;
+                case 'form':
+                    renderForm(container, data.props || {});
+                    break;
+                case 'link_preview':
+                    renderLinkPreview(container, data.props || {});
+                    break;
+                case 'image':
+                    renderImage(container, data.props || {});
+                    break;
+                default:
+                    container.innerHTML = `<div class="ui-component-fallback">[Unknown component: ${escapeHtml(data.component)}]</div>`;
+            }
+            
+            if (contentEl) {
+                contentEl.appendChild(container);
+            } else if (messageGroup) {
+                messageGroup.appendChild(container);
+            }
+            scrollToBottom();
+        }
+        
+        function renderQRCode(container, props) {
+            container.className += ' qr-component';
+            const canvas = document.createElement('canvas');
+            const label = props.label || '';
+            container.innerHTML = `
+                <div class="qr-wrapper">
+                    <div class="qr-canvas-container"></div>
+                    ${label ? `<div class="qr-label">${escapeHtml(label)}</div>` : ''}
+                </div>
+            `;
+            container.querySelector('.qr-canvas-container').appendChild(canvas);
+            if (typeof QRCode !== 'undefined') {
+                QRCode.toCanvas(canvas, props.data || '', {
+                    width: props.size || 200,
+                    margin: 2,
+                    color: { dark: '#333', light: '#fff' }
+                });
+            }
+        }
+        
+        function renderInfoCard(container, props) {
+            const actions = (props.actions || []).map(a =>
+                `<button class="card-action-btn" onclick="handleComponentAction('${escapeHtml(a.type || '')}', '${escapeHtml(a.data || '')}')">${escapeHtml(a.label || 'Action')}</button>`
+            ).join('');
+            container.innerHTML = `
+                <div class="info-card">
+                    ${props.icon ? `<div class="info-card-icon">${props.icon}</div>` : ''}
+                    <div class="info-card-body">
+                        <div class="info-card-title">${escapeHtml(props.title || '')}</div>
+                        ${props.description ? `<div class="info-card-desc">${escapeHtml(props.description)}</div>` : ''}
+                    </div>
+                    ${actions ? `<div class="info-card-actions">${actions}</div>` : ''}
+                </div>
+            `;
+        }
+        
+        function renderConfirmation(container, props) {
+            const confirmId = 'confirm-' + Date.now();
+            container.innerHTML = `
+                <div class="confirmation-component">
+                    <div class="confirmation-icon">⚠️</div>
+                    <div class="confirmation-text">${escapeHtml(props.description || 'Are you sure?')}</div>
+                    <div class="confirmation-actions">
+                        <button class="confirm-btn yes" onclick="handleConfirmation('${confirmId}', true, '${escapeHtml(props.yes_action || '')}')">
+                            ${escapeHtml(props.yes_label || 'Yes')}
+                        </button>
+                        <button class="confirm-btn no" onclick="handleConfirmation('${confirmId}', false, '')">
+                            ${escapeHtml(props.no_label || 'No')}
+                        </button>
+                    </div>
+                </div>
+            `;
+            container.id = confirmId;
+        }
+        
+        function renderProgress(container, props) {
+            const steps = props.steps || [];
+            const current = props.current || 0;
+            const stepsHtml = steps.map((s, i) => `
+                <div class="progress-step ${i < current ? 'done' : ''} ${i === current ? 'active' : ''}">
+                    <div class="step-number">${i < current ? '✓' : i + 1}</div>
+                    <div class="step-label">${escapeHtml(s)}</div>
+                </div>
+            `).join('');
+            container.innerHTML = `<div class="progress-component">${stepsHtml}</div>`;
+        }
+        
+        function renderStatus(container, props) {
+            const level = props.level || 'info';
+            const icons = { success: '✅', error: '❌', warning: '⚠️', info: 'ℹ️' };
+            container.innerHTML = `
+                <div class="status-component ${level}">
+                    <span class="status-icon">${icons[level] || 'ℹ️'}</span>
+                    <span class="status-text">${escapeHtml(props.message || '')}</span>
+                </div>
+            `;
+        }
+        
+        function renderForm(container, props) {
+            const fields = (props.fields || []).map(f => `
+                <div class="form-field">
+                    <label>${escapeHtml(f.label || f.name)}</label>
+                    <input type="${f.type || 'text'}" name="${escapeHtml(f.name)}" 
+                           placeholder="${escapeHtml(f.placeholder || '')}" 
+                           ${f.required ? 'required' : ''}>
+                </div>
+            `).join('');
+            container.innerHTML = `
+                <div class="form-component">
+                    ${props.title ? `<div class="form-title">${escapeHtml(props.title)}</div>` : ''}
+                    <form onsubmit="handleFormSubmit(event, '${escapeHtml(props.action || '')}')">
+                        ${fields}
+                        <button type="submit" class="form-submit">${escapeHtml(props.submit_label || 'Submit')}</button>
+                    </form>
+                </div>
+            `;
+        }
+        
+        function renderLinkPreview(container, props) {
+            container.innerHTML = `
+                <a href="${escapeHtml(props.url || '#')}" target="_blank" class="link-preview" rel="noopener">
+                    ${props.image ? `<img src="${escapeHtml(props.image)}" alt="" class="link-preview-img">` : ''}
+                    <div class="link-preview-body">
+                        <div class="link-preview-title">${escapeHtml(props.title || props.url || '')}</div>
+                        ${props.description ? `<div class="link-preview-desc">${escapeHtml(props.description)}</div>` : ''}
+                        <div class="link-preview-url">${escapeHtml(props.url || '')}</div>
+                    </div>
+                </a>
+            `;
+        }
+        
+        function renderImage(container, props) {
+            container.innerHTML = `
+                <div class="image-component">
+                    <img src="${escapeHtml(props.url || '')}" alt="${escapeHtml(props.alt || '')}" style="max-width:100%; border-radius: 12px;">
+                    ${props.caption ? `<div class="image-caption">${escapeHtml(props.caption)}</div>` : ''}
+                </div>
+            `;
+        }
+        
+        // ===== DASHBOARD COMMANDS =====
+        
+        async function executeDashboardCommand(data) {
+            let cmd = data.command;
+            if (cmd === 'add_widget') cmd = 'add_widgets';
+            if (cmd === 'remove_widget') cmd = 'remove_widgets';
+            const params = data.params || {};
+            
+            try {
+                switch (cmd) {
+                    case 'add_widgets':
+                        await apiRequest('/api/dashboard/widgets/', {
+                            method: 'POST',
+                            body: JSON.stringify({ widgets: params.widgets || [] })
+                        });
+                        showNotification('Widgets added to your dashboard!', 'success');
+                        break;
+                    case 'remove_widgets':
+                        for (const wid of (params.widgets || [])) {
+                            await apiRequest(`/api/dashboard/widgets/${wid}`, { method: 'DELETE' });
+                        }
+                        showNotification('Widgets removed from dashboard.', 'success');
+                        break;
+                    case 'navigate':
+                        if (params.page) {
+                            setTimeout(() => { window.location.href = params.page; }, 1500);
+                            showNotification(`Navigating to ${params.page}...`, 'info');
+                        }
+                        break;
+                    case 'refresh_data':
+                        window.location.reload();
+                        break;
+                    case 'notify':
+                        showNotification(params.message || '', params.level || 'info');
+                        break;
+                    default:
+                        console.warn('Unknown UI command:', cmd);
+                }
+            } catch (err) {
+                console.error('Dashboard command error:', err);
+            }
+        }
+        
+        function handleComponentAction(actionType, actionData) {
+            const input = document.getElementById('chatInput');
+            if (input) {
+                input.value = actionData || actionType;
+                input.focus();
+            }
+        }
+        
+        function handleConfirmation(confirmId, accepted, action) {
+            const el = document.getElementById(confirmId);
+            if (el) {
+                el.innerHTML = accepted 
+                    ? '<div class="status-component success"><span class="status-icon">✅</span><span class="status-text">Confirmed</span></div>'
+                    : '<div class="status-component info"><span class="status-icon">ℹ️</span><span class="status-text">Cancelled</span></div>';
+            }
+            if (accepted && action) {
+                const input = document.getElementById('chatInput');
+                if (input) { input.value = action; input.focus(); }
+            }
+        }
+        
+        function handleFormSubmit(event, action) {
+            event.preventDefault();
+            const formData = new FormData(event.target);
+            const data = Object.fromEntries(formData.entries());
+            const input = document.getElementById('chatInput');
+            if (input) {
+                input.value = `${action} ${JSON.stringify(data)}`;
+                document.getElementById('sendBtn')?.click();
+            }
+        }
+        
+        function showNotification(message, level = 'info') {
+            const toast = document.createElement('div');
+            toast.className = `chat-toast ${level}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.classList.add('visible'), 10);
+            setTimeout(() => {
+                toast.classList.remove('visible');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
         }
 
         // Feedback Actions
@@ -2244,10 +2788,6 @@
             container.scrollTop = container.scrollHeight;
         }
 
-        function sleep(ms) {
-            return new Promise(resolve => setTimeout(resolve, ms));
-        }
-
         // Action Cards Rendering
         function renderActionCards(cards) {
             if (!cards || cards.length === 0) return '';
@@ -2302,7 +2842,7 @@
                     return `
                         <button 
                             class="card-action-btn ${action.type}" 
-                            onclick="executeCardAction('${cardId}', '${action.type}', ${JSON.stringify(action.data).replace(/"/g, '&quot;')})"
+                            onclick="executeCardAction('${cardId}', '${action.type}', ${JSON.stringify(action.data).replace(/"/g, '&quot;')}, event)"
                         >
                             ${action.label}
                         </button>
@@ -2400,7 +2940,7 @@
                 const userId = session?.user_info?.user_id || session?.user_id;
                 
                 // Add to calendar
-                await apiRequest(`/calendar/events?user_id=${userId}`, {
+                await apiRequest(`/api/calendar/events?user_id=${userId}`, {
                     method: 'POST',
                     body: JSON.stringify({
                         title: data.title,
@@ -2437,9 +2977,9 @@
             }
         }
 
-        async function executeCardAction(cardId, actionType, dataStr) {
+        async function executeCardAction(cardId, actionType, dataStr, evt) {
             const data = typeof dataStr === 'string' ? JSON.parse(dataStr) : dataStr;
-            const btn = event.target;
+            const btn = (evt && evt.target) ? evt.target : document.querySelector(`[data-card-id="${cardId}"] button`);
             const originalText = btn.textContent;
             
             // ✅ FIX: Get authenticated user
@@ -2452,7 +2992,7 @@
             
             try {
                 if (actionType === 'add_to_calendar') {
-                    await apiRequest(`/calendar/events?user_id=${userId}`, {
+                    await apiRequest(`/api/calendar/events?user_id=${userId}`, {
                         method: 'POST',
                         body: JSON.stringify({
                             title: data.title,
@@ -2463,7 +3003,7 @@
                     btn.textContent = '✅ Added!';
                     
                 } else if (actionType === 'add_to_list') {
-                    await apiRequest(`/lists/tasks?user_id=${userId}`, {
+                    await apiRequest(`/api/lists/tasks?user_id=${userId}`, {
                         method: 'POST',
                         body: JSON.stringify({
                             text: data.text,
@@ -2617,12 +3157,16 @@
                     return priorityOrder[a.priority] - priorityOrder[b.priority];
                 });
                 
-                suggestionsContainer.innerHTML = suggestions.slice(0, 4).map(suggestion => `
-                    <div class="suggestion-chip" onclick="tryPrompt('${suggestion.prompt}')">
+                suggestionsContainer.innerHTML = suggestions.slice(0, 4).map((suggestion, idx) => `
+                    <div class="suggestion-chip" data-prompt-idx="${idx}">
                         <div class="suggestion-icon">${suggestion.icon}</div>
                         <div class="suggestion-label">${suggestion.label}</div>
                     </div>
                 `).join('');
+                suggestions.slice(0, 4).forEach((suggestion, idx) => {
+                    const chip = suggestionsContainer.querySelector(`[data-prompt-idx="${idx}"]`);
+                    if (chip) chip.addEventListener('click', () => tryPrompt(suggestion.prompt));
+                });
                 
             } catch (error) {
                 console.error('Error generating dynamic suggestions:', error);
@@ -2644,15 +3188,6 @@
         document.addEventListener('DOMContentLoaded', init);
     
 
-        // Navigation helper functions
-        function openMoreOverlay() {
-            document.getElementById('moreOverlay').classList.add('active');
-        }
-        
-        function closeMoreOverlay() {
-            document.getElementById('moreOverlay').classList.remove('active');
-        }
-        
         function navigateToPage(page) {
             window.location.href = page;
         }
@@ -2670,20 +3205,18 @@
 
         // Mobile menu toggle
         function toggleMobileMenu() {
-            if (window.innerWidth > 768) { window.location.href = 'index.html'; return; }
-            const menu = document.getElementById('mobileNavMenu');
-            const overlay = document.getElementById('mobileNavOverlay');
-            if (menu && overlay) {
-                menu.classList.toggle('open');
-                overlay.classList.toggle('open');
-            }
+            if (window.innerWidth > 768) { window.location.href = 'chat.html'; return; }
+            document.getElementById('mobileNavMenu')?.classList.toggle('open');
+            document.getElementById('mobileNavOverlay')?.classList.toggle('open');
         }
 
         function handleLogout() {
-            if (window.innerWidth <= 768) {
-                toggleMobileMenu();
+            if (window.zoeAuth) {
+                window.zoeAuth.logout();
+            } else {
+                localStorage.removeItem('zoe_session');
+                window.location.href = '/';
             }
-            logout();
         }
         
         async function loadNotifications() {
@@ -2749,19 +3282,6 @@
             closeNotifications();
         }
         
-        // Update time/date display
-        function updateTimeDate() {
-            const now = new Date();
-            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-            
-            const timeElement = document.getElementById('currentTime');
-            const dateElement = document.getElementById('currentDate');
-            
-            if (timeElement) timeElement.textContent = timeString;
-            if (dateElement) dateElement.textContent = dateString;
-        }
-        
         // Onboarding mode detection
         let isOnboardingMode = false;
         
@@ -2772,36 +3292,21 @@
             console.log('Onboarding mode activated');
         }
         
-        // Initialize time/date updates
-        if (document.readyState === 'loading') {
+        if (document.readyState !== 'loading') {
+            if (isOnboardingMode) handleOnboardingMode();
+            handleSetupChannelParam();
+        } else {
             document.addEventListener('DOMContentLoaded', function() {
-                updateTimeDate();
-                setInterval(updateTimeDate, 60000);
-                loadNotifications();
-                
-                // Handle onboarding mode
-                if (isOnboardingMode) {
-                    handleOnboardingMode();
-                }
-                // Handle setup_channel URL parameter (from settings page link)
+                if (isOnboardingMode) handleOnboardingMode();
                 handleSetupChannelParam();
             });
-        } else {
-            updateTimeDate();
-            setInterval(updateTimeDate, 60000);
-            loadNotifications();
-            
-            if (isOnboardingMode) {
-                handleOnboardingMode();
-            }
-            handleSetupChannelParam();
         }
 
         function handleSetupChannelParam() {
             const params = new URLSearchParams(window.location.search);
             const setupChannel = params.get('setup_channel');
             if (setupChannel) {
-                const input = document.getElementById('messageInput');
+                const input = document.getElementById('chatInput');
                 if (input) {
                     input.value = `Connect ${setupChannel}`;
                     input.focus();
@@ -2817,11 +3322,13 @@
             // Add a welcome message to the chat
             const messagesContainer = document.getElementById('messagesContainer');
             const onboardingMessage = `
-                <div class="message-group assistant-message">
-                    <div class="message-avatar">
-                        <div class="avatar">Z</div>
+                <div class="message-group assistant">
+                    <div class="message-header">
+                        <div class="message-avatar">🤖</div>
+                        <div class="message-name">Zoe</div>
+                        <div class="message-time">just now</div>
                     </div>
-                    <div class="message-bubble">
+                    <div class="message-content">
                         <p><strong>Hi! I'm Zoe 👋</strong></p>
                         <p>I'd love to get to know you better so I can be more helpful. Would you like to tell me about yourself?</p>
                         <p>Here are some things I'd like to know:</p>
@@ -2843,6 +3350,7 @@
         }
 
     </script>
+    <script src="/js/websocket-sync.js"></script>
     <!-- Mini Player for persistent music playback -->
     <script src="js/mini-player.js"></script>
 </body>

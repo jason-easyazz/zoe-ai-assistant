@@ -10,7 +10,7 @@ const API_BASE = getApiBase();
 // Test API connectivity using relative URL
 async function testApiConnectivity() {
     console.log('Testing API connectivity...');
-    const testUrl = '/api/health';
+    const testUrl = '/health';
     
     try {
         const response = await fetch(testUrl, { 
@@ -33,7 +33,7 @@ async function testApiConnectivity() {
 // API health check
 async function checkAPI() {
     try {
-        const response = await fetch(`${API_BASE}/health`);
+        const response = await fetch('/health');
         const indicator = document.getElementById('apiStatus');
         if (indicator) {
             if (response.ok) {
@@ -126,28 +126,11 @@ function updateTime() {
     }
 }
 
-// Service mapping for microservices architecture
 function getServiceMap() {
     const apiBase = getApiBase();
-    
     return {
-        // People-related endpoints -> proxy through zoe-core (exact matches only)
-        '/public-memories/?type=people': `${apiBase}/memories/proxy/people`,
-        '/memories/?type=people': `${apiBase}/memories/proxy/people`,
-        
-        // Collections-related endpoints -> proxy through zoe-core (exact matches only)
-        '/memories/collections': `${apiBase}/memories/proxy/collections`,
-        '/memories/tiles': `${apiBase}/memories/proxy/collections`,
-        
-        // Home Assistant endpoints -> ha-bridge (through nginx proxy)
         '/homeassistant/states': `${apiBase}/homeassistant/entities`,
         '/homeassistant/service': `${apiBase}/homeassistant/services`,
-        
-        // N8N endpoints -> n8n-bridge (through nginx proxy)
-        '/n8n/workflows': `${apiBase}/n8n/workflows`,
-        '/n8n/executions': `${apiBase}/n8n/executions`,
-        
-        // Default to zoe-core for other endpoints
         'default': apiBase
     };
 }
@@ -187,14 +170,9 @@ async function apiRequest(endpoint, options = {}) {
             serviceUrl = SERVICE_MAP[endpoint];
             normalizedEndpoint = '';
         } else {
-            // If endpoint already starts with /api, use it as-is (don't prepend serviceUrl)
             if (endpoint.startsWith('/api/')) {
                 serviceUrl = '';
                 normalizedEndpoint = endpoint;
-            } else {
-                // All collections and tiles routes go through nginx proxy to collections-service
-                // The nginx proxy handles routing /api/memories/collections/* to collections-service
-                // All other endpoints go to zoe-core (default)
             }
         }
         
@@ -204,10 +182,6 @@ async function apiRequest(endpoint, options = {}) {
         }
         
         const fullUrl = `${serviceUrl}${normalizedEndpoint}`;
-        console.log('Making API request to:', fullUrl);
-        console.log('Original endpoint:', endpoint);
-        console.log('Service URL:', serviceUrl);
-        console.log('Normalized endpoint:', normalizedEndpoint);
         
         // Convert X-Session-ID headers to Authorization Bearer tokens
         const headers = {
@@ -224,18 +198,11 @@ async function apiRequest(endpoint, options = {}) {
             }
         }
         
-        // CRITICAL: Normalize URL to HTTPS before calling fetch
-        // This is a backup to the auth.js interceptor
         const sanitizedUrl = normalizeToHttps(fullUrl);
-        console.log('[common] 🔧 Sanitized URL:', sanitizedUrl);
-        
         const response = await fetch(sanitizedUrl, {
             ...options,
             headers
         });
-        
-        console.log('Response status:', response.status);
-        console.log('Response URL:', response.url);
         
         if (!response.ok) {
             throw new Error(`API request failed: ${response.status} - ${response.statusText}`);
@@ -243,13 +210,7 @@ async function apiRequest(endpoint, options = {}) {
         
         return await response.json();
     } catch (error) {
-        console.error('API request error:', error);
-        console.error('Request endpoint was:', endpoint);
-        console.error('Error details:', {
-            name: error.name,
-            message: error.message,
-            stack: error.stack
-        });
+        console.error('API request error:', endpoint, error.message);
         showNotification(`Connection error: ${error.message}`, 'error');
         throw error;
     }

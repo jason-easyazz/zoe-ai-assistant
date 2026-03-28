@@ -881,8 +881,8 @@
             
             <!-- Time/Date Display -->
             <div class="time-date-display">
-                <div class="current-time" id="currentTime">Loading...</div>
-                <div class="current-date" id="currentDate">Loading...</div>
+                <div class="current-time" id="navCurrentTime">--:--</div>
+                <div class="current-date" id="navCurrentDate">Loading...</div>
             </div>
         </div>
     </div>
@@ -903,13 +903,13 @@
                     <div class="more-item-icon">🧠</div>
                     <div class="more-item-label">Memories</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('workflows.html')">
-                    <div class="more-item-icon">⚡</div>
-                    <div class="more-item-label">Workflows</div>
-                </div>
                 <div class="more-item" onclick="navigateToPage('music.html')">
                     <div class="more-item-icon">🎵</div>
                     <div class="more-item-label">Music</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('games.html')">
+                    <div class="more-item-icon">🎮</div>
+                    <div class="more-item-label">Games</div>
                 </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
@@ -935,6 +935,8 @@
             <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
+            <a href="music.html" class="mobile-nav-item">🎵 Music</a>
+            <a href="games.html" class="mobile-nav-item">🎮 Games</a>
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
             <a href="settings.html" class="mobile-nav-item active">⚙️ Settings</a>
             <div class="mobile-nav-divider"></div>
@@ -1207,57 +1209,6 @@
                         </div>
                     </div>
                     
-                    <!-- N8N Settings -->
-                    <div class="setting-item" style="border-top: 1px solid rgba(255, 255, 255, 0.2); padding-top: 20px; margin-top: 20px;">
-                        <div class="setting-info">
-                            <div class="setting-name">N8N Server URL</div>
-                            <div class="setting-description">URL of your N8N instance (default: https://zoe.local:5678)</div>
-                        </div>
-                        <div class="setting-control">
-                            <input type="url" class="form-input" id="n8nUrl" placeholder="https://zoe.local:5678">
-                            <button class="btn" onclick="saveN8nSettings()">Save</button>
-                        </div>
-                    </div>
-                    <div class="setting-item">
-                        <div class="setting-info">
-                            <div class="setting-name">N8N Username</div>
-                            <div class="setting-description">Your N8N username or email</div>
-                        </div>
-                        <div class="setting-control">
-                            <input type="text" class="form-input" id="n8nUsername" placeholder="Enter username">
-                            <button class="btn" onclick="saveN8nSettings()">Save</button>
-                        </div>
-                    </div>
-                    <div class="setting-item">
-                        <div class="setting-info">
-                            <div class="setting-name">N8N Password</div>
-                            <div class="setting-description">Your N8N password</div>
-                        </div>
-                        <div class="setting-control">
-                            <input type="password" class="form-input" id="n8nPassword" placeholder="Enter password">
-                            <button class="btn" onclick="saveN8nSettings()">Save</button>
-                        </div>
-                    </div>
-                    <div class="setting-item">
-                        <div class="setting-info">
-                            <div class="setting-name">N8N API Key</div>
-                            <div class="setting-description">API key for N8N (required for API access)</div>
-                        </div>
-                        <div class="setting-control">
-                            <input type="password" class="form-input" id="n8nApiKey" placeholder="Enter API key">
-                            <button class="btn" onclick="saveN8nSettings()">Save</button>
-                        </div>
-                    </div>
-                    <div class="setting-item">
-                        <div class="setting-info">
-                            <div class="setting-name">Test Connection</div>
-                            <div class="setting-description">Test your N8N connection</div>
-                        </div>
-                        <div class="setting-control">
-                            <button class="btn" onclick="testN8nConnection()">Test</button>
-                            <div id="n8nStatus" style="margin-left: 10px; font-size: 12px;"></div>
-                        </div>
-                    </div>
                 </div>
             </div>
 
@@ -2397,6 +2348,17 @@
                 </div>
             </div>
 
+            <!-- OpenClaw Brain Panel -->
+            <div class="settings-section">
+                <div class="section-header" onclick="toggleSection('openclaw-brain')">
+                    <div class="section-title">🧠 OpenClaw Brain</div>
+                    <div class="section-subtitle">View Zoe's AI engine, skills, tools, memories, and scheduled tasks</div>
+                </div>
+                <div class="section-content" id="openclaw-brain">
+                    <div id="openclawBrainContent" style="color:#666;padding:12px;">Loading...</div>
+                </div>
+            </div>
+
             <!-- AI Training & Learning -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('ai-training')">
@@ -3052,39 +3014,8 @@
         </div>
     </div>
 
-    <!-- More Overlay -->
-    <div class="more-overlay" id="moreOverlay">
-        <div class="more-content">
-            <button class="more-close" onclick="closeMoreOverlay()">×</button>
-            <div class="more-header">
-                <h2 class="more-title">More Options</h2>
-            </div>
-            <div class="more-grid">
-                <div class="more-item" onclick="navigateToPage('memories.html')">
-                    <div class="more-item-icon">🧠</div>
-                    <div class="more-item-label">Memories</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('workflows.html')">
-                    <div class="more-item-icon">⚡</div>
-                    <div class="more-item-label">Workflows</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('music.html')">
-                    <div class="more-item-icon">🎵</div>
-                    <div class="more-item-label">Music</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('settings.html')">
-                    <div class="more-item-icon">⚙️</div>
-                    <div class="more-item-label">Settings</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('developer/index.html')">
-                    <div class="more-item-icon">👨‍💻</div>
-                    <div class="more-item-label">Developer</div>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <script src="js/common.js"></script>
+    <script src="/js/notifications-panel.js"></script>
     <script>
         // Toggle section visibility
         function toggleSection(sectionId) {
@@ -3100,9 +3031,11 @@
             if (!isActive) {
                 content.classList.add('active');
                 
-                // Load music settings when section opens
                 if (sectionId === 'music') {
                     loadMusicSettings();
+                }
+                if (sectionId === 'openclaw-brain') {
+                    loadOpenClawBrain();
                 }
             }
         }
@@ -4411,7 +4344,6 @@
             loadCalendarSettings();
             loadProductivitySettings();
             loadTimeLanguageSettings();
-            loadN8nSettings();
             addProductivityEventListeners();
             updateSystemStatus();
             loadCurrentLocation();
@@ -4636,86 +4568,7 @@
             }, 3000);
         }
 
-        // N8N Settings Functions
-        async function saveN8nSettings() {
-            const url = document.getElementById('n8nUrl').value.trim();
-            const username = document.getElementById('n8nUsername').value.trim();
-            const password = document.getElementById('n8nPassword').value.trim();
-            const apiKey = document.getElementById('n8nApiKey').value.trim();
-            
-            if (!url) {
-                showUserNotification('Please enter N8N server URL', 'error');
-                return;
-            }
-            
-            if (!apiKey) {
-                showUserNotification('Please enter N8N API key', 'error');
-                return;
-            }
-            
-            try {
-                const response = await apiRequest('/settings/n8n', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        n8n_url: url,
-                        n8n_username: username,
-                        n8n_password: password,
-                        n8n_api_key: apiKey
-                    })
-                });
-                
-                showUserNotification('N8N settings saved successfully!', 'success');
-                // Test connection after saving
-                testN8nConnection();
-            } catch (error) {
-                console.error('Failed to save N8N settings:', error);
-                showUserNotification('Failed to save N8N settings', 'error');
-            }
-        }
 
-        async function testN8nConnection() {
-            const statusDiv = document.getElementById('n8nStatus');
-            statusDiv.textContent = 'Testing...';
-            statusDiv.style.color = '#666';
-            
-            try {
-                const response = await apiRequest('/n8n/health');
-                
-                if (response.status === 'healthy') {
-                    statusDiv.textContent = '✅ Connected';
-                    statusDiv.style.color = '#22c55e';
-                } else {
-                    statusDiv.textContent = '⚠️ Unhealthy';
-                    statusDiv.style.color = '#f59e0b';
-                }
-            } catch (error) {
-                console.error('N8N connection test failed:', error);
-                statusDiv.textContent = '❌ Connection failed';
-                statusDiv.style.color = '#ef4444';
-            }
-        }
-
-        async function loadN8nSettings() {
-            try {
-                const response = await apiRequest('/settings/n8n');
-                const settings = response.settings || {};
-                
-                if (settings.n8n_url) {
-                    document.getElementById('n8nUrl').value = settings.n8n_url;
-                }
-                if (settings.n8n_username) {
-                    document.getElementById('n8nUsername').value = settings.n8n_username;
-                }
-                // Don't load password or API key for security
-                
-                // Test connection if settings exist
-                if (settings.n8n_url && settings.n8n_username) {
-                    testN8nConnection();
-                }
-            } catch (error) {
-                console.error('Failed to load N8N settings:', error);
-            }
-        }
 
         // Notifications system
         function openNotifications() {
@@ -4733,7 +4586,7 @@
 
         // Mobile menu toggle
         function toggleMobileMenu() {
-            if (window.innerWidth > 768) { window.location.href = 'index.html'; return; }
+            if (window.innerWidth > 768) { window.location.href = 'chat.html'; return; }
             const menu = document.getElementById('mobileNavMenu');
             const overlay = document.getElementById('mobileNavOverlay');
             if (menu && overlay) {
@@ -4743,10 +4596,12 @@
         }
 
         function handleLogout() {
-            if (window.innerWidth <= 768) {
-                toggleMobileMenu();
+            if (window.zoeAuth) {
+                window.zoeAuth.logout();
+            } else {
+                localStorage.removeItem('zoe_session');
+                window.location.href = '/';
             }
-            logout();
         }
 
         async function loadNotifications() {
@@ -5699,29 +5554,21 @@
             closeNotifications();
         }
         
-        // Update time/date display
-        function updateTimeDate() {
+        function updateNavTime() {
             const now = new Date();
-            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-            
-            const timeElement = document.getElementById('currentTime');
-            const dateElement = document.getElementById('currentDate');
-            
-            if (timeElement) timeElement.textContent = timeString;
-            if (dateElement) dateElement.textContent = dateString;
+            document.getElementById('navCurrentTime').textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            document.getElementById('navCurrentDate').textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
         }
         
-        // Initialize time/date updates
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', function() {
-                updateTimeDate();
-                setInterval(updateTimeDate, 60000);
+                updateNavTime();
+                setInterval(updateNavTime, 30000);
                 loadNotifications();
             });
         } else {
-            updateTimeDate();
-            setInterval(updateTimeDate, 60000);
+            updateNavTime();
+            setInterval(updateNavTime, 30000);
             loadNotifications();
         }
 
@@ -6262,7 +6109,64 @@
             loadWeatherSettings();
         });
 
+        async function loadOpenClawBrain() {
+            const container = document.getElementById('openclawBrainContent');
+            if (!container) return;
+            container.innerHTML = '<div style="text-align:center;padding:20px;color:#999;">Loading OpenClaw status...</div>';
+            try {
+                const data = await apiRequest('/api/system/openclaw');
+                if (!data) { container.innerHTML = '<p style="color:#ef4444;">Could not connect to OpenClaw</p>'; return; }
+                const skills = data.skills || [];
+                const crons = data.cron_jobs || [];
+                const model = data.model || 'Unknown';
+                const gateway = data.gateway_status || 'unknown';
+                let html = `
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+                        <div style="background:rgba(123,97,255,0.08);padding:14px;border-radius:12px;">
+                            <div style="font-weight:600;font-size:13px;color:#7B61FF;margin-bottom:4px;">Gateway</div>
+                            <div style="font-size:15px;font-weight:500;">${gateway === 'connected' ? '🟢 Connected' : '🔴 Offline'}</div>
+                        </div>
+                        <div style="background:rgba(16,185,129,0.08);padding:14px;border-radius:12px;">
+                            <div style="font-weight:600;font-size:13px;color:#10b981;margin-bottom:4px;">Model</div>
+                            <div style="font-size:15px;font-weight:500;">${model}</div>
+                        </div>
+                        <div style="background:rgba(245,158,11,0.08);padding:14px;border-radius:12px;">
+                            <div style="font-weight:600;font-size:13px;color:#f59e0b;margin-bottom:4px;">Skills</div>
+                            <div style="font-size:15px;font-weight:500;">${skills.length} loaded</div>
+                        </div>
+                        <div style="background:rgba(236,72,153,0.08);padding:14px;border-radius:12px;">
+                            <div style="font-weight:600;font-size:13px;color:#ec4899;margin-bottom:4px;">Cron Jobs</div>
+                            <div style="font-size:15px;font-weight:500;">${crons.length} scheduled</div>
+                        </div>
+                    </div>
+                    <div style="margin-bottom:16px;">
+                        <div style="font-weight:600;font-size:14px;margin-bottom:8px;color:#333;">Skills</div>
+                        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+                            ${skills.map(s => '<span style="background:rgba(123,97,255,0.1);color:#7B61FF;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:500;">' + s + '</span>').join('')}
+                        </div>
+                    </div>
+                    <div>
+                        <div style="font-weight:600;font-size:14px;margin-bottom:8px;color:#333;">Scheduled Tasks</div>
+                        <div style="display:flex;flex-direction:column;gap:8px;">`;
+                crons.forEach(j => {
+                    const statusIcon = j.status === 'ok' ? '🟢' : j.status === 'error' ? '🔴' : '⚪';
+                    const errText = j.last_error ? '<div style="color:#ef4444;font-size:11px;margin-top:2px;">' + j.last_error + '</div>' : '';
+                    html += '<div style="background:rgba(248,250,252,0.8);padding:10px 14px;border-radius:10px;border:1px solid rgba(226,232,240,0.5);">' +
+                        '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+                        '<span style="font-weight:500;font-size:13px;">' + statusIcon + ' ' + j.name + '</span>' +
+                        '<span style="font-size:11px;color:#999;">' + (j.schedule || '') + '</span>' +
+                        '</div>' + errText + '</div>';
+                });
+                html += '</div></div>';
+                container.innerHTML = html;
+            } catch (e) {
+                container.innerHTML = '<p style="color:#ef4444;">Error loading OpenClaw data: ' + e.message + '</p>';
+            }
+        }
+
     </script>
+    <script src="/js/websocket-sync.js"></script>
+    <script src="/js/orb-loader.js"></script>
     <!-- Mini Player for persistent music playback -->
     <script src="js/mini-player.js"></script>
 </body>

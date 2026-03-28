@@ -70,7 +70,7 @@
         try {
             const response = await fetch(`${API_BASE}/vapid-public-key`);
             const data = await response.json();
-            vapidPublicKey = data.publicKey;
+            vapidPublicKey = data.public_key || data.publicKey;
             return vapidPublicKey;
         } catch (error) {
             console.error('❌ Failed to get VAPID public key:', error);
@@ -157,10 +157,12 @@
         const deviceType = detectDeviceType();
         
         const payload = {
-            endpoint: subscriptionJson.endpoint,
-            keys: {
-                p256dh: subscriptionJson.keys.p256dh,
-                auth: subscriptionJson.keys.auth
+            subscription: {
+                endpoint: subscriptionJson.endpoint,
+                keys: {
+                    p256dh: subscriptionJson.keys.p256dh,
+                    auth: subscriptionJson.keys.auth
+                }
             },
             user_agent: navigator.userAgent,
             device_type: deviceType

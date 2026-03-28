@@ -1733,8 +1733,8 @@
             
             <!-- Time/Date Display -->
             <div class="time-date-display">
-                <div class="current-time" id="currentTime">Loading...</div>
-                <div class="current-date" id="currentDate">Loading...</div>
+                <div class="current-time" id="navCurrentTime">--:--</div>
+                <div class="current-date" id="navCurrentDate">Loading...</div>
             </div>
         </div>
     </div>
@@ -1755,13 +1755,13 @@
                     <div class="more-item-icon">🧠</div>
                     <div class="more-item-label">Memories</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('workflows.html')">
-                    <div class="more-item-icon">⚡</div>
-                    <div class="more-item-label">Workflows</div>
-                </div>
                 <div class="more-item" onclick="navigateToPage('music.html')">
                     <div class="more-item-icon">🎵</div>
                     <div class="more-item-label">Music</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('games.html')">
+                    <div class="more-item-icon">🎮</div>
+                    <div class="more-item-label">Games</div>
                 </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
@@ -1787,6 +1787,8 @@
             <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item active">📔 Journal</a>
+            <a href="music.html" class="mobile-nav-item">🎵 Music</a>
+            <a href="games.html" class="mobile-nav-item">🎮 Games</a>
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
             <div class="mobile-nav-divider"></div>
@@ -1794,50 +1796,6 @@
         </div>
     </div>
     <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
-
-    <!-- Notifications Panel -->
-    <div class="notifications-panel" id="notificationsPanel">
-        <div class="notifications-header">
-            <h3 class="notifications-title">💬 Notifications</h3>
-            <button class="notifications-close" onclick="closeNotifications()">×</button>
-        </div>
-        <div class="notifications-content" id="notificationsContent">
-            <div class="no-notifications">No notifications</div>
-        </div>
-    </div>
-            </div>
-            
-    <!-- More Overlay -->
-    <div class="more-overlay" id="moreOverlay">
-        <div class="more-content">
-            <button class="more-close" onclick="closeMoreOverlay()">×</button>
-            <div class="more-header">
-                <h2 class="more-title">More Options</h2>
-                </div>
-            <div class="more-grid">
-                <div class="more-item" onclick="navigateToPage('memories.html')">
-                    <div class="more-item-icon">🧠</div>
-                    <div class="more-item-label">Memories</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('workflows.html')">
-                    <div class="more-item-icon">⚡</div>
-                    <div class="more-item-label">Workflows</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('music.html')">
-                    <div class="more-item-icon">🎵</div>
-                    <div class="more-item-label">Music</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('settings.html')">
-                    <div class="more-item-icon">⚙️</div>
-                    <div class="more-item-label">Settings</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('developer/index.html')">
-                    <div class="more-item-icon">👨‍💻</div>
-                    <div class="more-item-label">Developer</div>
-                </div>
-            </div>
-        </div>
-    </div>
 
     <!-- Notifications Panel -->
     <div class="notifications-panel" id="notificationsPanel">
@@ -2180,7 +2138,9 @@
     <script src="https://cdn.jsdelivr.net/npm/browser-image-compression@2.0.2/dist/browser-image-compression.js"></script>
     
     <!-- Zoe Auth (must load first) -->
-    <script src="/js/auth.js"></script>
+    <script src="js/auth.js"></script>
+    <script src="js/common.js"></script>
+    <script src="/js/notifications-panel.js"></script>
     <!-- Journal API Integration -->
     <script src="/js/journal-api.js"></script>
     <script src="/js/journal-ui-enhancements.js"></script>
@@ -2322,17 +2282,10 @@
             newEntryModal.classList.remove('active');
         }
         
-        // Update time/date display
-        function updateTimeDate() {
+        function updateNavTime() {
             const now = new Date();
-            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-            
-            const timeElement = document.getElementById('currentTime');
-            const dateElement = document.getElementById('currentDate');
-            
-            if (timeElement) timeElement.textContent = timeString;
-            if (dateElement) dateElement.textContent = dateString;
+            document.getElementById('navCurrentTime').textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            document.getElementById('navCurrentDate').textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
         }
         
         // Check API status
@@ -2635,8 +2588,8 @@
         
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', () => {
-            updateTimeDate();
-            setInterval(updateTimeDate, 60000); // Update every minute
+            updateNavTime();
+            setInterval(updateNavTime, 30000);
             
             checkApiStatus();
             setInterval(checkApiStatus, 30000); // Check every 30 seconds
@@ -2882,7 +2835,7 @@
 
         // Mobile menu toggle
         function toggleMobileMenu() {
-            if (window.innerWidth > 768) { window.location.href = 'index.html'; return; }
+            if (window.innerWidth > 768) { window.location.href = 'chat.html'; return; }
             const menu = document.getElementById('mobileNavMenu');
             const overlay = document.getElementById('mobileNavOverlay');
             if (menu && overlay) {
@@ -2892,10 +2845,12 @@
         }
 
         function handleLogout() {
-            if (window.innerWidth <= 768) {
-                toggleMobileMenu();
+            if (window.zoeAuth) {
+                window.zoeAuth.logout();
+            } else {
+                localStorage.removeItem('zoe_session');
+                window.location.href = '/';
             }
-            logout();
         }
 
         async function loadNotifications() {
@@ -3073,6 +3028,16 @@
                 .catch(err => console.error('Failed to load Zoe orb:', err));
         };
         document.head.appendChild(orbScript);
+    </script>
+    <script src="js/websocket-sync.js"></script>
+    <script>
+        (function() {
+            const session = window.zoeAuth?.getCurrentSession();
+            const userId = session?.user_info?.user_id || session?.user_id || 'family-admin';
+            if (typeof ZoeWebSockets !== 'undefined') {
+                ZoeWebSockets.init(userId);
+            }
+        })();
     </script>
     <!-- Mini Player for persistent music playback -->
     <script src="js/mini-player.js"></script>

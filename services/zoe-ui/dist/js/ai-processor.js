@@ -100,10 +100,13 @@ class ZoeAIProcessor {
         };
     }
 
-    // Dynamic API_BASE getter - always uses the latest value from common.js
     get API_BASE() {
-        // Use window.API_BASE from common.js, or fall back to relative URL
         return window.API_BASE || '/api';
+    }
+
+    _authHeaders() {
+        const sessionId = localStorage.getItem('zoe_session');
+        return sessionId ? { 'X-Session-ID': sessionId } : {};
     }
 
     // Main processing function
@@ -560,14 +563,13 @@ class ZoeAIProcessor {
     // Memory system - now uses real API
     async loadMemory() {
         try {
-            // Load people from API
-            const peopleResponse = await fetch(`${this.API_BASE}/memories/?type=people`);
+            const headers = this._authHeaders();
+            const [peopleResponse, notesResponse] = await Promise.all([
+                fetch(`${this.API_BASE}/memories/?type=people`, { headers }),
+                fetch(`${this.API_BASE}/memories/?type=notes`, { headers })
+            ]);
             const peopleData = await peopleResponse.json();
-            
-            // Load notes from API  
-            const notesResponse = await fetch(`${this.API_BASE}/memories/?type=notes`);
             const notesData = await notesResponse.json();
-            
             return {
                 people: peopleData.memories || [],
                 notes: notesData.memories || [],
@@ -581,7 +583,7 @@ class ZoeAIProcessor {
 
     async saveMemory(person, memory) {
         try {
-            // Check if person exists
+            const headers = { ...this._authHeaders(), 'Content-Type': 'application/json' };
             let personId = null;
             const existingPerson = this.memory.people.find(p => 
                 p.name.toLowerCase() === person.toLowerCase()
@@ -590,34 +592,22 @@ class ZoeAIProcessor {
             if (existingPerson) {
                 personId = existingPerson.id;
             } else {
-                // Create new person
                 const response = await fetch(`${this.API_BASE}/memories/?type=people`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        name: person,
-                        relationship: 'friend',
-                        notes: `AI learned: ${memory}`
-                    })
+                    headers,
+                    body: JSON.stringify({ name: person, relationship: 'friend', notes: `AI learned: ${memory}` })
                 });
                 const data = await response.json();
                 personId = data.memory.id;
             }
             
-            // Add as a note/memory fact
             await fetch(`${this.API_BASE}/memories/?type=notes`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    title: `About ${person}`,
-                    content: memory,
-                    category: 'ai_memory'
-                })
+                headers,
+                body: JSON.stringify({ title: `About ${person}`, content: memory, category: 'ai_memory' })
             });
             
-            // Reload memory
             this.memory = await this.loadMemory();
-            
         } catch (error) {
             console.error('Error saving memory to API:', error);
         }

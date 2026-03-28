@@ -568,13 +568,13 @@
                     <div class="more-item-icon">🧠</div>
                     <div class="more-item-label">Memories</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('workflows.html')">
-                    <div class="more-item-icon">⚡</div>
-                    <div class="more-item-label">Workflows</div>
-                </div>
                 <div class="more-item active" onclick="navigateToPage('music.html')">
                     <div class="more-item-icon">🎵</div>
                     <div class="more-item-label">Music</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('games.html')">
+                    <div class="more-item-icon">🎮</div>
+                    <div class="more-item-label">Games</div>
                 </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
@@ -601,6 +601,7 @@
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
             <a href="music.html" class="mobile-nav-item active">🎵 Music</a>
+            <a href="games.html" class="mobile-nav-item">🎮 Games</a>
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
             <div class="mobile-nav-divider"></div>
@@ -661,6 +662,7 @@
     <!-- Core Scripts -->
     <script src="js/auth.js"></script>
     <script src="js/common.js"></script>
+    <script src="/js/notifications-panel.js"></script>
     <script src="js/mini-player.js"></script>
     <script src="js/widget-base.js"></script>
     
@@ -2343,5 +2345,6 @@
         }
         @keyframes ml-spin { to { transform: rotate(360deg); } }
     </style>
+    <script src="/js/orb-loader.js"></script>
 </body>
 </html>

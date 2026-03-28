@@ -223,3 +223,9 @@ data/**/*.key
 
 # Vendor/Library files (large, versioned separately)
 services/zoe-ui/dist/lib/livekit/
+
+# Game / pub modules — keep local only; omit from GitHub pushes
+modules/jag-board/
+modules/questionable-decisions/
+modules/questionable-decisions-v1-backup/
+tests/unit/test_jag_board_game_store.py

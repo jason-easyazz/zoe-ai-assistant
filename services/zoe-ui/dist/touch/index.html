@@ -1336,8 +1336,11 @@
             
             // Show success and redirect
             showAuthSuccess(`Welcome, ${data.username}!`);
+            const params = new URLSearchParams(window.location.search);
+            const panelId = params.get('panel_id');
+            const panelSuffix = panelId ? `?panel_id=${encodeURIComponent(panelId)}` : '';
             setTimeout(() => {
-                window.location.href = 'dashboard.html';
+                window.location.href = 'dashboard.html' + panelSuffix;
             }, 1500);
         }
 
@@ -1434,6 +1437,22 @@
 
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
+            const params = new URLSearchParams(window.location.search);
+            const autoGuest = params.get('autoguest') === '1';
+            if (autoGuest) {
+                fetch('/api/auth/guest', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ device_info: { source: 'touch-kiosk-autoguest' } })
+                }).then(async (res) => {
+                    if (!res.ok) throw new Error('guest auth failed');
+                    const data = await res.json();
+                    handleSuccessfulAuth(data);
+                }).catch(() => {
+                    // Fall back to manual profile flow when auth service is unavailable.
+                });
+            }
+
             // Check for redirect loops
             const loopDetected = localStorage.getItem('redirect_loop_detected');
             if (loopDetected) {

@@ -122,6 +122,13 @@
     // Check if user should be on a protected page
     function enforceAuth() {
         const currentPath = window.location.pathname;
+        const search = window.location.search || '';
+        const isKioskMode = currentPath.startsWith('/touch/') && search.includes('kiosk=1');
+        const isPublicGameModule =
+            currentPath === '/modules/qd' ||
+            currentPath.startsWith('/modules/qd/') ||
+            currentPath === '/modules/jag-board' ||
+            currentPath.startsWith('/modules/jag-board/');
         // Only allow the main login pages and auth.html to skip authentication
         const isLoginPage = currentPath === '/index.html' || 
                            currentPath === '/' || 
@@ -129,7 +136,7 @@
         const isAuthPage = currentPath === '/auth.html';
         
         // Skip auth check for login and auth pages only
-        if (isLoginPage || isAuthPage) {
+        if (isLoginPage || isAuthPage || isKioskMode || isPublicGameModule) {
             console.log('✅ Auth check skipped - on login/auth page');
             return;
         }
@@ -253,13 +260,32 @@
             
             // Make request
             return originalFetch(url, options).then(response => {
-                // Handle 401 - just log and reject
-                // Let enforceAuth handle the actual logout/redirect
-                if (response.status === 401) {
-                    console.warn('⚠️ 401 Unauthorized response from:', url);
-                    return Promise.reject(new Error('Unauthorized'));
+                if (response.status !== 401) {
+                    return response;
                 }
-                return response;
+                let pathname = '';
+                try {
+                    const u = typeof urlString === 'string' ? urlString : '';
+                    if (u) pathname = new URL(u, window.location.origin).pathname;
+                } catch (_e) {}
+                const skipClear = /\/api\/auth\/(login|register|password|refresh)/i.test(pathname);
+                const sidBefore = getSession();
+                if (sidBefore && !skipClear && !options.__zoe401Retried) {
+                    console.warn('⚠️ 401 — clearing stale session and retrying once without X-Session-ID:', url);
+                    setSession(null);
+                    if (typeof showNotification === 'function') {
+                        showNotification('Session expired. Continuing as guest — sign in again for your account.', 'error');
+                    }
+                    const retryHeaders = { ...(options.headers || {}) };
+                    delete retryHeaders['X-Session-ID'];
+                    return originalFetch(url, {
+                        ...options,
+                        headers: retryHeaders,
+                        __zoe401Retried: true,
+                    });
+                }
+                console.warn('⚠️ 401 Unauthorized response from:', url);
+                return Promise.reject(new Error('Unauthorized'));
             });
         };
         

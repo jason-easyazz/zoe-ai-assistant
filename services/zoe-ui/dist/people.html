@@ -534,7 +534,7 @@
         <div class="nav-left">
             <div class="mini-orb" onclick="toggleMobileMenu()"></div>
             <div class="nav-menu">
-                <a href="index.html" class="nav-item">Chat</a>
+                <a href="chat.html" class="nav-item">Chat</a>
                 <a href="dashboard.html" class="nav-item">Dashboard</a>
                 <a href="lists.html" class="nav-item">Lists</a>
                 <a href="calendar.html" class="nav-item">Calendar</a>
@@ -549,8 +549,8 @@
             
             <!-- Time/Date Display -->
             <div class="time-date-display">
-                <div class="current-time" id="currentTime">Loading...</div>
-                <div class="current-date" id="currentDate">Loading...</div>
+                <div class="current-time" id="navCurrentTime">--:--</div>
+                <div class="current-date" id="navCurrentDate"></div>
             </div>
         </div>
     </div>
@@ -649,6 +649,8 @@
             <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
+            <a href="music.html" class="mobile-nav-item">🎵 Music</a>
+            <a href="games.html" class="mobile-nav-item">🎮 Games</a>
             <a href="people.html" class="mobile-nav-item active">👥 People</a>
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
@@ -674,17 +676,21 @@
                     <div class="more-item-icon">🧠</div>
                     <div class="more-item-label">Memories</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('workflows.html')">
-                    <div class="more-item-icon">⚡</div>
-                    <div class="more-item-label">Workflows</div>
-                </div>
                 <div class="more-item" onclick="navigateToPage('music.html')">
                     <div class="more-item-icon">🎵</div>
                     <div class="more-item-label">Music</div>
                 </div>
+                <div class="more-item" onclick="navigateToPage('games.html')">
+                    <div class="more-item-icon">🎮</div>
+                    <div class="more-item-label">Games</div>
+                </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
                     <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
                 </div>
             </div>
         </div>
@@ -697,6 +703,7 @@
     
     <script src="js/auth.js"></script>
     <script src="js/common.js"></script>
+    <script src="/js/notifications-panel.js"></script>
     <script>
         const canvas = document.getElementById('peopleCanvas');
         const ctx = canvas.getContext('2d');
@@ -846,23 +853,22 @@
                     birthday: birthday || null,
                     phone: phone || null,
                     email: email || null,
-                    address: address || null,
                     notes: notes || null,
-                    metadata: {
-                        strength: category === 'inner' ? 0.9 : category === 'circle' ? 0.7 : category === 'acquaintance' ? 0.5 : category === 'professional' ? 0.6 : 0.3,
-                        frequency: category === 'inner' ? 7 : category === 'circle' ? 14 : category === 'acquaintance' ? 30 : category === 'professional' ? 21 : 90,
-                        lastContact: category === 'inner' ? 3 : category === 'circle' ? 7 : category === 'acquaintance' ? 14 : category === 'professional' ? 10 : 30
-                    }
                 };
+                if (address) {
+                    personData.preferences = { address: address };
+                }
                 
-                const result = await apiRequest('/api/people', {
+                const result = await apiRequest('/api/people/', {
                     method: 'POST',
                     body: JSON.stringify(personData)
                 });
                 
-                if (result && result.person) {
+                if (result && result.id) {
+                    const strengthMap = { inner: 0.9, circle: 0.7, acquaintance: 0.5, professional: 0.6 };
+                    const freqMap = { inner: 7, circle: 14, acquaintance: 30, professional: 21 };
                     const newPerson = {
-                        id: `p${result.person.id}`,
+                        id: 'p' + result.id,
                         name: name,
                         category: category,
                         birthday: birthday,
@@ -871,9 +877,9 @@
                         address: address,
                         notes: notes,
                         relationshipType: category,
-                        strength: personData.metadata.strength,
-                        frequency: personData.metadata.frequency,
-                        lastContact: personData.metadata.lastContact,
+                        strength: strengthMap[category] || 0.3,
+                        frequency: freqMap[category] || 90,
+                        lastContact: 7,
                         angle: Math.random() * Math.PI * 2,
                         distance: 100 + Math.random() * 100,
                         relationships: []
@@ -883,7 +889,7 @@
                     closeAddPersonModal();
                     updateSidebar();
                     updateLegend();
-                    showNotification(`✅ Added ${name}!`, 'success');
+                    showNotification('Added ' + name + '!', 'success');
                 } else {
                     throw new Error('Invalid response from server');
                 }
@@ -1293,84 +1299,125 @@
         }
         
         // Person detail action functions
-        function scheduleWithPerson(personId) {
+        async function scheduleWithPerson(personId) {
             const person = people.find(p => p.id === personId);
             if (!person) return;
-            
-            const title = prompt(`Schedule something with ${person.name}:`, 'Coffee meeting');
-            if (title) {
-                const date = prompt('When? (e.g., "Next Tuesday 2pm" or "2024-01-15 14:00"):', '');
-                if (date) {
-                    alert(`Scheduled: ${title} with ${person.name} on ${date}`);
-                }
-            }
+            const title = prompt(`Schedule something with ${person.name}:`, `Meeting with ${person.name}`);
+            if (!title) return;
+            const dateStr = prompt('Date (YYYY-MM-DD):', new Date(Date.now() + 7*86400000).toISOString().slice(0,10));
+            if (!dateStr) return;
+            const timeStr = prompt('Time (HH:MM, optional):', '10:00');
+            try {
+                const res = await apiRequest('/api/calendar/events', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, start_date: dateStr, start_time: timeStr || null, category: 'social' })
+                });
+                if (res && res.id) showNotification(`Scheduled "${title}" on ${dateStr}`, 'success');
+                else showNotification('Failed to create event', 'error');
+            } catch (e) { showNotification('Error creating event', 'error'); }
         }
         
-        function createTodoForPerson(personId) {
+        async function createTodoForPerson(personId) {
             const person = people.find(p => p.id === personId);
             if (!person) return;
-            
-            const todo = prompt(`Create a to-do related to ${person.name}:`, 'Call to check in');
-            if (todo) {
-                const priority = prompt('Priority (1-5, where 5 is highest):', '3');
-                if (priority) {
-                    alert(`Created to-do: ${todo} (Priority: ${priority})`);
-                }
-            }
+            const todo = prompt(`Create a reminder for ${person.name}:`, `Call ${person.name} to check in`);
+            if (!todo) return;
+            try {
+                const res = await apiRequest('/api/reminders/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: todo, category: 'personal', priority: 'normal' })
+                });
+                if (res && (res.id || res.reminder_id)) showNotification(`Reminder created: ${todo}`, 'success');
+                else showNotification('Failed to create reminder', 'error');
+            } catch (e) { showNotification('Error creating reminder', 'error'); }
         }
         
-        function addNoteToPerson(personId) {
+        async function addNoteToPerson(personId) {
             const person = people.find(p => p.id === personId);
             if (!person) return;
-            
             const note = prompt(`Add a note about ${person.name}:`, '');
-            if (note) {
-                alert(`Note added: ${note}`);
-            }
+            if (!note) return;
+            try {
+                const res = await apiRequest('/api/notes/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: `Note: ${person.name}`, content: note, category: 'people' })
+                });
+                if (res && (res.id || res.note_id)) showNotification(`Note saved about ${person.name}`, 'success');
+                else showNotification('Failed to save note', 'error');
+            } catch (e) { showNotification('Error saving note', 'error'); }
         }
         
-        function setGoalWithPerson(personId) {
+        async function setGoalWithPerson(personId) {
             const person = people.find(p => p.id === personId);
             if (!person) return;
-            
             const goal = prompt(`Set a goal with ${person.name}:`, 'Plan a trip together');
-            if (goal) {
-                const deadline = prompt('Deadline (optional):', '');
-                alert(`Goal set: ${goal}${deadline ? ` (Deadline: ${deadline})` : ''}`);
-            }
+            if (!goal) return;
+            const deadline = prompt('Deadline (YYYY-MM-DD, optional):', '');
+            try {
+                const res = await apiRequest('/api/reminders/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: `Goal: ${goal} (${person.name})`, category: 'goals', priority: 'normal', due_date: deadline || null })
+                });
+                if (res && (res.id || res.reminder_id)) showNotification(`Goal set: ${goal}`, 'success');
+                else showNotification('Failed to set goal', 'error');
+            } catch (e) { showNotification('Error setting goal', 'error'); }
         }
         
-        function addGiftForPerson(personId) {
+        async function addGiftForPerson(personId) {
             const person = people.find(p => p.id === personId);
             if (!person) return;
-            
             const gift = prompt(`Gift idea for ${person.name}:`, '');
-            if (gift) {
-                const occasion = prompt('Occasion (optional):', 'Birthday');
-                alert(`Gift idea added: ${gift}${occasion ? ` for ${occasion}` : ''}`);
-            }
+            if (!gift) return;
+            const occasion = prompt('Occasion (optional):', 'Birthday');
+            try {
+                const res = await apiRequest('/api/notes/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: `Gift idea for ${person.name}`, content: `${gift}${occasion ? ` (${occasion})` : ''}`, category: 'gifts' })
+                });
+                if (res && (res.id || res.note_id)) showNotification(`Gift idea saved for ${person.name}`, 'success');
+                else showNotification('Failed to save gift idea', 'error');
+            } catch (e) { showNotification('Error saving gift idea', 'error'); }
         }
         
-        function logConversationWithPerson(personId) {
+        async function logConversationWithPerson(personId) {
             const person = people.find(p => p.id === personId);
             if (!person) return;
-            
             const topic = prompt(`What did you talk about with ${person.name}?`, '');
-            if (topic) {
-                const notes = prompt('Additional notes (optional):', '');
-                alert(`Conversation logged: ${topic}${notes ? `\nNotes: ${notes}` : ''}`);
-            }
+            if (!topic) return;
+            try {
+                const res = await apiRequest('/api/journal/entries', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: `Conversation with ${person.name}: ${topic}`, mood: 'neutral', tags: 'people,conversation' })
+                });
+                if (res && (res.id || res.entry_id)) showNotification(`Conversation with ${person.name} logged`, 'success');
+                else showNotification('Failed to log conversation', 'error');
+            } catch (e) { showNotification('Error logging conversation', 'error'); }
         }
         
-        function trackDebtWithPerson(personId) {
+        async function trackDebtWithPerson(personId) {
             const person = people.find(p => p.id === personId);
             if (!person) return;
-            
-            const amount = prompt(`Debt amount with ${person.name} (positive = they owe you, negative = you owe them):`, '0');
-            if (amount !== null) {
-                const reason = prompt('Reason (optional):', '');
-                alert(`Debt tracked: ${amount}${reason ? ` (${reason})` : ''}`);
-            }
+            const amountStr = prompt(`Amount with ${person.name} (positive = they owe you, negative = you owe them):`, '0');
+            if (amountStr === null) return;
+            const amount = parseFloat(amountStr);
+            if (isNaN(amount) || amount === 0) return;
+            const reason = prompt('Reason (optional):', '');
+            try {
+                const desc = amount > 0 ? `${person.name} owes you` : `You owe ${person.name}`;
+                const res = await apiRequest('/api/transactions/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ amount: Math.abs(amount), category: 'debt', description: `${desc}${reason ? ': ' + reason : ''}`, type: amount > 0 ? 'income' : 'expense' })
+                });
+                if (res && (res.id || res.transaction_id)) showNotification(`Debt tracked: $${Math.abs(amount)} (${desc})`, 'success');
+                else showNotification('Failed to track debt', 'error');
+            } catch (e) { showNotification('Error tracking debt', 'error'); }
         }
         
         function editPerson(personId) {
@@ -1628,7 +1675,27 @@
         function resetView() { scale = 1; offsetX = 0; offsetY = 0; }
         function zoomIn() { scale = Math.min(2, scale * 1.2); }
         function zoomOut() { scale = Math.max(0.5, scale / 1.2); }
-        function searchPeople(q) { console.log('Search:', q); }
+        function searchPeople(q) {
+            if (!q || q.length < 1) {
+                updateSidebar();
+                return;
+            }
+            const query = q.toLowerCase();
+            const sidebar = document.getElementById('peopleList');
+            if (!sidebar) return;
+            const filtered = people.filter(p =>
+                (p.name && p.name.toLowerCase().includes(query)) ||
+                (p.email && p.email.toLowerCase().includes(query)) ||
+                (p.phone && p.phone.includes(query)) ||
+                (p.category && p.category.toLowerCase().includes(query))
+            );
+            sidebar.innerHTML = filtered.map(p => `
+                <div class="person-item" onclick="selectPerson('${p.id}')">
+                    <div class="person-name">${p.name || 'Unknown'}</div>
+                    <div class="person-type">${p.category || p.relationshipType || ''}</div>
+                </div>
+            `).join('');
+        }
         
         // Show notification (imported from common.js but add fallback)
         if (typeof showNotification === 'undefined') {
@@ -1655,7 +1722,7 @@
         
         // Mobile menu functions
         function toggleMobileMenu() {
-            if (window.innerWidth > 768) { window.location.href = 'index.html'; return; }
+            if (window.innerWidth > 768) { window.location.href = 'chat.html'; return; }
             const menu = document.getElementById('mobileNavMenu');
             const overlay = document.getElementById('mobileNavOverlay');
             if (menu && overlay) {
@@ -1668,7 +1735,15 @@
             if (window.innerWidth <= 768) {
                 toggleMobileMenu();
             }
-            logout();
+            if (window.zoeAuth && typeof window.zoeAuth.logout === 'function') {
+                window.zoeAuth.logout();
+            } else if (typeof logout === 'function') {
+                logout();
+            } else {
+                console.error('logout function not found');
+                localStorage.removeItem('zoe_session');
+                window.location.href = 'chat.html';
+            }
         }
 
         // More overlay functions
@@ -1684,17 +1759,12 @@
             window.location.href = page;
         }
 
-        // Time/Date Update Functions
-        function updateTimeDate() {
+        function updateNavTime() {
             const now = new Date();
-            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-            
-            const timeElement = document.getElementById('currentTime');
-            const dateElement = document.getElementById('currentDate');
-            
-            if (timeElement) timeElement.textContent = timeString;
-            if (dateElement) dateElement.textContent = dateString;
+            const timeEl = document.getElementById('navCurrentTime');
+            const dateEl = document.getElementById('navCurrentDate');
+            if (timeEl) timeEl.textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            if (dateEl) dateEl.textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
         }
 
         // User profile storage
@@ -1760,8 +1830,8 @@
             await loadPeople();
             updateSidebar();
             updateLegend();
-            updateTimeDate();
-            setInterval(updateTimeDate, 60000);
+            updateNavTime();
+            setInterval(updateNavTime, 30000);
         });
 
         async function updateAPIStatus() {
@@ -1780,8 +1850,19 @@
         resizeCanvas();
         animate();
     </script>
+    <script src="js/websocket-sync.js"></script>
+    <script>
+        (function() {
+            const session = window.zoeAuth?.getCurrentSession();
+            const userId = session?.user_info?.user_id || session?.user_id || 'family-admin';
+            if (typeof ZoeWebSockets !== 'undefined') {
+                ZoeWebSockets.init(userId);
+            }
+        })();
+    </script>
     <!-- Mini Player for persistent music playback -->
     <script src="js/mini-player.js"></script>
+    <script src="/js/orb-loader.js"></script>
 </body>
 </html>
 

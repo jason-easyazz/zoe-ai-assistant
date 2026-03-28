@@ -21,7 +21,8 @@
         </div>
     </div>
     <div class="orb-chat-input-area">
-        <textarea class="orb-chat-input" id="orbChatInput" placeholder="Type your message..." rows="1"></textarea>
+        <textarea class="orb-chat-input" id="orbChatInput" placeholder="Type or tap mic..." rows="1"></textarea>
+        <button class="orb-chat-voice" id="orbVoiceBtn" onclick="if(typeof toggleOrbVoice==='function'){toggleOrbVoice()}" title="Voice input">🎤</button>
         <button class="orb-chat-send" id="orbChatSend" onclick="if(typeof sendOrbMessage==='function'){sendOrbMessage()}">→</button>
     </div>
 </div>
@@ -220,6 +221,24 @@
 .orb-chat-input::placeholder {
     color: rgba(107, 114, 128, 0.7);
     font-size: 12px;
+}
+
+.orb-chat-voice {
+    background: rgba(123, 97, 255, 0.1);
+    border: 1px solid rgba(123, 97, 255, 0.2); border-radius: 50%; width: 32px; height: 32px;
+    cursor: pointer; transition: all 0.2s;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; flex-shrink: 0;
+}
+.orb-chat-voice:hover { background: rgba(123, 97, 255, 0.2); transform: scale(1.05); }
+.orb-chat-voice.listening {
+    background: linear-gradient(135deg, #EF4444, #F87171);
+    border-color: #EF4444; color: white;
+    animation: voice-pulse 1.5s ease-in-out infinite;
+}
+@keyframes voice-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
 }
 
 .orb-chat-send {

@@ -1801,6 +1801,8 @@
         let zoeConversationHistory = [];
         let speechSynthesis = window.speechSynthesis;
         let currentUtterance = null;
+        let currentAudio = null;
+        window.__zoeSpeaking = false;
 
         // ========================================
         // WIDGET SYSTEM - Now uses shared modules
@@ -4061,63 +4063,72 @@
             }
         }
 
-        function speakText(text) {
-            // Stop any current speech
-            if (currentUtterance) {
-                speechSynthesis.cancel();
+        async function speakText(text) {
+            stopSpeaking();
+            const spokenText = String(text || '').trim();
+            if (!spokenText) return;
+
+            // Primary: backend synthesized audio for natural, consistent voice.
+            try {
+                const response = await fetch('/api/voice/synthesize', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: spokenText, profile: 'zoe_au_natural_v1' })
+                });
+                if (!response.ok) throw new Error(`TTS HTTP ${response.status}`);
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                currentAudio = new Audio(url);
+                window.__zoeSpeaking = true;
+                currentAudio.onended = () => {
+                    URL.revokeObjectURL(url);
+                    currentAudio = null;
+                    window.__zoeSpeaking = false;
+                };
+                currentAudio.onerror = () => {
+                    URL.revokeObjectURL(url);
+                    currentAudio = null;
+                    window.__zoeSpeaking = false;
+                };
+                await currentAudio.play();
+                return;
+            } catch (error) {
+                window.__zoeSpeaking = false;
+                console.warn('Backend TTS unavailable, using browser fallback:', error);
             }
-            
+
+            // Fallback: browser speech synthesis.
             if (!speechSynthesis) {
                 console.warn('Text-to-speech not supported');
                 return;
             }
-            
-            // Create new utterance
-            currentUtterance = new SpeechSynthesisUtterance(text);
-            
-            // Configure voice settings
-            currentUtterance.rate = 0.9;
+            currentUtterance = new SpeechSynthesisUtterance(spokenText);
+            currentUtterance.rate = 0.92;
             currentUtterance.pitch = 1.0;
-            currentUtterance.volume = 0.8;
-            
-            // Try to use a female voice for Zoe
+            currentUtterance.volume = 0.85;
             const voices = speechSynthesis.getVoices();
-            const femaleVoice = voices.find(voice => 
-                voice.name.includes('Female') || 
-                voice.name.includes('female') ||
-                voice.name.includes('Zira') ||
-                voice.name.includes('Samantha') ||
-                voice.name.includes('Karen')
+            const preferredVoice = voices.find((voice) =>
+                /female|natasha|samantha|karen|zira|australia|australian/i.test(voice.name)
             );
-            
-            if (femaleVoice) {
-                currentUtterance.voice = femaleVoice;
-            }
-            
-            // Event handlers
-            currentUtterance.onstart = function() {
-                console.log('🔊 Zoe is speaking:', text);
-            };
-            
-            currentUtterance.onend = function() {
-                console.log('🔊 Zoe finished speaking');
-                currentUtterance = null;
-            };
-            
-            currentUtterance.onerror = function(event) {
-                console.error('🔊 Speech synthesis error:', event.error);
-                currentUtterance = null;
-            };
-            
-            // Speak the text
+            if (preferredVoice) currentUtterance.voice = preferredVoice;
+            currentUtterance.onend = function() { currentUtterance = null; };
+            currentUtterance.onerror = function() { currentUtterance = null; };
             speechSynthesis.speak(currentUtterance);
         }
 
         function stopSpeaking() {
+            if (currentAudio) {
+                try {
+                    currentAudio.pause();
+                    currentAudio.currentTime = 0;
+                } catch (_) {}
+                currentAudio = null;
+            }
             if (speechSynthesis && speechSynthesis.speaking) {
                 speechSynthesis.cancel();
                 currentUtterance = null;
             }
+            window.__zoeSpeaking = false;
         }
 
         function showTypingIndicator() {
@@ -4439,6 +4450,394 @@
         console.log('🔒 Edit controls are properly hidden until edit mode is enabled');
         console.log('🎯 Drag and drop: Enable edit mode, then drag widgets to rearrange');
         console.log('📡 Connected to Zoe backend APIs for real-time data');
+    </script>
+    <script src="/js/websocket-sync.js"></script>
+    <script src="/js/touch-ui-executor.js"></script>
+    <script>
+    // Touch panel voice input + wake word
+    (function() {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) return;
+        const rec = new SR();
+        rec.continuous = false;
+        rec.interimResults = true;
+        rec.lang = 'en-US';
+        let listening = false;
+        const orb = document.querySelector('.zoe-orb');
+        if (!orb) return;
+        let micBusy = false;
+        let commandModeUntil = 0;
+        let commandHeardSpeech = false;
+        let commandLatestTranscript = '';
+        let commandSubmittedAt = 0;
+        let commandSilenceCommitTimer = null;
+        let commandHardTimeoutTimer = null;
+
+        async function submitVoiceCommand(text) {
+            const message = (text || '').trim();
+            if (!message) return;
+            const resp = document.querySelector('.voice-response');
+            if (resp) { resp.textContent = `Heard: ${message}`; resp.style.display = 'block'; }
+            let sessionId = localStorage.getItem('zoe_session') || '';
+            async function doChat() {
+                return fetch('/api/chat/?stream=false', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Session-ID': sessionId },
+                    body: JSON.stringify({ message })
+                });
+            }
+            try {
+                let r = await doChat();
+                if (r.status === 401 || r.status === 403 || !sessionId) {
+                    const g = await fetch('/api/auth/guest', { method: 'POST' });
+                    if (g.ok) {
+                        const gj = await g.json();
+                        sessionId = gj.session_id || '';
+                        if (sessionId) localStorage.setItem('zoe_session', sessionId);
+                        r = await doChat();
+                    }
+                }
+                const data = await r.json();
+                if (resp) resp.textContent = data.response || 'Done';
+                speakText(data.response || '');
+                setTimeout(() => { if (resp) resp.style.display = 'none'; }, 8000);
+            } catch (_) {
+                if (resp) resp.textContent = 'Could not process voice command';
+            }
+        }
+
+        rec.onresult = function(e) {
+            let final = '';
+            let anyTranscript = false;
+            let latest = '';
+            for (let i = 0; i < e.results.length; i++) {
+                const t = e.results[i][0]?.transcript || '';
+                if (t.trim()) anyTranscript = true;
+                if (t.trim()) latest = t.trim();
+                if (e.results[i].isFinal) final += t;
+            }
+            if (anyTranscript) commandHeardSpeech = true;
+            if (latest) {
+                commandLatestTranscript = latest;
+                setWakeStatus(`Heard: ${latest.slice(0, 42)}`);
+                if (commandSilenceCommitTimer) clearTimeout(commandSilenceCommitTimer);
+                // Commit shortly after speech pauses even if final transcript never arrives.
+                commandSilenceCommitTimer = setTimeout(() => {
+                    if (!listening || commandSubmittedAt) return;
+                    if (commandLatestTranscript.split(/\s+/).length >= 1) {
+                        commandSubmittedAt = Date.now();
+                        submitVoiceCommand(commandLatestTranscript);
+                    }
+                }, 1200);
+            }
+            if (final) {
+                commandSubmittedAt = Date.now();
+                submitVoiceCommand(final);
+            }
+        };
+        rec.onstart = function() {
+            micBusy = true;
+            setWakeStatus('Listening...');
+            if (commandHardTimeoutTimer) clearTimeout(commandHardTimeoutTimer);
+            // Prevent indefinite "Listening..." if recognizer produces no result.
+            commandHardTimeoutTimer = setTimeout(() => {
+                if (!listening || commandSubmittedAt) return;
+                if (commandLatestTranscript.trim()) {
+                    commandSubmittedAt = Date.now();
+                    submitVoiceCommand(commandLatestTranscript);
+                    return;
+                }
+                setWakeStatus('Did not catch that. Say "Hey Zoe" and try again.');
+                try { rec.stop(); } catch (_) {}
+            }, 8000);
+        };
+        rec.onend = function() {
+            if (commandHardTimeoutTimer) clearTimeout(commandHardTimeoutTimer);
+            if (commandSilenceCommitTimer) clearTimeout(commandSilenceCommitTimer);
+            // Keep listening briefly after wake tone so user can start speaking naturally.
+            if (!commandHeardSpeech && Date.now() < commandModeUntil && !window.__zoeSpeaking) {
+                setWakeStatus('Listening...');
+                setTimeout(() => { try { rec.start(); } catch (_) {} }, 220);
+                return;
+            }
+            // Fallback: submit strong interim transcript if no final result arrived.
+            if (commandHeardSpeech && !commandSubmittedAt && commandLatestTranscript.split(/\s+/).length >= 2) {
+                commandSubmittedAt = Date.now();
+                submitVoiceCommand(commandLatestTranscript);
+            }
+            listening = false;
+            micBusy = false;
+            orb.classList.remove('listening');
+            setWakeStatus('Wake listener active: say "Hey Zoe"');
+            // Resume wake listener after command capture completes.
+            wakePausedForCommand = false;
+            setTimeout(() => { try { wakeRec.start(); } catch (_) {} }, 500);
+        };
+        rec.onerror = function(e) {
+            if (commandHardTimeoutTimer) clearTimeout(commandHardTimeoutTimer);
+            if (commandSilenceCommitTimer) clearTimeout(commandSilenceCommitTimer);
+            const err = (e && e.error) ? String(e.error) : 'unknown';
+            if ((err === 'no-speech' || err === 'aborted' || err === 'network') &&
+                Date.now() < commandModeUntil && !window.__zoeSpeaking) {
+                setWakeStatus('Listening...');
+                setTimeout(() => { try { rec.start(); } catch (_) {} }, 260);
+                return;
+            }
+            listening = false;
+            micBusy = false;
+            orb.classList.remove('listening');
+            setWakeStatus('Wake listener active: say "Hey Zoe"');
+            wakePausedForCommand = false;
+            scheduleWakeStart(1000);
+        };
+
+        orb.addEventListener('click', function() {
+            try { if (wakeVadCtx && wakeVadCtx.state === 'suspended') wakeVadCtx.resume(); } catch (_) {}
+            if (listening) { rec.stop(); }
+            else {
+                wakePausedForCommand = true;
+                try { wakeRec.stop(); } catch (_) {}
+                rec.start();
+                listening = true;
+                orb.classList.add('listening');
+            }
+        });
+
+        // Always-on wake word listener ("hey zoe") for touch panel only.
+        const wakeRec = new SR();
+        wakeRec.continuous = true;
+        wakeRec.interimResults = true;
+        wakeRec.lang = 'en-US';
+        let wakeCooldownUntil = 0;
+        let speechHeardCooldownUntil = 0;
+        let wakeRestartTimer = null;
+        let wakeLastStartAt = 0;
+        let wakeErrorCount = 0;
+        let wakePausedForCommand = false;
+        let wakeRestartBackoffMs = 800;
+        let wakeSilenceCycles = 0;
+        let wakeNextStartAt = 0;
+        let wakeSpeechBurstCount = 0;
+        let wakeSpeechBurstUntil = 0;
+        let wakeVadCooldownUntil = 0;
+        let wakeVadSpeechFrames = 0;
+        let wakeLastActivityAt = Date.now();
+        let wakeVadCtx = null;
+
+        function scheduleWakeStart(minDelayMs) {
+            if (wakePausedForCommand || micBusy || listening) return;
+            const now = Date.now();
+            const delay = Math.max(minDelayMs, wakeNextStartAt - now, 0);
+            wakeNextStartAt = now + delay;
+            if (wakeRestartTimer) clearTimeout(wakeRestartTimer);
+            wakeRestartTimer = setTimeout(() => {
+                if (wakePausedForCommand || micBusy || listening) return;
+                try {
+                    wakeRec.start();
+                    wakeLastActivityAt = Date.now();
+                } catch (_) {}
+            }, delay);
+        }
+
+        function wakeTone(strong = false) {
+            try {
+                const Ctx = window.AudioContext || window.webkitAudioContext;
+                if (!Ctx) return;
+                const ctx = new Ctx();
+                const osc1 = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc1.type = 'sine';
+                osc1.frequency.value = strong ? 960 : 740;
+                gain.gain.value = strong ? 0.06 : 0.035;
+                osc1.connect(gain);
+                gain.connect(ctx.destination);
+                osc1.start();
+                setTimeout(() => { osc1.stop(); }, strong ? 120 : 80);
+                if (strong) {
+                    const osc2 = ctx.createOscillator();
+                    osc2.type = 'sine';
+                    osc2.frequency.value = 1240;
+                    osc2.connect(gain);
+                    setTimeout(() => osc2.start(), 130);
+                    setTimeout(() => { osc2.stop(); ctx.close(); }, 250);
+                } else {
+                    setTimeout(() => { ctx.close(); }, 120);
+                }
+            } catch (_) {}
+        }
+
+        function setWakeStatus(text) {
+            let el = document.getElementById('wakeWordStatus');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'wakeWordStatus';
+                el.style.cssText = 'position:fixed;bottom:60px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,0.78);color:#fff;padding:8px 14px;border-radius:999px;font-size:13px;z-index:220;backdrop-filter:blur(8px);';
+                document.body.appendChild(el);
+            }
+            el.textContent = text;
+        }
+
+        function isWakePhrase(text) {
+            const t = (text || '').toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+            if (!t) return false;
+            if (t.includes('hey zoe') || t.includes('hi zoe') || t.includes('okay zoe') || t.includes('ok zoe')) return true;
+            // Common recognition variants for "zoe" on panel mics.
+            if (/(hey|hi|okay|ok)\s+(zoe|zoey|zo|zoh|so|sow|joe|joey)/.test(t)) return true;
+            // Ultra-tolerant fallback for noisy mic transcripts.
+            return /(zoe|zoey|joe|joey)/.test(t) && /(hey|hi|okay|ok|hello)/.test(t);
+        }
+
+        function startCommandCapture() {
+            if (listening || window.__zoeSpeaking) return;
+            wakeLastActivityAt = Date.now();
+            commandModeUntil = Date.now() + 7000;
+            commandHeardSpeech = false;
+            commandLatestTranscript = '';
+            commandSubmittedAt = 0;
+            try {
+                wakePausedForCommand = true;
+                wakeRec.stop();
+            } catch (_) {}
+            try {
+                rec.start();
+                listening = true;
+                orb.classList.add('listening');
+            } catch (_) {
+                // If command recognizer fails to start, do not leave wake listener paused.
+                wakePausedForCommand = false;
+                setWakeStatus('Wake listener active: say "Hey Zoe"');
+                scheduleWakeStart(1200);
+            }
+        }
+
+        wakeRec.onresult = function(e) {
+            wakeLastActivityAt = Date.now();
+            if (Date.now() < wakeCooldownUntil) return;
+            if (micBusy) return;
+            if (window.__zoeSpeaking) return;
+            let heard = '';
+            for (let i = e.resultIndex; i < e.results.length; i++) {
+                heard += (e.results[i][0]?.transcript || '') + ' ';
+            }
+            const normalized = heard.toLowerCase().trim();
+            if (normalized && Date.now() > speechHeardCooldownUntil) {
+                speechHeardCooldownUntil = Date.now() + 1400;
+                wakeTone(false); // Soft cue: Zoe hears speech activity.
+                setWakeStatus(`Heard: ${normalized.slice(0, 42)}`);
+            }
+            const now = Date.now();
+            if (normalized) {
+                if (now > wakeSpeechBurstUntil) wakeSpeechBurstCount = 0;
+                wakeSpeechBurstCount += 1;
+                wakeSpeechBurstUntil = now + 5000;
+            }
+            const wakeMatched = isWakePhrase(normalized);
+            const burstTrigger = wakeSpeechBurstCount >= 2 && normalized.split(' ').length >= 2;
+            if (!wakeMatched && !burstTrigger) return;
+            wakeCooldownUntil = Date.now() + 6000; // debounce and reduce false triggers.
+            wakeTone(true); // Strong cue: wake word matched.
+            setWakeStatus(wakeMatched ? 'Wake word detected' : 'Voice detected, opening command mode');
+            wakeSpeechBurstCount = 0;
+            startCommandCapture();
+        };
+        wakeRec.onend = function() {
+            wakeLastActivityAt = Date.now();
+            // Keep wake listener persistent across browser interruptions.
+            if (wakePausedForCommand || micBusy || listening) return;
+            // If recognizer is ending quickly on silence, back off to avoid hardware LED flicker loops.
+            const runtimeMs = Date.now() - wakeLastStartAt;
+            if (runtimeMs < 2500) wakeSilenceCycles += 1;
+            else wakeSilenceCycles = 0;
+            const quietBackoffMs = wakeSilenceCycles >= 3 ? 3500 : 1800;
+            scheduleWakeStart(Math.max(wakeRestartBackoffMs, quietBackoffMs));
+        };
+        wakeRec.onerror = function(e) {
+            wakeLastActivityAt = Date.now();
+            wakeErrorCount += 1;
+            const err = (e && e.error) ? String(e.error) : 'unknown';
+            if (err === 'no-speech' || err === 'aborted' || err === 'network') {
+                setWakeStatus('Wake listener active: say "Hey Zoe"');
+                if (err === 'no-speech') wakeSilenceCycles = Math.min(10, wakeSilenceCycles + 1);
+            } else if (err === 'audio-capture') {
+                setWakeStatus('Mic busy, retrying wake listener...');
+            } else if (err === 'not-allowed' || err === 'service-not-allowed') {
+                setWakeStatus('Mic permission blocked. Tap orb to enable microphone.');
+                return;
+            } else if (wakeErrorCount > 2) {
+                // Keep UX stable even if the browser emits unknown recognizer errors.
+                setWakeStatus('Wake listener active: say "Hey Zoe"');
+            }
+            wakeRestartBackoffMs = Math.min(4500, wakeRestartBackoffMs + 600);
+            if (wakePausedForCommand || micBusy || listening) return;
+            const errDelay = (err === 'no-speech' || err === 'aborted' || err === 'network') ? 1800 : 2500;
+            scheduleWakeStart(Math.max(wakeRestartBackoffMs, errDelay));
+        };
+        wakeRec.onstart = function() {
+            wakeLastStartAt = Date.now();
+            wakeLastActivityAt = wakeLastStartAt;
+            wakeErrorCount = 0;
+            wakeRestartBackoffMs = 900;
+            wakeSilenceCycles = Math.max(0, wakeSilenceCycles - 1);
+            setWakeStatus('Wake listener active: say "Hey Zoe"');
+        };
+        // Ensure mic permission prompt appears and wake listener starts.
+        navigator.mediaDevices?.getUserMedia?.({ audio: true }).then((stream) => {
+            // Keep a lightweight VAD running so wake still works if phrase transcripts are unreliable.
+            try {
+                const ACtx = window.AudioContext || window.webkitAudioContext;
+                if (ACtx) {
+                    const ctx = new ACtx();
+                    wakeVadCtx = ctx;
+                    const src = ctx.createMediaStreamSource(stream);
+                    const analyser = ctx.createAnalyser();
+                    analyser.fftSize = 1024;
+                    src.connect(analyser);
+                    const data = new Uint8Array(analyser.fftSize);
+                    setInterval(() => {
+                        try { if (ctx.state === 'suspended') ctx.resume(); } catch (_) {}
+                        if (Date.now() < wakeVadCooldownUntil) return;
+                        if (listening || micBusy || window.__zoeSpeaking) return;
+                        analyser.getByteTimeDomainData(data);
+                        let sum = 0;
+                        for (let i = 0; i < data.length; i++) {
+                            const v = (data[i] - 128) / 128;
+                            sum += v * v;
+                        }
+                        const rms = Math.sqrt(sum / data.length);
+                        if (rms > 0.012) wakeVadSpeechFrames += 1;
+                        else wakeVadSpeechFrames = Math.max(0, wakeVadSpeechFrames - 1);
+                        if (wakeVadSpeechFrames >= 2) {
+                            wakeVadSpeechFrames = 0;
+                            wakeVadCooldownUntil = Date.now() + 5000;
+                            wakeLastActivityAt = Date.now();
+                            wakeTone(true);
+                            setWakeStatus('Voice detected, opening command mode');
+                            startCommandCapture();
+                        }
+                    }, 220);
+                }
+            } catch (_) {}
+            setWakeStatus('Wake listener active: say "Hey Zoe"');
+            scheduleWakeStart(1200);
+            // Watchdog: recover wake pipeline if browser recognizer goes stale.
+            setInterval(() => {
+                if (listening || micBusy || wakePausedForCommand) return;
+                if (Date.now() - wakeLastActivityAt < 15000) return;
+                setWakeStatus('Recovering wake listener...');
+                wakeLastActivityAt = Date.now();
+                try { wakeRec.stop(); } catch (_) {}
+                scheduleWakeStart(800);
+            }, 3000);
+        }).catch(() => {
+            setWakeStatus('Tap orb once to enable microphone');
+        });
+
+        // Add response display
+        const respEl = document.createElement('div');
+        respEl.className = 'voice-response';
+        respEl.style.cssText = 'display:none;position:fixed;bottom:100px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:white;padding:16px 24px;border-radius:16px;max-width:80%;text-align:center;z-index:200;font-size:16px;backdrop-filter:blur(10px);';
+        document.body.appendChild(respEl);
+    })();
     </script>
 </body>
 </html>

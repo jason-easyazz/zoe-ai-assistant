@@ -71,21 +71,14 @@ class ZoeWebSocketSync {
     }
     
     handleMessage(data) {
-        console.log('📥 WebSocket message received:', data);
         const { type } = data;
-        
-        console.log(`🔍 Looking for callback for type: "${type}"`);
-        console.log('🔍 Registered callbacks:', Object.keys(this.callbacks));
-        
-        // Call registered callbacks for this message type
+
+        if (type === 'pong' || type === 'connected') return;
+
         if (this.callbacks[type]) {
-            console.log(`✅ Found callback for "${type}", calling it...`);
             this.callbacks[type](data);
-        } else {
-            console.warn(`⚠️ No callback registered for "${type}"`);
         }
-        
-        // Call global message callback
+
         if (this.callbacks['message']) {
             this.callbacks['message'](data);
         }
@@ -167,121 +160,120 @@ class ZoeWebSocketSync {
 window.ZoeWebSockets = {
     lists: null,
     calendar: null,
-    
+    people: null,
+    reminders: null,
+    notes: null,
+    journal: null,
+
+    _refreshListWidget(listType) {
+        const widgetNames = {
+            'shopping': 'shopping',
+            'personal_todos': 'personal',
+            'work_todos': 'work',
+            'bucket': 'bucket'
+        };
+        const widgetName = widgetNames[listType] || listType;
+        const widget = (typeof WidgetManager !== 'undefined' && WidgetManager.modules)
+            ? WidgetManager.modules[widgetName] : null;
+        if (widget && typeof widget.update === 'function') {
+            widget.update();
+        } else if (typeof WidgetManager !== 'undefined' && WidgetManager.updateAll) {
+            WidgetManager.updateAll();
+        }
+    },
+
+    _refreshWidget(name) {
+        if (typeof WidgetManager !== 'undefined' && WidgetManager.modules) {
+            const widget = WidgetManager.modules[name];
+            if (widget && typeof widget.update === 'function') {
+                widget.update();
+                return;
+            }
+        }
+        if (typeof WidgetManager !== 'undefined' && WidgetManager.updateAll) {
+            WidgetManager.updateAll();
+        }
+    },
+
     init(userId) {
-        console.log('🚀 Initializing Zoe WebSockets for user:', userId);
-        
-        // Initialize lists WebSocket
+        // --- Lists ---
         this.lists = new ZoeWebSocketSync('/api/lists/ws', userId);
-        
-        // Listen for item_added (sent by intent system)
-        this.lists.on('item_added', (data) => {
-            console.log('✅ Item added:', data);
-            console.log('🔄 Refreshing list widgets...');
-            
-            // Refresh ONLY the affected list widget (not all widgets)
-            const listType = data.list_type || 'shopping';
-            
-            if (typeof WidgetManager !== 'undefined' && WidgetManager.modules) {
-                // Update specific list widget
-                const widgetNames = {
-                    'shopping': 'shopping',
-                    'personal_todos': 'personal',
-                    'work_todos': 'work',
-                    'bucket': 'bucket'
-                };
-                
-                const widgetName = widgetNames[listType] || listType;
-                const widget = WidgetManager.modules[widgetName];
-                
-                if (widget && typeof widget.update === 'function') {
-                    console.log(`✅ Updating ${widgetName} widget`);
-                    widget.update();
-                } else {
-                    console.warn(`⚠️ Widget ${widgetName} not found or no update method`);
-                }
-            } else {
-                console.warn('⚠️ WidgetManager not available!');
-            }
+        ['item_added', 'item_removed', 'item_completed'].forEach(evt => {
+            this.lists.on(evt, (data) => {
+                this._refreshListWidget(data.list_type || data?.data?.list_type || 'shopping');
+            });
         });
-        
-        // Listen for item_removed
-        this.lists.on('item_removed', (data) => {
-            console.log('🗑️ Item removed:', data);
-            const listType = data.list_type || 'shopping';
-            const widgetNames = {'shopping': 'shopping', 'personal_todos': 'personal', 'work_todos': 'work', 'bucket': 'bucket'};
-            const widgetName = widgetNames[listType] || listType;
-            const widget = WidgetManager?.modules?.[widgetName];
-            if (widget && typeof widget.update === 'function') widget.update();
-        });
-        
-        // Listen for item_completed
-        this.lists.on('item_completed', (data) => {
-            console.log('✔️ Item completed:', data);
-            const listType = data.list_type || 'shopping';
-            const widgetNames = {'shopping': 'shopping', 'personal_todos': 'personal', 'work_todos': 'work', 'bucket': 'bucket'};
-            const widgetName = widgetNames[listType] || listType;
-            const widget = WidgetManager?.modules?.[widgetName];
-            if (widget && typeof widget.update === 'function') widget.update();
-        });
-        
-        // Legacy events (for backwards compatibility)
-        this.lists.on('list_created', (data) => {
-            console.log('📋 List created:', data);
-            // Refresh all list widgets
-            if (typeof WidgetManager !== 'undefined' && WidgetManager.updateAll) {
-                WidgetManager.updateAll();
-            }
-        });
-        this.lists.on('list_updated', (data) => {
-            console.log('📋 List updated:', data);
-            // Refresh all list widgets
-            if (typeof WidgetManager !== 'undefined' && WidgetManager.updateAll) {
-                WidgetManager.updateAll();
-            }
+        ['list_created', 'list_updated'].forEach(evt => {
+            this.lists.on(evt, () => {
+                if (typeof WidgetManager !== 'undefined' && WidgetManager.updateAll) WidgetManager.updateAll();
+            });
         });
         this.lists.on('fallback', () => {
-            // Fallback to 5-second polling
-            console.log('📋 Lists: Using polling fallback');
             setInterval(() => {
-                if (typeof WidgetManager !== 'undefined' && WidgetManager.updateAll) {
-                    WidgetManager.updateAll();
-                }
+                if (typeof WidgetManager !== 'undefined' && WidgetManager.updateAll) WidgetManager.updateAll();
             }, 5000);
         });
         this.lists.connect();
-        
-        // Initialize calendar WebSocket
+
+        // --- Calendar ---
         this.calendar = new ZoeWebSocketSync('/api/calendar/ws', userId);
-        this.calendar.on('event_created', (data) => {
-            console.log('📅 Event created:', data);
-            // Refresh calendar
-            if (typeof loadEvents === 'function') {
-                loadEvents();
-            }
-        });
-        this.calendar.on('event_updated', (data) => {
-            console.log('📅 Event updated:', data);
-            // Refresh calendar
-            if (typeof loadEvents === 'function') {
-                loadEvents();
-            }
+        ['event_created', 'event_updated', 'event_deleted'].forEach(evt => {
+            this.calendar.on(evt, () => {
+                if (typeof loadEvents === 'function') loadEvents();
+                this._refreshWidget('events');
+            });
         });
         this.calendar.on('fallback', () => {
-            // Fallback to 5-second polling
-            console.log('📅 Calendar: Using polling fallback');
             setInterval(() => {
-                if (typeof loadEvents === 'function') {
-                    loadEvents();
-                }
+                if (typeof loadEvents === 'function') loadEvents();
             }, 5000);
         });
         this.calendar.connect();
+
+        // --- People ---
+        this.people = new ZoeWebSocketSync('/api/people/ws', userId);
+        ['people:created', 'people:updated', 'people:deleted'].forEach(evt => {
+            this.people.on(evt, () => {
+                if (typeof loadPeople === 'function') loadPeople();
+            });
+        });
+        this.people.connect();
+
+        // --- Reminders ---
+        this.reminders = new ZoeWebSocketSync('/api/reminders/ws', userId);
+        ['reminder_created', 'reminder_updated', 'reminder_deleted',
+         'reminder_snoozed', 'reminder_acknowledged'].forEach(evt => {
+            this.reminders.on(evt, () => {
+                if (typeof loadReminders === 'function') loadReminders();
+                this._refreshWidget('reminders');
+            });
+        });
+        this.reminders.connect();
+
+        // --- Notes ---
+        this.notes = new ZoeWebSocketSync('/api/notes/ws', userId);
+        ['note_created', 'note_updated', 'note_deleted'].forEach(evt => {
+            this.notes.on(evt, () => {
+                if (typeof loadNotes === 'function') loadNotes();
+            });
+        });
+        this.notes.connect();
+
+        // --- Journal ---
+        this.journal = new ZoeWebSocketSync('/api/journal/ws', userId);
+        ['entry_created', 'entry_updated', 'entry_deleted'].forEach(evt => {
+            this.journal.on(evt, () => {
+                if (typeof loadJournalEntriesInline === 'function') loadJournalEntriesInline();
+                else if (typeof loadEntries === 'function') loadEntries();
+            });
+        });
+        this.journal.connect();
     },
-    
+
     disconnect() {
-        if (this.lists) this.lists.disconnect();
-        if (this.calendar) this.calendar.disconnect();
+        ['lists', 'calendar', 'people', 'reminders', 'notes', 'journal'].forEach(name => {
+            if (this[name]) this[name].disconnect();
+        });
     }
 };
 

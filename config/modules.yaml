@@ -1,7 +1,0 @@
-enabled_modules:
-  - agent-zero
-module_config:
-  agent-zero:
-    safety_mode: grandma
-    # Pin version note: update modules/agent-zero/docker-compose.module.yml
-    # Current pin: v0.9.7

@@ -1200,6 +1200,16 @@
 
         // Check for existing session on page load
         document.addEventListener('DOMContentLoaded', function() {
+            // If nginx/SW mis-routes a module URL to this shell, do not send users to dashboard.
+            var _p = window.location.pathname;
+            if (
+                _p === '/modules/qd' ||
+                _p.startsWith('/modules/qd/') ||
+                _p === '/modules/jag-board' ||
+                _p.startsWith('/modules/jag-board/')
+            ) {
+                return;
+            }
             const session = localStorage.getItem('zoe_session');
             if (session) {
                 try {
