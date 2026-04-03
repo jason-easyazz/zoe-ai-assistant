@@ -1457,6 +1457,64 @@
                             </select>
                         </div>
                     </div>
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Sync Direction</div>
+                            <div class="setting-description">Choose one-way or bi-directional synchronization</div>
+                        </div>
+                        <div class="setting-control">
+                            <select class="form-select" id="syncDirection" onchange="saveCalendarSetting('syncDirection', this.value)">
+                                <option value="read_only">Read Only</option>
+                                <option value="two_way">Two-way</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Conflict Policy</div>
+                            <div class="setting-description">How to resolve event updates from multiple systems</div>
+                        </div>
+                        <div class="setting-control">
+                            <select class="form-select" id="conflictPolicy" onchange="saveCalendarSetting('conflictPolicy', this.value)">
+                                <option value="last_write_wins">Last write wins</option>
+                                <option value="zoe_wins">Prefer Zoe</option>
+                                <option value="provider_wins">Prefer provider</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Deletion Policy</div>
+                            <div class="setting-description">Choose safe handling for deletes while syncing</div>
+                        </div>
+                        <div class="setting-control">
+                            <select class="form-select" id="deletionPolicy" onchange="saveCalendarSetting('deletionPolicy', this.value)">
+                                <option value="soft_delete">Soft delete</option>
+                                <option value="propagate_delete">Propagate delete</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Connected Accounts</div>
+                            <div class="setting-description">Google, Outlook, iCloud/CalDAV account links</div>
+                        </div>
+                        <div class="setting-control" style="display: block; width: 100%;">
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px;">
+                                <select class="form-select" id="calendarProvider" style="max-width: 220px;">
+                                    <option value="google">Google</option>
+                                    <option value="outlook">Outlook</option>
+                                    <option value="icloud">iCloud</option>
+                                    <option value="caldav">CalDAV</option>
+                                </select>
+                                <input type="email" class="form-input" id="calendarAccountEmail" placeholder="account email (optional)">
+                                <button class="btn" onclick="connectCalendarAccount()">Connect</button>
+                                <button class="btn btn-secondary" onclick="triggerCalendarSync()">Sync now</button>
+                            </div>
+                            <div id="calendarAccountsList" style="display: grid; gap: 8px;"></div>
+                            <div id="calendarSyncHealth" style="margin-top: 10px; color: #666; font-size: 13px;">Sync health loading...</div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -3385,7 +3443,10 @@
             showPersonalTasks: true,
             showAllDayEvents: true,
             timeSlotInterval: 60,
-            syncFrequency: 'hourly'
+            syncFrequency: 'hourly',
+            syncDirection: 'two_way',
+            conflictPolicy: 'last_write_wins',
+            deletionPolicy: 'soft_delete'
         };
 
         async function loadCalendarSettings() {
@@ -3418,6 +3479,15 @@
             if (document.getElementById('syncFrequency')) {
                 document.getElementById('syncFrequency').value = calendarSettings.syncFrequency;
             }
+                if (document.getElementById('syncDirection')) {
+                    document.getElementById('syncDirection').value = calendarSettings.syncDirection || 'two_way';
+                }
+                if (document.getElementById('conflictPolicy')) {
+                    document.getElementById('conflictPolicy').value = calendarSettings.conflictPolicy || 'last_write_wins';
+                }
+                if (document.getElementById('deletionPolicy')) {
+                    document.getElementById('deletionPolicy').value = calendarSettings.deletionPolicy || 'soft_delete';
+                }
 
             // Apply toggle states
             updateToggleState('showAllDayToggle', calendarSettings.showAllDayEvents);
@@ -3493,6 +3563,110 @@
             } catch (error) {
                 console.error('Failed to save calendar API key:', error);
                 showNotification('Failed to save API key', 'error');
+            }
+        }
+
+        async function loadCalendarAccounts() {
+            const list = document.getElementById('calendarAccountsList');
+            if (!list) return;
+            try {
+                const response = await apiRequest('/settings/calendar/accounts');
+                const accounts = response?.accounts || [];
+                if (accounts.length === 0) {
+                    list.innerHTML = '<div style="color:#888;">No connected accounts yet.</div>';
+                    return;
+                }
+                list.innerHTML = accounts.map((acct) => `
+                    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px;border:1px solid #eee;border-radius:8px;">
+                        <div>
+                            <div style="font-weight:600;">${acct.provider} ${acct.account_email ? `- ${acct.account_email}` : ''}</div>
+                            <div style="font-size:12px;color:#666;">status: ${acct.status} | scopes: ${(acct.scopes || []).join(', ') || 'none'}</div>
+                        </div>
+                        <div style="display:flex;gap:8px;">
+                            <button class="btn btn-secondary" onclick="refreshCalendarAccount(${acct.id})">Reconnect</button>
+                            <button class="btn" onclick="disconnectCalendarAccount(${acct.id})">Disconnect</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Failed to load calendar accounts', error);
+                list.innerHTML = '<div style="color:#ef4444;">Failed to load accounts</div>';
+            }
+        }
+
+        async function connectCalendarAccount() {
+            const provider = document.getElementById('calendarProvider')?.value;
+            const accountEmail = document.getElementById('calendarAccountEmail')?.value?.trim() || null;
+            if (!provider) return;
+            try {
+                await apiRequest('/settings/calendar/accounts', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        provider,
+                        account_email: accountEmail,
+                        account_label: provider,
+                        scopes: ['calendar.read', 'calendar.write']
+                    })
+                });
+                showNotification(`${provider} account connected`, 'success');
+                document.getElementById('calendarAccountEmail').value = '';
+                await loadCalendarAccounts();
+                await loadCalendarSyncHealth();
+            } catch (error) {
+                console.error('Failed to connect calendar account', error);
+                showNotification('Failed to connect account', 'error');
+            }
+        }
+
+        async function refreshCalendarAccount(accountId) {
+            try {
+                await apiRequest(`/settings/calendar/accounts/${accountId}/refresh`, { method: 'POST' });
+                showNotification('Account refreshed', 'success');
+                await loadCalendarAccounts();
+                await loadCalendarSyncHealth();
+            } catch (error) {
+                console.error('Failed to refresh account', error);
+                showNotification('Failed to refresh account', 'error');
+            }
+        }
+
+        async function disconnectCalendarAccount(accountId) {
+            if (!confirm('Disconnect this account?')) return;
+            try {
+                await apiRequest(`/settings/calendar/accounts/${accountId}`, { method: 'DELETE' });
+                showNotification('Account disconnected', 'success');
+                await loadCalendarAccounts();
+                await loadCalendarSyncHealth();
+            } catch (error) {
+                console.error('Failed to disconnect account', error);
+                showNotification('Failed to disconnect account', 'error');
+            }
+        }
+
+        async function loadCalendarSyncHealth() {
+            const healthEl = document.getElementById('calendarSyncHealth');
+            if (!healthEl) return;
+            try {
+                const response = await apiRequest('/settings/calendar/sync/health');
+                const connected = response?.connected_accounts || 0;
+                const statusCounts = response?.status_counts_24h || {};
+                const okCount = statusCounts.ok || 0;
+                const errorCount = statusCounts.error || 0;
+                healthEl.textContent = `Connected: ${connected} | Sync OK (24h): ${okCount} | Errors (24h): ${errorCount}`;
+            } catch (error) {
+                console.error('Failed to load sync health', error);
+                healthEl.textContent = 'Failed to load sync health';
+            }
+        }
+
+        async function triggerCalendarSync() {
+            try {
+                await apiRequest('/settings/calendar/sync/trigger', { method: 'POST' });
+                showNotification('Manual sync queued', 'success');
+                await loadCalendarSyncHealth();
+            } catch (error) {
+                console.error('Failed to trigger sync', error);
+                showNotification('Failed to trigger sync', 'error');
             }
         }
 
@@ -4342,6 +4516,8 @@
         document.addEventListener('DOMContentLoaded', () => {
             loadSettings();
             loadCalendarSettings();
+            loadCalendarAccounts();
+            loadCalendarSyncHealth();
             loadProductivitySettings();
             loadTimeLanguageSettings();
             addProductivityEventListeners();
@@ -6109,58 +6285,141 @@
             loadWeatherSettings();
         });
 
-        async function loadOpenClawBrain() {
+        function _ocEsc(s) {
+            if (s == null || s === undefined) return '';
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        async function saveOpenClawUpdatePreference() {
+            const sel = document.getElementById('openclawAutoUpdateSelect');
+            if (!sel) return;
+            const mode = sel.value;
+            try {
+                await apiRequest('/api/system/openclaw/preferences', {
+                    method: 'PUT',
+                    body: JSON.stringify({ prefs: { openclaw_auto_update: mode } }),
+                });
+                showNotification('OpenClaw update preference saved', 'success');
+            } catch (err) {
+                console.error(err);
+                showNotification('Could not save preference', 'error');
+            }
+        }
+
+        async function checkOpenClawUpdatesFromSettings() {
+            const el = document.getElementById('openclawVersionSummary');
+            if (el) el.textContent = 'Checking npm registry…';
+            try {
+                await loadOpenClawBrain(true);
+                showNotification('Version check complete', 'success');
+            } catch (e) {
+                showNotification('Version check failed', 'error');
+            }
+        }
+
+        async function installOpenClawFromSettings() {
+            try {
+                showNotification('Installing OpenClaw (may take a few minutes)…', 'info');
+                await apiRequest('/api/system/openclaw/upgrade', {
+                    method: 'POST',
+                    body: JSON.stringify({ confirm: true }),
+                });
+                showNotification('OpenClaw updated. Gateway restarted.', 'success');
+                await loadOpenClawBrain(true);
+            } catch (e) {
+                console.error(e);
+                showNotification((e && e.message) ? e.message : 'Upgrade failed (admin only)', 'error');
+            }
+        }
+
+        async function loadOpenClawBrain(forceCheckLatest) {
             const container = document.getElementById('openclawBrainContent');
             if (!container) return;
             container.innerHTML = '<div style="text-align:center;padding:20px;color:#999;">Loading OpenClaw status...</div>';
             try {
-                const data = await apiRequest('/api/system/openclaw');
-                if (!data) { container.innerHTML = '<p style="color:#ef4444;">Could not connect to OpenClaw</p>'; return; }
+                const q = forceCheckLatest ? '?check_latest=true' : '';
+                const data = await apiRequest('/api/system/openclaw' + q);
+                let prefs = { openclaw_auto_update: 'notify' };
+                try {
+                    const pr = await apiRequest('/api/system/openclaw/preferences');
+                    if (pr && pr.prefs) prefs = pr.prefs;
+                } catch (pe) { console.warn('openclaw prefs', pe); }
+
+                if (!data) {
+                    container.innerHTML = '<p style="color:#ef4444;">Could not connect to OpenClaw</p>';
+                    return;
+                }
                 const skills = data.skills || [];
                 const crons = data.cron_jobs || [];
-                const model = data.model || 'Unknown';
+                const model = data.model || data.gateway_model || 'Unknown';
                 const gateway = data.gateway_status || 'unknown';
-                let html = `
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
-                        <div style="background:rgba(123,97,255,0.08);padding:14px;border-radius:12px;">
-                            <div style="font-weight:600;font-size:13px;color:#7B61FF;margin-bottom:4px;">Gateway</div>
-                            <div style="font-size:15px;font-weight:500;">${gateway === 'connected' ? '🟢 Connected' : '🔴 Offline'}</div>
-                        </div>
-                        <div style="background:rgba(16,185,129,0.08);padding:14px;border-radius:12px;">
-                            <div style="font-weight:600;font-size:13px;color:#10b981;margin-bottom:4px;">Model</div>
-                            <div style="font-size:15px;font-weight:500;">${model}</div>
-                        </div>
-                        <div style="background:rgba(245,158,11,0.08);padding:14px;border-radius:12px;">
-                            <div style="font-weight:600;font-size:13px;color:#f59e0b;margin-bottom:4px;">Skills</div>
-                            <div style="font-size:15px;font-weight:500;">${skills.length} loaded</div>
-                        </div>
-                        <div style="background:rgba(236,72,153,0.08);padding:14px;border-radius:12px;">
-                            <div style="font-weight:600;font-size:13px;color:#ec4899;margin-bottom:4px;">Cron Jobs</div>
-                            <div style="font-size:15px;font-weight:500;">${crons.length} scheduled</div>
-                        </div>
-                    </div>
-                    <div style="margin-bottom:16px;">
-                        <div style="font-weight:600;font-size:14px;margin-bottom:8px;color:#333;">Skills</div>
-                        <div style="display:flex;flex-wrap:wrap;gap:6px;">
-                            ${skills.map(s => '<span style="background:rgba(123,97,255,0.1);color:#7B61FF;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:500;">' + s + '</span>').join('')}
-                        </div>
-                    </div>
-                    <div>
-                        <div style="font-weight:600;font-size:14px;margin-bottom:8px;color:#333;">Scheduled Tasks</div>
-                        <div style="display:flex;flex-direction:column;gap:8px;">`;
-                crons.forEach(j => {
-                    const statusIcon = j.status === 'ok' ? '🟢' : j.status === 'error' ? '🔴' : '⚪';
-                    const errText = j.last_error ? '<div style="color:#ef4444;font-size:11px;margin-top:2px;">' + j.last_error + '</div>' : '';
-                    html += '<div style="background:rgba(248,250,252,0.8);padding:10px 14px;border-radius:10px;border:1px solid rgba(226,232,240,0.5);">' +
-                        '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-                        '<span style="font-weight:500;font-size:13px;">' + statusIcon + ' ' + j.name + '</span>' +
-                        '<span style="font-size:11px;color:#999;">' + (j.schedule || '') + '</span>' +
-                        '</div>' + errText + '</div>';
+                const installed = data.installed_version || '—';
+                const latest = data.latest_version != null ? data.latest_version : '—';
+                const upd = data.update_available === true;
+                const mode = prefs.openclaw_auto_update || 'notify';
+
+                let html = '';
+                html += '<div style="margin-bottom:16px;padding:14px;border-radius:12px;background:rgba(123,97,255,0.06);border:1px solid rgba(123,97,255,0.2);">';
+                html += '<div style="font-weight:600;font-size:14px;margin-bottom:10px;color:#7B61FF;">Versions &amp; updates</div>';
+                html += '<div id="openclawVersionSummary" style="font-size:13px;color:#555;margin-bottom:10px;line-height:1.5;">';
+                html += 'Installed: <strong>' + _ocEsc(installed) + '</strong>';
+                if (forceCheckLatest || data.latest_version != null) {
+                    html += ' &nbsp;|&nbsp; Latest on npm: <strong>' + _ocEsc(latest) + '</strong>';
+                    if (upd) html += ' &nbsp;<span style="background:#f59e0b;color:#fff;padding:2px 8px;border-radius:6px;font-size:11px;">Update available</span>';
+                }
+                html += '</div>';
+                html += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;">';
+                html += '<button type="button" onclick="checkOpenClawUpdatesFromSettings()" style="background:#7B61FF;color:#fff;border:none;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;">Check for updates</button>';
+                html += '<button type="button" onclick="installOpenClawFromSettings()" style="background:#10b981;color:#fff;border:none;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;">Install update</button>';
+                html += '<span style="font-size:11px;color:#888;">Install requires admin. Advanced gateway UI: <a href="http://127.0.0.1:18789/" target="_blank" rel="noopener">127.0.0.1:18789</a> (local)</span>';
+                html += '</div>';
+                html += '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">';
+                html += '<label style="font-size:13px;color:#444;">Automatic updates:</label>';
+                html += '<select id="openclawAutoUpdateSelect" onchange="saveOpenClawUpdatePreference()" style="padding:6px 10px;border-radius:8px;border:1px solid #ccc;font-size:13px;">';
+                html += '<option value="off"' + (mode === 'off' ? ' selected' : '') + '>Off (manual check only)</option>';
+                html += '<option value="notify"' + (mode === 'notify' ? ' selected' : '') + '>Notify when an update exists</option>';
+                html += '<option value="auto"' + (mode === 'auto' ? ' selected' : '') + '>Auto-install (requires OPENCLAW_ALLOW_AUTO_UPDATE=true on server)</option>';
+                html += '</select></div></div>';
+
+                html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">';
+                html += '<div style="background:rgba(123,97,255,0.08);padding:14px;border-radius:12px;">';
+                html += '<div style="font-weight:600;font-size:13px;color:#7B61FF;margin-bottom:4px;">Gateway</div>';
+                html += '<div style="font-size:15px;font-weight:500;">' + (gateway === 'connected' ? '🟢 Connected' : '🔴 Offline') + '</div></div>';
+                html += '<div style="background:rgba(16,185,129,0.08);padding:14px;border-radius:12px;">';
+                html += '<div style="font-weight:600;font-size:13px;color:#10b981;margin-bottom:4px;">Model</div>';
+                html += '<div style="font-size:15px;font-weight:500;">' + _ocEsc(model) + '</div></div>';
+                html += '<div style="background:rgba(245,158,11,0.08);padding:14px;border-radius:12px;">';
+                html += '<div style="font-weight:600;font-size:13px;color:#f59e0b;margin-bottom:4px;">Skills</div>';
+                html += '<div style="font-size:15px;font-weight:500;">' + skills.length + ' loaded</div></div>';
+                html += '<div style="background:rgba(236,72,153,0.08);padding:14px;border-radius:12px;">';
+                html += '<div style="font-weight:600;font-size:13px;color:#ec4899;margin-bottom:4px;">Cron Jobs</div>';
+                html += '<div style="font-size:15px;font-weight:500;">' + crons.length + ' scheduled</div></div></div>';
+
+                html += '<div style="margin-bottom:16px;">';
+                html += '<div style="font-weight:600;font-size:14px;margin-bottom:8px;color:#333;">Skills</div>';
+                html += '<div style="display:flex;flex-wrap:wrap;gap:6px;">';
+                skills.forEach(function(s) {
+                    const sid = typeof s === 'object' ? (s.id || '') : String(s);
+                    const desc = typeof s === 'object' ? (s.description || '') : '';
+                    const title = desc ? _ocEsc(desc) : '';
+                    html += '<span title="' + title + '" style="background:rgba(123,97,255,0.1);color:#7B61FF;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:500;">' + _ocEsc(sid) + '</span>';
+                });
+                html += '</div></div><div><div style="font-weight:600;font-size:14px;margin-bottom:8px;color:#333;">Scheduled Tasks</div>';
+                html += '<div style="display:flex;flex-direction:column;gap:8px;">';
+                crons.forEach(function(j) {
+                    const st = j.last_status || j.status || '';
+                    const statusIcon = st === 'ok' ? '🟢' : st === 'error' ? '🔴' : '⚪';
+                    const errText = j.last_error ? '<div style="color:#ef4444;font-size:11px;margin-top:2px;">' + _ocEsc(j.last_error) + '</div>' : '';
+                    html += '<div style="background:rgba(248,250,252,0.8);padding:10px 14px;border-radius:10px;border:1px solid rgba(226,232,240,0.5);">';
+                    html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
+                    html += '<span style="font-weight:500;font-size:13px;">' + statusIcon + ' ' + _ocEsc(j.name || '') + '</span>';
+                    html += '<span style="font-size:11px;color:#999;">' + _ocEsc(j.schedule || '') + '</span>';
+                    html += '</div>' + errText + '</div>';
                 });
                 html += '</div></div>';
                 container.innerHTML = html;
             } catch (e) {
-                container.innerHTML = '<p style="color:#ef4444;">Error loading OpenClaw data: ' + e.message + '</p>';
+                container.innerHTML = '<p style="color:#ef4444;">Error loading OpenClaw data: ' + _ocEsc(e.message) + '</p>';
             }
         }
 

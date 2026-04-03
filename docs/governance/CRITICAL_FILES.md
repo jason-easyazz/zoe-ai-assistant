@@ -1,6 +1,6 @@
 # 🚨 CRITICAL FILES - DO NOT DELETE
 
-**Last Updated:** October 19, 2025
+**Last Updated:** April 3, 2026
 **Purpose:** Prevent accidental deletion of essential files during cleanup operations
 
 ## ⚠️ ULTRA-CRITICAL RULE
@@ -37,11 +37,12 @@ services/zoe-ui/dist/js/
 ├── zoe-orb.js                   # Zoe orb interface - IMPORTANT
 ├── journal-api.js               # Journal functionality - IMPORTANT
 ├── journal-ui-enhancements.js   # Journal UI - IMPORTANT
-├── memory-graph.js              # Memory visualization - IMPORTANT
-├── memory-search.js             # Memory search - IMPORTANT
-├── memory-timeline.js           # Memory timeline - IMPORTANT
-├── settings.js                  # Settings page - IMPORTANT
-└── wikilink-parser.js           # Wikilink parsing - IMPORTANT
+└── _archive/                    # Archived JS (still referenced by some pages)
+    ├── memory-graph.js          # Memory visualization - IMPORTANT
+    ├── memory-search.js         # Memory search - IMPORTANT
+    ├── memory-timeline.js       # Memory timeline - IMPORTANT
+    ├── settings.js              # Settings helpers - IMPORTANT
+    └── wikilink-parser.js       # Wikilink parsing - IMPORTANT
 ```
 
 **Impact if deleted:** Pages break, JavaScript errors, features stop working
@@ -117,18 +118,41 @@ services/zoe-ui/dist/
 
 ## 🔧 BACKEND CRITICAL FILES
 
-### Core Services (NEVER DELETE)
+### Production API — zoe-data (NEVER DELETE)
+Host-native FastAPI on port **8000** (see `docker-compose.yml`). OpenClaw bridge, AG-UI SSE, intents, system/OpenClaw settings.
+
 ```
-services/zoe-core/
-├── main.py                      # Main FastAPI app - CRITICAL
+services/zoe-data/
+├── main.py                      # FastAPI app - CRITICAL
+├── database.py                  # DB path + schema - CRITICAL
+├── auth.py                      # Session validation - CRITICAL
+├── openclaw_ws.py               # OpenClaw CLI client - CRITICAL
+├── openclaw_maintenance.py      # Version check / upgrade helpers - CRITICAL
+├── intent_router.py             # Intent fast path - CRITICAL
+├── mcp_server.py                # MCP stdio server for tools - CRITICAL
 ├── routers/
-│   └── chat.py                  # SINGLE chat router - CRITICAL
-├── ai_client.py                 # AI integration - CRITICAL
-├── requirements.txt             # Dependencies - CRITICAL
-└── Dockerfile                   # Container config - CRITICAL
+│   ├── chat.py                  # Production chat router - CRITICAL
+│   └── system.py                # System + /api/system/openclaw* - CRITICAL
+├── requirements.txt
+└── Dockerfile
 ```
 
-**Impact if deleted:** Backend stops working, API endpoints fail
+**Impact if deleted:** Chat, calendar/lists APIs, OpenClaw integration, and settings brain UI break.
+
+---
+
+### Legacy — zoe-core (RETIRED, Docker tree)
+Kept in-repo for reference only. **Do not treat as live stack** — not started by current `docker-compose.yml`.
+
+```
+services/zoe-core/
+├── main.py                      # Legacy FastAPI (retired)
+├── routers/chat.py              # Legacy chat (retired)
+├── ai_client.py
+└── ...
+```
+
+**Impact if deleted:** Historical reference lost; no production impact if zoe-data is already primary.
 
 ---
 
@@ -149,7 +173,7 @@ services/zoe-auth/
 /home/zoe/assistant/
 ├── docker-compose.yml           # Service orchestration - CRITICAL
 ├── .env                         # Environment variables - CRITICAL
-└── nginx.conf                   # Web server config - CRITICAL
+└── services/zoe-ui/nginx.conf   # Web server config (zoe-ui container) - CRITICAL
 ```
 
 **Impact if deleted:** Services won't start, app unusable

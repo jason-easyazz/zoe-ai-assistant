@@ -2035,8 +2035,8 @@
         </div>
     </div>
 
-    <script src="js/auth.js"></script>
-    <script src="js/common.js"></script>
+    <script src="js/auth.js?v=9.3&t=1764035000"></script>
+    <script src="js/common.js?v=9.3&t=1764035000"></script>
     <script src="/js/notifications-panel.js"></script>
     <script src="js/websocket-sync.js"></script>
     <script>
@@ -2244,9 +2244,8 @@
                 loadReminders(startDate, endDate).catch(error => {
                     console.error('Failed to load reminders:', error);
                 });
-                loadListItems(startDate, endDate).catch(error => {
-                    console.warn('Failed to load reminders:', error);
-                });
+                // Disabled: /api/lists/calendar-items endpoint is not implemented in zoe-data.
+                // Keep calendar stable and avoid repeated 404 noise.
             } catch (error) {
                 console.warn('API unavailable for events, using fallback data');
                 // Use fallback events when API is unavailable
@@ -2256,76 +2255,10 @@
         }
         
         async function loadListItems(startDate, endDate) {
-            // Only load list items for weekly/daily views (not month view)
-            const currentView = document.querySelector('.view-toggle-btn.active')?.dataset.view || 'week';
-            if (currentView === 'month') {
-                return; // Hide in month view
-            }
-            
-            try {
-                const response = await authedApiRequest(`/api/lists/calendar-items?start_date=${startDate}&end_date=${endDate}`);
-                const items = response.items || [];
-                
-                // Display in sidebar - create list items section if it doesn't exist
-                let listItemsSection = document.getElementById('listItemsSection');
-                if (!listItemsSection) {
-                    listItemsSection = document.createElement('div');
-                    listItemsSection.id = 'listItemsSection';
-                    listItemsSection.className = 'list-items-section';
-                    listItemsSection.style.cssText = 'margin-bottom: 20px; padding-top: 20px; border-top: 1px solid rgba(0, 0, 0, 0.1);';
-                    const sidebarContent = document.querySelector('.tasks-container');
-                    if (sidebarContent) {
-                        sidebarContent.appendChild(listItemsSection);
-                    }
-                }
-                
-                if (items.length === 0) {
-                    listItemsSection.innerHTML = '';
-                    return;
-                }
-                
-                // Group items by time
-                const itemsByTime = {};
-                items.forEach(item => {
-                    const time = item.reminder_time || (item.due_date && item.due_time ? `${item.due_date} ${item.due_time}` : 'No time');
-                    const timeKey = time.split(' ')[1] || '00:00:00'; // Extract time part
-                    if (!itemsByTime[timeKey]) {
-                        itemsByTime[timeKey] = [];
-                    }
-                    itemsByTime[timeKey].push(item);
-                });
-                
-                // Render items
-                let html = '<div style="margin-bottom: 12px; font-size: 13px; font-weight: 600; color: #7B61FF;">📋 List Items with Reminders</div>';
-                
-                // Sort times and display
-                const sortedTimes = Object.keys(itemsByTime).sort();
-                sortedTimes.forEach(time => {
-                    itemsByTime[time].forEach(item => {
-                        const displayTime = time.split(':').slice(0, 2).join(':');
-                        const listIcon = {
-                            'shopping': '🛒',
-                            'work': '💼',
-                            'personal': '📝',
-                            'bucket': '🎯'
-                        }[item.list_type] || '📋';
-                        
-                        html += `
-                            <div class="calendar-list-item" 
-                                 onclick="window.location.href='/lists.html#item-${item.id}'"
-                                 style="cursor: pointer;">
-                                <span class="list-name">[${listIcon} ${item.list_name}]</span>
-                                <span class="item-text">${item.task_text.substring(0, 30)}${item.task_text.length > 30 ? '...' : ''}</span>
-                                <span class="item-time">${displayTime}</span>
-                            </div>
-                        `;
-                    });
-                });
-                
-                listItemsSection.innerHTML = html;
-            } catch (error) {
-                console.error('Failed to load list items:', error);
-            }
+            // Endpoint removed in zoe-data; keep this as a no-op for compatibility.
+            const listItemsSection = document.getElementById('listItemsSection');
+            if (listItemsSection) listItemsSection.innerHTML = '';
+            return;
         }
         
         async function loadReminders(startDate, endDate) {
@@ -3901,7 +3834,11 @@
                 currentAttendees = data.attendees || [];
                 renderAttendeesList();
             } catch (error) {
-                console.error('Error loading attendees:', error);
+                if (String(error?.message || error).includes('404')) {
+                    console.info('Attendees endpoint not available; continuing without attendees.');
+                } else {
+                    console.error('Error loading attendees:', error);
+                }
                 currentAttendees = [];
                 renderAttendeesList();
             }
@@ -3916,7 +3853,11 @@
                 }));
                 renderRemindersList();
             } catch (error) {
-                console.error('Error loading reminders:', error);
+                if (String(error?.message || error).includes('404')) {
+                    console.info('Event reminders endpoint not available; continuing without event reminders.');
+                } else {
+                    console.error('Error loading reminders:', error);
+                }
                 currentReminders = [];
                 renderRemindersList();
             }
@@ -4035,7 +3976,7 @@
         let peopleList = [];
         async function loadPeopleList() {
             try {
-                const data = await authedApiRequest('/people');
+                const data = await authedApiRequest('/people/');
                 peopleList = data.people || [];
             } catch (error) {
                 console.error('Error loading people:', error);
@@ -4489,7 +4430,9 @@
                     }
                 }
             } catch (error) {
-                console.error('Error saving attendees:', error);
+                if (!String(error?.message || error).includes('404')) {
+                    console.error('Error saving attendees:', error);
+                }
             }
         }
         
@@ -4506,7 +4449,9 @@
                     });
                 }
             } catch (error) {
-                console.error('Error saving reminders:', error);
+                if (!String(error?.message || error).includes('404')) {
+                    console.error('Error saving reminders:', error);
+                }
             }
         }
         

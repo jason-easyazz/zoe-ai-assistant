@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from typing import Optional, Dict
 import os
 import json
+import sqlite3
 from pathlib import Path
 from datetime import datetime
 import logging
@@ -15,6 +16,7 @@ from encryption_util import get_encryption_manager
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings")
+DB_PATH = os.getenv("DATABASE_PATH", "/app/data/zoe.db")
 
 @router.get("/")
 async def get_all_settings(
@@ -311,6 +313,24 @@ def get_calendar_settings_file(user_id: str) -> Path:
 class CalendarSettings(BaseModel):
     settings: Dict
 
+
+class CalendarAccountCreate(BaseModel):
+    provider: str
+    account_email: Optional[str] = None
+    account_label: Optional[str] = None
+    token_ref: Optional[str] = None
+    refresh_token_ref: Optional[str] = None
+    token_expires_at: Optional[str] = None
+    scopes: Optional[list[str]] = []
+
+
+class CalendarAccountUpdate(BaseModel):
+    status: Optional[str] = None
+    token_ref: Optional[str] = None
+    refresh_token_ref: Optional[str] = None
+    token_expires_at: Optional[str] = None
+    scopes: Optional[list[str]] = None
+
 def load_calendar_settings(user_id: str) -> Dict:
     """Load calendar settings from storage"""
     settings_file = get_calendar_settings_file(user_id)
@@ -339,13 +359,70 @@ def save_calendar_settings(user_id: str, settings: Dict):
     with open(settings_file, 'w') as f:
         json.dump(settings, f, indent=2)
 
+
+def _calendar_db_connection():
+    conn = sqlite3.connect(DB_PATH, timeout=5.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
+
+
+def _ensure_calendar_sync_tables():
+    conn = _calendar_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS calendar_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            account_email TEXT,
+            account_label TEXT,
+            scopes TEXT,
+            token_ref TEXT,
+            refresh_token_ref TEXT,
+            token_expires_at TEXT,
+            status TEXT DEFAULT 'connected',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS calendar_sync_audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            zoe_event_id INTEGER,
+            provider TEXT,
+            operation TEXT NOT NULL,
+            idempotency_key TEXT,
+            status TEXT NOT NULL,
+            error_message TEXT,
+            correlation_id TEXT,
+            request_payload TEXT,
+            response_payload TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
 @router.get("/calendar")
 async def get_calendar_settings(
     session: AuthenticatedSession = Depends(validate_session)
 ):
     """Get calendar settings"""
     user_id = session.user_id
-    return {"settings": load_calendar_settings(user_id)}
+    _ensure_calendar_sync_tables()
+    settings = load_calendar_settings(user_id)
+    settings.setdefault("syncProvider", os.getenv("ZOE_CALENDAR_SYNC_PROVIDER", "keeper"))
+    settings.setdefault("syncEnabled", os.getenv("ZOE_CALENDAR_SYNC_ENABLED", "false").lower() in {"1", "true", "yes", "on"})
+    settings.setdefault("syncDirection", "two_way")
+    settings.setdefault("conflictPolicy", "last_write_wins")
+    settings.setdefault("deletionPolicy", "soft_delete")
+    return {"settings": settings}
 
 @router.post("/calendar")
 async def save_calendar_settings_endpoint(
@@ -359,6 +436,235 @@ async def save_calendar_settings_endpoint(
         return {"success": True, "message": "Calendar settings saved"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/calendar/accounts")
+async def get_calendar_accounts(
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    user_id = session.user_id
+    _ensure_calendar_sync_tables()
+    conn = _calendar_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT id, provider, account_email, account_label, scopes, token_expires_at, status, created_at, updated_at
+        FROM calendar_accounts
+        WHERE user_id = ?
+        ORDER BY updated_at DESC
+        """,
+        (user_id,),
+    )
+    accounts = []
+    for row in cursor.fetchall():
+        scopes = []
+        try:
+            scopes = json.loads(row["scopes"]) if row["scopes"] else []
+        except Exception:
+            scopes = []
+        accounts.append(
+            {
+                "id": row["id"],
+                "provider": row["provider"],
+                "account_email": row["account_email"],
+                "account_label": row["account_label"],
+                "scopes": scopes,
+                "token_expires_at": row["token_expires_at"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+        )
+    conn.close()
+    return {"accounts": accounts}
+
+
+@router.post("/calendar/accounts")
+async def create_calendar_account(
+    account: CalendarAccountCreate,
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    user_id = session.user_id
+    _ensure_calendar_sync_tables()
+    conn = _calendar_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO calendar_accounts
+        (user_id, provider, account_email, account_label, scopes, token_ref, refresh_token_ref, token_expires_at, status, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'connected', CURRENT_TIMESTAMP)
+        """,
+        (
+            user_id,
+            account.provider.lower(),
+            account.account_email,
+            account.account_label,
+            json.dumps(account.scopes or []),
+            account.token_ref,
+            account.refresh_token_ref,
+            account.token_expires_at,
+        ),
+    )
+    account_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return {"success": True, "account_id": account_id}
+
+
+@router.put("/calendar/accounts/{account_id}")
+async def update_calendar_account(
+    account_id: int,
+    update: CalendarAccountUpdate,
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    user_id = session.user_id
+    _ensure_calendar_sync_tables()
+    update_data = update.dict(exclude_unset=True)
+    if not update_data:
+        return {"success": True, "message": "No changes"}
+
+    fields = []
+    params = []
+    for key, value in update_data.items():
+        fields.append(f"{key} = ?")
+        if key == "scopes" and value is not None:
+            params.append(json.dumps(value))
+        else:
+            params.append(value)
+    fields.append("updated_at = CURRENT_TIMESTAMP")
+    params.extend([user_id, account_id])
+
+    conn = _calendar_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        f"UPDATE calendar_accounts SET {', '.join(fields)} WHERE user_id = ? AND id = ?",
+        params,
+    )
+    conn.commit()
+    conn.close()
+    return {"success": True}
+
+
+@router.post("/calendar/accounts/{account_id}/refresh")
+async def refresh_calendar_account(
+    account_id: int,
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    user_id = session.user_id
+    _ensure_calendar_sync_tables()
+    conn = _calendar_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE calendar_accounts
+        SET status = 'connected', updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ? AND id = ?
+        """,
+        (user_id, account_id),
+    )
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Calendar account not found")
+    conn.commit()
+    conn.close()
+    return {"success": True, "message": "Account marked refreshed"}
+
+
+@router.delete("/calendar/accounts/{account_id}")
+async def delete_calendar_account(
+    account_id: int,
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    user_id = session.user_id
+    _ensure_calendar_sync_tables()
+    conn = _calendar_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE calendar_accounts
+        SET status = 'revoked', updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ? AND id = ?
+        """,
+        (user_id, account_id),
+    )
+    if cursor.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Calendar account not found")
+    conn.commit()
+    conn.close()
+    return {"success": True}
+
+
+@router.get("/calendar/sync/health")
+async def get_calendar_sync_health(
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    user_id = session.user_id
+    _ensure_calendar_sync_tables()
+    conn = _calendar_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) AS count FROM calendar_accounts WHERE user_id = ? AND status = 'connected'", (user_id,))
+    connected_accounts = cursor.fetchone()["count"]
+
+    cursor.execute(
+        """
+        SELECT status, COUNT(*) AS count
+        FROM calendar_sync_audit_logs
+        WHERE user_id = ? AND created_at >= datetime('now', '-24 hours')
+        GROUP BY status
+        """,
+        (user_id,),
+    )
+    status_counts = {row["status"]: row["count"] for row in cursor.fetchall()}
+
+    cursor.execute(
+        """
+        SELECT provider, operation, status, error_message, created_at
+        FROM calendar_sync_audit_logs
+        WHERE user_id = ?
+        ORDER BY id DESC
+        LIMIT 20
+        """,
+        (user_id,),
+    )
+    recent_actions = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    return {
+        "connected_accounts": connected_accounts,
+        "status_counts_24h": status_counts,
+        "recent_actions": recent_actions,
+    }
+
+
+@router.post("/calendar/sync/trigger")
+async def trigger_calendar_sync(
+    session: AuthenticatedSession = Depends(validate_session)
+):
+    user_id = session.user_id
+    _ensure_calendar_sync_tables()
+    conn = _calendar_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO calendar_sync_audit_logs
+        (user_id, provider, operation, status, correlation_id, request_payload, response_payload)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            user_id,
+            os.getenv("ZOE_CALENDAR_SYNC_PROVIDER", "keeper"),
+            "manual_sync_trigger",
+            "queued",
+            f"manual-{datetime.utcnow().timestamp()}",
+            json.dumps({"trigger": "manual"}),
+            json.dumps({"message": "Sync trigger queued"}),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return {"success": True, "message": "Manual sync trigger queued"}
 
 @router.post("/calendar/api")
 async def save_calendar_api_key(

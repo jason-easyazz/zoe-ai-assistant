@@ -24,8 +24,9 @@
 - services/zoe-ui/dist/js/widgets/core/**/*.js (ALL widget files)
 - services/zoe-ui/dist/components/**/*.html (ALL components)
 - services/zoe-ui/dist/*.html (ALL HTML pages)
-- services/zoe-core/main.py, routers/chat.py, ai_client.py
-- docker-compose.yml, .env, nginx.conf
+- services/zoe-data/main.py, database.py, auth.py, openclaw_ws.py, openclaw_maintenance.py, intent_router.py, mcp_server.py, routers/chat.py, routers/system.py
+- services/zoe-auth/main.py
+- docker-compose.yml, .env, services/zoe-ui/nginx.conf
 
 ### PROHIBITED PATTERNS (Never Commit):
 - *_backup.*, *_old.*, *_v2.*, *_new.*, *_fixed.*
@@ -53,26 +54,25 @@
 ## 🏛️ ARCHITECTURE RULES
 
 ### Single Source of Truth:
-- ONLY ONE chat router: services/zoe-core/routers/chat.py
+- Production web + chat API: **services/zoe-data/** (host uvicorn :8000; OpenClaw CLI bridge, AG-UI SSE, intent fast path). See `docker-compose.yml` header comments.
+- **ONLY ONE production chat router:** services/zoe-data/routers/chat.py
+- **services/zoe-core/** is RETIRED (legacy Docker tree). Do not extend for new features.
 - NEVER create chat_v2.py, chat_new.py, chat_optimized.py
 - Use git branches for changes, NOT file duplication
 - Backup files must use git, not file copying
 
-### Intelligent Systems (Use Them, Don't Replace):
-- MemAgentClient for semantic memory search
-- EnhancedMemAgentClient for action execution
-- ExpertOrchestrator for multi-step task coordination
-- AgentPlanner for task decomposition
-- RouteLLM for intelligent model selection
-- MCP Server for tool-based actions
-- NEVER hardcode regex patterns or canned responses in chat.py
+### Intelligent Systems (production zoe-data):
+- Intent fast path + OpenClaw agent path: **services/zoe-data/routers/chat.py** (with intent_router, openclaw_ws, ag_ui_stream)
+- Family / MCP tools: **services/zoe-data/mcp_server.py**
+- **services/zoe-core** still contains older RouteLLM/MemAgent stacks for reference only — retired from production
+- NEVER hardcode brittle command detection in **production** chat.py for NLU; use intent_router patterns + OpenClaw where appropriate
 - Let specialized systems do their jobs
 
 ### No Hardcoding:
-- NO "if/else" command detection in chat router
+- NO "if/else" command detection in **production chat router** for general NLU
 - Use LLM + Agent system for natural language understanding
 - Example WRONG: if "add" in message and "shopping" in message: return "Added"
-- Example RIGHT: result = await enhanced_mem_agent.execute_action(message, user_id)
+- Example RIGHT: route through intent_router / OpenClaw agent per architecture docs
 
 ## Security Rules
 - Never hardcode API keys, passwords, or secrets
@@ -259,9 +259,7 @@ FEATURES = {
 
 ### Critical Files
 
-**Hardware detection**: Check before modifying
-- `services/zoe-core/model_config.py` (model selection)
-- `services/zoe-core/model_prewarm.py` (pre-warming)
+**Hardware / LLM**: Host llama-server, Jetson/Pi overlays, and GPU settings are documented in **HARDWARE_COMPATIBILITY.md** and `docker-compose*.yml`. Legacy model helpers under **services/zoe-core/** are **retired** (do not treat as live stack).
 - `docker-compose.yml` (service configs)
 - `.env` (platform settings)
 

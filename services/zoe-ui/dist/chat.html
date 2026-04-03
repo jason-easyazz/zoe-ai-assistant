@@ -1502,6 +1502,11 @@
                     <button type="button" class="stop-stream-btn" id="stopStreamBtn" title="Stop">■</button>
                     <button class="send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
                 </div>
+                <div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;color:#94a3b8;">
+                    <input type="checkbox" id="forceOpenClawToggle" />
+                    <label for="forceOpenClawToggle">Run with OpenClaw (full tools)</label>
+                    <button type="button" class="action-btn" onclick="tryPrompt('/capabilities')" style="margin-left:8px;">Capabilities</button>
+                </div>
                 </div>
             </div>
 
@@ -1526,22 +1531,17 @@
         </div>
     </div>
 
-            <!-- Quick Actions -->
+            <!-- Quick Actions (OpenClaw full tools) -->
             <div class="quick-actions">
                 <div class="quick-actions-title">Quick Actions</div>
                 <div class="action-chips">
-                    <div class="action-chip" onclick="tryPrompt('Plan my day')">
-                        📅 Plan Day
-            </div>
-                    <div class="action-chip" onclick="tryPrompt('What smart actions can you help me with?')">
-                        🎯 Smart Actions
-                </div>
-                    <div class="action-chip" onclick="tryPrompt('Analyze productivity')">
-                        📊 Productivity
-                </div>
-                    <div class="action-chip" onclick="tryPrompt('Review week')">
-                        📝 Weekly Review
-                </div>
+                    <div class="action-chip" onclick="tryPromptWithOpenClaw('What is on my calendar today and what should I prioritize?')">📅 Today</div>
+                    <div class="action-chip" onclick="tryPromptWithOpenClaw('Show my shopping list and suggest what to add for the week')">🛒 Lists</div>
+                    <div class="action-chip" onclick="tryPromptWithOpenClaw('What is the weather like at my saved location?')">🌤️ Weather</div>
+                    <div class="action-chip" onclick="tryPromptWithOpenClaw('Search the web for recent news about AI assistants and summarize key points')">🔎 Research</div>
+                    <div class="action-chip" onclick="tryPromptWithOpenClaw('Help me connect or configure WhatsApp integration step by step')">💬 WhatsApp</div>
+                    <div class="action-chip" onclick="tryPromptWithOpenClaw('What are my pending reminders and overdue tasks?')">⏰ Reminders</div>
+                    <div class="action-chip" onclick="tryPrompt('/capabilities')">🧰 Tools</div>
                 </div>
             </div>
         </div>
@@ -1641,6 +1641,33 @@
                 if (data.threadId) currentSessionId = data.threadId;
                 return;
             }
+            if (t === 'CUSTOM' && data.name === 'zoe.run_meta') {
+                const v = data.value || {};
+                if (v.runId) {
+                    let runBadge = group.querySelector('.run-meta-badge');
+                    if (!runBadge) {
+                        runBadge = document.createElement('div');
+                        runBadge.className = 'run-meta-badge';
+                        runBadge.style.cssText = 'font-size:0.72em;color:#94a3b8;margin:0 0 6px 0;';
+                        group.insertBefore(runBadge, ctx.toolTraceEl || contentEl);
+                    }
+                    runBadge.textContent = `Run ${v.runId} • mode ${v.mode || 'chat'}`;
+                }
+                return;
+            }
+            if (t === 'CUSTOM' && data.name === 'zoe.run_log') {
+                const v = data.value || {};
+                const panel = ctx.toolTraceEl;
+                if (panel) {
+                    panel.style.display = 'flex';
+                    const log = document.createElement('div');
+                    log.className = 'tool-call-card';
+                    log.innerHTML = `<div class="tool-call-body"><div class="tool-call-result">[${(v.level || 'info').toUpperCase()}] ${escapeHtml(String(v.message || ''))}</div></div>`;
+                    panel.appendChild(log);
+                    scrollToBottom();
+                }
+                return;
+            }
             if (t === 'CUSTOM' && data.name === 'zoe.session') {
                 const v = data.value || {};
                 if (v.sessionId) currentSessionId = v.sessionId;
@@ -1652,7 +1679,7 @@
                 const snap = data.snapshot || {};
                 if (snap.status === 'generating' && thinkingIndicator && thinkingIndicator.parentNode) {
                     const el = thinkingIndicator.querySelector('span:last-child');
-                    if (el) el.textContent = 'Generating response with ' + (snap.model || 'AI') + '...';
+                    if (el) el.textContent = 'Zoe is typing… (' + (snap.model || 'AI') + ')';
                 }
                 return;
             }
@@ -1788,7 +1815,7 @@
                 const st = data.state || {};
                 if (st.status === 'generating' && thinkingIndicator && thinkingIndicator.parentNode) {
                     const el = thinkingIndicator.querySelector('span:last-child');
-                    if (el) el.textContent = 'Generating response with ' + (st.model || 'AI') + '...';
+                    if (el) el.textContent = 'Zoe is typing… (' + (st.model || 'AI') + ')';
                 }
                 return;
             }
@@ -1881,6 +1908,7 @@
         let currentSessionId = null;
         let messageCount = 0;
         let streamAbortController = null;
+        let forceOpenClawMode = false;
         let lastSubmittedUserMessage = '';
 
         // Initialize
@@ -2165,11 +2193,59 @@
             sendMessage();
         }
 
+        /** Quick Actions: enable full OpenClaw tool path for one send (like terminal). */
+        function tryPromptWithOpenClaw(text) {
+            const cb = document.getElementById('forceOpenClawToggle');
+            if (cb) cb.checked = true;
+            tryPrompt(text);
+        }
+
         // Message Handling
         async function sendMessage() {
             const input = document.getElementById('chatInput');
             const message = input.value.trim();
             if (!message || isStreaming) return;
+            forceOpenClawMode = !!document.getElementById('forceOpenClawToggle')?.checked;
+
+            if (message.toLowerCase() === '/pending approvals') {
+                input.value = '';
+                adjustTextareaHeight(input);
+                try {
+                    const data = await apiRequest('/api/chat/approvals/pending');
+                    const lines = (data.items || []).map(i => `- ${i.id}: ${i.request_text} (${i.risk_level})`);
+                    addAssistantMessage(lines.length ? `Pending approvals:\n${lines.join('\n')}` : 'No pending approvals.');
+                } catch (e) {
+                    addAssistantMessage('Failed to load pending approvals.');
+                }
+                return;
+            }
+            if (message.toLowerCase() === '/resume last operation') {
+                input.value = '';
+                adjustTextareaHeight(input);
+                try {
+                    const data = await apiRequest(`/api/chat/runs/${encodeURIComponent(currentSessionId || '')}/resume`, { method: 'POST' });
+                    if (data.resume_prompt) {
+                        document.getElementById('chatInput').value = data.resume_prompt;
+                        await sendMessage();
+                    } else {
+                        addAssistantMessage(data.message || 'Nothing to resume.');
+                    }
+                } catch (e) {
+                    addAssistantMessage('Failed to resume operation.');
+                }
+                return;
+            }
+            if (message.toLowerCase() === '/cancel operation') {
+                input.value = '';
+                adjustTextareaHeight(input);
+                try {
+                    const data = await apiRequest(`/api/chat/runs/${encodeURIComponent(currentSessionId || '')}/cancel`, { method: 'POST' });
+                    addAssistantMessage(data.status === 'ok' ? 'Latest operation marked as cancelled.' : 'Unable to cancel operation.');
+                } catch (e) {
+                    addAssistantMessage('Failed to cancel operation.');
+                }
+                return;
+            }
 
             // Remove welcome
             const welcome = document.getElementById('welcomeSection');
@@ -2222,8 +2298,8 @@
             thinkingIndicator.className = 'activity-indicator thinking';
             thinkingIndicator.innerHTML = `
                 <div class="activity-content">
-                    <span class="activity-icon">🧠</span>
-                    <span>Zoe is thinking...</span>
+                    <span class="activity-icon">💬</span>
+                    <span>Zoe is typing…</span>
                 </div>
             `;
             container.appendChild(thinkingIndicator);
@@ -2289,6 +2365,7 @@
                     body: JSON.stringify({
                         message: message,
                         user_id: userId,
+                        force_openclaw: forceOpenClawMode,
                         context: { 
                             mode: 'main_chat',
                             channel: 'web',
@@ -2648,7 +2725,13 @@
             }
             if (accepted && action) {
                 const input = document.getElementById('chatInput');
-                if (input) { input.value = action; input.focus(); }
+                if (input) {
+                    input.value = action;
+                    input.focus();
+                    setTimeout(() => {
+                        if (!isStreaming) sendMessage();
+                    }, 50);
+                }
             }
         }
         

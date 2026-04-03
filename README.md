@@ -94,20 +94,16 @@ docker-compose -f docker-compose.yml -f docker-compose.pi.yml up -d
 
 ## 🏗️ Architecture
 
-### Services (14 Running)
+### Services (see `docker-compose.yml` for current set)
 
 ```
 ┌─────────────┬──────────────────────────────────────┐
-│ Core        │ zoe-core, zoe-auth, zoe-ui          │
-│ AI/LLM      │ zoe-llamacpp, zoe-mem-agent         │
-│ MCP Bridges │ zoe-mcp-server, homeassistant-mcp,  │
-│             │ n8n-mcp-bridge                       │
-│ Integration │ homeassistant, zoe-n8n, livekit     │
-│ Storage     │ zoe-redis                            │
-│ Tools       │ zoe-code-execution                   │
-│ Tunnel      │ cloudflared                          │
+│ Core        │ zoe-data (host :8000), zoe-auth,     │
+│             │ zoe-ui (nginx)                        │
+│ Integration │ homeassistant, bridges, cloudflared    │
 └─────────────┴──────────────────────────────────────┘
 ```
+Host-native: **zoe-data** (FastAPI + OpenClaw bridge), OpenClaw gateway, llama-server — see compose header comments. **zoe-core** in `services/zoe-core/` is retired legacy code, not started by default.
 
 ### Tech Stack
 

@@ -81,7 +81,7 @@ Backend:
 Intents:
   • music.yaml (16 definitions)
   • handlers.py (16 MCP-based handlers)
-  • Auto-discovered by zoe-core
+  • Registered with the production API stack (zoe-data / modules)
   
 Frontend:
   • manifest.json (widget metadata)
@@ -176,8 +176,8 @@ python tools/zoe_module.py enable zoe-myfeature
 - UI adapts to installed modules
 
 ### Zero-Touch Core ✅
-- Add module → no zoe-core changes
-- Add module → no zoe-ui changes
+- Add module → no changes to core `services/zoe-data` routers
+- Add module → no zoe-ui shell changes
 - Just enable and it works
 - True plugin architecture
 

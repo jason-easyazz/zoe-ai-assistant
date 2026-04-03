@@ -14,6 +14,11 @@ import sys
 import asyncio
 from dateutil.rrule import rrule, DAILY, WEEKLY, MONTHLY, YEARLY
 from dateutil.relativedelta import relativedelta
+from services.calendar_gateway import (
+    build_idempotency_key,
+    get_calendar_gateway,
+    is_calendar_sync_enabled,
+)
 sys.path.append('/app')
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
@@ -202,6 +207,10 @@ def init_calendar_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    try:
+        cursor.execute("ALTER TABLE events ADD COLUMN duration INTEGER DEFAULT 30")
+    except Exception:
+        pass
     
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_events_date 
@@ -236,6 +245,82 @@ def init_calendar_db():
         CREATE INDEX IF NOT EXISTS idx_event_attendees 
         ON event_attendees(event_id)
     """)
+
+    # Calendar provider account links
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS calendar_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            account_email TEXT,
+            account_label TEXT,
+            scopes TEXT,
+            token_ref TEXT,
+            refresh_token_ref TEXT,
+            token_expires_at TEXT,
+            status TEXT DEFAULT 'connected',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_accounts_user_provider_email
+        ON calendar_accounts(user_id, provider, account_email)
+    """)
+
+    # Incremental sync checkpoints for provider deltas
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS calendar_sync_checkpoints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            account_id INTEGER,
+            checkpoint_token TEXT,
+            last_synced_at TEXT,
+            sync_cursor TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Zoe <-> keeper <-> provider event mapping
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS calendar_event_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            zoe_event_id INTEGER NOT NULL,
+            keeper_event_id TEXT,
+            provider TEXT NOT NULL DEFAULT 'keeper',
+            provider_event_id TEXT,
+            provider_etag TEXT,
+            last_sync_hash TEXT,
+            sync_status TEXT DEFAULT 'pending',
+            is_tombstoned INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cursor.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_event_links_user_event_provider
+        ON calendar_event_links(user_id, zoe_event_id, provider)
+    """)
+
+    # Immutable-enough sync audit trail
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS calendar_sync_audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            zoe_event_id INTEGER,
+            provider TEXT,
+            operation TEXT NOT NULL,
+            idempotency_key TEXT,
+            status TEXT NOT NULL,
+            error_message TEXT,
+            correlation_id TEXT,
+            request_payload TEXT,
+            response_payload TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     
     # Add transaction_id and sort_order columns for week planner integration
     try:
@@ -252,6 +337,79 @@ def init_calendar_db():
 
 # Initialize on import
 init_calendar_db()
+
+
+def _upsert_event_link(
+    conn: sqlite3.Connection,
+    user_id: str,
+    zoe_event_id: int,
+    provider: str,
+    keeper_event_id: Optional[str] = None,
+    provider_event_id: Optional[str] = None,
+    provider_etag: Optional[str] = None,
+    sync_status: str = "ok",
+):
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO calendar_event_links (user_id, zoe_event_id, provider, keeper_event_id, provider_event_id, provider_etag, sync_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, zoe_event_id, provider)
+        DO UPDATE SET
+            keeper_event_id = excluded.keeper_event_id,
+            provider_event_id = COALESCE(excluded.provider_event_id, calendar_event_links.provider_event_id),
+            provider_etag = COALESCE(excluded.provider_etag, calendar_event_links.provider_etag),
+            sync_status = excluded.sync_status,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (user_id, zoe_event_id, provider, keeper_event_id, provider_event_id, provider_etag, sync_status),
+    )
+
+
+def _get_event_link(conn: sqlite3.Connection, user_id: str, zoe_event_id: int, provider: str = "keeper"):
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT keeper_event_id, provider_event_id, provider_etag
+        FROM calendar_event_links
+        WHERE user_id = ? AND zoe_event_id = ? AND provider = ?
+        """,
+        (user_id, zoe_event_id, provider),
+    )
+    return cursor.fetchone()
+
+
+def _write_sync_audit(
+    conn: sqlite3.Connection,
+    user_id: str,
+    zoe_event_id: int,
+    operation: str,
+    idempotency_key: str,
+    status: str,
+    provider: str = "keeper",
+    error_message: Optional[str] = None,
+    request_payload: Optional[Dict[str, Any]] = None,
+    response_payload: Optional[Dict[str, Any]] = None,
+):
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO calendar_sync_audit_logs
+        (user_id, zoe_event_id, provider, operation, idempotency_key, status, error_message, request_payload, response_payload)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            user_id,
+            zoe_event_id,
+            provider,
+            operation,
+            idempotency_key,
+            status,
+            error_message,
+            json.dumps(request_payload) if request_payload is not None else None,
+            json.dumps(response_payload) if response_payload is not None else None,
+        ),
+    )
 
 # Request/Response models
 class EventCreate(BaseModel):
@@ -271,6 +429,16 @@ class EventCreate(BaseModel):
     travel_time: Optional[int] = 0
     prep_items: Optional[List[Dict[str, Any]]] = []
     attendee_ids: Optional[List[int]] = []
+
+
+class ScheduleCommand(BaseModel):
+    title: str
+    start_date: str
+    start_time: Optional[str] = None
+    duration: Optional[int] = 30
+    description: Optional[str] = None
+    location: Optional[str] = None
+    category: Optional[str] = "personal"
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
@@ -529,6 +697,52 @@ async def create_event(event: EventCreate, session: AuthenticatedSession = Depen
                 pass
     
     conn.commit()
+
+    sync_status = "disabled"
+    if is_calendar_sync_enabled():
+        payload = {
+            "title": event.title,
+            "description": event.description,
+            "start_date": event.start_date,
+            "start_time": event.start_time,
+            "end_date": end_date,
+            "end_time": end_time,
+            "category": event.category,
+            "location": event.location,
+            "all_day": event.all_day,
+            "recurring": event.recurring,
+            "metadata": metadata,
+        }
+        idem_key = build_idempotency_key(user_id, "create", str(event_id), payload)
+        result = get_calendar_gateway().create_event(user_id, payload, idem_key)
+        if result.success:
+            _upsert_event_link(
+                conn,
+                user_id=user_id,
+                zoe_event_id=event_id,
+                provider=result.provider,
+                keeper_event_id=result.provider_event_id,
+                provider_event_id=result.provider_event_id,
+                provider_etag=(result.response_payload or {}).get("etag"),
+                sync_status="ok",
+            )
+            sync_status = "ok"
+            _write_sync_audit(conn, user_id, event_id, "create", idem_key, "ok", request_payload=payload, response_payload=result.response_payload)
+        else:
+            sync_status = "error"
+            _upsert_event_link(conn, user_id, event_id, "keeper", sync_status="error")
+            _write_sync_audit(
+                conn,
+                user_id,
+                event_id,
+                "create",
+                idem_key,
+                "error",
+                error_message=result.error,
+                request_payload=payload,
+                response_payload=result.response_payload,
+            )
+        conn.commit()
     conn.close()
     
     # Broadcast update to WebSocket clients
@@ -556,7 +770,8 @@ async def create_event(event: EventCreate, session: AuthenticatedSession = Depen
         "get_ready_time": event.get_ready_time,
         "travel_time": event.travel_time,
         "prep_items": event.prep_items,
-        "attendee_ids": event.attendee_ids
+        "attendee_ids": event.attendee_ids,
+        "sync_status": sync_status
     }}
 
 @router.get("/events/{event_id}")
@@ -665,6 +880,48 @@ async def update_event(event_id: int, event_update: EventUpdate, session: Authen
         query = f"UPDATE events SET {', '.join(update_fields)} WHERE id = ? AND user_id = ?"
         cursor.execute(query, params)
         conn.commit()
+
+        sync_status = "disabled"
+        if is_calendar_sync_enabled():
+            updated_payload = update_data.copy()
+            idem_key = build_idempotency_key(user_id, "update", str(event_id), updated_payload)
+            link = _get_event_link(conn, user_id, event_id, "keeper")
+            provider_event_id = link[1] if link else None
+            result = get_calendar_gateway().update_event(
+                user_id=user_id,
+                event_id=str(event_id),
+                event_payload=updated_payload,
+                idempotency_key=idem_key,
+                provider_event_id=provider_event_id,
+            )
+            if result.success:
+                _upsert_event_link(
+                    conn,
+                    user_id=user_id,
+                    zoe_event_id=event_id,
+                    provider=result.provider,
+                    keeper_event_id=result.provider_event_id or (link[0] if link else None),
+                    provider_event_id=result.provider_event_id or provider_event_id,
+                    provider_etag=(result.response_payload or {}).get("etag"),
+                    sync_status="ok",
+                )
+                sync_status = "ok"
+                _write_sync_audit(conn, user_id, event_id, "update", idem_key, "ok", request_payload=updated_payload, response_payload=result.response_payload)
+            else:
+                sync_status = "error"
+                _upsert_event_link(conn, user_id, event_id, "keeper", sync_status="error")
+                _write_sync_audit(
+                    conn,
+                    user_id,
+                    event_id,
+                    "update",
+                    idem_key,
+                    "error",
+                    error_message=result.error,
+                    request_payload=updated_payload,
+                    response_payload=result.response_payload,
+                )
+            conn.commit()
         
         # Fetch and return the updated event
         conn.row_factory = sqlite3.Row
@@ -681,7 +938,9 @@ async def update_event(event_id: int, event_update: EventUpdate, session: Authen
         })
         
         if event:
-            return {"event": dict(event)}
+            out_event = dict(event)
+            out_event["sync_status"] = sync_status
+            return {"event": out_event}
         else:
             raise HTTPException(status_code=404, detail="Event not found after update")
     
@@ -696,6 +955,37 @@ async def delete_event(event_id: int, session: AuthenticatedSession = Depends(va
     conn = get_connection()
     cursor = conn.cursor()
     
+    sync_status = "disabled"
+    link = _get_event_link(conn, user_id, event_id, "keeper")
+    provider_event_id = link[1] if link else None
+
+    if is_calendar_sync_enabled():
+        payload = {"event_id": event_id}
+        idem_key = build_idempotency_key(user_id, "delete", str(event_id), payload)
+        result = get_calendar_gateway().delete_event(
+            user_id=user_id,
+            event_id=str(event_id),
+            idempotency_key=idem_key,
+            provider_event_id=provider_event_id,
+        )
+        if result.success:
+            sync_status = "ok"
+            _write_sync_audit(conn, user_id, event_id, "delete", idem_key, "ok", request_payload=payload, response_payload=result.response_payload)
+        else:
+            sync_status = "error"
+            _write_sync_audit(
+                conn,
+                user_id,
+                event_id,
+                "delete",
+                idem_key,
+                "error",
+                error_message=result.error,
+                request_payload=payload,
+                response_payload=result.response_payload,
+            )
+        conn.commit()
+
     cursor.execute("DELETE FROM events WHERE id = ? AND user_id = ?", (event_id, user_id))
     
     if cursor.rowcount == 0:
@@ -705,7 +995,7 @@ async def delete_event(event_id: int, session: AuthenticatedSession = Depends(va
     conn.commit()
     conn.close()
     
-    return {"message": "Event deleted successfully"}
+    return {"message": "Event deleted successfully", "sync_status": sync_status}
 
 @router.put("/events/{event_id}/move")
 async def move_event(event_id: int, new_date: str = Query(..., description="New date (YYYY-MM-DD)"), session: AuthenticatedSession = Depends(validate_session)):
@@ -735,6 +1025,37 @@ async def move_event(event_id: int, new_date: str = Query(..., description="New 
         "id": event_id,
         "start_date": new_date
     }
+
+
+@router.post("/schedule")
+async def schedule_command(payload: ScheduleCommand, session: AuthenticatedSession = Depends(validate_session)):
+    """Natural-language compatible schedule command wrapper."""
+    event = EventCreate(
+        title=payload.title,
+        description=payload.description,
+        start_date=payload.start_date,
+        start_time=payload.start_time,
+        duration=payload.duration,
+        category=payload.category,
+        location=payload.location,
+    )
+    return await create_event(event, session)
+
+
+@router.post("/reschedule/{event_id}")
+async def reschedule_command(
+    event_id: int,
+    new_date: str = Query(..., description="New date (YYYY-MM-DD)"),
+    session: AuthenticatedSession = Depends(validate_session),
+):
+    """Natural-language compatible reschedule command wrapper."""
+    return await move_event(event_id=event_id, new_date=new_date, session=session)
+
+
+@router.post("/cancel/{event_id}")
+async def cancel_command(event_id: int, session: AuthenticatedSession = Depends(validate_session)):
+    """Natural-language compatible cancel command wrapper."""
+    return await delete_event(event_id=event_id, session=session)
 
 # Event Attendees Endpoints
 

@@ -45,8 +45,8 @@ def __init__(self, db_path: str = "/home/zoe/assistant/data/zoe.db"):  # HARDCOD
 - **Run manually**: `python3 tools/audit/check_database_paths.py`
 
 ### 📋 Affected Files:
-- All services in `services/zoe-core/services/`
-- All routers in `services/zoe-core/routers/`
+- Production: `services/zoe-data/` (routers, DB access)
+- Legacy reference: `services/zoe-core/` (retired Docker tree)
 - Any new code that accesses databases
 
 ---
@@ -207,7 +207,7 @@ async def get_user_data(
 - **Auto-fix available**: `python3 scripts/utilities/fix_user_isolation.py`
 
 ### 📋 Affected Endpoints:
-- **ALL** routers in `services/zoe-core/routers/` that access user data
+- **ALL** routers in `services/zoe-data/routers/` that access user data
 - Exceptions documented in `tools/audit/check_authentication.py`
 - Public endpoints should be explicitly marked as public
 
@@ -265,7 +265,8 @@ async def get_user_data(
 │   └── [automation scripts]
 │
 ├── 🐳 services/                     [DO NOT MODIFY STRUCTURE]
-│   ├── zoe-core/
+│   ├── zoe-data/                    [PRODUCTION FastAPI + OpenClaw]
+│   ├── zoe-core/                    [RETIRED legacy — reference only]
 │   ├── zoe-ui/
 │   └── ...
 │

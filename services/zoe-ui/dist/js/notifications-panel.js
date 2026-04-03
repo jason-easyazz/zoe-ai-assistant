@@ -24,6 +24,32 @@
         document.body.appendChild(panel);
     }
 
+    function parseNotifData(n) {
+        if (n.data_parsed) return n.data_parsed;
+        if (n.data) {
+            try { return JSON.parse(n.data); } catch (e) { return null; }
+        }
+        return null;
+    }
+
+    function maybeToastOpenClawUpdate() {
+        const oc = notificationsData.find(function(n) {
+            const d = parseNotifData(n);
+            return d && d.kind === 'openclaw_update';
+        });
+        if (!oc || typeof showNotification !== 'function') return;
+        const d = parseNotifData(oc);
+        const key = 'zoe_oc_toast_' + (d && d.latest ? d.latest : 'x');
+        try {
+            if (sessionStorage.getItem(key)) return;
+            sessionStorage.setItem(key, '1');
+        } catch (e) { /* private mode */ }
+        showNotification(
+            'OpenClaw ' + (d.latest || 'update') + ' is available. Open notifications to install, or use Settings → OpenClaw.',
+            'info'
+        );
+    }
+
     async function loadNotifications() {
         ensurePanel();
         try {
@@ -31,6 +57,7 @@
             notificationsData = result.notifications || [];
             renderNotifications();
             updateBadge();
+            maybeToastOpenClawUpdate();
         } catch (e) {
             console.error('Failed to load notifications:', e);
         }
@@ -43,18 +70,66 @@
             list.innerHTML = '<p style="color:var(--text-secondary,#888);text-align:center;padding:40px 20px;">No new notifications</p>';
             return;
         }
-        list.innerHTML = notificationsData.map(n => `
-            <div class="notification-item" style="padding:12px;margin:8px 0;background:rgba(255,255,255,0.05);border-radius:8px;border-left:3px solid ${getTypeColor(n.type)};">
-                <div style="display:flex;justify-content:space-between;align-items:start;">
-                    <div>
-                        <strong style="color:var(--text-primary,#e0e0e0);">${escapeHtmlNotif(n.title || 'Notification')}</strong>
-                        <p style="margin:4px 0 0;color:var(--text-secondary,#aaa);font-size:0.9em;">${escapeHtmlNotif(n.message || '')}</p>
-                        <small style="color:var(--text-muted,#666);">${formatTime(n.created_at)}</small>
-                    </div>
-                    <button onclick="window.zoeNotifications.dismiss('${n.id}')" style="background:none;border:none;color:var(--text-secondary,#888);cursor:pointer;padding:4px 8px;" title="Dismiss">&times;</button>
-                </div>
-            </div>
-        `).join('');
+        list.innerHTML = notificationsData.map(function(n) {
+            const dp = parseNotifData(n);
+            const showInstall = dp && dp.kind === 'openclaw_update';
+            const installRow = showInstall
+                ? '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">' +
+                  '<button type="button" class="zoe-openclaw-install-btn" data-nid="' + escapeAttr(n.id) + '" ' +
+                  'style="background:#7B61FF;color:#fff;border:none;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;">Install update</button>' +
+                  '<span style="font-size:11px;color:#888;align-self:center;">Requires admin</span></div>'
+                : '';
+            return (
+                '<div class="notification-item" style="padding:12px;margin:8px 0;background:rgba(255,255,255,0.05);border-radius:8px;border-left:3px solid ' + getTypeColor(n.type) + ';">' +
+                '<div style="display:flex;justify-content:space-between;align-items:start;">' +
+                '<div style="flex:1;min-width:0;">' +
+                '<strong style="color:var(--text-primary,#e0e0e0);">' + escapeHtmlNotif(n.title || 'Notification') + '</strong>' +
+                '<p style="margin:4px 0 0;color:var(--text-secondary,#aaa);font-size:0.9em;">' + escapeHtmlNotif(n.message || '') + '</p>' +
+                installRow +
+                '<small style="color:var(--text-muted,#666);">' + formatTime(n.created_at) + '</small>' +
+                '</div>' +
+                '<button type="button" class="zoe-notif-dismiss" data-nid="' + escapeAttr(n.id) + '" style="background:none;border:none;color:var(--text-secondary,#888);cursor:pointer;padding:4px 8px;flex-shrink:0;" title="Dismiss">&times;</button>' +
+                '</div></div>'
+            );
+        }).join('');
+
+        list.querySelectorAll('.zoe-openclaw-install-btn').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                installOpenClawUpdate(btn.getAttribute('data-nid'));
+            });
+        });
+        list.querySelectorAll('.zoe-notif-dismiss').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                dismiss(btn.getAttribute('data-nid'));
+            });
+        });
+    }
+
+    function escapeAttr(s) {
+        if (!s) return '';
+        return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    }
+
+    async function installOpenClawUpdate(notificationId) {
+        try {
+            if (typeof showNotification === 'function') {
+                showNotification('Installing OpenClaw update (this can take a few minutes)…', 'info');
+            }
+            await apiRequest('/api/system/openclaw/upgrade', {
+                method: 'POST',
+                body: JSON.stringify({ confirm: true }),
+            });
+            if (typeof showNotification === 'function') {
+                showNotification('OpenClaw updated. Gateway restarted.', 'success');
+            }
+            await dismiss(notificationId);
+        } catch (e) {
+            console.error('OpenClaw upgrade failed:', e);
+            const msg = (e && e.message) ? e.message : 'Upgrade failed (admin only, or disabled on server).';
+            if (typeof showNotification === 'function') {
+                showNotification(msg, 'error');
+            }
+        }
     }
 
     function getTypeColor(type) {
@@ -90,7 +165,7 @@
     function updateBadge() {
         const badges = document.querySelectorAll('.notification-badge, #notificationCount');
         const count = notificationsData.length;
-        badges.forEach(badge => {
+        badges.forEach(function(badge) {
             badge.textContent = count;
             badge.style.display = count > 0 ? '' : 'none';
         });
@@ -98,8 +173,8 @@
 
     async function dismiss(notificationId) {
         try {
-            await apiRequest(`/api/notifications/${notificationId}/read`, { method: 'POST' });
-            notificationsData = notificationsData.filter(n => n.id !== notificationId);
+            await apiRequest('/api/notifications/' + notificationId + '/read', { method: 'POST' });
+            notificationsData = notificationsData.filter(function(n) { return n.id !== notificationId; });
             renderNotifications();
             updateBadge();
         } catch (e) {
@@ -127,6 +202,7 @@
         toggle: toggle,
         close: close,
         dismiss: dismiss,
+        installOpenClawUpdate: installOpenClawUpdate,
     };
 
     window.openNotifications = toggle;

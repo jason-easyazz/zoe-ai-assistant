@@ -2208,12 +2208,49 @@
         }
         
         
+        let reviewQueue = [];
+
+        async function loadMemoryReviewQueue() {
+            try {
+                const data = await apiRequest('/api/memories/review');
+                reviewQueue = data.items || [];
+            } catch (error) {
+                console.error('Failed to load memory review queue:', error);
+                reviewQueue = [];
+            }
+        }
+
+        async function reviewMemory(memoryId, action) {
+            try {
+                await apiRequest(`/api/memories/${memoryId}/review`, {
+                    method: 'POST',
+                    body: JSON.stringify({ action: action })
+                });
+                await loadMemoryReviewQueue();
+                updateSidebar();
+            } catch (error) {
+                console.error('Failed to review memory:', error);
+            }
+        }
+
         function updateSidebar() {
             const list = document.getElementById('insightsList');
             const filters = document.getElementById('filterChips');
             
-            filters.innerHTML = '';
-            list.innerHTML = '';
+            filters.innerHTML = `<div class="filter-chip active">Review Queue (${reviewQueue.length})</div>`;
+            list.innerHTML = reviewQueue.map(item => `
+                <div class="person-card">
+                    <div class="person-label">${item.memory_type || 'memory'} • confidence ${(Math.round((item.confidence || 0) * 100))}%</div>
+                    <div class="person-text">${(item.content || '').slice(0, 180)}</div>
+                    <div class="quick-actions" style="margin-top:10px">
+                        <div class="quick-action-btn" onclick="reviewMemory('${item.id}','approve')"><div class="quick-action-label">Approve</div></div>
+                        <div class="quick-action-btn" onclick="reviewMemory('${item.id}','reject')"><div class="quick-action-label">Reject</div></div>
+                    </div>
+                </div>
+            `).join('');
+            if (!reviewQueue.length) {
+                list.innerHTML = '<div class="person-card"><div class="person-text">No pending memories. OpenClaw-learned facts will appear here for review.</div></div>';
+            }
         }
         
         
@@ -2242,11 +2279,30 @@
         function resetView() { scale = 1; offsetX = 0; offsetY = 0; }
         function zoomIn() { scale = Math.min(2, scale * 1.2); }
         function zoomOut() { scale = Math.max(0.5, scale / 1.2); }
-        function searchMemories(q) { console.log('Search:', q); }
+        async function searchMemories(q) {
+            if (!q || q.length < 2) {
+                await loadMemoryReviewQueue();
+                updateSidebar();
+                return;
+            }
+            try {
+                const data = await apiRequest(`/api/memories/search?q=${encodeURIComponent(q)}&limit=20`);
+                const results = data.results || [];
+                const list = document.getElementById('insightsList');
+                list.innerHTML = results.map(item => `
+                    <div class="person-card">
+                        <div class="person-label">${item.source || 'local'} • score ${Number(item.score || 0).toFixed(2)}</div>
+                        <div class="person-text">${(item.content || '').slice(0, 180)}</div>
+                    </div>
+                `).join('') || '<div class="person-card"><div class="person-text">No matches.</div></div>';
+            } catch (error) {
+                console.error('Memory search failed:', error);
+            }
+        }
         
         window.addEventListener('resize', resizeCanvas);
         resizeCanvas();
-        updateSidebar();
+        loadMemoryReviewQueue().then(updateSidebar);
         updateLegend();
         animate();
         

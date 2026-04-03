@@ -263,7 +263,7 @@ vcgencmd measure_temp
 
 **Ports Used:**
 - 80/443: Web UI (nginx)
-- 8000: Core API (zoe-core)
+- 8000: Core API (zoe-data, host-native FastAPI + OpenClaw bridge)
 - 8002: Auth API (zoe-auth)
 - 8003: MCP Server
 - 11434: LLM Inference (zoe-llamacpp)

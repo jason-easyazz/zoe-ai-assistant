@@ -88,6 +88,32 @@ services:
     env_file:
     - .env
 
+  # ── Keeper.sh Calendar Sync ────────────────────────────────────────────────
+  keeper:
+    image: ghcr.io/ridafkih/keeper.sh:latest
+    container_name: zoe-keeper
+    restart: unless-stopped
+    ports:
+    - 8787:8787
+    environment:
+    - KEEPER_HOST=0.0.0.0
+    - KEEPER_PORT=8787
+    - KEEPER_BASE_URL=${KEEPER_BASE_URL:-http://zoe-keeper:8787}
+    - KEEPER_AUTH_TOKEN=${KEEPER_AUTH_TOKEN:-}
+    - KEEPER_DATA_DIR=/data
+    volumes:
+    - ./data/keeper:/data
+    networks:
+    - zoe-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8787/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+    env_file:
+    - .env
+
   # ── Cloudflare Tunnel ─────────────────────────────────────────────────────
   cloudflared:
     image: cloudflare/cloudflared:latest

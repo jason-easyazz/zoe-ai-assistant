@@ -620,6 +620,10 @@
                 <label class="modal-label">Notes</label>
                 <textarea class="modal-input" id="personNotes" placeholder="Add any notes about this person" rows="3"></textarea>
             </div>
+            <div class="modal-field">
+                <label class="modal-label">Custom Fields</label>
+                <div id="personCustomFields"></div>
+            </div>
             <div class="modal-actions">
                 <button class="modal-btn modal-btn-secondary" onclick="closeAddPersonModal()">Cancel</button>
                 <button class="modal-btn modal-btn-primary" onclick="createPerson()">Add Person</button>
@@ -720,6 +724,7 @@
         
         let people = [];
         let currentUser = null;
+        let peopleFieldSchema = [];
         
         // Load data from API
         async function loadPeople() {
@@ -840,6 +845,10 @@
             const email = document.getElementById('personEmail').value.trim();
             const address = document.getElementById('personAddress').value.trim();
             const notes = document.getElementById('personNotes').value.trim();
+            const customFields = {};
+            document.querySelectorAll('#personCustomFields [data-field-key]').forEach(el => {
+                if (el.value && el.value.trim() !== '') customFields[el.dataset.fieldKey] = el.value.trim();
+            });
             
             if (!name) {
                 showNotification('⚠️ Name is required', 'error');
@@ -854,6 +863,7 @@
                     phone: phone || null,
                     email: email || null,
                     notes: notes || null,
+                    custom_fields: customFields,
                 };
                 if (address) {
                     personData.preferences = { address: address };
@@ -1293,6 +1303,28 @@
                     </div>
                 </div>
             `);
+
+            // Custom fields section
+            if (peopleFieldSchema && peopleFieldSchema.length) {
+                const custom = person.custom_fields || {};
+                htmlSections.push(`
+                    <div class="detail-section">
+                        <div class="section-title">Custom Fields</div>
+                        <div class="info-grid">
+                            ${peopleFieldSchema.map(field => `
+                                <div class="info-item">
+                                    <div class="info-label">${field.label}</div>
+                                    <div class="info-value">
+                                        ${isEditing
+                                            ? `<input type="text" class="edit-field" data-edit-field-key="${field.field_key}" value="${custom[field.field_key] || ''}" placeholder="${field.label}">`
+                                            : (custom[field.field_key] || 'Not set')}
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `);
+            }
             
             content.innerHTML = htmlSections.join('');
             panel.classList.add('open');
@@ -1454,6 +1486,10 @@
             const birthday = document.getElementById('editPersonBirthday')?.value || '';
             const address = document.getElementById('editPersonAddress')?.value || '';
             const notes = document.getElementById('editPersonNotes')?.value || '';
+            const customFields = {};
+            document.querySelectorAll('[data-edit-field-key]').forEach(el => {
+                if (el.value && el.value.trim() !== '') customFields[el.dataset.editFieldKey] = el.value.trim();
+            });
             
             if (!name) {
                 showNotification('⚠️ Name is required', 'error');
@@ -1472,7 +1508,8 @@
                     email: email || null,
                     birthday: birthday || null,
                     address: address || null,
-                    notes: notes || null
+                    notes: notes || null,
+                    custom_fields: customFields
                 };
                 
                 // Call backend API to update
@@ -1769,6 +1806,24 @@
 
         // User profile storage
         let userProfile = null;
+
+        async function loadPeopleFieldSchema() {
+            try {
+                const res = await apiRequest('/api/people/fields');
+                peopleFieldSchema = (res.fields || []).filter(f => f.is_active !== false);
+                const container = document.getElementById('personCustomFields');
+                if (container) {
+                    container.innerHTML = peopleFieldSchema.map(field => `
+                        <div class="modal-field">
+                            <label class="modal-label">${field.label}</label>
+                            <input type="text" class="modal-input" data-field-key="${field.field_key}" placeholder="${field.label}">
+                        </div>
+                    `).join('');
+                }
+            } catch (error) {
+                console.error('Failed to load people fields:', error);
+            }
+        }
         
         async function loadUserProfile() {
             try {
@@ -1826,6 +1881,7 @@
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', async () => {
             updateAPIStatus();
+            await loadPeopleFieldSchema();
             await loadUserProfile();
             await loadPeople();
             updateSidebar();
