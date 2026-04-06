@@ -1,6 +1,6 @@
 ---
 name: proactive-agent
-description: Schedule proactive push notifications and one-shot nudges for users
+description: "Schedule proactive push notifications and one-shot nudges for users. Use when the user asks for a future reminder, notification, alert, or nudge like 'remind me at 3pm' or 'notify me tomorrow morning'."
 version: 2.0.0
 author: zoe-team
 api_only: true
@@ -20,6 +20,10 @@ triggers:
   - "recurring"
   - "automate"
   - "nudge"
+  - "remind me every"
+  - "set up a timer"
+  - "periodic"
+  - "cron"
 allowed_endpoints:
   - "POST /api/proactive/schedule"
   - "GET /api/proactive/schedule"
@@ -86,6 +90,31 @@ specific future time.  Example:
 - User says "notify me in 2 hours"
 - User says "send me a message tomorrow morning at 8am"
 - Any explicit future-notification request
+
+## Workflow
+
+1. Parse the requested reminder message and target time.
+2. Ask a clarifying question if the time, date, timezone, or recipient is ambiguous.
+3. Use `proactive_schedule` or `POST /api/proactive/schedule` to create the nudge.
+4. Confirm the scheduled message and when it will fire.
+5. Use the list or cancel endpoints when the user asks to review or remove pending nudges.
+
+## Example
+
+**User:** "Remind me tomorrow at 8am to put the bins out"
+
+**Steps:**
+- Parse the message as "put the bins out".
+- Resolve "tomorrow at 8am" to an ISO timestamp in the user's timezone.
+- Call `proactive_schedule` with the message and `send_at`.
+- Respond with a short confirmation including the scheduled time.
+
+## Error Handling
+
+- **Ambiguous time**: Ask for a specific time before scheduling.
+- **Past time**: Ask for a future time instead of silently adjusting.
+- **Duplicate request**: If a very similar pending nudge exists, mention it before creating another.
+- **API failure**: Tell the user the notification could not be scheduled and suggest retrying.
 
 ## Implementation Notes
 - APScheduler persists jobs in SQLite so they survive restarts.
