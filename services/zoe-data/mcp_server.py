@@ -17,6 +17,8 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("ZOE_DATA_DB", os.path.join(_BASE_DIR, "zoe.db"))
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 _BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
+# OpenClaw gateway for browser screenshot forwarding (screenshot-to-panel model)
+_OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW", "http://127.0.0.1:18789")
 
 
 async def _notify_ui(channel: str, event_type: str, data: dict):
@@ -466,6 +468,157 @@ TOOLS = [
             "required": ["title", "message"],
         },
     },
+    # --- Touch Presence Platform panel controls ---
+    {
+        "name": "panel_navigate",
+        "description": (
+            "Load a URL full-screen on a touch panel (e.g. the Raspberry Pi kiosk). "
+            "Use this to show the user what you are doing: a web search result, a Home Assistant "
+            "dashboard (/ha/lovelace/default_view), or any URL. "
+            "Example: panel_navigate(url='https://www.google.com/search?q=weather', panel_id='zoe-touch-pi')"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "URL to load on the panel (must be http/https)"},
+                "panel_id": {"type": "string", "description": "Target panel ID (default: foreground panel)"},
+                "label": {"type": "string", "description": "Optional label shown briefly on the panel"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "panel_clear",
+        "description": "Return the touch panel to its ambient dashboard view.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "panel_id": {"type": "string", "description": "Target panel ID (default: foreground panel)"},
+            },
+        },
+    },
+    {
+        "name": "panel_show_fullscreen",
+        "description": "Display a base64 PNG image full-screen on the touch panel (e.g. a browser screenshot).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "image_base64": {"type": "string", "description": "Base64-encoded PNG image to display"},
+                "caption": {"type": "string", "description": "Optional caption shown at the bottom"},
+                "panel_id": {"type": "string", "description": "Target panel ID (default: foreground panel)"},
+            },
+            "required": ["image_base64"],
+        },
+    },
+    {
+        "name": "panel_browser_screenshot",
+        "description": (
+            "Capture a screenshot of the current page in OpenClaw's automation browser and display it "
+            "full-screen on the touch panel. Use this to show the user what Zoe is doing in the browser "
+            "(e.g. during a web search, HA setup, or login flow). "
+            "Optionally navigates to a URL first. Returns the panel action result."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "caption": {"type": "string", "description": "Caption shown under the screenshot on the panel"},
+                "panel_id": {"type": "string", "description": "Target panel ID (default: foreground panel)"},
+                "navigate_to": {"type": "string", "description": "Optional URL to navigate to before screenshotting"},
+            },
+        },
+    },
+    {
+        "name": "panel_announce",
+        "description": "Play a TTS announcement on a panel (or all panels).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "Text to speak aloud"},
+                "panel_id": {"type": "string", "description": "Target panel ID, or 'all' for all panels"},
+            },
+            "required": ["message"],
+        },
+    },
+    {
+        "name": "panel_request_auth",
+        "description": (
+            "Ask the user to enter their PIN on the touch panel to authorise a high-privilege action. "
+            "Returns a challenge_id. Poll panel_check_auth to confirm approval before proceeding."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "panel_id": {"type": "string", "description": "Panel to show the PIN pad on"},
+                "action_context": {"type": "string", "description": "Short description shown to the user"},
+            },
+            "required": ["panel_id", "action_context"],
+        },
+    },
+    {
+        "name": "panel_check_auth",
+        "description": "Check the status of a PIN auth challenge (pending / approved / rejected / expired).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "challenge_id": {"type": "string", "description": "Challenge ID from panel_request_auth"},
+            },
+            "required": ["challenge_id"],
+        },
+    },
+    {
+        "name": "panel_set_mode",
+        "description": "Set the touch panel display mode: ambient | fullscreen | listening | thinking | responding | overlay.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "enum": ["ambient", "fullscreen", "listening", "thinking", "responding", "overlay"]},
+                "panel_id": {"type": "string", "description": "Target panel ID (default: foreground panel)"},
+            },
+            "required": ["mode"],
+        },
+    },
+    {
+        "name": "panel_show_smart_home",
+        "description": "Show a smart home control overlay on the touch panel. Displays entity states and toggles.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "entities": {
+                    "type": "array",
+                    "description": "List of entity objects: [{entity_id, name, state, icon}]",
+                    "items": {"type": "object"},
+                },
+                "title": {"type": "string", "description": "Overlay title"},
+                "dismiss_after": {"type": "integer", "description": "Auto-dismiss after N seconds (default 30)"},
+                "panel_id": {"type": "string", "description": "Target panel ID (default: foreground panel)"},
+            },
+        },
+    },
+    {
+        "name": "panel_show_media",
+        "description": "Show a now-playing media card on the touch panel.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Track or content title"},
+                "artist": {"type": "string", "description": "Artist or show name"},
+                "album_art": {"type": "string", "description": "Album art URL"},
+                "entity_id": {"type": "string", "description": "HA media_player entity_id for transport controls"},
+                "dismiss_after": {"type": "integer", "description": "Auto-dismiss after N seconds (default 20)"},
+                "panel_id": {"type": "string", "description": "Target panel ID (default: foreground panel)"},
+            },
+        },
+    },
+    {
+        "name": "media_get_now_playing",
+        "description": "Get the currently playing media from Home Assistant media player entities.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string", "description": "Specific media_player entity (optional, fetches all if omitted)"},
+            },
+        },
+    },
 ]
 
 
@@ -496,6 +649,67 @@ _LIST_TYPE_ALIASES = {
     "todo": "tasks",
     "todos": "tasks",
 }
+
+
+async def _resolve_panel_owner(db, panel_id, fallback_user_id: str):
+    """Map panel_id to the user_id bound in ui_panel_sessions so /api/ui/actions/pending matches the kiosk."""
+    if panel_id and str(panel_id) != "all":
+        cur = await db.execute(
+            "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (str(panel_id),),
+        )
+        row = await cur.fetchone()
+        if row:
+            return row["user_id"], str(panel_id)
+    cur2 = await db.execute(
+        """SELECT user_id, panel_id FROM ui_panel_sessions
+           WHERE is_foreground = 1 ORDER BY updated_at DESC LIMIT 1"""
+    )
+    row2 = await cur2.fetchone()
+    if row2:
+        return row2["user_id"], row2["panel_id"]
+    return fallback_user_id, panel_id
+
+
+async def _enqueue_panel_tool(db, *, user_id_fallback: str, panel_id, action_type: str, payload: dict):
+    """Queue a touch-panel action in ui_actions (and WS push) for the touch-ui-executor poll loop."""
+    from ui_orchestrator import enqueue_ui_action
+
+    if panel_id == "all":
+        cur = await db.execute(
+            "SELECT user_id, panel_id FROM ui_panel_sessions GROUP BY panel_id"
+        )
+        rows = await cur.fetchall()
+        if not rows:
+            uid, pid = await _resolve_panel_owner(db, None, user_id_fallback)
+            return await enqueue_ui_action(
+                db,
+                user_id=uid,
+                action_type=action_type,
+                payload=payload,
+                requested_by="openclaw",
+                panel_id=pid,
+            )
+        last = None
+        for r in rows:
+            last = await enqueue_ui_action(
+                db,
+                user_id=r["user_id"],
+                action_type=action_type,
+                payload=payload,
+                requested_by="openclaw",
+                panel_id=r["panel_id"],
+            )
+        return last
+    uid, pid = await _resolve_panel_owner(db, panel_id, user_id_fallback)
+    return await enqueue_ui_action(
+        db,
+        user_id=uid,
+        action_type=action_type,
+        payload=payload,
+        requested_by="openclaw",
+        panel_id=pid,
+    )
 
 
 async def _execute_tool(db, name: str, args: dict):
@@ -1186,6 +1400,229 @@ async def _execute_tool(db, name: str, args: dict):
                   "type": args.get("type", "info")}
         await _notify_ui("all", "notification_created", result)
         return {**result, "status": "created"}
+
+    elif name == "panel_navigate":
+        url = str(args.get("url") or "").strip()
+        if not url or not url.startswith(("http://", "https://")):
+            return {"error": "url must be an http/https URL"}
+        panel_id = args.get("panel_id") or None
+        label = args.get("label") or f"Opening {url[:60]}"
+        msg = await _enqueue_panel_tool(
+            db,
+            user_id_fallback=user_id,
+            panel_id=panel_id,
+            action_type="panel_navigate",
+            payload={"url": url, "label": label},
+        )
+        return {"ok": True, "action": "panel_navigate", "url": url, "panel_id": panel_id, "queued": msg}
+
+    elif name == "panel_clear":
+        panel_id = args.get("panel_id") or None
+        msg = await _enqueue_panel_tool(
+            db,
+            user_id_fallback=user_id,
+            panel_id=panel_id,
+            action_type="panel_clear",
+            payload={},
+        )
+        return {"ok": True, "action": "panel_clear", "panel_id": panel_id, "queued": msg}
+
+    elif name == "panel_show_fullscreen":
+        image_b64 = str(args.get("image_base64") or "").strip()
+        if not image_b64:
+            return {"error": "image_base64 is required"}
+        panel_id = args.get("panel_id") or None
+        caption = args.get("caption") or ""
+        msg = await _enqueue_panel_tool(
+            db,
+            user_id_fallback=user_id,
+            panel_id=panel_id,
+            action_type="panel_show_fullscreen",
+            payload={"image_base64": image_b64, "caption": caption},
+        )
+        return {"ok": True, "action": "panel_show_fullscreen", "panel_id": panel_id, "queued": msg}
+
+    elif name == "panel_browser_screenshot":
+        # Screenshot-to-panel: fetch screenshot from OpenClaw browser, display on panel.
+        panel_id = args.get("panel_id") or None
+        caption = args.get("caption") or ""
+        navigate_to = args.get("navigate_to") or None
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                if navigate_to:
+                    # Navigate first (fire-and-forget; screenshot taken after nav)
+                    try:
+                        await client.post(f"{_OPENCLAW_GW}/browser/navigate", json={"url": navigate_to}, timeout=15.0)
+                    except Exception:
+                        pass  # Best-effort; screenshot may still be useful
+                resp = await client.post(f"{_OPENCLAW_GW}/browser/screenshot", json={})
+            if resp.status_code != 200:
+                return {"error": f"OpenClaw screenshot returned HTTP {resp.status_code}"}
+            data = resp.json()
+            image_b64 = data.get("image") or data.get("screenshot") or data.get("data") or ""
+            if not image_b64:
+                return {"error": "No screenshot data in OpenClaw response", "response": data}
+        except httpx.ConnectError:
+            return {"error": "OpenClaw gateway unreachable — is it running?"}
+        except Exception as exc:
+            return {"error": f"Screenshot failed: {exc}"}
+
+        msg = await _enqueue_panel_tool(
+            db,
+            user_id_fallback=user_id,
+            panel_id=panel_id,
+            action_type="panel_show_fullscreen",
+            payload={"image_base64": image_b64, "caption": caption or (f"Browser view: {navigate_to}" if navigate_to else "Browser view")},
+        )
+        return {"ok": True, "action": "panel_browser_screenshot", "panel_id": panel_id, "queued": msg}
+
+    elif name == "panel_announce":
+        message = str(args.get("message") or "").strip()
+        if not message:
+            return {"error": "message is required"}
+        panel_id = args.get("panel_id") or "all"
+        msg = await _enqueue_panel_tool(
+            db,
+            user_id_fallback=user_id,
+            panel_id=panel_id,
+            action_type="panel_announce",
+            payload={"message": message},
+        )
+        return {"ok": True, "action": "panel_announce", "panel_id": panel_id, "message": message, "queued": msg}
+
+    elif name == "panel_request_auth":
+        panel_id = str(args.get("panel_id") or "").strip()
+        action_context = str(args.get("action_context") or "Authorise action").strip()
+        if not panel_id:
+            return {"error": "panel_id is required"}
+        import uuid as _uuid
+        import time as _time
+        from datetime import datetime as _dt, timezone as _tz
+        challenge_id = _uuid.uuid4().hex
+        ttl = 120
+        expires_at = _dt.fromtimestamp(_time.time() + ttl, tz=_tz.utc).isoformat()
+        await db.execute(
+            """INSERT INTO panel_auth_challenges (challenge_id, panel_id, user_id, action_context, status, expires_at)
+               VALUES (?, ?, ?, ?, 'pending', ?)""",
+            (challenge_id, panel_id, user_id, action_context, expires_at),
+        )
+        await db.commit()
+        await _notify_ui("all", "panel_pin_request", {
+            "panel_id": panel_id,
+            "challenge_id": challenge_id,
+            "action_context": action_context,
+            "expires_at": expires_at,
+        })
+        return {"ok": True, "challenge_id": challenge_id, "panel_id": panel_id, "expires_at": expires_at,
+                "note": "Show PIN pad to user; call panel_check_auth to confirm approval."}
+
+    elif name == "panel_check_auth":
+        challenge_id = str(args.get("challenge_id") or "").strip()
+        if not challenge_id:
+            return {"error": "challenge_id is required"}
+        row = await (await db.execute(
+            "SELECT status, expires_at FROM panel_auth_challenges WHERE challenge_id = ?", (challenge_id,)
+        )).fetchone()
+        if not row:
+            return {"error": "Challenge not found"}
+        return {"challenge_id": challenge_id, "status": row["status"], "expires_at": row["expires_at"]}
+
+    elif name == "panel_set_mode":
+        mode = str(args.get("mode") or "ambient").strip()
+        panel_id = args.get("panel_id") or None
+        msg = await _enqueue_panel_tool(
+            db,
+            user_id_fallback=user_id,
+            panel_id=panel_id,
+            action_type="panel_set_mode",
+            payload={"mode": mode},
+        )
+        return {"ok": True, "action": "panel_set_mode", "mode": mode, "panel_id": panel_id, "queued": msg}
+
+    elif name == "panel_show_smart_home":
+        panel_id = args.get("panel_id") or None
+        entities = args.get("entities") or []
+        title = args.get("title") or "Smart Home"
+        dismiss_after = int(args.get("dismiss_after") or 30)
+        # If no entities supplied, fetch from HA bridge
+        if not entities:
+            _ha_bridge = os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    r = await client.get(f"{_ha_bridge}/entities")
+                    if r.status_code == 200:
+                        all_ents = r.json()
+                        if isinstance(all_ents, list):
+                            all_ents = all_ents
+                        elif isinstance(all_ents, dict):
+                            all_ents = all_ents.get("entities", [])
+                        # Filter to actionable domains
+                        entities = [
+                            e for e in all_ents
+                            if str(e.get("entity_id", "")).startswith(("light.", "switch.", "input_boolean."))
+                        ][:12]  # Cap at 12 for UI
+            except Exception:
+                pass
+        msg = await _enqueue_panel_tool(
+            db,
+            user_id_fallback=user_id,
+            panel_id=panel_id,
+            action_type="panel_show_smart_home",
+            payload={"entities": entities, "title": title, "dismiss_after": dismiss_after},
+        )
+        return {"ok": True, "action": "panel_show_smart_home", "entity_count": len(entities), "panel_id": panel_id, "queued": msg}
+
+    elif name == "panel_show_media":
+        panel_id = args.get("panel_id") or None
+        payload = {k: v for k, v in args.items() if k != "panel_id"}
+        msg = await _enqueue_panel_tool(
+            db,
+            user_id_fallback=user_id,
+            panel_id=panel_id,
+            action_type="panel_show_media",
+            payload=payload,
+        )
+        return {"ok": True, "action": "panel_show_media", "panel_id": panel_id, "queued": msg}
+
+    elif name == "media_get_now_playing":
+        entity_id = str(args.get("entity_id") or "").strip()
+        _ha_bridge = os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                if entity_id:
+                    r = await client.get(f"{_ha_bridge}/state/{entity_id}")
+                    r.raise_for_status()
+                    state = r.json()
+                    attrs = state.get("attributes") or {}
+                    return {
+                        "entity_id": entity_id,
+                        "state": state.get("state"),
+                        "title": attrs.get("media_title"),
+                        "artist": attrs.get("media_artist"),
+                        "album": attrs.get("media_album_name"),
+                        "album_art": attrs.get("entity_picture"),
+                        "volume": attrs.get("volume_level"),
+                    }
+                else:
+                    r = await client.get(f"{_ha_bridge}/entities")
+                    r.raise_for_status()
+                    ents = r.json()
+                    if isinstance(ents, dict):
+                        ents = ents.get("entities", [])
+                    players = [e for e in ents if str(e.get("entity_id", "")).startswith("media_player.")]
+                    results = []
+                    for p in players:
+                        attrs = p.get("attributes") or {}
+                        results.append({
+                            "entity_id": p.get("entity_id"),
+                            "state": p.get("state"),
+                            "title": attrs.get("media_title"),
+                            "artist": attrs.get("media_artist"),
+                            "album_art": attrs.get("entity_picture"),
+                        })
+                    return {"players": results}
+        except Exception as exc:
+            return {"error": f"HA bridge error: {exc}"}
 
     else:
         return {"error": f"Unknown tool: {name}"}

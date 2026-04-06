@@ -623,4 +623,62 @@ html, body {
   will-change: opacity, background-image;
 }
 
+/* ═══════════════════════════════════════════════
+   LIGHT MODE
+   Applied via: body.light-mode  OR system pref
+═══════════════════════════════════════════════ */
 
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg-gradient: linear-gradient(135deg, #f0f4ff 0%, #e8eeff 50%, #f5f0ff 100%);
+    --glass-bg: rgba(255, 255, 255, 0.75);
+    --glass-bg-light: rgba(255, 255, 255, 0.55);
+    --glass-bg-dark: rgba(0, 0, 0, 0.04);
+    --glass-border: rgba(0, 0, 0, 0.08);
+    --glass-border-light: rgba(0, 0, 0, 0.05);
+    --fg-primary: #1a1a2e;
+    --fg-secondary: rgba(26, 26, 46, 0.72);
+    --fg-muted: rgba(26, 26, 46, 0.45);
+    --shadow-small: 0 2px 8px rgba(0, 0, 0, 0.06);
+    --shadow-medium: 0 4px 16px rgba(0, 0, 0, 0.09);
+    --shadow-large: 0 8px 32px rgba(0, 0, 0, 0.12);
+  }
+
+  html, body {
+    background: var(--bg-gradient);
+    color: var(--fg-primary);
+  }
+}
+
+/* Force dark mode (overrides system pref) */
+body.dark-mode {
+  --bg-gradient: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+  --glass-bg: rgba(255, 255, 255, 0.06);
+  --glass-bg-light: rgba(255, 255, 255, 0.04);
+  --glass-bg-dark: rgba(0, 0, 0, 0.15);
+  --glass-border: rgba(255, 255, 255, 0.10);
+  --glass-border-light: rgba(255, 255, 255, 0.06);
+  --fg-primary: #ffffff;
+  --fg-secondary: rgba(255, 255, 255, 0.70);
+  --fg-muted: rgba(255, 255, 255, 0.45);
+  background: var(--bg-gradient) !important;
+  color: var(--fg-primary) !important;
+}
+
+/* Force light mode (overrides system pref) */
+body.light-mode {
+  --bg-gradient: linear-gradient(135deg, #f0f4ff 0%, #e8eeff 50%, #f5f0ff 100%);
+  --glass-bg: rgba(255, 255, 255, 0.75);
+  --glass-bg-light: rgba(255, 255, 255, 0.55);
+  --glass-bg-dark: rgba(0, 0, 0, 0.04);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-border-light: rgba(0, 0, 0, 0.05);
+  --fg-primary: #1a1a2e;
+  --fg-secondary: rgba(26, 26, 46, 0.72);
+  --fg-muted: rgba(26, 26, 46, 0.45);
+  --shadow-small: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-medium: 0 4px 16px rgba(0, 0, 0, 0.09);
+  --shadow-large: 0 8px 32px rgba(0, 0, 0, 0.12);
+  background: var(--bg-gradient) !important;
+  color: var(--fg-primary) !important;
+}

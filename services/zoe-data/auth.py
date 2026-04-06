@@ -12,6 +12,9 @@ from typing import Any, Optional, Dict, Tuple
 logger = logging.getLogger(__name__)
 
 ZOE_AUTH_URL = os.environ.get("ZOE_AUTH_URL", "http://localhost:8002")
+# When set to "guest", requests without X-Session-ID get role guest (kiosk / public API safety).
+# Default empty: preserve legacy behaviour (no session → family-admin).
+_UNAUTH_ROLE = os.environ.get("ZOE_UNAUTHENTICATED_ROLE", "").strip().lower()
 CACHE_TTL_SECONDS = 30
 DEFAULT_USER_ID = "family-admin"
 _DEGRADED_MARK = "__zoe_degraded__"
@@ -86,10 +89,50 @@ async def _validate_with_auth_service(session_id: str) -> Optional[dict]:
 
 
 async def get_current_user(request: Request) -> dict:
-    """Extract and validate user from session header against zoe-auth."""
+    """Extract and validate user from session header against zoe-auth.
+
+    Also accepts X-Device-Token for voice/panel daemon requests — resolves to
+    the panel's registered user so voice commands run in the right user context.
+    """
     session_id = request.headers.get("X-Session-ID", "")
+    device_token = request.headers.get("X-Device-Token", "")
+
+    # Device token path: resolve to panel user without going through zoe-auth session.
+    # Inline token check to avoid circular import with panel_auth (which imports auth).
+    if not session_id and device_token:
+        import hashlib as _hashlib
+        _tok_hash = _hashlib.sha256(device_token.encode()).hexdigest()
+        # Late import inside function body avoids module-level circular dependency
+        try:
+            from routers.panel_auth import _token_cache as _ptc
+            _tok_info = _ptc.get(_tok_hash)
+            if _tok_info and not _tok_info.get("revoked"):
+                _exp = _tok_info.get("expires_at")
+                _ok = True
+                if _exp:
+                    from datetime import datetime, timezone
+                    _ok = datetime.fromisoformat(_exp) >= datetime.now(tz=timezone.utc)
+                if _ok:
+                    _pid = _tok_info.get("panel_id", "unknown")
+                    return {
+                        "user_id": DEFAULT_USER_ID,
+                        "role": "member",
+                        "username": f"panel:{_pid}",
+                        "permissions": ["chat", "voice"],
+                        "panel_id": _pid,
+                    }
+        except Exception:
+            pass
+        # Invalid/unknown token → fall through to unauthenticated behaviour
 
     if not session_id:
+        if _UNAUTH_ROLE == "guest":
+            return {
+                "user_id": "guest",
+                "role": "guest",
+                "username": "guest",
+                "permissions": [],
+            }
         return {"user_id": DEFAULT_USER_ID, "role": "admin"}
 
     cached = _cache_get(session_id)

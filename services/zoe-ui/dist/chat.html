@@ -1657,6 +1657,10 @@
             }
             if (t === 'CUSTOM' && data.name === 'zoe.run_log') {
                 const v = data.value || {};
+                if (thinkingIndicator && thinkingIndicator.parentNode && v.message) {
+                    const tx = thinkingIndicator.querySelector('span:last-child');
+                    if (tx) tx.textContent = String(v.message);
+                }
                 const panel = ctx.toolTraceEl;
                 if (panel) {
                     panel.style.display = 'flex';
@@ -1679,7 +1683,20 @@
                 const snap = data.snapshot || {};
                 if (snap.status === 'generating' && thinkingIndicator && thinkingIndicator.parentNode) {
                     const el = thinkingIndicator.querySelector('span:last-child');
-                    if (el) el.textContent = 'Zoe is typing… (' + (snap.model || 'AI') + ')';
+                    if (el) {
+                        const detail = snap.detail ? String(snap.detail) : '';
+                        const phase = snap.phase ? String(snap.phase) : '';
+                        if (detail) {
+                            el.textContent = detail;
+                        } else if (phase === 'openclaw') {
+                            el.textContent = 'OpenClaw: ' + (snap.model || 'agent') + '…';
+                        } else {
+                            el.textContent = 'Zoe is typing… (' + (snap.model || 'AI') + ')';
+                        }
+                    }
+                    if (snap.phase === 'openclaw' && ctx.toolTraceEl) {
+                        ctx.toolTraceEl.style.display = 'flex';
+                    }
                 }
                 return;
             }
@@ -3436,5 +3453,28 @@
     <script src="/js/websocket-sync.js"></script>
     <!-- Mini Player for persistent music playback -->
     <script src="js/mini-player.js"></script>
+    <!-- Touch panel action executor -->
+    <script src="/js/touch-ui-executor.js?v=20260405"></script>
+
+    <!-- Degraded mode banner -->
+    <div id="zoe-degraded-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:rgba(220,38,38,0.9);color:white;font-size:13px;text-align:center;padding:6px 12px;backdrop-filter:blur(4px);">
+        Zoe is running in basic mode — some features may be unavailable
+    </div>
+    <script>
+    (function() {
+        async function checkDegraded() {
+            try {
+                const r = await fetch('/api/system/status', { signal: AbortSignal.timeout(5000) });
+                const d = await r.json();
+                const banner = document.getElementById('zoe-degraded-banner');
+                if (!banner) return;
+                const gw = d.openclaw_gateway || '';
+                banner.style.display = (gw === 'offline' || gw.startsWith('error')) ? 'block' : 'none';
+            } catch (_) {}
+        }
+        checkDegraded();
+        setInterval(checkDegraded, 60000);
+    })();
+    </script>
 </body>
 </html><!-- Cache Bust: 1760009000 - v8.1 Fresh Start -->

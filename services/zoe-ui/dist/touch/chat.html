@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#060610">
+    <title>Zoe — Chat</title>
+    <link rel="stylesheet" href="/touch/css/touch-base.css">
+    <script src="/js/auth.js"></script>
+    <style>
+    :root {
+        --purple:   #7B61FF;
+        --teal:     #5AE0E0;
+        --grad:     linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+        --bg-deep:  #060610;
+        --surface:  rgba(255,255,255,0.055);
+        --surface-hi: rgba(255,255,255,0.09);
+        --border:   rgba(255,255,255,0.10);
+        --text-1:   rgba(255,255,255,0.93);
+        --text-2:   rgba(255,255,255,0.58);
+        --text-3:   rgba(255,255,255,0.32);
+        --input-h:  66px;
+    }
+
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+
+    html, body {
+        width:100%; height:100%;
+        overflow:hidden;
+        background: var(--bg-deep);
+        color: var(--text-1);
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+        -webkit-user-select: none;
+        user-select: none;
+    }
+
+    body.light-mode {
+        --bg-deep: #f0f4ff;
+        --surface: rgba(255,255,255,0.75);
+        --surface-hi: rgba(255,255,255,0.90);
+        --border: rgba(0,0,0,0.08);
+        --text-1: #1a1a2e;
+        --text-2: rgba(26,26,46,0.60);
+        --text-3: rgba(26,26,46,0.35);
+    }
+
+    body::before {
+        content:'';
+        position:fixed; inset:0; pointer-events:none; z-index:0;
+        background:
+            radial-gradient(ellipse 60% 50% at 15% 20%, rgba(123,97,255,.10) 0%, transparent 65%),
+            radial-gradient(ellipse 50% 40% at 85% 80%, rgba(90,224,224,.07) 0%, transparent 65%);
+    }
+
+    /* ── Layout ─────────────────────────────────── */
+    #chat-app {
+        position: fixed;
+        inset: 0;
+        z-index: 1;
+        display: flex;
+        flex-direction: column;
+    }
+
+    /* ── Message list ───────────────────────────── */
+    #messages {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 14px 16px calc(var(--input-h) + 14px);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        -webkit-overflow-scrolling: touch;
+        scroll-behavior: smooth;
+    }
+    #messages::-webkit-scrollbar { display: none; }
+
+    /* ── Bubble ─────────────────────────────────── */
+    .msg {
+        max-width: 76%;
+        padding: 12px 16px;
+        border-radius: 20px;
+        font-size: 15px;
+        line-height: 1.5;
+        animation: msg-in 0.22s cubic-bezier(0.34,1.56,0.64,1);
+        position: relative;
+    }
+    @keyframes msg-in {
+        from { opacity: 0; transform: scale(0.88) translateY(6px); }
+        to   { opacity: 1; transform: scale(1) translateY(0); }
+    }
+
+    .msg-user {
+        align-self: flex-end;
+        background: var(--grad);
+        color: #fff;
+        border-bottom-right-radius: 6px;
+    }
+
+    .msg-zoe {
+        align-self: flex-start;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        color: var(--text-1);
+        border-bottom-left-radius: 6px;
+        backdrop-filter: blur(20px);
+    }
+
+    .msg-zoe .msg-sender {
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        background: var(--grad);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin-bottom: 4px;
+        display: block;
+    }
+
+    /* ── Typing indicator ───────────────────────── */
+    .msg-typing {
+        align-self: flex-start;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 20px 20px 20px 6px;
+        padding: 14px 18px;
+        display: flex;
+        gap: 5px;
+        align-items: center;
+    }
+    .dot {
+        width: 7px; height: 7px;
+        border-radius: 50%;
+        background: var(--text-3);
+        animation: bounce 1.2s ease-in-out infinite;
+    }
+    .dot:nth-child(2) { animation-delay: 0.18s; }
+    .dot:nth-child(3) { animation-delay: 0.36s; }
+    @keyframes bounce {
+        0%,80%,100% { transform: translateY(0); opacity: 0.4; }
+        40% { transform: translateY(-6px); opacity: 1; }
+    }
+
+    /* ── Empty state ────────────────────────────── */
+    #empty-state {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        padding: 40px;
+        text-align: center;
+        pointer-events: none;
+    }
+    #empty-state .orb-icon {
+        width: 72px; height: 72px;
+        border-radius: 50%;
+        background: var(--grad);
+        box-shadow: 0 0 40px rgba(123,97,255,0.35);
+        animation: breathe 4s ease-in-out infinite;
+    }
+    @keyframes breathe {
+        0%,100% { transform: scale(1); }
+        50% { transform: scale(1.07); }
+    }
+    #empty-state h2 {
+        font-size: 20px; font-weight: 300;
+        color: var(--text-1);
+    }
+    #empty-state p {
+        font-size: 14px; color: var(--text-2); line-height: 1.5;
+        max-width: 280px;
+    }
+
+    /* ── Suggestions ────────────────────────────── */
+    #suggestions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: center;
+        padding: 0 16px 16px;
+    }
+    .suggestion {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        padding: 8px 16px;
+        font-size: 13px;
+        color: var(--text-2);
+        cursor: pointer;
+        transition: background 0.18s, color 0.18s;
+        backdrop-filter: blur(16px);
+        white-space: nowrap;
+    }
+    .suggestion:active { background: rgba(123,97,255,0.18); color: #fff; }
+
+    /* ── Input bar ──────────────────────────────── */
+    #input-bar {
+        position: fixed;
+        bottom: 0; left: 0; right: 0;
+        height: var(--input-h);
+        background: rgba(6,6,16,0.92);
+        backdrop-filter: blur(24px) saturate(160%);
+        -webkit-backdrop-filter: blur(24px) saturate(160%);
+        border-top: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        z-index: 100;
+    }
+    body.light-mode #input-bar {
+        background: rgba(240,244,255,0.94);
+    }
+
+    #msg-input {
+        flex: 1;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        padding: 11px 18px;
+        font-size: 16px;
+        color: var(--text-1);
+        font-family: inherit;
+        outline: none;
+        resize: none;
+        line-height: 1.4;
+        min-height: 44px;
+        max-height: 120px;
+        overflow-y: auto;
+        -webkit-user-select: text;
+        user-select: text;
+        transition: border-color 0.2s;
+    }
+    #msg-input:focus { border-color: rgba(123,97,255,0.45); }
+    #msg-input::placeholder { color: var(--text-3); }
+
+    .bar-btn {
+        width: 44px; height: 44px;
+        border-radius: 50%;
+        border: none;
+        cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 18px;
+        flex-shrink: 0;
+        transition: transform 0.15s, opacity 0.15s;
+        -webkit-tap-highlight-color: transparent;
+    }
+    .bar-btn:active { transform: scale(0.88); }
+
+    #send-btn {
+        background: var(--grad);
+        color: #fff;
+        opacity: 0.4;
+        transition: opacity 0.2s, transform 0.15s;
+    }
+    #send-btn.ready { opacity: 1; }
+
+    #voice-btn {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        color: var(--text-2);
+    }
+    #voice-btn.active {
+        background: rgba(255,78,78,0.2);
+        border-color: rgba(255,78,78,0.5);
+        color: #ff4e4e;
+        animation: pulse-red 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse-red {
+        0%,100% { box-shadow: 0 0 0 0 rgba(255,78,78,0); }
+        50% { box-shadow: 0 0 0 8px rgba(255,78,78,0.2); }
+    }
+
+    /* ── Clear button ───────────────────────────── */
+    #clear-btn {
+        position: fixed;
+        top: 60px; right: 14px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 7px 12px;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-2);
+        cursor: pointer;
+        z-index: 10;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        display: none;
+        backdrop-filter: blur(16px);
+        transition: background 0.18s;
+    }
+    #clear-btn.visible { display: block; }
+    #clear-btn:active { background: var(--surface-hi); }
+    </style>
+</head>
+<body>
+
+<div id="chat-app">
+    <!-- Message area -->
+    <div id="messages">
+        <!-- Empty state shown until first message -->
+        <div id="empty-state">
+            <div class="orb-icon"></div>
+            <h2>Chat with Zoe</h2>
+            <p>Ask me anything — I can help with your calendar, lists, notes, smart home, and more.</p>
+        </div>
+    </div>
+
+    <!-- Suggestions (shown when empty) -->
+    <div id="suggestions">
+        <div class="suggestion" onclick="sendSuggestion(this)">What's on today?</div>
+        <div class="suggestion" onclick="sendSuggestion(this)">Show the weather</div>
+        <div class="suggestion" onclick="sendSuggestion(this)">Add to shopping list</div>
+        <div class="suggestion" onclick="sendSuggestion(this)">Play some music</div>
+        <div class="suggestion" onclick="sendSuggestion(this)">Set a timer</div>
+        <div class="suggestion" onclick="sendSuggestion(this)">Write a journal entry</div>
+    </div>
+
+    <!-- Input bar -->
+    <div id="input-bar">
+        <button class="bar-btn" id="voice-btn" aria-label="Voice input">🎤</button>
+        <textarea id="msg-input" placeholder="Message Zoe…" rows="1"
+                  aria-label="Chat message"></textarea>
+        <button class="bar-btn" id="send-btn" aria-label="Send">↑</button>
+    </div>
+</div>
+
+<!-- Clear history button -->
+<button id="clear-btn" onclick="clearHistory()">Clear</button>
+
+<!-- Orb overlay -->
+<script src="/js/orb-loader.js"></script>
+<script src="/js/websocket-sync.js"></script>
+<script src="/touch/js/gestures.js"></script>
+<script src="/touch/js/touch-menu.js"></script>
+
+<script>
+'use strict';
+
+TouchMenu.init({ page: 'chat' });
+
+/* ── Session helpers ─────────────────────────────── */
+function getSession() {
+    try { return JSON.parse(localStorage.getItem('zoe_session')) || {}; } catch { return {}; }
+}
+function getSessionId() { return getSession().session_id || ''; }
+function getUserId()    { const s = getSession(); return s.user_info?.user_id || s.user_id || ''; }
+
+/* ── Message history (session-scoped) ─────────── */
+const HIST_KEY = 'zoe.touch.chat.history';
+let messages = [];
+let streaming = false;
+
+function loadHistory() {
+    try {
+        const raw = sessionStorage.getItem(HIST_KEY);
+        if (raw) messages = JSON.parse(raw);
+    } catch {}
+}
+
+function saveHistory() {
+    try { sessionStorage.setItem(HIST_KEY, JSON.stringify(messages.slice(-40))); } catch {}
+}
+
+/* ── Render ──────────────────────────────────────── */
+const msgList = document.getElementById('messages');
+const emptyState = document.getElementById('empty-state');
+const suggestionsEl = document.getElementById('suggestions');
+const clearBtn = document.getElementById('clear-btn');
+
+function renderAll() {
+    // Remove bubbles but keep empty-state
+    msgList.querySelectorAll('.msg, .msg-typing').forEach(el => el.remove());
+    messages.forEach(m => appendBubble(m.role, m.content, false));
+    scrollBottom();
+    updateEmpty();
+}
+
+function appendBubble(role, content, animate = true) {
+    const div = document.createElement('div');
+    div.className = role === 'user' ? 'msg msg-user' : 'msg msg-zoe';
+    if (!animate) div.style.animation = 'none';
+
+    if (role === 'assistant') {
+        const sender = document.createElement('span');
+        sender.className = 'msg-sender';
+        sender.textContent = 'Zoe';
+        div.appendChild(sender);
+    }
+    const text = document.createElement('span');
+    text.textContent = content;
+    div.appendChild(text);
+
+    msgList.appendChild(div);
+    scrollBottom();
+    return div;
+}
+
+function showTyping() {
+    removeTyping();
+    const div = document.createElement('div');
+    div.className = 'msg-typing';
+    div.id = 'typing-indicator';
+    div.innerHTML = '<div class="dot"></div><div class="dot"></div><div class="dot"></div>';
+    msgList.appendChild(div);
+    scrollBottom();
+}
+
+function removeTyping() {
+    document.getElementById('typing-indicator')?.remove();
+}
+
+function scrollBottom() {
+    msgList.scrollTop = msgList.scrollHeight;
+}
+
+function updateEmpty() {
+    const hasMessages = messages.length > 0;
+    emptyState.style.display = hasMessages ? 'none' : 'flex';
+    suggestionsEl.style.display = hasMessages ? 'none' : 'flex';
+    clearBtn.classList.toggle('visible', hasMessages);
+}
+
+/* ── Send ────────────────────────────────────────── */
+async function sendMessage(text) {
+    if (!text.trim() || streaming) return;
+    text = text.trim();
+
+    // Add to history and render
+    messages.push({ role: 'user', content: text });
+    appendBubble('user', text);
+    updateEmpty();
+    saveHistory();
+
+    // Clear input
+    const input = document.getElementById('msg-input');
+    input.value = '';
+    resizeInput(input);
+    setSendReady(false);
+
+    // Show typing
+    showTyping();
+    streaming = true;
+
+    try {
+        const sid = getSessionId();
+        const uid = getUserId();
+
+        const res = await fetch('/api/chat', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Session-ID': sid,
+            },
+            body: JSON.stringify({
+                message: text,
+                user_id: uid,
+                session_id: sid,
+                stream: true,
+            }),
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        removeTyping();
+        const bubble = appendBubble('assistant', '');
+        const textSpan = bubble.querySelector('span:last-child');
+        let fullText = '';
+
+        // Handle SSE streaming
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                const data = line.slice(6).trim();
+                if (data === '[DONE]') break;
+                try {
+                    const json = JSON.parse(data);
+                    const delta = json.choices?.[0]?.delta?.content
+                        || json.delta?.text
+                        || json.text
+                        || json.content
+                        || '';
+                    if (delta) {
+                        fullText += delta;
+                        textSpan.textContent = fullText;
+                        scrollBottom();
+                    }
+                } catch {}
+            }
+        }
+
+        // Fallback: if no streaming content, try as JSON
+        if (!fullText) {
+            try {
+                const json = await res.clone().json().catch(() => null);
+                fullText = json?.response || json?.message || json?.content || '…';
+                textSpan.textContent = fullText;
+                scrollBottom();
+            } catch {}
+        }
+
+        messages.push({ role: 'assistant', content: fullText });
+        saveHistory();
+
+    } catch (err) {
+        removeTyping();
+        appendBubble('assistant', `Sorry, something went wrong. ${err.message}`);
+    } finally {
+        streaming = false;
+    }
+}
+
+function sendSuggestion(el) {
+    sendMessage(el.textContent);
+}
+
+function clearHistory() {
+    messages = [];
+    saveHistory();
+    msgList.querySelectorAll('.msg, .msg-typing').forEach(el => el.remove());
+    updateEmpty();
+}
+
+/* ── Input bar wiring ────────────────────────────── */
+const input = document.getElementById('msg-input');
+const sendBtn = document.getElementById('send-btn');
+
+function setSendReady(ready) {
+    sendBtn.classList.toggle('ready', ready);
+}
+
+function resizeInput(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+input.addEventListener('input', (e) => {
+    resizeInput(e.target);
+    setSendReady(e.target.value.trim().length > 0);
+});
+
+input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage(input.value);
+    }
+});
+
+sendBtn.addEventListener('click', () => sendMessage(input.value));
+
+/* ── Voice input ─────────────────────────────────── */
+let recognition = null;
+const voiceBtn = document.getElementById('voice-btn');
+
+voiceBtn.addEventListener('click', () => {
+    if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+        alert('Voice input not supported in this browser.');
+        return;
+    }
+    if (recognition && voiceBtn.classList.contains('active')) {
+        recognition.stop();
+        return;
+    }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition = new SR();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => voiceBtn.classList.add('active');
+    recognition.onend = () => voiceBtn.classList.remove('active');
+    recognition.onresult = (e) => {
+        const transcript = e.results[0][0].transcript;
+        input.value = transcript;
+        resizeInput(input);
+        setSendReady(true);
+        sendMessage(transcript);
+    };
+    recognition.onerror = () => voiceBtn.classList.remove('active');
+    recognition.start();
+});
+
+/* ── Boot ────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', () => {
+    loadHistory();
+    renderAll();
+
+    // Allow text selection in input
+    input.style.webkitUserSelect = 'text';
+    input.style.userSelect = 'text';
+
+    // Focus input after nav has been built
+    setTimeout(() => input.focus(), 400);
+});
+</script>
+
+</body>
+</html>

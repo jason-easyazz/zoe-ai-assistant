@@ -169,7 +169,15 @@
             badge.textContent = count;
             badge.style.display = count > 0 ? '' : 'none';
         });
+        // Touch panel bell badge
+        const touchBadge = document.getElementById('notif-badge');
+        if (touchBadge) {
+            touchBadge.textContent = count > 9 ? '9+' : String(count);
+            touchBadge.style.display = count > 0 ? 'block' : 'none';
+        }
     }
+
+    function getCount() { return notificationsData.length; }
 
     async function dismiss(notificationId) {
         try {
@@ -202,6 +210,9 @@
         toggle: toggle,
         close: close,
         dismiss: dismiss,
+        refresh: loadNotifications,
+        getCount: getCount,
+        updateBadge: updateBadge,
         installOpenClawUpdate: installOpenClawUpdate,
     };
 

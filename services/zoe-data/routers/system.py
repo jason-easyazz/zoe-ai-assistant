@@ -101,10 +101,48 @@ async def get_system_status(
     except Exception:
         pass
 
+    # llama-server health probe (local model on port 11434)
+    llama_status = "unconfigured"
+    llama_model = None
+    llama_url = os.environ.get("ZOE_LLAMA_URL", "http://127.0.0.1:11434")
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            lr = await client.get(f"{llama_url}/health")
+            if lr.status_code == 200:
+                llama_status = "ok"
+                ld = lr.json()
+                llama_model = ld.get("model") or ld.get("status")
+            else:
+                llama_status = f"http_{lr.status_code}"
+    except httpx.ConnectError:
+        llama_status = "offline"
+    except Exception as exc:
+        llama_status = f"error:{type(exc).__name__}"
+
+    # homeassistant-mcp-bridge health (port 8007)
+    ha_bridge_status = "unconfigured"
+    ha_bridge_url = os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            hr = await client.get(f"{ha_bridge_url}/entities")
+            if hr.status_code == 200:
+                hd = hr.json()
+                entity_count = hd.get("count", len(hd) if isinstance(hd, list) else 0)
+                ha_bridge_status = f"ok:{entity_count}_entities"
+            else:
+                ha_bridge_status = f"http_{hr.status_code}"
+    except httpx.ConnectError:
+        ha_bridge_status = "offline"
+    except Exception as exc:
+        ha_bridge_status = f"error:{type(exc).__name__}"
+
     return {
         "database": db_status,
         "openclaw_gateway": gateway_status,
         "openclaw_model": gateway_model,
+        "llama_server": llama_status,
+        "llama_model": llama_model,
+        "ha_bridge": ha_bridge_status,
         "platform": "aarch64",
         "engine": "openclaw",
         "ui_orchestrator": {

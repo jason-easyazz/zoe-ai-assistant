@@ -83,6 +83,24 @@ async def iter_text_message_chunks(
             await asyncio.sleep(0)
 
 
+async def iter_openclaw_text_chunks(
+    enc: EventEncoder,
+    recorder: AgRunRecorder,
+    message_id: str,
+    text: str,
+) -> AsyncIterator[str]:
+    """Smaller batches than default so the UI feels responsive after OpenClaw returns."""
+    async for line in iter_text_message_chunks(
+        enc,
+        recorder,
+        message_id,
+        text,
+        min_chars=72,
+        max_interval_s=0.06,
+    ):
+        yield line
+
+
 def new_run_ids() -> tuple[str, str]:
     """Returns (run_id, assistant_message_id)."""
     return uuid.uuid4().hex, uuid.uuid4().hex[:12]

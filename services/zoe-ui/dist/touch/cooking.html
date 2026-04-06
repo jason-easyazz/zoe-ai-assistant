@@ -1,0 +1,1053 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Zoe – Cooking</title>
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#7B61FF">
+    <link rel="stylesheet" href="/touch/css/touch-base.css">
+    <script src="/js/auth.js"></script>
+    <style>
+        /* ── Cooking Page ── */
+        :root {
+            --bg: #0f0f1a;
+            --purple: #7B61FF;
+            --teal: #5AE0E0;
+            --orange: #FF7B3D;
+            --red: #FF4D6A;
+            --green: #4DDB9E;
+            --glass: rgba(255,255,255,0.07);
+            --glass-border: rgba(255,255,255,0.12);
+            --glass-hi: rgba(255,255,255,0.15);
+            --text: #ffffff;
+            --text-2: rgba(255,255,255,0.7);
+            --text-3: rgba(255,255,255,0.4);
+            --radius: 18px;
+            --nav-h: 68px;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            width: 100%; height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+            overflow: hidden;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            height: 100dvh;
+        }
+
+        /* ── Header ── */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 20px;
+            background: rgba(15,15,26,0.88);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--glass-border);
+            flex-shrink: 0;
+            z-index: 10;
+        }
+
+        .header-title {
+            font-size: 20px;
+            font-weight: 600;
+            background: linear-gradient(135deg, var(--orange) 0%, var(--purple) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .icon-btn {
+            width: 48px; height: 48px;
+            border: 1px solid var(--glass-border);
+            border-radius: 50%;
+            background: var(--glass);
+            color: var(--text);
+            font-size: 18px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: background 0.2s, transform 0.1s;
+            text-decoration: none;
+        }
+        .icon-btn:active { transform: scale(0.92); background: rgba(123,97,255,0.25); }
+
+        /* ── Two-half split ── */
+        .split-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            padding-bottom: var(--nav-h);
+        }
+
+        /* ── TIMERS half ── */
+        .timers-half {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            border-bottom: 1px solid var(--glass-border);
+            overflow: hidden;
+            min-height: 0;
+        }
+
+        .half-label {
+            padding: 10px 20px 6px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            color: var(--text-3);
+            flex-shrink: 0;
+        }
+
+        /* Add Timer Row */
+        .add-timer-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0 16px 10px;
+            flex-shrink: 0;
+        }
+
+        .timer-name-input {
+            flex: 1;
+            min-height: 48px;
+            padding: 0 14px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            color: var(--text);
+            font-size: 15px;
+            outline: none;
+            -webkit-user-select: text;
+            user-select: text;
+            touch-action: manipulation;
+        }
+        .timer-name-input::placeholder { color: var(--text-3); }
+        .timer-name-input:focus { border-color: var(--orange); box-shadow: 0 0 0 2px rgba(255,123,61,0.2); }
+
+        .minutes-picker {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 4px 8px;
+        }
+
+        .min-btn {
+            width: 36px; height: 36px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(255,255,255,0.1);
+            color: var(--text);
+            font-size: 20px;
+            font-weight: 300;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: background 0.15s, transform 0.1s;
+        }
+        .min-btn:active { background: rgba(255,123,61,0.3); transform: scale(0.9); }
+
+        .minutes-display {
+            font-size: 20px;
+            font-weight: 600;
+            min-width: 40px;
+            text-align: center;
+        }
+
+        .start-btn {
+            min-height: 48px;
+            padding: 0 20px;
+            background: linear-gradient(135deg, var(--orange), #FF5A89);
+            border: none;
+            border-radius: 12px;
+            color: white;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: opacity 0.2s, transform 0.1s;
+            white-space: nowrap;
+        }
+        .start-btn:active { opacity: 0.85; transform: scale(0.97); }
+
+        /* Timer cards grid */
+        .timers-grid {
+            display: flex;
+            gap: 12px;
+            padding: 4px 16px 12px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            -webkit-overflow-scrolling: touch;
+            scroll-snap-type: x mandatory;
+            flex-shrink: 0;
+        }
+        .timers-grid::-webkit-scrollbar { display: none; }
+
+        .timer-card {
+            flex-shrink: 0;
+            scroll-snap-align: start;
+            width: 160px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            backdrop-filter: blur(10px);
+            position: relative;
+            transition: border-color 0.3s;
+        }
+        .timer-card.expired {
+            border-color: var(--red);
+            background: rgba(255,77,106,0.12);
+            animation: flashCard 0.5s ease infinite alternate;
+        }
+        @keyframes flashCard {
+            from { background: rgba(255,77,106,0.08); }
+            to   { background: rgba(255,77,106,0.22); }
+        }
+
+        .timer-name {
+            font-size: 13px;
+            color: var(--text-2);
+            font-weight: 500;
+            text-align: center;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            width: 100%;
+        }
+
+        /* Progress ring */
+        .ring-wrap {
+            position: relative;
+            width: 80px; height: 80px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .ring-svg {
+            position: absolute;
+            top: 0; left: 0;
+            transform: rotate(-90deg);
+        }
+        .ring-bg { fill: none; stroke: rgba(255,255,255,0.1); stroke-width: 5; }
+        .ring-fill { fill: none; stroke-width: 5; stroke-linecap: round; transition: stroke-dashoffset 0.9s linear; }
+
+        .timer-countdown {
+            font-size: 20px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: -0.5px;
+        }
+
+        .timer-done-text {
+            font-size: 20px;
+            font-weight: 800;
+            color: var(--red);
+            letter-spacing: 1px;
+        }
+
+        .timer-controls {
+            display: flex;
+            gap: 6px;
+            margin-top: 4px;
+        }
+
+        .ctrl-btn {
+            min-width: 40px; min-height: 36px;
+            border: 1px solid var(--glass-border);
+            border-radius: 8px;
+            background: rgba(255,255,255,0.08);
+            color: var(--text-2);
+            font-size: 14px;
+            cursor: pointer;
+            touch-action: manipulation;
+            display: flex; align-items: center; justify-content: center;
+            transition: background 0.15s, transform 0.1s;
+        }
+        .ctrl-btn:active { transform: scale(0.9); }
+        .ctrl-btn.pause-btn:hover { background: rgba(255,200,0,0.2); }
+        .ctrl-btn.cancel-btn:hover { background: rgba(255,77,106,0.25); color: var(--red); }
+
+        .no-timers {
+            text-align: center;
+            color: var(--text-3);
+            font-size: 13px;
+            padding: 12px 20px;
+        }
+
+        /* ── RECIPES half ── */
+        .recipes-half {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            min-height: 0;
+        }
+
+        .search-row {
+            display: flex;
+            gap: 10px;
+            padding: 0 16px 10px;
+            flex-shrink: 0;
+        }
+
+        .recipe-search-input {
+            flex: 1;
+            min-height: 48px;
+            padding: 0 16px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            color: var(--text);
+            font-size: 15px;
+            outline: none;
+            -webkit-user-select: text;
+            user-select: text;
+            touch-action: manipulation;
+        }
+        .recipe-search-input::placeholder { color: var(--text-3); }
+        .recipe-search-input:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(90,224,224,0.2); }
+
+        .search-btn {
+            min-height: 48px;
+            padding: 0 20px;
+            background: linear-gradient(135deg, var(--teal), var(--purple));
+            border: none;
+            border-radius: 12px;
+            color: white;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: opacity 0.2s, transform 0.1s;
+        }
+        .search-btn:active { opacity: 0.85; transform: scale(0.97); }
+
+        /* Recipe cards */
+        .recipes-grid {
+            flex: 1;
+            display: flex;
+            gap: 12px;
+            padding: 0 16px 12px;
+            overflow-x: auto;
+            overflow-y: hidden;
+            -webkit-overflow-scrolling: touch;
+            scroll-snap-type: x mandatory;
+        }
+        .recipes-grid::-webkit-scrollbar { display: none; }
+
+        .recipe-card {
+            flex-shrink: 0;
+            scroll-snap-align: start;
+            width: 200px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            cursor: pointer;
+            touch-action: manipulation;
+            backdrop-filter: blur(10px);
+            transition: border-color 0.2s, transform 0.15s;
+        }
+        .recipe-card:active { transform: scale(0.97); border-color: var(--teal); }
+
+        .recipe-name { font-size: 15px; font-weight: 600; }
+        .recipe-desc { font-size: 12px; color: var(--text-2); line-height: 1.4; flex: 1; }
+        .recipe-meta { display: flex; gap: 10px; font-size: 12px; color: var(--text-3); }
+
+        .recipe-placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 8px;
+            height: 100%;
+            padding: 20px;
+            text-align: center;
+            color: var(--text-3);
+            font-size: 14px;
+        }
+        .recipe-placeholder .emoji { font-size: 36px; }
+
+        /* ── Recipe overlay ── */
+        .recipe-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(8,8,18,0.96);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            z-index: 200;
+            display: flex;
+            flex-direction: column;
+            transform: translateY(100%);
+            transition: transform 0.35s cubic-bezier(0.4,0,0.2,1);
+        }
+        .recipe-overlay.open { transform: translateY(0); }
+
+        .overlay-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--glass-border);
+            flex-shrink: 0;
+        }
+        .overlay-title { font-size: 18px; font-weight: 600; }
+
+        .close-btn {
+            min-width: 48px; min-height: 48px;
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            background: var(--glass);
+            color: var(--text);
+            font-size: 16px;
+            cursor: pointer;
+            touch-action: manipulation;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .close-btn:active { background: rgba(255,77,106,0.2); }
+
+        .overlay-body {
+            flex: 1;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            padding: 20px;
+        }
+        .overlay-body::-webkit-scrollbar { width: 4px; }
+        .overlay-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+
+        .recipe-section-title {
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--teal);
+            margin-bottom: 10px;
+            margin-top: 16px;
+        }
+
+        .ingredients-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .ingredient-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 10px;
+            font-size: 14px;
+            color: var(--text-2);
+        }
+        .ingredient-item::before { content: '·'; color: var(--teal); font-size: 20px; line-height: 0; }
+
+        .steps-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .step-item {
+            display: flex;
+            gap: 12px;
+            padding: 12px 14px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+        }
+
+        .step-num {
+            width: 28px; height: 28px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--purple), var(--teal));
+            display: flex; align-items: center; justify-content: center;
+            font-size: 13px;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .step-text { font-size: 14px; color: var(--text-2); line-height: 1.5; }
+
+        /* ── Bottom Nav ── */
+        .bottom-nav {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            height: var(--nav-h);
+            background: rgba(10,10,20,0.92);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-top: 1px solid var(--glass-border);
+            display: flex;
+            align-items: center;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scroll-snap-type: x mandatory;
+            padding: 0 8px;
+            gap: 4px;
+            z-index: 100;
+        }
+        .bottom-nav::-webkit-scrollbar { display: none; }
+
+        .nav-item {
+            flex-shrink: 0;
+            scroll-snap-align: start;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+            min-width: 60px;
+            min-height: 52px;
+            padding: 6px 10px;
+            border-radius: 12px;
+            text-decoration: none;
+            color: rgba(255,255,255,0.4);
+            font-size: 11px;
+            font-weight: 500;
+            touch-action: manipulation;
+            transition: color 0.2s, background 0.2s;
+        }
+        .nav-item:active { background: rgba(123,97,255,0.15); }
+        .nav-item.active {
+            color: var(--orange);
+            background: rgba(255,123,61,0.12);
+        }
+        .nav-item .nav-icon { font-size: 20px; line-height: 1; }
+
+        /* landscape tweaks */
+        @media (orientation: landscape) {
+            .split-container { flex-direction: row; }
+            .timers-half { border-bottom: none; border-right: 1px solid var(--glass-border); }
+            .half-label { padding: 8px 16px 4px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="header">
+    <a href="/touch/dashboard.html" class="icon-btn" title="Back" aria-label="Back">←</a>
+    <span class="header-title">🍳 Cooking</span>
+    <div style="width:48px;"></div>
+</header>
+
+<!-- Two-half split -->
+<div class="split-container">
+
+    <!-- ══ TIMERS HALF ══ -->
+    <div class="timers-half">
+        <div class="half-label">⏱ Timers</div>
+
+        <!-- Add Timer -->
+        <div class="add-timer-row">
+            <input type="text" id="timerName" class="timer-name-input"
+                   placeholder="Timer name…"
+                   maxlength="24"
+                   autocomplete="off" autocorrect="off" autocapitalize="words">
+
+            <div class="minutes-picker">
+                <button class="min-btn" onclick="changeMinutes(-1)" aria-label="Decrease minutes" touch-action="manipulation">−</button>
+                <span class="minutes-display" id="timerMinutes">5</span>
+                <button class="min-btn" onclick="changeMinutes(1)" aria-label="Increase minutes" touch-action="manipulation">+</button>
+            </div>
+
+            <button class="start-btn" onclick="startTimer()" aria-label="Start timer" touch-action="manipulation">Start</button>
+        </div>
+
+        <!-- Active timers grid -->
+        <div class="timers-grid" id="timersGrid">
+            <div class="no-timers" id="noTimers">No active timers</div>
+        </div>
+    </div>
+
+    <!-- ══ RECIPES HALF ══ -->
+    <div class="recipes-half">
+        <div class="half-label">📖 Recipes</div>
+
+        <div class="search-row">
+            <input type="text" id="recipeSearch" class="recipe-search-input"
+                   placeholder="Search recipes…"
+                   autocomplete="off" autocorrect="off"
+                   onkeydown="if(event.key==='Enter') searchRecipes()">
+            <button class="search-btn" onclick="searchRecipes()" aria-label="Search" touch-action="manipulation">Search</button>
+        </div>
+
+        <div class="recipes-grid" id="recipesGrid">
+            <div class="recipe-placeholder">
+                <span class="emoji">🍽️</span>
+                <span>Search for a recipe or ask Zoe</span>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Recipe Detail Overlay -->
+<div class="recipe-overlay" id="recipeOverlay" role="dialog" aria-modal="true" aria-label="Recipe detail">
+    <div class="overlay-header">
+        <span class="overlay-title" id="overlayTitle">Recipe</span>
+        <button class="close-btn" onclick="closeRecipeOverlay()" aria-label="Close recipe" touch-action="manipulation">✕</button>
+    </div>
+    <div class="overlay-body" id="overlayBody"></div>
+</div>
+
+<!-- Bottom Nav -->
+<nav class="bottom-nav" role="navigation" aria-label="Main navigation">
+    <a class="nav-item" href="/touch/dashboard.html"><span class="nav-icon">🏠</span>Home</a>
+    <a class="nav-item" href="/touch/calendar.html"><span class="nav-icon">📅</span>Calendar</a>
+    <a class="nav-item" href="/touch/lists.html"><span class="nav-icon">📋</span>Lists</a>
+    <a class="nav-item" href="/touch/notes.html"><span class="nav-icon">📝</span>Notes</a>
+    <a class="nav-item" href="/touch/journal.html"><span class="nav-icon">📖</span>Journal</a>
+    <a class="nav-item" href="/touch/music.html"><span class="nav-icon">🎵</span>Music</a>
+    <a class="nav-item" href="/touch/smart-home.html"><span class="nav-icon">💡</span>Home</a>
+    <a class="nav-item" href="/touch/people.html"><span class="nav-icon">👥</span>People</a>
+    <a class="nav-item" href="/touch/memories.html"><span class="nav-icon">🖼️</span>Memories</a>
+    <a class="nav-item active" href="/touch/cooking.html" aria-current="page"><span class="nav-icon">🍳</span>Cooking</a>
+    <a class="nav-item" href="/touch/weather.html"><span class="nav-icon">⛅</span>Weather</a>
+    <a class="nav-item" href="/touch/settings.html"><span class="nav-icon">⚙️</span>Settings</a>
+</nav>
+
+<script src="/js/websocket-sync.js"></script>
+<script src="/js/touch-ui-executor.js"></script>
+<script src="/js/orb-loader.js"></script>
+<script>
+(function () {
+    'use strict';
+
+    // ── Utilities ──────────────────────────────────────────────────
+    function getUserId() {
+        try {
+            const s = localStorage.getItem('zoe_session');
+            if (s) {
+                const p = JSON.parse(s);
+                return p.user_info?.user_id || p.user_id || 'default';
+            }
+        } catch (_) {}
+        return 'default';
+    }
+
+    // ── Audio beep (Web Audio API – no microphone) ─────────────────
+    function beep() {
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const freqs = [880, 1046, 1318];
+            freqs.forEach((f, i) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.type = 'sine';
+                osc.frequency.value = f;
+                gain.gain.setValueAtTime(0.4, ctx.currentTime + i * 0.22);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.22 + 0.3);
+                osc.start(ctx.currentTime + i * 0.22);
+                osc.stop(ctx.currentTime + i * 0.22 + 0.35);
+            });
+        } catch (e) {
+            console.warn('[Cooking] Audio beep failed:', e);
+        }
+    }
+
+    // ── Timer state ────────────────────────────────────────────────
+    const STORAGE_KEY = 'zoe_cooking_timers';
+    let timers = []; // { id, name, totalSecs, endTime, paused, pauseRemaining, expired }
+    let timerRaf = null;
+
+    function loadTimers() {
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (raw) timers = JSON.parse(raw);
+        } catch (_) { timers = []; }
+        // Prune expired timers older than 2 minutes
+        const now = Date.now();
+        timers = timers.filter(t => !t.expired || (now - t.endTime) < 120000);
+        saveTimers();
+    }
+
+    function saveTimers() {
+        try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(timers));
+        } catch (_) {}
+    }
+
+    function genId() {
+        return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    }
+
+    // ── Minutes picker ─────────────────────────────────────────────
+    let minuteVal = 5;
+
+    window.changeMinutes = function (delta) {
+        minuteVal = Math.max(1, Math.min(99, minuteVal + delta));
+        document.getElementById('timerMinutes').textContent = minuteVal;
+    };
+
+    // ── Start timer ────────────────────────────────────────────────
+    window.startTimer = function () {
+        const name = document.getElementById('timerName').value.trim() || 'Timer';
+        const mins = minuteVal;
+        const secs = mins * 60;
+
+        const t = {
+            id: genId(),
+            name,
+            totalSecs: secs,
+            endTime: Date.now() + secs * 1000,
+            paused: false,
+            pauseRemaining: null,
+            expired: false
+        };
+        timers.push(t);
+        saveTimers();
+        renderTimers();
+
+        // Reset inputs
+        document.getElementById('timerName').value = '';
+        minuteVal = 5;
+        document.getElementById('timerMinutes').textContent = '5';
+
+        if (!timerRaf) tickTimers();
+    };
+
+    function pauseTimer(id) {
+        const t = timers.find(x => x.id === id);
+        if (!t || t.expired) return;
+        if (t.paused) {
+            // Resume
+            t.endTime = Date.now() + t.pauseRemaining;
+            t.paused = false;
+            t.pauseRemaining = null;
+            if (!timerRaf) tickTimers();
+        } else {
+            t.pauseRemaining = t.endTime - Date.now();
+            t.paused = true;
+        }
+        saveTimers();
+        renderTimers();
+    }
+
+    function cancelTimer(id) {
+        timers = timers.filter(t => t.id !== id);
+        saveTimers();
+        renderTimers();
+    }
+
+    // ── Ring helpers ───────────────────────────────────────────────
+    const RING_R = 34;
+    const RING_C = RING_R * 2 * Math.PI;
+
+    function ringOffset(pct) {
+        return RING_C - pct * RING_C;
+    }
+
+    function timerColor(pct) {
+        if (pct > 0.5) return '#4DDB9E';      // green
+        if (pct > 0.25) return '#FFD700';     // yellow
+        return '#FF4D6A';                      // red
+    }
+
+    // ── Render timer cards ─────────────────────────────────────────
+    function renderTimers() {
+        const grid = document.getElementById('timersGrid');
+        const noTimers = document.getElementById('noTimers');
+
+        const active = timers.filter(t => !t.expired);
+        const expired = timers.filter(t => t.expired);
+        const all = [...expired, ...active]; // expired first so they catch eye
+
+        if (all.length === 0) {
+            grid.innerHTML = '';
+            noTimers.style.display = '';
+            return;
+        }
+        noTimers.style.display = 'none';
+
+        all.forEach(t => {
+            let card = document.getElementById('timer-' + t.id);
+            if (!card) {
+                card = document.createElement('div');
+                card.id = 'timer-' + t.id;
+                card.className = 'timer-card';
+                grid.appendChild(card);
+            }
+
+            const remaining = t.paused
+                ? t.pauseRemaining
+                : Math.max(0, t.endTime - Date.now());
+
+            const pct = Math.min(1, remaining / (t.totalSecs * 1000));
+            const mm = Math.floor(remaining / 60000);
+            const ss = Math.floor((remaining % 60000) / 1000);
+            const timeStr = String(mm).padStart(2, '0') + ':' + String(ss).padStart(2, '0');
+            const color = timerColor(pct);
+
+            if (t.expired) {
+                card.className = 'timer-card expired';
+                card.innerHTML = `
+                    <div class="timer-name">${escHtml(t.name)}</div>
+                    <div class="ring-wrap">
+                        <svg class="ring-svg" width="80" height="80" viewBox="0 0 80 80">
+                            <circle class="ring-bg" cx="40" cy="40" r="${RING_R}"/>
+                            <circle class="ring-fill" cx="40" cy="40" r="${RING_R}"
+                                stroke="${color}"
+                                stroke-dasharray="${RING_C}"
+                                stroke-dashoffset="0"/>
+                        </svg>
+                        <span class="timer-done-text">DONE!</span>
+                    </div>
+                    <div class="timer-controls">
+                        <button class="ctrl-btn cancel-btn" onclick="cancelTimer('${t.id}')" touch-action="manipulation" aria-label="Dismiss">✕</button>
+                    </div>
+                `;
+            } else {
+                card.className = 'timer-card';
+                card.innerHTML = `
+                    <div class="timer-name">${escHtml(t.name)}</div>
+                    <div class="ring-wrap">
+                        <svg class="ring-svg" width="80" height="80" viewBox="0 0 80 80">
+                            <circle class="ring-bg" cx="40" cy="40" r="${RING_R}"/>
+                            <circle class="ring-fill" cx="40" cy="40" r="${RING_R}"
+                                stroke="${color}"
+                                stroke-dasharray="${RING_C}"
+                                stroke-dashoffset="${ringOffset(pct)}"/>
+                        </svg>
+                        <span class="timer-countdown">${timeStr}</span>
+                    </div>
+                    <div class="timer-controls">
+                        <button class="ctrl-btn pause-btn" onclick="pauseTimer('${t.id}')" touch-action="manipulation" aria-label="${t.paused ? 'Resume' : 'Pause'}">
+                            ${t.paused ? '▶' : '⏸'}
+                        </button>
+                        <button class="ctrl-btn cancel-btn" onclick="cancelTimer('${t.id}')" touch-action="manipulation" aria-label="Cancel">✕</button>
+                    </div>
+                `;
+            }
+        });
+
+        // Remove stale cards
+        const ids = new Set(all.map(t => 'timer-' + t.id));
+        Array.from(grid.querySelectorAll('.timer-card')).forEach(el => {
+            if (!ids.has(el.id)) el.remove();
+        });
+    }
+
+    // ── Tick loop ──────────────────────────────────────────────────
+    let beeped = new Set();
+
+    function tickTimers() {
+        const now = Date.now();
+        let anyActive = false;
+
+        timers.forEach(t => {
+            if (t.expired || t.paused) return;
+            const rem = t.endTime - now;
+            if (rem <= 0 && !t.expired) {
+                t.expired = true;
+                t.endTime = now;
+                if (!beeped.has(t.id)) {
+                    beep();
+                    beeped.add(t.id);
+                }
+            }
+            if (!t.expired) anyActive = true;
+        });
+
+        saveTimers();
+        renderTimers();
+
+        if (anyActive) {
+            timerRaf = requestAnimationFrame(tickTimers);
+        } else {
+            timerRaf = null;
+        }
+    }
+
+    // ── Recipes ────────────────────────────────────────────────────
+    let currentRecipes = [];
+
+    window.searchRecipes = async function () {
+        const q = document.getElementById('recipeSearch').value.trim();
+        if (!q) return;
+
+        const grid = document.getElementById('recipesGrid');
+        grid.innerHTML = '<div class="recipe-placeholder"><span class="emoji">🔍</span><span>Searching…</span></div>';
+
+        try {
+            const res = await fetch(`/api/recipes?q=${encodeURIComponent(q)}`);
+            if (!res.ok) throw new Error('no-api');
+            const data = await res.json();
+            const recipes = data.recipes || data.results || data || [];
+            if (!Array.isArray(recipes) || recipes.length === 0) throw new Error('empty');
+            currentRecipes = recipes;
+            renderRecipeCards(recipes);
+        } catch (err) {
+            if (err.message === 'no-api' || err.message === 'empty') {
+                grid.innerHTML = `
+                    <div class="recipe-placeholder">
+                        <span class="emoji">🤷</span>
+                        <span>No recipe API connected — try asking Zoe for specific recipe steps</span>
+                    </div>`;
+            } else {
+                grid.innerHTML = `
+                    <div class="recipe-placeholder">
+                        <span class="emoji">⚠️</span>
+                        <span>Search failed. Check your connection.</span>
+                    </div>`;
+            }
+        }
+    };
+
+    function renderRecipeCards(recipes) {
+        const grid = document.getElementById('recipesGrid');
+        grid.innerHTML = recipes.map((r, i) => `
+            <div class="recipe-card" onclick="openRecipe(${i})" touch-action="manipulation" role="button" tabindex="0" aria-label="${escHtml(r.name || r.title)}">
+                <div class="recipe-name">${escHtml(r.name || r.title || 'Recipe')}</div>
+                <div class="recipe-desc">${escHtml((r.description || r.summary || '').slice(0, 100))}</div>
+                <div class="recipe-meta">
+                    ${r.time || r.readyInMinutes ? `<span>⏱ ${r.time || r.readyInMinutes + ' min'}</span>` : ''}
+                    ${r.servings ? `<span>👤 ${r.servings}</span>` : ''}
+                </div>
+            </div>
+        `).join('');
+    }
+
+    window.openRecipe = function (idx) {
+        const r = currentRecipes[idx];
+        if (!r) return;
+        document.getElementById('overlayTitle').textContent = r.name || r.title || 'Recipe';
+
+        const ingredients = r.ingredients || r.extendedIngredients || [];
+        const steps = r.steps || r.instructions || (r.analyzedInstructions?.[0]?.steps) || [];
+
+        let html = '';
+
+        if (r.description || r.summary) {
+            html += `<p style="color:var(--text-2);font-size:14px;line-height:1.5;margin-bottom:8px;">${escHtml(r.description || r.summary)}</p>`;
+        }
+
+        if (ingredients.length) {
+            html += `<div class="recipe-section-title">Ingredients</div>
+                     <div class="ingredients-list">
+                       ${ingredients.map(ing => {
+                           const text = typeof ing === 'string' ? ing
+                               : ing.original || (ing.amount + ' ' + ing.unit + ' ' + ing.name) || ing.name || '';
+                           return `<div class="ingredient-item">${escHtml(text)}</div>`;
+                       }).join('')}
+                     </div>`;
+        }
+
+        if (steps.length) {
+            html += `<div class="recipe-section-title">Steps</div>
+                     <div class="steps-list">
+                       ${steps.map((s, i) => {
+                           const text = typeof s === 'string' ? s : s.step || s.text || '';
+                           return `<div class="step-item">
+                               <div class="step-num">${i + 1}</div>
+                               <div class="step-text">${escHtml(text)}</div>
+                           </div>`;
+                       }).join('')}
+                     </div>`;
+        }
+
+        if (!ingredients.length && !steps.length) {
+            html = '<p style="color:var(--text-3);font-size:14px;text-align:center;padding:40px 0;">No detailed info available.</p>';
+        }
+
+        document.getElementById('overlayBody').innerHTML = html;
+        document.getElementById('overlayBody').scrollTop = 0;
+        document.getElementById('recipeOverlay').classList.add('open');
+    };
+
+    window.closeRecipeOverlay = function () {
+        document.getElementById('recipeOverlay').classList.remove('open');
+    };
+
+    // ── HTML escape ────────────────────────────────────────────────
+    function escHtml(str) {
+        if (!str) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    // ── ZOE_OPEN_FORM ──────────────────────────────────────────────
+    window.ZOE_OPEN_FORM = function (formType, prefill) {
+        prefill = prefill || {};
+        if (formType === 'new_timer') {
+            document.getElementById('timerName').value = prefill.label || '';
+            if (prefill.minutes) {
+                minuteVal = parseInt(prefill.minutes, 10) || 5;
+                document.getElementById('timerMinutes').textContent = minuteVal;
+            }
+            document.getElementById('timerName').focus();
+            if (prefill.label && prefill.minutes) {
+                setTimeout(() => startTimer(), 500);
+            }
+        }
+        if (formType === 'recipe_search') {
+            document.getElementById('recipeSearch').value = prefill.query || '';
+            document.getElementById('recipeSearch').focus();
+            if (prefill.query) {
+                setTimeout(() => searchRecipes(), 500);
+            }
+        }
+    };
+
+    // ── Init ───────────────────────────────────────────────────────
+    document.addEventListener('DOMContentLoaded', function () {
+        const userId = getUserId();
+        if (typeof ZoeWebSockets !== 'undefined') {
+            ZoeWebSockets.init(userId);
+        }
+
+        loadTimers();
+        renderTimers();
+
+        // Start tick if any active timers
+        const hasActive = timers.some(t => !t.expired && !t.paused);
+        if (hasActive && !timerRaf) tickTimers();
+    });
+
+    // Also expose cancelTimer / pauseTimer globally (called from innerHTML onclick)
+    window.pauseTimer = pauseTimer;
+    window.cancelTimer = cancelTimer;
+    window.changeMinutes = window.changeMinutes;
+
+})();
+</script>
+<script src="/touch/js/gestures.js"></script>
+<script src="/touch/js/touch-menu.js"></script>
+<script>TouchMenu.init({ page: 'cooking' });</script>
+</body>
+</html>

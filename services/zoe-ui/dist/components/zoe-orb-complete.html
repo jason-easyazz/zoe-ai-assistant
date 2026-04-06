@@ -61,6 +61,32 @@
 
 .zoe-orb:active { transform: scale(0.95); }
 
+/* Voice state colors — driven by _zoeSetOrbMode() via /ws/push */
+.zoe-orb.listening {
+    background: linear-gradient(135deg, #EF4444 0%, #F97316 50%, #FBBF24 100%);
+    background-size: 200% 200%;
+    box-shadow: 0 6px 20px rgba(239, 68, 68, 0.5), 0 0 50px rgba(239, 68, 68, 0.3);
+    animation: orb-listening-pulse 1.2s ease-in-out infinite, orb-liquid-swirl 8s ease-in-out infinite;
+}
+
+.zoe-orb.responding {
+    background: linear-gradient(135deg, #10B981 0%, #06B6D4 50%, #3B82F6 100%);
+    background-size: 200% 200%;
+    box-shadow: 0 6px 20px rgba(16, 185, 129, 0.5), 0 0 50px rgba(6, 182, 212, 0.3);
+    animation: orb-responding-wave 1.5s ease-in-out infinite, orb-liquid-swirl 8s ease-in-out infinite;
+}
+
+@keyframes orb-listening-pulse {
+    0%, 100% { transform: scale(1); box-shadow: 0 6px 20px rgba(239, 68, 68, 0.5), 0 0 50px rgba(239, 68, 68, 0.3); }
+    50% { transform: scale(1.08); box-shadow: 0 8px 28px rgba(239, 68, 68, 0.7), 0 0 70px rgba(239, 68, 68, 0.5); }
+}
+
+@keyframes orb-responding-wave {
+    0%, 100% { transform: scale(1) rotate(0deg); }
+    25% { transform: scale(1.04) rotate(2deg); }
+    75% { transform: scale(1.04) rotate(-2deg); }
+}
+
 /* State-based colors */
 .zoe-orb.connecting { 
     background: linear-gradient(135deg, #7B61FF 0%, #6366F1 50%, #8B5CF6 100%);

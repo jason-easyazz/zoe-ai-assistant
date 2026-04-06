@@ -86,7 +86,17 @@ async def get_pending_ui_actions(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    user_id = user["user_id"]
+    # Resolve the panel's registered user_id from ui_panel_sessions.
+    # Actions are stored under the panel's user (who polls for them), which may differ
+    # from the caller's user_id when actions are queued by OpenClaw/API on behalf of the panel.
+    panel_cursor = await db.execute(
+        "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+        (panel_id,),
+    )
+    panel_row = await panel_cursor.fetchone()
+    # Fall back to the caller's user_id if the panel has no registered session yet.
+    panel_user_id = panel_row["user_id"] if panel_row else user["user_id"]
+
     cursor = await db.execute(
         """SELECT id, panel_id, chat_session_id, action_type, payload, status, requires_confirmation,
                   confirmation_token, retry_count, max_retries, created_at, updated_at
@@ -94,7 +104,7 @@ async def get_pending_ui_actions(
            WHERE user_id = ? AND panel_id = ? AND status IN ('queued', 'running')
            ORDER BY created_at ASC
            LIMIT ?""",
-        (user_id, panel_id, limit),
+        (panel_user_id, panel_id, limit),
     )
     rows = await cursor.fetchall()
     actions = []

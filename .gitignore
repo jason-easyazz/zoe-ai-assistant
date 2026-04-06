@@ -9,6 +9,9 @@ data/*.db-wal
 !data/schema/
 !data/schema/*.sql
 
+# Wyoming voice models (large; install via scripts/setup)
+data/wyoming/
+
 # SECURITY: Never commit secrets or API keys
 .env
 .env.local

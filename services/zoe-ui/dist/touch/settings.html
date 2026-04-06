@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Zoe – Settings</title>
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#7B61FF">
+    <link rel="stylesheet" href="/touch/css/touch-base.css">
+    <script src="/js/auth.js"></script>
+    <style>
+        /* ── Settings Page ── */
+        :root {
+            --bg: #0f0f1a;
+            --purple: #7B61FF;
+            --teal: #5AE0E0;
+            --green: #4DDB9E;
+            --red: #FF4D6A;
+            --glass: rgba(255,255,255,0.07);
+            --glass-border: rgba(255,255,255,0.12);
+            --text: #ffffff;
+            --text-2: rgba(255,255,255,0.7);
+            --text-3: rgba(255,255,255,0.4);
+            --radius: 18px;
+            --nav-h: 68px;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            width: 100%; height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+            overflow: hidden;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            height: 100dvh;
+        }
+
+        /* ── Header ── */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 20px;
+            background: rgba(15,15,26,0.88);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--glass-border);
+            flex-shrink: 0;
+            z-index: 10;
+        }
+
+        .header-title {
+            font-size: 20px;
+            font-weight: 600;
+            background: linear-gradient(135deg, var(--purple), var(--teal));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .icon-btn {
+            width: 48px; height: 48px;
+            border: 1px solid var(--glass-border);
+            border-radius: 50%;
+            background: var(--glass);
+            color: var(--text);
+            font-size: 18px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: background 0.2s, transform 0.1s;
+            text-decoration: none;
+        }
+        .icon-btn:active { transform: scale(0.92); background: rgba(123,97,255,0.25); }
+
+        /* ── Scrollable settings body ── */
+        .settings-body {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            -webkit-overflow-scrolling: touch;
+            padding: 16px 20px calc(var(--nav-h) + 20px);
+        }
+        .settings-body::-webkit-scrollbar { display: none; }
+
+        /* ── Section ── */
+        .settings-section {
+            margin-bottom: 24px;
+        }
+
+        .section-header {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            color: var(--text-3);
+            margin-bottom: 10px;
+            padding-left: 4px;
+        }
+
+        .settings-card {
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            backdrop-filter: blur(12px);
+            overflow: hidden;
+        }
+
+        .setting-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 18px;
+            min-height: 64px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            gap: 12px;
+        }
+        .setting-row:last-child { border-bottom: none; }
+
+        .row-left {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            flex: 1;
+        }
+
+        .row-label {
+            font-size: 15px;
+            font-weight: 500;
+        }
+
+        .row-sublabel {
+            font-size: 12px;
+            color: var(--text-3);
+        }
+
+        /* ── Segmented control ── */
+        .segmented {
+            display: flex;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid var(--glass-border);
+            border-radius: 10px;
+            padding: 3px;
+            gap: 2px;
+            flex-shrink: 0;
+        }
+
+        .seg-btn {
+            padding: 7px 12px;
+            min-height: 36px;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-3);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: background 0.2s, color 0.2s;
+            white-space: nowrap;
+        }
+        .seg-btn.active {
+            background: linear-gradient(135deg, var(--purple), #9B7FFF);
+            color: #fff;
+            box-shadow: 0 2px 8px rgba(123,97,255,0.4);
+        }
+        .seg-btn:not(.active):active { background: rgba(255,255,255,0.08); color: var(--text-2); }
+
+        /* ── Toggle ── */
+        .toggle-wrap {
+            position: relative;
+            width: 52px; height: 30px;
+            flex-shrink: 0;
+            touch-action: manipulation;
+            cursor: pointer;
+        }
+        .toggle-wrap input { position: absolute; opacity: 0; width: 0; height: 0; }
+        .toggle-track {
+            position: absolute;
+            inset: 0;
+            border-radius: 15px;
+            background: rgba(255,255,255,0.12);
+            border: 1px solid var(--glass-border);
+            transition: background 0.25s;
+        }
+        .toggle-wrap input:checked ~ .toggle-track {
+            background: var(--purple);
+            border-color: var(--purple);
+        }
+        .toggle-thumb {
+            position: absolute;
+            top: 3px; left: 3px;
+            width: 24px; height: 24px;
+            border-radius: 50%;
+            background: #fff;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+            transition: left 0.25s cubic-bezier(0.4,0,0.2,1);
+        }
+        .toggle-wrap input:checked ~ .toggle-track .toggle-thumb { left: 25px; }
+
+        /* ── Status dot ── */
+        .status-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            background: var(--text-3);
+            flex-shrink: 0;
+            transition: background 0.4s;
+        }
+        .status-dot.online { background: var(--green); box-shadow: 0 0 8px rgba(77,219,158,0.6); }
+        .status-dot.offline { background: var(--red); }
+
+        .status-label { font-size: 14px; color: var(--text-2); }
+
+        /* ── Info chip (read-only) ── */
+        .info-chip {
+            background: rgba(0,0,0,0.25);
+            border: 1px solid var(--glass-border);
+            border-radius: 8px;
+            padding: 6px 12px;
+            font-size: 13px;
+            color: var(--text-2);
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            max-width: 220px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* ── Text input ── */
+        .settings-input {
+            background: rgba(0,0,0,0.25);
+            border: 1px solid var(--glass-border);
+            border-radius: 10px;
+            padding: 8px 14px;
+            color: var(--text);
+            font-size: 14px;
+            min-height: 40px;
+            min-width: 140px;
+            max-width: 200px;
+            outline: none;
+            -webkit-user-select: text;
+            user-select: text;
+            touch-action: manipulation;
+            transition: border-color 0.2s;
+        }
+        .settings-input:focus { border-color: var(--purple); box-shadow: 0 0 0 2px rgba(123,97,255,0.2); }
+        .settings-input::placeholder { color: var(--text-3); }
+
+        /* ── Action buttons ── */
+        .action-btn {
+            min-height: 48px;
+            padding: 0 20px;
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            background: var(--glass);
+            color: var(--text-2);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: background 0.2s, transform 0.1s, color 0.2s;
+            white-space: nowrap;
+        }
+        .action-btn:active { transform: scale(0.96); }
+        .action-btn.danger {
+            border-color: var(--red);
+            color: var(--red);
+        }
+        .action-btn.danger:active { background: rgba(255,77,106,0.15); }
+
+        /* ── Wake word card ── */
+        .wake-word-card {
+            background: linear-gradient(135deg, rgba(123,97,255,0.15), rgba(90,224,224,0.08));
+            border: 1px solid rgba(123,97,255,0.3);
+            border-radius: 12px;
+            padding: 10px 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .wake-word-text {
+            font-size: 16px;
+            font-weight: 600;
+            background: linear-gradient(135deg, var(--purple), var(--teal));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        /* ── Version badge ── */
+        .version-badge {
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 4px 14px;
+            font-size: 13px;
+            color: var(--text-2);
+        }
+
+        /* ── Bottom Nav ── */
+        .bottom-nav {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            height: var(--nav-h);
+            background: rgba(10,10,20,0.92);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-top: 1px solid var(--glass-border);
+            display: flex;
+            align-items: center;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scroll-snap-type: x mandatory;
+            padding: 0 8px;
+            gap: 4px;
+            z-index: 100;
+        }
+        .bottom-nav::-webkit-scrollbar { display: none; }
+
+        .nav-item {
+            flex-shrink: 0;
+            scroll-snap-align: start;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+            min-width: 60px;
+            min-height: 52px;
+            padding: 6px 10px;
+            border-radius: 12px;
+            text-decoration: none;
+            color: rgba(255,255,255,0.4);
+            font-size: 11px;
+            font-weight: 500;
+            touch-action: manipulation;
+            transition: color 0.2s, background 0.2s;
+        }
+        .nav-item:active { background: rgba(123,97,255,0.15); }
+        .nav-item.active {
+            color: var(--purple);
+            background: rgba(123,97,255,0.12);
+        }
+        .nav-item .nav-icon { font-size: 20px; line-height: 1; }
+
+        /* ── Confirm dialog ── */
+        .confirm-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(8px);
+            z-index: 300;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+        .confirm-overlay.open { display: flex; }
+
+        .confirm-dialog {
+            background: #1a1a2e;
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 28px 24px 20px;
+            max-width: 340px;
+            width: 90%;
+            text-align: center;
+        }
+        .confirm-title { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+        .confirm-body { font-size: 14px; color: var(--text-2); margin-bottom: 24px; line-height: 1.5; }
+        .confirm-actions { display: flex; gap: 12px; justify-content: center; }
+        .confirm-btn {
+            flex: 1;
+            min-height: 48px;
+            border-radius: 12px;
+            border: 1px solid var(--glass-border);
+            background: var(--glass);
+            color: var(--text);
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: background 0.2s, transform 0.1s;
+        }
+        .confirm-btn:active { transform: scale(0.96); }
+        .confirm-btn.confirm-danger {
+            background: var(--red);
+            border-color: var(--red);
+            color: #fff;
+        }
+
+        @media (orientation: landscape) {
+            .settings-body {
+                column-count: 2;
+                column-gap: 20px;
+            }
+            .settings-section { break-inside: avoid; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="header">
+    <a href="/touch/dashboard.html" class="icon-btn" title="Back" aria-label="Back">←</a>
+    <span class="header-title">⚙️ Settings</span>
+    <div style="width:48px;"></div>
+</header>
+
+<!-- Settings body -->
+<div class="settings-body">
+
+    <!-- ══ Display ══ -->
+    <div class="settings-section">
+        <div class="section-header">Display</div>
+        <div class="settings-card">
+            <div class="setting-row">
+                <div class="row-left">
+                    <span class="row-label">Screensaver Timeout</span>
+                    <span class="row-sublabel">Dims display after inactivity</span>
+                </div>
+                <div class="segmented" id="screensaverControl" role="group" aria-label="Screensaver timeout">
+                    <button class="seg-btn" onclick="setScreensaver(1)"   data-val="1"   touch-action="manipulation">1m</button>
+                    <button class="seg-btn" onclick="setScreensaver(3)"   data-val="3"   touch-action="manipulation">3m</button>
+                    <button class="seg-btn active" onclick="setScreensaver(5)"  data-val="5"   touch-action="manipulation">5m</button>
+                    <button class="seg-btn" onclick="setScreensaver(10)"  data-val="10"  touch-action="manipulation">10m</button>
+                    <button class="seg-btn" onclick="setScreensaver(0)"   data-val="0"   touch-action="manipulation">Never</button>
+                </div>
+            </div>
+            <div class="setting-row">
+                <div class="row-left">
+                    <span class="row-label">Theme</span>
+                    <span class="row-sublabel">Choose display theme</span>
+                </div>
+                <div class="segmented" id="themeControl" role="group" aria-label="Theme">
+                    <button class="seg-btn active" onclick="setTheme('dark')"  data-val="dark" touch-action="manipulation">Dark</button>
+                    <button class="seg-btn" onclick="setTheme('auto')"  data-val="auto" touch-action="manipulation">Auto</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══ Voice ══ -->
+    <div class="settings-section">
+        <div class="section-header">Voice</div>
+        <div class="settings-card">
+            <div class="setting-row">
+                <div class="row-left">
+                    <span class="row-label">Wake Word</span>
+                    <span class="row-sublabel">Detected by hardware daemon</span>
+                </div>
+                <div class="wake-word-card">
+                    <span>🎙</span>
+                    <span class="wake-word-text" id="wakeWordText">Hey Zoe</span>
+                </div>
+            </div>
+            <div class="setting-row">
+                <div class="row-left">
+                    <span class="row-label">Voice Daemon</span>
+                    <span class="row-sublabel" id="daemonSubLabel">Checking…</span>
+                </div>
+                <div class="status-row">
+                    <div class="status-dot" id="daemonDot"></div>
+                    <span class="status-label" id="daemonLabel">Checking…</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══ Panel ══ -->
+    <div class="settings-section">
+        <div class="section-header">Panel</div>
+        <div class="settings-card">
+            <div class="setting-row">
+                <div class="row-left">
+                    <span class="row-label">Panel Name</span>
+                    <span class="row-sublabel">Friendly name for this display</span>
+                </div>
+                <input type="text"
+                       id="panelNameInput"
+                       class="settings-input"
+                       placeholder="e.g. Kitchen Panel"
+                       maxlength="32"
+                       autocomplete="off" autocorrect="off"
+                       oninput="savePanelName(this.value)">
+            </div>
+            <div class="setting-row">
+                <div class="row-left">
+                    <span class="row-label">Panel ID</span>
+                    <span class="row-sublabel">Unique identifier (read-only)</span>
+                </div>
+                <div class="info-chip" id="panelIdChip" title="Panel ID">—</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══ About ══ -->
+    <div class="settings-section">
+        <div class="section-header">About</div>
+        <div class="settings-card">
+            <div class="setting-row">
+                <div class="row-left">
+                    <span class="row-label">App Version</span>
+                    <span class="row-sublabel">Zoe Smart Home Assistant</span>
+                </div>
+                <div class="version-badge" id="appVersion">—</div>
+            </div>
+            <div class="setting-row">
+                <div class="row-left">
+                    <span class="row-label">Clear Cache</span>
+                    <span class="row-sublabel">Resets all local settings &amp; storage</span>
+                </div>
+                <button class="action-btn danger" onclick="confirmClearCache()" touch-action="manipulation" aria-label="Clear cache">Clear Cache</button>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Bottom Nav -->
+<nav class="bottom-nav" role="navigation" aria-label="Main navigation">
+    <a class="nav-item" href="/touch/dashboard.html"><span class="nav-icon">🏠</span>Home</a>
+    <a class="nav-item" href="/touch/calendar.html"><span class="nav-icon">📅</span>Calendar</a>
+    <a class="nav-item" href="/touch/lists.html"><span class="nav-icon">📋</span>Lists</a>
+    <a class="nav-item" href="/touch/notes.html"><span class="nav-icon">📝</span>Notes</a>
+    <a class="nav-item" href="/touch/journal.html"><span class="nav-icon">📖</span>Journal</a>
+    <a class="nav-item" href="/touch/music.html"><span class="nav-icon">🎵</span>Music</a>
+    <a class="nav-item" href="/touch/smart-home.html"><span class="nav-icon">💡</span>Home</a>
+    <a class="nav-item" href="/touch/people.html"><span class="nav-icon">👥</span>People</a>
+    <a class="nav-item" href="/touch/memories.html"><span class="nav-icon">🖼️</span>Memories</a>
+    <a class="nav-item" href="/touch/cooking.html"><span class="nav-icon">🍳</span>Cooking</a>
+    <a class="nav-item" href="/touch/weather.html"><span class="nav-icon">⛅</span>Weather</a>
+    <a class="nav-item active" href="/touch/settings.html" aria-current="page"><span class="nav-icon">⚙️</span>Settings</a>
+</nav>
+
+<!-- Confirm dialog -->
+<div class="confirm-overlay" id="confirmOverlay" role="dialog" aria-modal="true">
+    <div class="confirm-dialog">
+        <div class="confirm-title">⚠️ Clear All Cache?</div>
+        <div class="confirm-body">This will wipe all local settings, saved timers, and preferences. The page will reload.</div>
+        <div class="confirm-actions">
+            <button class="confirm-btn" onclick="closeConfirm()" touch-action="manipulation">Cancel</button>
+            <button class="confirm-btn confirm-danger" onclick="doClearCache()" touch-action="manipulation">Clear</button>
+        </div>
+    </div>
+</div>
+
+<script src="/js/websocket-sync.js"></script>
+<script src="/js/touch-ui-executor.js"></script>
+<script src="/js/orb-loader.js"></script>
+<script>
+(function () {
+    'use strict';
+
+    // ── Storage keys ───────────────────────────────────────────────
+    const KEY_SCREENSAVER = 'zoe_screensaver_timeout';
+    const KEY_THEME       = 'zoe_theme';
+    const KEY_PANEL_NAME  = 'zoe_panel_name';
+    const KEY_PANEL_ID    = 'zoe_panel_id';
+
+    // ── Utilities ──────────────────────────────────────────────────
+    function getUserId() {
+        try {
+            const s = localStorage.getItem('zoe_session');
+            if (s) {
+                const p = JSON.parse(s);
+                return p.user_info?.user_id || p.user_id || 'default';
+            }
+        } catch (_) {}
+        return 'default';
+    }
+
+    function generatePanelId() {
+        const arr = new Uint8Array(8);
+        if (window.crypto && window.crypto.getRandomValues) {
+            window.crypto.getRandomValues(arr);
+        } else {
+            for (let i = 0; i < arr.length; i++) arr[i] = Math.floor(Math.random() * 256);
+        }
+        return 'panel-' + Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 12);
+    }
+
+    // ── Screensaver ────────────────────────────────────────────────
+    window.setScreensaver = function (val) {
+        localStorage.setItem(KEY_SCREENSAVER, String(val));
+        document.querySelectorAll('#screensaverControl .seg-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.val === String(val));
+        });
+    };
+
+    function loadScreensaver() {
+        const saved = localStorage.getItem(KEY_SCREENSAVER);
+        const val = saved !== null ? saved : '5';
+        document.querySelectorAll('#screensaverControl .seg-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.val === val);
+        });
+    }
+
+    // ── Theme ──────────────────────────────────────────────────────
+    window.setTheme = function (val) {
+        localStorage.setItem(KEY_THEME, val);
+        document.querySelectorAll('#themeControl .seg-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.val === val);
+        });
+        applyTheme(val);
+    };
+
+    function applyTheme(val) {
+        const body = document.body;
+        body.classList.remove('dark-mode', 'light-mode');
+        if (val === 'light') {
+            body.classList.add('light-mode');
+            document.documentElement.style.setProperty('--bg', '#f0f4ff');
+        } else if (val === 'auto') {
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            body.classList.add(prefersDark ? 'dark-mode' : 'light-mode');
+            document.documentElement.style.setProperty('--bg', prefersDark ? '#0f0f1a' : '#f0f4ff');
+        } else {
+            body.classList.add('dark-mode');
+            document.documentElement.style.setProperty('--bg', '#0f0f1a');
+        }
+        // Update ztm-nav if present (from universal menu)
+        if (window.TouchMenu) window.TouchMenu.applyTheme && window.TouchMenu.applyTheme(val);
+    }
+
+    function loadTheme() {
+        const saved = localStorage.getItem(KEY_THEME) || 'dark';
+        document.querySelectorAll('#themeControl .seg-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.val === saved);
+        });
+        applyTheme(saved);
+    }
+
+    // ── Panel name ─────────────────────────────────────────────────
+    window.savePanelName = function (val) {
+        localStorage.setItem(KEY_PANEL_NAME, val);
+    };
+
+    function loadPanelName() {
+        const name = localStorage.getItem(KEY_PANEL_NAME) || '';
+        document.getElementById('panelNameInput').value = name;
+    }
+
+    // ── Panel ID ───────────────────────────────────────────────────
+    function loadPanelId() {
+        let id = localStorage.getItem(KEY_PANEL_ID);
+        if (!id) {
+            id = generatePanelId();
+            localStorage.setItem(KEY_PANEL_ID, id);
+        }
+        document.getElementById('panelIdChip').textContent = id;
+        document.getElementById('panelIdChip').title = id;
+    }
+
+    // ── Wake word ──────────────────────────────────────────────────
+    function loadWakeWord() {
+        // Custom model stored by voice daemon setup
+        const custom = localStorage.getItem('zoe_wake_word');
+        document.getElementById('wakeWordText').textContent = custom || 'Hey Zoe';
+    }
+
+    // ── Voice daemon status ─────────────────────────────────────────
+    let daemonPollInterval = null;
+
+    async function pollDaemonStatus() {
+        try {
+            const res = await fetch('/api/system/status');
+            if (!res.ok) throw new Error('non-ok');
+            const data = await res.json();
+
+            const connected = data.voice_daemon === true
+                || data.voice_daemon === 'running'
+                || data.voice_connected === true
+                || data.status === 'ok';
+
+            document.getElementById('daemonDot').className = 'status-dot ' + (connected ? 'online' : 'offline');
+            document.getElementById('daemonLabel').textContent = connected ? 'Connected' : 'Not detected';
+            document.getElementById('daemonSubLabel').textContent = connected ? 'Voice daemon running' : 'Voice daemon offline';
+
+            // Also grab version
+            if (data.version || data.app_version) {
+                document.getElementById('appVersion').textContent = data.version || data.app_version;
+            }
+
+            // Wake word from system status
+            if (data.wake_word) {
+                localStorage.setItem('zoe_wake_word', data.wake_word);
+                document.getElementById('wakeWordText').textContent = data.wake_word;
+            }
+        } catch (_) {
+            document.getElementById('daemonDot').className = 'status-dot offline';
+            document.getElementById('daemonLabel').textContent = 'Not detected';
+            document.getElementById('daemonSubLabel').textContent = 'Cannot reach system API';
+        }
+    }
+
+    // ── Clear cache ────────────────────────────────────────────────
+    window.confirmClearCache = function () {
+        document.getElementById('confirmOverlay').classList.add('open');
+    };
+
+    window.closeConfirm = function () {
+        document.getElementById('confirmOverlay').classList.remove('open');
+    };
+
+    window.doClearCache = function () {
+        localStorage.clear();
+        location.reload();
+    };
+
+    // ── ZOE_OPEN_FORM – not needed for settings ────────────────────
+    window.ZOE_OPEN_FORM = function () {};
+
+    // ── Init ───────────────────────────────────────────────────────
+    document.addEventListener('DOMContentLoaded', function () {
+        const userId = getUserId();
+        if (typeof ZoeWebSockets !== 'undefined') {
+            ZoeWebSockets.init(userId);
+        }
+
+        loadScreensaver();
+        loadTheme();
+        loadPanelName();
+        loadPanelId();
+        loadWakeWord();
+
+        // Initial status check + poll every 30s
+        pollDaemonStatus();
+        daemonPollInterval = setInterval(pollDaemonStatus, 30000);
+    });
+
+    // Dismiss confirm on backdrop tap
+    document.getElementById('confirmOverlay').addEventListener('click', function (e) {
+        if (e.target === this) closeConfirm();
+    });
+
+})();
+</script>
+<script src="/touch/js/gestures.js"></script>
+<script src="/touch/js/touch-menu.js"></script>
+<script>TouchMenu.init({ page: 'settings' });</script>
+</body>
+</html>

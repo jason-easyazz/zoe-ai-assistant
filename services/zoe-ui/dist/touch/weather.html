@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Zoe – Weather</title>
+    <meta name="application-name" content="Zoe AI">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#7B61FF">
+    <link rel="stylesheet" href="/touch/css/touch-base.css">
+    <script src="/js/auth.js"></script>
+    <style>
+        /* ── Weather Page ── */
+        :root {
+            --bg: #0f0f1a;
+            --purple: #7B61FF;
+            --teal: #5AE0E0;
+            --glass: rgba(255,255,255,0.07);
+            --glass-border: rgba(255,255,255,0.12);
+            --text: #ffffff;
+            --text-2: rgba(255,255,255,0.7);
+            --text-3: rgba(255,255,255,0.45);
+            --radius: 18px;
+            --nav-h: 68px;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            width: 100%; height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            user-select: none;
+            overflow: hidden;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            height: 100dvh;
+        }
+
+        /* ── Header ── */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 20px;
+            background: rgba(15,15,26,0.85);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--glass-border);
+            flex-shrink: 0;
+            z-index: 10;
+        }
+
+        .header-title {
+            font-size: 20px;
+            font-weight: 600;
+            background: linear-gradient(135deg, var(--purple), var(--teal));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .icon-btn {
+            width: 48px; height: 48px;
+            border: 1px solid var(--glass-border);
+            border-radius: 50%;
+            background: var(--glass);
+            backdrop-filter: blur(10px);
+            color: var(--text);
+            font-size: 18px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: background 0.2s, transform 0.1s;
+            text-decoration: none;
+        }
+        .icon-btn:active { transform: scale(0.92); background: rgba(123,97,255,0.25); }
+
+        /* ── Scrollable content ── */
+        .content {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            -webkit-overflow-scrolling: touch;
+            padding: 0 0 calc(var(--nav-h) + 8px);
+        }
+        .content::-webkit-scrollbar { display: none; }
+
+        /* ── Hero ── */
+        .hero {
+            padding: 24px 20px 20px;
+            text-align: center;
+            position: relative;
+            background: linear-gradient(180deg,
+                rgba(123,97,255,0.12) 0%,
+                rgba(90,224,224,0.06) 60%,
+                transparent 100%);
+        }
+
+        .location-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 6px 14px;
+            font-size: 14px;
+            color: var(--text-2);
+            margin-bottom: 16px;
+        }
+
+        .temp-main {
+            font-size: clamp(80px, 18vw, 120px);
+            font-weight: 200;
+            line-height: 1;
+            background: linear-gradient(135deg, #fff 0%, var(--teal) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -4px;
+        }
+
+        .condition-emoji {
+            font-size: 48px;
+            line-height: 1;
+            margin: 8px 0 4px;
+        }
+
+        .condition-text {
+            font-size: 22px;
+            font-weight: 300;
+            color: var(--text-2);
+            margin-bottom: 20px;
+            text-transform: capitalize;
+        }
+
+        .meta-pills {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .meta-pill {
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 8px 14px;
+            font-size: 13px;
+            color: var(--text-2);
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .meta-pill span:first-child { color: var(--teal); font-size: 16px; }
+
+        /* ── Sunrise / Sunset Bar ── */
+        .sun-section {
+            margin: 16px 20px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            padding: 16px 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        .sun-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            color: var(--text-3);
+            margin-bottom: 12px;
+        }
+
+        .sun-bar-wrap {
+            position: relative;
+            height: 8px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+            overflow: visible;
+        }
+
+        .sun-bar-fill {
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            background: linear-gradient(90deg, #FFD700, #FF8C00);
+            border-radius: 4px;
+            transition: width 0.8s ease;
+        }
+
+        .sun-orb {
+            position: absolute;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px; height: 20px;
+            border-radius: 50%;
+            background: radial-gradient(circle, #FFE066, #FF8C00);
+            box-shadow: 0 0 12px rgba(255,210,0,0.6);
+        }
+
+        .sun-times {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 10px;
+            font-size: 14px;
+        }
+
+        .sun-time { display: flex; align-items: center; gap: 6px; color: var(--text-2); }
+
+        /* ── Section labels ── */
+        .section-label {
+            padding: 0 20px 10px;
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-3);
+        }
+
+        /* ── Hourly strip ── */
+        .hourly-strip {
+            display: flex;
+            gap: 10px;
+            padding: 0 20px 16px;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scroll-snap-type: x mandatory;
+        }
+        .hourly-strip::-webkit-scrollbar { display: none; }
+
+        .hour-card {
+            flex-shrink: 0;
+            scroll-snap-align: start;
+            width: 72px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            padding: 12px 8px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+        }
+
+        .hour-time { font-size: 12px; color: var(--text-3); margin-bottom: 6px; }
+        .hour-icon { font-size: 22px; line-height: 1; margin-bottom: 6px; }
+        .hour-temp { font-size: 15px; font-weight: 500; }
+
+        /* ── 7-day forecast ── */
+        .daily-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 0 20px 8px;
+        }
+
+        .day-card {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            padding: 14px 18px;
+            backdrop-filter: blur(10px);
+        }
+
+        .day-name { font-size: 15px; font-weight: 500; min-width: 70px; }
+        .day-icon { font-size: 24px; flex: 1; text-align: center; }
+        .day-temps { display: flex; gap: 10px; font-size: 15px; }
+        .day-high { font-weight: 600; }
+        .day-low { color: var(--text-3); }
+
+        /* ── Footer ── */
+        .update-footer {
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-3);
+            padding: 10px 20px 4px;
+        }
+
+        /* ── Skeleton loading ── */
+        @keyframes shimmer {
+            0% { background-position: -400px 0; }
+            100% { background-position: 400px 0; }
+        }
+        .skeleton {
+            background: linear-gradient(90deg,
+                rgba(255,255,255,0.06) 25%,
+                rgba(255,255,255,0.12) 50%,
+                rgba(255,255,255,0.06) 75%);
+            background-size: 800px 100%;
+            animation: shimmer 1.4s infinite;
+            border-radius: 8px;
+        }
+        .skeleton-temp { width: 180px; height: 100px; margin: 0 auto 8px; border-radius: 16px; }
+        .skeleton-text { height: 20px; border-radius: 10px; }
+        .skeleton-pill { height: 34px; width: 90px; border-radius: 20px; }
+        .skeleton-card { height: 80px; border-radius: var(--radius); }
+
+        /* ── Bottom Nav ── */
+        .bottom-nav {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            height: var(--nav-h);
+            background: rgba(10,10,20,0.92);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-top: 1px solid var(--glass-border);
+            display: flex;
+            align-items: center;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scroll-snap-type: x mandatory;
+            padding: 0 8px;
+            gap: 4px;
+            z-index: 100;
+        }
+        .bottom-nav::-webkit-scrollbar { display: none; }
+
+        .nav-item {
+            flex-shrink: 0;
+            scroll-snap-align: start;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+            min-width: 60px;
+            min-height: 52px;
+            padding: 6px 10px;
+            border-radius: 12px;
+            text-decoration: none;
+            color: var(--text-3);
+            font-size: 11px;
+            font-weight: 500;
+            touch-action: manipulation;
+            transition: color 0.2s, background 0.2s;
+        }
+        .nav-item:active { background: rgba(123,97,255,0.15); }
+        .nav-item.active {
+            color: var(--purple);
+            background: rgba(123,97,255,0.12);
+        }
+        .nav-item .nav-icon { font-size: 20px; line-height: 1; }
+
+        /* ── Refresh spin ── */
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spinning { animation: spin 0.8s linear infinite; }
+
+        /* ── Responsive ── */
+        @media (orientation: landscape) {
+            .hero { padding: 14px 20px 12px; }
+            .temp-main { font-size: clamp(60px, 12vw, 100px); }
+            .meta-pills { gap: 8px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Header -->
+<header class="header">
+    <a href="/touch/dashboard.html" class="icon-btn" title="Back" aria-label="Back">←</a>
+    <span class="header-title">⛅ Weather</span>
+    <button class="icon-btn" id="refreshBtn" onclick="refreshWeather()" title="Refresh" aria-label="Refresh" touch-action="manipulation">↻</button>
+</header>
+
+<!-- Scrollable content -->
+<main class="content" id="mainContent">
+
+    <!-- HERO -->
+    <section class="hero" id="heroSection">
+        <div id="heroContent">
+            <!-- populated by JS -->
+            <div class="location-pill skeleton skeleton-pill" style="width:120px;height:32px;margin-bottom:16px;"></div>
+            <div class="skeleton skeleton-temp"></div>
+            <div class="skeleton skeleton-text" style="width:160px;margin:8px auto 20px;"></div>
+            <div class="meta-pills">
+                <div class="skeleton skeleton-pill"></div>
+                <div class="skeleton skeleton-pill"></div>
+                <div class="skeleton skeleton-pill"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Sunrise / Sunset -->
+    <section class="sun-section" id="sunSection" style="opacity:0;transition:opacity 0.4s;">
+        <div class="sun-header">
+            <span>🌅 Sunrise</span>
+            <span>🌇 Sunset</span>
+        </div>
+        <div class="sun-bar-wrap" id="sunBar">
+            <div class="sun-bar-fill" id="sunFill" style="width:0%"></div>
+            <div class="sun-orb" id="sunOrb" style="left:0%"></div>
+        </div>
+        <div class="sun-times">
+            <div class="sun-time">🌅 <span id="sunriseTime">--:--</span></div>
+            <div class="sun-time">🌇 <span id="sunsetTime">--:--</span></div>
+        </div>
+    </section>
+
+    <!-- Hourly -->
+    <div class="section-label">Hourly</div>
+    <div class="hourly-strip" id="hourlyStrip">
+        <!-- skeleton -->
+        <div class="hour-card skeleton skeleton-card" style="width:72px;"></div>
+        <div class="hour-card skeleton skeleton-card" style="width:72px;"></div>
+        <div class="hour-card skeleton skeleton-card" style="width:72px;"></div>
+        <div class="hour-card skeleton skeleton-card" style="width:72px;"></div>
+        <div class="hour-card skeleton skeleton-card" style="width:72px;"></div>
+        <div class="hour-card skeleton skeleton-card" style="width:72px;"></div>
+    </div>
+
+    <!-- 7-day -->
+    <div class="section-label">7-Day Forecast</div>
+    <div class="daily-list" id="dailyList">
+        <div class="skeleton skeleton-card"></div>
+        <div class="skeleton skeleton-card"></div>
+        <div class="skeleton skeleton-card"></div>
+    </div>
+
+    <!-- Last updated -->
+    <div class="update-footer" id="updateFooter">Fetching weather…</div>
+
+</main>
+
+<!-- Bottom Nav -->
+<nav class="bottom-nav" role="navigation" aria-label="Main navigation">
+    <a class="nav-item" href="/touch/dashboard.html"><span class="nav-icon">🏠</span>Home</a>
+    <a class="nav-item" href="/touch/calendar.html"><span class="nav-icon">📅</span>Calendar</a>
+    <a class="nav-item" href="/touch/lists.html"><span class="nav-icon">📋</span>Lists</a>
+    <a class="nav-item" href="/touch/notes.html"><span class="nav-icon">📝</span>Notes</a>
+    <a class="nav-item" href="/touch/journal.html"><span class="nav-icon">📖</span>Journal</a>
+    <a class="nav-item" href="/touch/music.html"><span class="nav-icon">🎵</span>Music</a>
+    <a class="nav-item" href="/touch/smart-home.html"><span class="nav-icon">💡</span>Home</a>
+    <a class="nav-item" href="/touch/people.html"><span class="nav-icon">👥</span>People</a>
+    <a class="nav-item" href="/touch/memories.html"><span class="nav-icon">🖼️</span>Memories</a>
+    <a class="nav-item" href="/touch/cooking.html"><span class="nav-icon">🍳</span>Cooking</a>
+    <a class="nav-item active" href="/touch/weather.html" aria-current="page"><span class="nav-icon">⛅</span>Weather</a>
+    <a class="nav-item" href="/touch/settings.html"><span class="nav-icon">⚙️</span>Settings</a>
+</nav>
+
+<script src="/js/websocket-sync.js"></script>
+<script src="/js/touch-ui-executor.js"></script>
+<script src="/js/orb-loader.js"></script>
+<script>
+(function() {
+    'use strict';
+
+    // ── Utilities ────────────────────────────────────────────────
+    function getUserId() {
+        try {
+            const s = localStorage.getItem('zoe_session');
+            if (s) {
+                const p = JSON.parse(s);
+                return p.user_info?.user_id || p.user_id || 'default';
+            }
+        } catch (_) {}
+        return 'default';
+    }
+
+    function conditionEmoji(desc) {
+        if (!desc) return '🌤';
+        const d = desc.toLowerCase();
+        if (d.includes('thunder') || d.includes('storm')) return '⛈';
+        if (d.includes('snow') || d.includes('blizzard')) return '❄️';
+        if (d.includes('sleet') || d.includes('hail')) return '🌨';
+        if (d.includes('rain') || d.includes('drizzle') || d.includes('shower')) return '🌧';
+        if (d.includes('fog') || d.includes('mist') || d.includes('haze')) return '🌫';
+        if (d.includes('overcast') || d.includes('cloudy')) return '☁️';
+        if (d.includes('partly') || d.includes('mostly cloudy')) return '⛅';
+        if (d.includes('clear') || d.includes('sunny')) return '☀️';
+        if (d.includes('wind')) return '💨';
+        return '🌤';
+    }
+
+    function iconEmoji(iconCode) {
+        if (!iconCode) return '🌤';
+        const map = {
+            '01d':'☀️','01n':'🌙','02d':'⛅','02n':'☁️','03d':'☁️','03n':'☁️',
+            '04d':'☁️','04n':'☁️','09d':'🌦','09n':'🌧','10d':'🌧','10n':'🌧',
+            '11d':'⛈','11n':'⛈','13d':'❄️','13n':'❄️','50d':'🌫','50n':'🌫'
+        };
+        return map[iconCode] || conditionEmoji(iconCode);
+    }
+
+    function fmt12(timeStr) {
+        if (!timeStr) return '--:--';
+        try {
+            const d = new Date(timeStr.includes('T') ? timeStr : 'T' + timeStr);
+            if (isNaN(d)) return timeStr;
+            return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        } catch (_) { return timeStr; }
+    }
+
+    function fmtTemp(t) {
+        return t !== undefined && t !== null ? Math.round(t) + '°' : '--°';
+    }
+
+    function fmtHour(timeStr) {
+        try {
+            const d = new Date(timeStr);
+            const h = d.getHours();
+            return h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM';
+        } catch (_) { return timeStr; }
+    }
+
+    function fmtDay(timeStr) {
+        try {
+            const d = new Date(timeStr);
+            return d.toLocaleDateString([], { weekday: 'short' });
+        } catch (_) { return timeStr; }
+    }
+
+    // ── Sun progress ──────────────────────────────────────────────
+    function updateSunBar(sunriseISO, sunsetISO) {
+        const now = Date.now();
+        const rise = new Date(sunriseISO).getTime();
+        const set = new Date(sunsetISO).getTime();
+        if (!rise || !set) return;
+
+        const total = set - rise;
+        const elapsed = Math.max(0, Math.min(total, now - rise));
+        const pct = (elapsed / total) * 100;
+
+        document.getElementById('sunFill').style.width = pct + '%';
+        document.getElementById('sunOrb').style.left = pct + '%';
+        document.getElementById('sunSection').style.opacity = '1';
+    }
+
+    // ── Render current weather ────────────────────────────────────
+    function renderCurrent(data) {
+        const emoji = data.icon ? iconEmoji(data.icon) : conditionEmoji(data.description);
+
+        document.getElementById('heroContent').innerHTML = `
+            <div class="location-pill">📍 ${data.city || 'Unknown Location'}</div>
+            <div class="temp-main">${fmtTemp(data.temp)}</div>
+            <div class="condition-emoji">${emoji}</div>
+            <div class="condition-text">${data.description || ''}</div>
+            <div class="meta-pills">
+                <div class="meta-pill"><span>🌡</span> Feels ${fmtTemp(data.feels_like)}</div>
+                <div class="meta-pill"><span>💧</span> ${data.humidity !== undefined ? data.humidity + '%' : '--'} Humidity</div>
+                <div class="meta-pill"><span>💨</span> ${data.wind_speed !== undefined ? Math.round(data.wind_speed) + ' mph' : '--'} Wind</div>
+            </div>
+        `;
+
+        if (data.sunrise && data.sunset) {
+            document.getElementById('sunriseTime').textContent = fmt12(data.sunrise);
+            document.getElementById('sunsetTime').textContent = fmt12(data.sunset);
+            updateSunBar(data.sunrise, data.sunset);
+        }
+    }
+
+    // ── Render forecast ───────────────────────────────────────────
+    function renderForecast(data) {
+        const hourly = (data.hourly || []).slice(0, 12);
+        const daily = data.daily || [];
+
+        const hourlyStrip = document.getElementById('hourlyStrip');
+        if (hourly.length) {
+            hourlyStrip.innerHTML = hourly.map(h => `
+                <div class="hour-card">
+                    <div class="hour-time">${fmtHour(h.time)}</div>
+                    <div class="hour-icon">${h.icon ? iconEmoji(h.icon) : conditionEmoji(h.description)}</div>
+                    <div class="hour-temp">${fmtTemp(h.temp)}</div>
+                </div>
+            `).join('');
+        } else {
+            hourlyStrip.innerHTML = '<div style="color:rgba(255,255,255,0.4);padding:12px 20px;font-size:13px;">No hourly data</div>';
+        }
+
+        const dailyList = document.getElementById('dailyList');
+        if (daily.length) {
+            dailyList.innerHTML = daily.map(d => `
+                <div class="day-card">
+                    <div class="day-name">${fmtDay(d.day || d.date)}</div>
+                    <div class="day-icon">${d.icon ? iconEmoji(d.icon) : conditionEmoji(d.description)}</div>
+                    <div class="day-temps">
+                        <span class="day-high">${fmtTemp(d.high)}</span>
+                        <span class="day-low">${fmtTemp(d.low)}</span>
+                    </div>
+                </div>
+            `).join('');
+        } else {
+            dailyList.innerHTML = '<div style="color:rgba(255,255,255,0.4);padding:12px 20px;font-size:13px;">No forecast data</div>';
+        }
+    }
+
+    // ── Fetch ─────────────────────────────────────────────────────
+    let lastUpdated = null;
+
+    async function fetchWeather() {
+        try {
+            const [curRes, fcastRes] = await Promise.all([
+                fetch('/api/weather/current'),
+                fetch('/api/weather/forecast')
+            ]);
+            if (curRes.ok) {
+                const cur = await curRes.json();
+                renderCurrent(cur);
+            }
+            if (fcastRes.ok) {
+                const fcast = await fcastRes.json();
+                renderForecast(fcast);
+            }
+            lastUpdated = new Date();
+            updateFooter();
+        } catch (err) {
+            console.warn('[Weather] fetch failed:', err);
+            document.getElementById('updateFooter').textContent = 'Could not load weather data';
+        }
+    }
+
+    function updateFooter() {
+        if (!lastUpdated) return;
+        const mins = Math.floor((Date.now() - lastUpdated.getTime()) / 60000);
+        const label = mins < 1 ? 'Just updated' : `Updated ${mins} minute${mins !== 1 ? 's' : ''} ago`;
+        document.getElementById('updateFooter').textContent = label;
+    }
+
+    window.refreshWeather = function() {
+        const btn = document.getElementById('refreshBtn');
+        btn.classList.add('spinning');
+        btn.style.pointerEvents = 'none';
+        fetchWeather().finally(() => {
+            btn.classList.remove('spinning');
+            btn.style.pointerEvents = '';
+        });
+    };
+
+    // ZOE_OPEN_FORM – weather is navigate-only, no form needed
+    window.ZOE_OPEN_FORM = function() {};
+
+    // ── Init ──────────────────────────────────────────────────────
+    document.addEventListener('DOMContentLoaded', function () {
+        const userId = getUserId();
+        if (typeof ZoeWebSockets !== 'undefined') {
+            ZoeWebSockets.init(userId);
+        }
+        fetchWeather();
+
+        // Update footer every minute
+        setInterval(updateFooter, 60000);
+        // Auto-refresh every 10 minutes
+        setInterval(fetchWeather, 600000);
+    });
+})();
+</script>
+<script src="/touch/js/gestures.js"></script>
+<script src="/touch/js/touch-menu.js"></script>
+<script>TouchMenu.init({ page: 'weather' });</script>
+</body>
+</html>

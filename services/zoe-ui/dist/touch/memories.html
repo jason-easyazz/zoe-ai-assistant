@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Zoe – Memories</title>
+  <link rel="stylesheet" href="/touch/css/touch-base.css">
+  <meta name="application-name" content="Zoe AI">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#7B61FF">
+  <link rel="manifest" href="/manifest.json">
+  <script src="/js/auth.js"></script>
+  <style>
+    :root {
+      --bg:           #0f0f1a;
+      --glass:        rgba(255,255,255,0.055);
+      --glass-hi:     rgba(255,255,255,0.10);
+      --glass-border: rgba(255,255,255,0.11);
+      --purple:       #7B61FF;
+      --teal:         #5AE0E0;
+      --grad:         linear-gradient(135deg,#7B61FF,#5AE0E0);
+      --text:         #ffffff;
+      --text-sec:     rgba(255,255,255,0.65);
+      --text-muted:   rgba(255,255,255,0.40);
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden;
+      touch-action: manipulation;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+    }
+
+    .page {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      height: 100dvh;
+    }
+
+    /* ── HEADER ─────────────────────────── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      background: rgba(13,13,24,0.92);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border-bottom: 1px solid var(--glass-border);
+      flex-shrink: 0;
+      min-height: 58px;
+    }
+    .header-title {
+      font-size: 19px;
+      font-weight: 600;
+      background: var(--grad);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .icon-btn {
+      width: 48px; height: 48px;
+      border: 1px solid var(--glass-border);
+      border-radius: 50%;
+      background: var(--glass);
+      color: var(--text);
+      font-size: 20px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      touch-action: manipulation;
+      transition: background 0.18s, transform 0.12s;
+      flex-shrink: 0;
+    }
+    .icon-btn:active { transform: scale(0.90); background: var(--glass-hi); }
+
+    /* ── FILTER TABS ────────────────────── */
+    .filter-tabs {
+      display: flex;
+      gap: 6px;
+      padding: 8px 14px;
+      background: rgba(13,13,24,0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--glass-border);
+      flex-shrink: 0;
+    }
+    .filter-tab {
+      padding: 8px 18px;
+      border-radius: 20px;
+      border: 1px solid var(--glass-border);
+      background: var(--glass);
+      color: var(--text-muted);
+      font-size: 13px; font-weight: 500;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: all 0.2s ease;
+      min-height: 38px;
+      display: flex; align-items: center;
+    }
+    .filter-tab.active {
+      background: var(--grad);
+      border-color: transparent;
+      color: #fff;
+      box-shadow: 0 0 14px rgba(123,97,255,0.4);
+    }
+    .filter-tab:active { transform: scale(0.94); }
+
+    /* ── CONTENT ────────────────────────── */
+    .content-area {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
+      padding: 12px 12px 80px;
+    }
+
+    /* ── ON THIS DAY HERO ───────────────── */
+    .on-this-day {
+      background: linear-gradient(135deg,rgba(123,97,255,0.20),rgba(90,224,224,0.12));
+      border: 1px solid rgba(123,97,255,0.35);
+      border-radius: 20px;
+      padding: 18px 18px 16px;
+      margin-bottom: 16px;
+      position: relative;
+      overflow: hidden;
+    }
+    .on-this-day::before {
+      content: '';
+      position: absolute; top: -20px; right: -20px;
+      width: 120px; height: 120px; border-radius: 50%;
+      background: var(--grad);
+      opacity: 0.07;
+    }
+    .otd-header {
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 14px;
+    }
+    .otd-icon { font-size: 22px; }
+    .otd-label {
+      font-size: 12px; font-weight: 700;
+      color: var(--teal);
+      text-transform: uppercase; letter-spacing: 1.3px;
+    }
+    .otd-date { font-size: 12px; color: var(--text-muted); }
+
+    .otd-entry {
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .otd-year-badge {
+      display: inline-flex; align-items: center;
+      padding: 3px 10px;
+      border-radius: 12px;
+      background: rgba(123,97,255,0.22);
+      color: var(--purple);
+      font-size: 12px; font-weight: 600;
+      border: 1px solid rgba(123,97,255,0.35);
+      width: fit-content;
+    }
+    .otd-excerpt {
+      font-size: 15px; color: var(--text-sec);
+      line-height: 1.55; margin: 4px 0;
+    }
+    .otd-mood { font-size: 22px; margin-bottom: 2px; }
+    .otd-view-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 9px 18px;
+      border-radius: 20px;
+      background: var(--grad);
+      border: none;
+      color: #fff;
+      font-size: 13px; font-weight: 600;
+      cursor: pointer;
+      touch-action: manipulation;
+      margin-top: 4px;
+      min-height: 40px;
+      transition: transform 0.12s;
+      width: fit-content;
+    }
+    .otd-view-btn:active { transform: scale(0.94); }
+    .otd-empty {
+      font-size: 14px; color: var(--text-muted);
+      line-height: 1.5; text-align: center;
+      padding: 10px 0 4px;
+    }
+
+    /* ── SECTION HEADING ────────────────── */
+    .section-heading {
+      font-size: 11px; font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 1.3px;
+      margin: 16px 2px 10px;
+    }
+
+    /* ── MASONRY GRID ───────────────────── */
+    .masonry {
+      columns: 2;
+      column-gap: 10px;
+    }
+    @media (min-width: 600px) { .masonry { columns: 3; } }
+    @media (min-width: 900px) { .masonry { columns: 4; } }
+
+    .masonry-item {
+      break-inside: avoid;
+      margin-bottom: 10px;
+      display: block;
+    }
+
+    /* ── PHOTO CARD ─────────────────────── */
+    .photo-card {
+      background: var(--glass);
+      border: 1px solid var(--glass-border);
+      border-radius: 16px;
+      overflow: hidden;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: transform 0.18s, border-color 0.2s;
+    }
+    .photo-card:active { transform: scale(0.96); }
+    .photo-card img {
+      width: 100%; display: block;
+      object-fit: cover;
+      min-height: 80px;
+    }
+    .photo-caption {
+      padding: 8px 10px;
+    }
+    .photo-date { font-size: 11px; color: var(--text-muted); }
+    .photo-caption-text {
+      font-size: 12px; color: var(--text-sec);
+      margin-top: 2px; line-height: 1.4;
+    }
+
+    /* Photo placeholder for loading/error */
+    .photo-placeholder {
+      width: 100%;
+      aspect-ratio: 4/3;
+      background: linear-gradient(135deg,rgba(123,97,255,0.15),rgba(90,224,224,0.08));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 28px; opacity: 0.5;
+    }
+
+    /* ── JOURNAL CARD ───────────────────── */
+    .journal-card {
+      background: var(--glass);
+      border: 1px solid var(--glass-border);
+      border-radius: 16px;
+      padding: 14px;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: border-color 0.2s, transform 0.15s;
+    }
+    .journal-card:active { transform: scale(0.96); }
+    .journal-card:hover { border-color: rgba(123,97,255,0.3); }
+    .journal-card-top {
+      display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+    }
+    .journal-mood { font-size: 22px; }
+    .journal-date { font-size: 12px; color: var(--text-muted); }
+    .journal-excerpt { font-size: 13px; color: var(--text-sec); line-height: 1.5; }
+
+    /* ── MEMORY CARD ────────────────────── */
+    .memory-card {
+      background: var(--glass);
+      border: 1px solid var(--glass-border);
+      border-radius: 16px;
+      padding: 14px;
+      transition: border-color 0.2s;
+    }
+    .memory-card-top {
+      display: flex; align-items: flex-start;
+      justify-content: space-between; gap: 8px; margin-bottom: 8px;
+    }
+    .memory-date { font-size: 11px; color: var(--text-muted); }
+    .memory-cat {
+      padding: 2px 8px; border-radius: 10px;
+      font-size: 10px; font-weight: 600;
+      background: rgba(90,224,224,0.14);
+      color: var(--teal);
+      border: 1px solid rgba(90,224,224,0.28);
+      white-space: nowrap;
+    }
+    .memory-text { font-size: 13px; color: var(--text-sec); line-height: 1.55; }
+
+    /* ── EMPTY STATE ────────────────────── */
+    .empty-state {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 12px; padding: 40px 24px;
+      text-align: center; color: var(--text-muted);
+    }
+    .empty-icon { font-size: 48px; opacity: 0.55; }
+    .empty-title { font-size: 16px; font-weight: 600; color: var(--text-sec); }
+    .empty-msg { font-size: 14px; max-width: 240px; line-height: 1.5; }
+
+    /* ── LIGHTBOX ───────────────────────── */
+    .lightbox-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.92);
+      z-index: 200;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+    .lightbox-overlay.open { opacity: 1; pointer-events: auto; }
+
+    .lightbox-close {
+      position: absolute; top: 16px; right: 16px;
+      width: 48px; height: 48px; border-radius: 50%;
+      border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+      font-size: 22px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      touch-action: manipulation;
+      transition: background 0.15s;
+      z-index: 10;
+    }
+    .lightbox-close:active { background: rgba(255,255,255,0.15); transform: scale(0.90); }
+
+    .lightbox-img-wrap {
+      flex: 1; display: flex; align-items: center; justify-content: center;
+      width: 100%; padding: 60px 60px 10px;
+      position: relative;
+    }
+    .lightbox-img {
+      max-width: 100%; max-height: 100%;
+      border-radius: 12px;
+      object-fit: contain;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+    }
+
+    .lightbox-nav {
+      position: absolute;
+      top: 50%; transform: translateY(-50%);
+      width: 52px; height: 52px; border-radius: 50%;
+      background: rgba(255,255,255,0.10);
+      border: 1px solid rgba(255,255,255,0.18);
+      color: #fff; font-size: 24px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      touch-action: manipulation;
+      transition: background 0.15s, transform 0.12s;
+      z-index: 10;
+    }
+    .lightbox-nav:active { background: rgba(255,255,255,0.2); transform: translateY(-50%) scale(0.90); }
+    .lightbox-prev { left: 8px; }
+    .lightbox-next { right: 8px; }
+
+    .lightbox-info {
+      padding: 10px 20px 20px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    .lightbox-date { font-size: 13px; color: rgba(255,255,255,0.55); }
+    .lightbox-caption { font-size: 15px; color: rgba(255,255,255,0.85); margin-top: 4px; }
+
+    /* ── BOTTOM NAV ─────────────────────── */
+    .bottom-nav {
+      display: flex;
+      overflow-x: auto;
+      scrollbar-width: none;
+      background: rgba(10,10,20,0.96);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border-top: 1px solid var(--glass-border);
+      padding: 5px 6px;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+    .bottom-nav::-webkit-scrollbar { display: none; }
+    .nav-item {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 2px;
+      padding: 5px 9px;
+      border-radius: 12px;
+      text-decoration: none;
+      color: var(--text-muted);
+      font-size: 10px; font-weight: 500;
+      white-space: nowrap;
+      min-width: 52px; min-height: 52px;
+      touch-action: manipulation;
+      transition: all 0.18s ease;
+      flex-shrink: 0;
+      border: 1px solid transparent;
+    }
+    .nav-item:active { transform: scale(0.90); }
+    .nav-icon { font-size: 20px; line-height: 1; }
+    .nav-item.active {
+      background: linear-gradient(135deg,rgba(123,97,255,0.22),rgba(90,224,224,0.12));
+      color: var(--teal);
+      border-color: rgba(90,224,224,0.28);
+    }
+    .nav-item.active .nav-icon { filter: drop-shadow(0 0 5px var(--teal)); }
+
+    /* Skeleton shimmer */
+    @keyframes shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .skeleton-block {
+      border-radius: 16px;
+      background: linear-gradient(90deg,
+        rgba(255,255,255,0.04) 0%,
+        rgba(255,255,255,0.08) 50%,
+        rgba(255,255,255,0.04) 100%);
+      background-size: 200% 100%;
+      animation: shimmer 1.6s ease-in-out infinite;
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- HEADER -->
+  <div class="header">
+    <button class="icon-btn" onclick="goBack()" aria-label="Back">‹</button>
+    <span class="header-title">🖼️ Memories</span>
+    <div style="width:48px"></div><!-- spacer for symmetry -->
+  </div>
+
+  <!-- FILTER TABS -->
+  <div class="filter-tabs">
+    <div class="filter-tab active" data-filter="all"     onclick="setFilter('all',this)">All</div>
+    <div class="filter-tab"        data-filter="photos"  onclick="setFilter('photos',this)">📷 Photos</div>
+    <div class="filter-tab"        data-filter="memories"onclick="setFilter('memories',this)">💭 Memories</div>
+    <div class="filter-tab"        data-filter="journal" onclick="setFilter('journal',this)">📔 Journal</div>
+  </div>
+
+  <!-- CONTENT -->
+  <div class="content-area" id="contentArea">
+    <!-- On This Day -->
+    <div class="on-this-day" id="onThisDay">
+      <div class="otd-header">
+        <span class="otd-icon">✨</span>
+        <div>
+          <div class="otd-label">On This Day</div>
+          <div class="otd-date" id="otdDate"></div>
+        </div>
+      </div>
+      <div class="otd-entry" id="otdContent">
+        <div class="skeleton-block" style="height:16px;width:60%;margin-bottom:8px"></div>
+        <div class="skeleton-block" style="height:60px;margin-bottom:8px"></div>
+      </div>
+    </div>
+
+    <!-- Grid -->
+    <div class="section-heading" id="gridHeading">All Memories</div>
+    <div class="masonry" id="memoriesGrid">
+      <div class="masonry-item"><div class="skeleton-block" style="height:160px"></div></div>
+      <div class="masonry-item"><div class="skeleton-block" style="height:120px"></div></div>
+      <div class="masonry-item"><div class="skeleton-block" style="height:190px"></div></div>
+      <div class="masonry-item"><div class="skeleton-block" style="height:140px"></div></div>
+    </div>
+  </div>
+
+  <!-- BOTTOM NAV -->
+  <nav class="bottom-nav">
+    <a href="/touch/dashboard.html"  class="nav-item"><span class="nav-icon">🏠</span>Dashboard</a>
+    <a href="/touch/calendar.html"   class="nav-item"><span class="nav-icon">📅</span>Calendar</a>
+    <a href="/touch/lists.html"      class="nav-item"><span class="nav-icon">✅</span>Lists</a>
+    <a href="/touch/notes.html"      class="nav-item"><span class="nav-icon">📝</span>Notes</a>
+    <a href="/touch/journal.html"    class="nav-item"><span class="nav-icon">📔</span>Journal</a>
+    <a href="/touch/music.html"      class="nav-item"><span class="nav-icon">🎵</span>Music</a>
+    <a href="/touch/smart-home.html" class="nav-item"><span class="nav-icon">💡</span>Smart Home</a>
+    <a href="/touch/people.html"     class="nav-item"><span class="nav-icon">👥</span>People</a>
+    <a href="/touch/memories.html"   class="nav-item active"><span class="nav-icon">🖼️</span>Memories</a>
+    <a href="/touch/cooking.html"    class="nav-item"><span class="nav-icon">🍳</span>Cooking</a>
+    <a href="/touch/weather.html"    class="nav-item"><span class="nav-icon">⛅</span>Weather</a>
+    <a href="/touch/settings.html"   class="nav-item"><span class="nav-icon">⚙️</span>Settings</a>
+  </nav>
+
+</div><!-- /page -->
+
+<!-- LIGHTBOX -->
+<div class="lightbox-overlay" id="lightboxOverlay">
+  <button class="lightbox-close" onclick="closeLightbox()">×</button>
+  <div class="lightbox-img-wrap">
+    <button class="lightbox-nav lightbox-prev" onclick="lightboxNav(-1)">‹</button>
+    <img class="lightbox-img" id="lightboxImg" src="" alt="">
+    <button class="lightbox-nav lightbox-next" onclick="lightboxNav(+1)">›</button>
+  </div>
+  <div class="lightbox-info">
+    <div class="lightbox-date" id="lightboxDate"></div>
+    <div class="lightbox-caption" id="lightboxCaption"></div>
+  </div>
+</div>
+
+<script>
+// ─── ZOE HOOK ─────────────────────────────────────────────────────────────────
+window.ZOE_OPEN_FORM = null;
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let allPhotos    = [];
+let allMemories  = [];
+let allJournal   = [];
+let currentFilter = 'all';
+let lightboxPhotos = [];
+let lightboxIndex  = 0;
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  try {
+    const session = JSON.parse(localStorage.getItem('zoe_session') || '{}');
+    if (typeof ZoeWebSockets !== 'undefined') {
+      ZoeWebSockets.init(session.userId || session.user_id || 'guest');
+    }
+  } catch(e) {}
+
+  document.querySelector('.nav-item.active')?.scrollIntoView({ inline: 'center', behavior: 'instant' });
+
+  // Show today's date in OTD
+  const today = new Date();
+  document.getElementById('otdDate').textContent =
+    today.toLocaleDateString('en-US', { month:'long', day:'numeric' });
+
+  loadAll();
+});
+
+function goBack() { window.location.href = '/touch/dashboard.html'; }
+
+// ─── LOAD ─────────────────────────────────────────────────────────────────────
+async function loadAll() {
+  await Promise.allSettled([
+    loadJournal(),
+    loadPhotos(),
+    loadMemories(),
+  ]);
+  renderOnThisDay();
+  renderGrid();
+}
+
+async function loadJournal() {
+  try {
+    const res = await fetch('/api/journal/entries?limit=50');
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    allJournal = Array.isArray(data) ? data : (data.entries || data.items || []);
+  } catch(e) {
+    allJournal = getDemoJournal();
+  }
+}
+
+async function loadPhotos() {
+  try {
+    const res = await fetch('/api/journal/photos?limit=30');
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    allPhotos = Array.isArray(data) ? data : (data.photos || data.items || []);
+  } catch(e) {
+    allPhotos = getDemoPhotos();
+  }
+}
+
+async function loadMemories() {
+  try {
+    const res = await fetch('/api/memories?limit=30');
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    allMemories = Array.isArray(data) ? data : (data.memories || data.items || []);
+  } catch(e) {
+    allMemories = getDemoMemories();
+  }
+}
+
+// ─── ON THIS DAY ──────────────────────────────────────────────────────────────
+function renderOnThisDay() {
+  const today = new Date();
+  const todayMD = `${today.getMonth() + 1}-${today.getDate()}`;
+
+  // Filter journal entries from previous years matching today's month/day
+  const onThisDay = allJournal.filter(entry => {
+    try {
+      const d = new Date(entry.date || entry.created_at);
+      const entryMD = `${d.getMonth() + 1}-${d.getDate()}`;
+      return entryMD === todayMD && d.getFullYear() < today.getFullYear();
+    } catch(e) { return false; }
+  }).sort((a, b) => {
+    // Most recent year first
+    return new Date(b.date||b.created_at) - new Date(a.date||a.created_at);
+  });
+
+  const el = document.getElementById('otdContent');
+
+  if (onThisDay.length === 0) {
+    el.innerHTML = `<div class="otd-empty">
+      No memories from this day yet — start journaling! 📝
+    </div>`;
+    return;
+  }
+
+  const entry = onThisDay[0];
+  const year  = new Date(entry.date||entry.created_at).getFullYear();
+  const yearsAgo = today.getFullYear() - year;
+  const excerpt = (entry.content || entry.text || entry.body || '').slice(0, 160);
+  const mood  = entry.mood || entry.mood_emoji || '';
+
+  el.innerHTML = `
+    <span class="otd-year-badge">${year} — ${yearsAgo} year${yearsAgo!==1?'s':''} ago</span>
+    ${mood ? `<div class="otd-mood">${mood}</div>` : ''}
+    <div class="otd-excerpt">${escHtml(excerpt)}${excerpt.length >= 160 ? '…' : ''}</div>
+    <button class="otd-view-btn" onclick="viewJournalEntry('${entry.id||''}')">
+      View full entry →
+    </button>
+    ${onThisDay.length > 1 ? `<div style="font-size:12px;color:var(--text-muted);margin-top:8px">+${onThisDay.length-1} more from this day</div>` : ''}`;
+}
+
+function viewJournalEntry(id) {
+  if (id) {
+    window.location.href = `/touch/journal.html#entry-${id}`;
+  } else {
+    window.location.href = '/touch/journal.html';
+  }
+}
+
+// ─── FILTER ───────────────────────────────────────────────────────────────────
+function setFilter(filter, el) {
+  currentFilter = filter;
+  document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+
+  const headingMap = { all:'All Memories', photos:'Photos', memories:'Memories', journal:'Journal' };
+  document.getElementById('gridHeading').textContent = headingMap[filter] || 'All Memories';
+
+  // Show/hide "On This Day" for non-photo filters
+  const otd = document.getElementById('onThisDay');
+  otd.style.display = filter === 'photos' ? 'none' : '';
+
+  renderGrid();
+}
+
+// ─── RENDER GRID ──────────────────────────────────────────────────────────────
+function renderGrid() {
+  const grid = document.getElementById('memoriesGrid');
+  grid.innerHTML = '';
+
+  let items = [];
+
+  if (currentFilter === 'all' || currentFilter === 'photos') {
+    allPhotos.forEach(p => items.push({ type:'photo', data:p, date:new Date(p.date||p.created_at||0) }));
+  }
+  if (currentFilter === 'all' || currentFilter === 'journal') {
+    allJournal.forEach(j => items.push({ type:'journal', data:j, date:new Date(j.date||j.created_at||0) }));
+  }
+  if (currentFilter === 'all' || currentFilter === 'memories') {
+    allMemories.forEach(m => items.push({ type:'memory', data:m, date:new Date(m.date||m.created_at||0) }));
+  }
+
+  // Sort all by date descending
+  items.sort((a,b) => b.date - a.date);
+
+  if (items.length === 0) {
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">
+      <div class="empty-icon">🖼️</div>
+      <div class="empty-title">No memories yet</div>
+      <div class="empty-msg">Start journaling to capture your memories here.</div>
+    </div>`;
+    return;
+  }
+
+  // Build lightbox photo index
+  lightboxPhotos = items.filter(i => i.type === 'photo').map(i => i.data);
+
+  items.forEach(item => {
+    const wrap = document.createElement('div');
+    wrap.className = 'masonry-item';
+
+    if (item.type === 'photo') {
+      const photoIdx = lightboxPhotos.findIndex(p => p === item.data);
+      wrap.innerHTML = buildPhotoCard(item.data, photoIdx);
+    } else if (item.type === 'journal') {
+      wrap.innerHTML = buildJournalCard(item.data);
+    } else {
+      wrap.innerHTML = buildMemoryCard(item.data);
+    }
+
+    grid.appendChild(wrap);
+  });
+}
+
+function buildPhotoCard(photo, idx) {
+  const src     = photo.url || photo.src || photo.path || '';
+  const date    = formatDate(photo.date || photo.created_at);
+  const caption = photo.caption || photo.description || '';
+  return `
+    <div class="photo-card" onclick="openLightbox(${idx})">
+      ${src
+        ? `<img src="${escHtml(src)}" alt="${escHtml(caption)}" loading="lazy">`
+        : `<div class="photo-placeholder">📷</div>`}
+      <div class="photo-caption">
+        <div class="photo-date">${date}</div>
+        ${caption ? `<div class="photo-caption-text">${escHtml(caption)}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function buildJournalCard(entry) {
+  const mood    = entry.mood || entry.mood_emoji || '📔';
+  const date    = formatDate(entry.date || entry.created_at);
+  const excerpt = (entry.content || entry.text || entry.body || '').slice(0, 120);
+  return `
+    <div class="journal-card" onclick="viewJournalEntry('${entry.id||''}')">
+      <div class="journal-card-top">
+        <span class="journal-mood">${mood}</span>
+        <span class="journal-date">${date}</span>
+      </div>
+      <div class="journal-excerpt">${escHtml(excerpt)}${excerpt.length>=120?'…':''}</div>
+    </div>`;
+}
+
+function buildMemoryCard(memory) {
+  const date    = formatDate(memory.date || memory.created_at);
+  const cat     = memory.category || memory.type || 'Memory';
+  const text    = memory.content || memory.text || memory.description || '';
+  return `
+    <div class="memory-card">
+      <div class="memory-card-top">
+        <span class="memory-date">${date}</span>
+        <span class="memory-cat">${escHtml(cat)}</span>
+      </div>
+      <div class="memory-text">${escHtml(text.slice(0,150))}${text.length>150?'…':''}</div>
+    </div>`;
+}
+
+// ─── LIGHTBOX ─────────────────────────────────────────────────────────────────
+function openLightbox(idx) {
+  if (lightboxPhotos.length === 0) return;
+  lightboxIndex = Math.max(0, Math.min(idx, lightboxPhotos.length - 1));
+  updateLightboxPhoto();
+  document.getElementById('lightboxOverlay').classList.add('open');
+}
+
+function closeLightbox() {
+  document.getElementById('lightboxOverlay').classList.remove('open');
+}
+
+function lightboxNav(dir) {
+  lightboxIndex = (lightboxIndex + dir + lightboxPhotos.length) % lightboxPhotos.length;
+  updateLightboxPhoto();
+}
+
+function updateLightboxPhoto() {
+  const photo = lightboxPhotos[lightboxIndex];
+  if (!photo) return;
+  const imgEl = document.getElementById('lightboxImg');
+  imgEl.src = photo.url || photo.src || photo.path || '';
+  imgEl.alt = photo.caption || '';
+  document.getElementById('lightboxDate').textContent = formatDate(photo.date || photo.created_at);
+  document.getElementById('lightboxCaption').textContent = photo.caption || photo.description || '';
+
+  // Show/hide nav arrows
+  document.querySelector('.lightbox-prev').style.display = lightboxPhotos.length > 1 ? 'flex' : 'none';
+  document.querySelector('.lightbox-next').style.display = lightboxPhotos.length > 1 ? 'flex' : 'none';
+}
+
+// Swipe support for lightbox
+let swipeStartX = 0;
+document.getElementById('lightboxOverlay').addEventListener('touchstart', e => {
+  swipeStartX = e.touches[0].clientX;
+}, { passive: true });
+document.getElementById('lightboxOverlay').addEventListener('touchend', e => {
+  const dx = e.changedTouches[0].clientX - swipeStartX;
+  if (Math.abs(dx) > 50) lightboxNav(dx > 0 ? -1 : 1);
+}, { passive: true });
+
+// Keyboard support
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('lightboxOverlay').classList.contains('open')) return;
+  if (e.key === 'ArrowLeft')  lightboxNav(-1);
+  if (e.key === 'ArrowRight') lightboxNav(+1);
+  if (e.key === 'Escape')     closeLightbox();
+});
+
+// ─── DEMO DATA ────────────────────────────────────────────────────────────────
+function getDemoJournal() {
+  const today = new Date();
+  const makeDate = (yearsAgo, month, day) => {
+    return new Date(today.getFullYear()-yearsAgo, month-1, day).toISOString();
+  };
+  return [
+    { id:'j1', date: makeDate(1, today.getMonth()+1, today.getDate()),
+      mood:'😊', content:'Today was a beautiful day. We went for a long walk in the park and had ice cream. The kids were so happy playing with the dogs by the lake.' },
+    { id:'j2', date: makeDate(2, today.getMonth()+1, today.getDate()),
+      mood:'🎉', content:`Can't believe it's been two years already! Celebrated with family dinner. Everyone came home for the occasion, which felt really special.` },
+    { id:'j3', date:'2026-03-28T10:00:00Z',
+      mood:'😌', content:'Quiet Sunday at home. Made banana bread and listened to records all afternoon. These slow days feel like treasures.' },
+    { id:'j4', date:'2026-03-15T18:00:00Z',
+      mood:'💪', content:'Big presentation today — it went really well! Weeks of preparation paid off. Feeling accomplished and grateful for the team.' },
+  ];
+}
+
+function getDemoPhotos() {
+  return [
+    { id:'p1', url:'', caption:'Sunset at the beach', date:'2026-03-20T17:30:00Z' },
+    { id:'p2', url:'', caption:'Family dinner',        date:'2026-02-14T19:00:00Z' },
+    { id:'p3', url:'', caption:'Morning coffee',       date:'2026-01-08T08:00:00Z' },
+    { id:'p4', url:'', caption:'Garden in spring',     date:'2025-04-10T11:00:00Z' },
+    { id:'p5', url:'', caption:'Road trip views',      date:'2025-07-22T14:00:00Z' },
+  ];
+}
+
+function getDemoMemories() {
+  return [
+    { id:'m1', date:'2026-02-10T00:00:00Z', category:'Milestone',
+      content:'Emma took her first steps today! She walked from the sofa to the coffee table — a full 6 steps all by herself.' },
+    { id:'m2', date:'2025-12-25T00:00:00Z', category:'Holiday',
+      content:`Best Christmas in years. Everyone made it back. Dad's famous roast, Mum's trifle, and the kids running wild with their new toys.` },
+    { id:'m3', date:'2025-09-01T00:00:00Z', category:'Achievement',
+      content:'First day of school for Oliver. He was so nervous at breakfast but walked in with his head high. Growing up so fast.' },
+    { id:'m4', date:'2025-06-15T00:00:00Z', category:'Travel',
+      content:'Three days in the Lake District. Perfect weather, amazing hikes, no Wi-Fi. Exactly what we needed.' },
+  ];
+}
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function formatDate(iso) {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+  } catch(e) { return String(iso); }
+}
+</script>
+
+<script src="/js/websocket-sync.js"></script>
+<script src="/js/touch-ui-executor.js"></script>
+<script src="/js/orb-loader.js"></script>
+<script src="/touch/js/gestures.js"></script>
+<script src="/touch/js/touch-menu.js"></script>
+<script>TouchMenu.init({ page: 'memories' });</script>
+</body>
+</html>

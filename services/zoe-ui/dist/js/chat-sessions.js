@@ -106,9 +106,25 @@ class ChatSessionManager {
     /**
      * Load a specific session and display its messages
      */
+    /**
+     * Fire-and-forget: pre-warm the Hermes agent pool for this session so the
+     * first user message is responded to quickly rather than cold-starting.
+     */
+    warmSession(sessionId) {
+        if (!sessionId) return;
+        const session = window.zoeAuth?.getCurrentSession();
+        const headers = { 'Content-Type': 'application/json' };
+        if (session?.session_id) headers['X-Session-ID'] = session.session_id;
+        fetch(`/api/chat/warm/${encodeURIComponent(sessionId)}`, { method: 'POST', headers })
+            .catch(() => {}); // Best-effort — ignore failures
+    }
+
     async loadSession(sessionId) {
         try {
             console.log('📖 Loading session:', sessionId);
+
+            // Pre-warm the Hermes agent pool so the first message is fast.
+            this.warmSession(sessionId);
             
             // Check cache first
             if (this.messageCache.has(sessionId)) {
@@ -276,6 +292,7 @@ class ChatSessionManager {
             }
             
             console.log('✅ Created new session:', data.session_id);
+            this.warmSession(data.session_id); // Pre-warm Hermes for this new session
             
             // Clear current chat
             const chatContainer = document.getElementById('messagesContainer');

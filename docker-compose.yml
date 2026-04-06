@@ -12,11 +12,12 @@ services:
 
   # ── UI ─────────────────────────────────────────────────────────────────────
   zoe-ui:
-    image: nginx:alpine
+    image: nginx:alpine  # pinned: nginx@sha256:b3c656d55d7ad751196f21b7fd2e8d4da9cb430e32f646adcf92441b72f82b14
     container_name: zoe-ui
     ports:
     - 80:80
     - 443:443
+    - 18790:18790
     volumes:
     - ./services/zoe-ui/dist:/usr/share/nginx/html
     - ./services/zoe-ui/nginx.conf:/etc/nginx/conf.d/default.conf:ro
@@ -50,7 +51,7 @@ services:
 
   # ── Home Assistant ─────────────────────────────────────────────────────────
   homeassistant:
-    image: ghcr.io/home-assistant/home-assistant:stable
+    image: ghcr.io/home-assistant/home-assistant:stable  # pinned: sha256:449140e073d8d7814098cd62dfdbb326ad043f51a3c4d4721889369f46751d52
     container_name: homeassistant
     restart: unless-stopped
     ports:
@@ -74,8 +75,12 @@ services:
     - PYTHONUNBUFFERED=1
     - HA_BASE_URL=${HA_BASE_URL:-http://homeassistant:8123}
     - HA_ACCESS_TOKEN=${HA_ACCESS_TOKEN:-}
+    - ZOE_HA_VOICE_INGRESS_URL=${ZOE_HA_VOICE_INGRESS_URL:-http://host.docker.internal:8000}
+    - ZOE_HA_VOICE_TOKEN=${ZOE_HA_VOICE_TOKEN:-}
     networks:
     - zoe-network
+    extra_hosts:
+    - "host.docker.internal:host-gateway"
     healthcheck:
       test:
       - CMD
@@ -87,6 +92,39 @@ services:
       retries: 3
     env_file:
     - .env
+
+  # ── Wyoming Voice Services (HA Assist) ────────────────────────────────────
+  wyoming-piper:
+    image: rhasspy/wyoming-piper:latest
+    container_name: wyoming-piper
+    restart: unless-stopped
+    command: --voice en_US-lessac-medium --uri tcp://0.0.0.0:10200
+    volumes:
+    - ./data/wyoming/piper:/data
+    networks:
+    - zoe-network
+
+  wyoming-whisper:
+    image: rhasspy/wyoming-whisper:latest
+    container_name: wyoming-whisper
+    restart: unless-stopped
+    command: --model tiny-int8 --language en --uri tcp://0.0.0.0:10300
+    volumes:
+    - ./data/wyoming/whisper:/data
+    networks:
+    - zoe-network
+
+  wyoming-openwakeword:
+    image: rhasspy/wyoming-openwakeword:latest
+    container_name: wyoming-openwakeword
+    restart: unless-stopped
+    command: --preload-model ok_nabu --threshold 0.20 --trigger-level 0 --uri tcp://0.0.0.0:10400 --debug --debug-probability
+    ports:
+    - 10400:10400
+    volumes:
+    - ./data/wyoming/openwakeword:/data
+    networks:
+    - zoe-network
 
   # ── Keeper.sh Calendar Sync ────────────────────────────────────────────────
   keeper:
@@ -116,7 +154,7 @@ services:
 
   # ── Cloudflare Tunnel ─────────────────────────────────────────────────────
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:latest  # pinned: sha256:21f3607baf2384c54d592b0efe76dd5f548c0dbc083e62fa22c7fac3923d077f
     container_name: zoe-cloudflared
     command: --config /etc/cloudflared/config.yml --no-autoupdate tunnel run
     restart: unless-stopped

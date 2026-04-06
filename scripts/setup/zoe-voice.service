@@ -1,0 +1,36 @@
+[Unit]
+Description=Zoe Voice Daemon (OpenWakeWord + PyAudio)
+Documentation=https://github.com/your-org/zoe
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zoe
+Group=audio
+WorkingDirectory=/home/zoe/assistant/scripts/setup
+
+# Load environment variables from env file
+EnvironmentFile=-/etc/zoe-voice.env
+EnvironmentFile=-/home/zoe/.zoe-voice/.env.voice
+
+# Run via the Python venv (adjust path if venv is elsewhere)
+ExecStart=/home/zoe/venv/bin/python3 /home/zoe/assistant/scripts/setup/zoe_voice_daemon.py
+
+# Restart on failure with backoff
+Restart=always
+RestartSec=5
+StartLimitInterval=60
+StartLimitBurst=5
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=zoe-voice
+
+# Resource limits
+TimeoutStartSec=30
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

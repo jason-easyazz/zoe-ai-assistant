@@ -50,6 +50,16 @@ function initOrbChat() {
     
     console.log('✅ Zoe orb initialized');
     
+    // Pre-warm Hermes session for this orb so the first message is fast.
+    if (orbSessionId) {
+        var session = window.zoeAuth ? window.zoeAuth.getCurrentSession() : null;
+        var warmHeaders = { 'Content-Type': 'application/json' };
+        if (session && session.session_id) warmHeaders['X-Session-ID'] = session.session_id;
+        fetch('/api/chat/warm/' + encodeURIComponent(orbSessionId), {
+            method: 'POST', headers: warmHeaders
+        }).catch(function() {});
+    }
+
     // Initialize intelligence WebSocket
     initIntelligenceWS();
 }
@@ -629,4 +639,215 @@ function toggleOrbVoice() {
 
 // Note: initOrbChat() is called by the page after component loads
 // No auto-initialization here to avoid race conditions
+
+// ══════════════════════════════════════════════════════════════════════
+// Canvas Orb — State-Driven Premium Animation
+// Driven by window._zoeSetOrbMode(state) from touch-ui-executor.js
+// States: 'ambient' | 'listening' | 'thinking' | 'responding'
+// ══════════════════════════════════════════════════════════════════════
+(function () {
+    'use strict';
+
+    let _canvas = null;
+    let _ctx = null;
+    let _raf = null;
+    let _state = 'ambient';
+    let _t = 0;
+    let _initialized = false;
+
+    // Particle system for idle/ambient state
+    const PARTICLE_COUNT = 20;
+    const particles = [];
+
+    function initParticles(R) {
+        particles.length = 0;
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            const angle = (i / PARTICLE_COUNT) * Math.PI * 2;
+            const r = R * 0.72 + (Math.random() - 0.5) * R * 0.12;
+            particles.push({
+                angle: angle + (Math.random() - 0.5) * 0.3,
+                r: r,
+                baseR: r,
+                size: 1.8 + Math.random() * 2.2,
+                speed: 0.003 + Math.random() * 0.004,
+                phase: Math.random() * Math.PI * 2,
+            });
+        }
+    }
+
+    function drawAmbient(cx, cy, R, t) {
+        const alpha = 0.55 + 0.2 * Math.sin(t * 0.8);
+        particles.forEach((p) => {
+            p.angle += p.speed;
+            const radial = p.baseR + Math.sin(t * 1.2 + p.phase) * R * 0.06;
+            const x = cx + Math.cos(p.angle) * radial;
+            const y = cy + Math.sin(p.angle) * radial;
+            const grd = _ctx.createRadialGradient(x, y, 0, x, y, p.size * 2.5);
+            grd.addColorStop(0, `rgba(123, 97, 255, ${alpha})`);
+            grd.addColorStop(1, 'rgba(123, 97, 255, 0)');
+            _ctx.beginPath();
+            _ctx.arc(x, y, p.size * 2.5, 0, Math.PI * 2);
+            _ctx.fillStyle = grd;
+            _ctx.fill();
+        });
+    }
+
+    function drawListening(cx, cy, R, t) {
+        const rings = 4;
+        for (let i = 0; i < rings; i++) {
+            const progress = ((t * 0.6 + i / rings) % 1);
+            const r = R * (0.35 + progress * 0.85);
+            const alpha = (1 - progress) * 0.7;
+            _ctx.beginPath();
+            _ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            _ctx.strokeStyle = `rgba(239, 68, 68, ${alpha})`;
+            _ctx.lineWidth = 2.5 * (1 - progress * 0.6);
+            _ctx.stroke();
+        }
+        // Inner warm glow
+        const innerGrd = _ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 0.4);
+        innerGrd.addColorStop(0, `rgba(251, 191, 36, ${0.3 + 0.15 * Math.sin(t * 4)})`);
+        innerGrd.addColorStop(1, 'rgba(239, 68, 68, 0)');
+        _ctx.beginPath();
+        _ctx.arc(cx, cy, R * 0.4, 0, Math.PI * 2);
+        _ctx.fillStyle = innerGrd;
+        _ctx.fill();
+    }
+
+    function drawThinking(cx, cy, R, t) {
+        const arcs = 5;
+        for (let i = 0; i < arcs; i++) {
+            const rotOffset = (i / arcs) * Math.PI * 2 + t * 1.4;
+            const arcLen = 0.4 + 0.25 * Math.sin(t * 2.1 + i * 1.2);
+            const r = R * (0.42 + i * 0.07);
+            const alpha = 0.5 + 0.25 * Math.sin(t * 1.8 + i);
+            _ctx.beginPath();
+            _ctx.arc(cx, cy, r, rotOffset, rotOffset + arcLen);
+            _ctx.strokeStyle = `rgba(245, 158, 11, ${alpha})`;
+            _ctx.lineWidth = 2.8;
+            _ctx.stroke();
+        }
+        // Pulsing center
+        const pulse = R * 0.2 * (0.8 + 0.2 * Math.sin(t * 3.5));
+        const cGrd = _ctx.createRadialGradient(cx, cy, 0, cx, cy, pulse);
+        cGrd.addColorStop(0, `rgba(251, 191, 36, 0.6)`);
+        cGrd.addColorStop(1, 'rgba(245, 158, 11, 0)');
+        _ctx.beginPath();
+        _ctx.arc(cx, cy, pulse, 0, Math.PI * 2);
+        _ctx.fillStyle = cGrd;
+        _ctx.fill();
+    }
+
+    function drawResponding(cx, cy, R, t) {
+        const bars = 12;
+        for (let i = 0; i < bars; i++) {
+            const angle = (i / bars) * Math.PI * 2 - Math.PI / 2;
+            const freq = Math.sin(t * 4 + i * 0.6) * 0.5 + 0.5;
+            const innerR = R * 0.38;
+            const outerR = innerR + R * (0.12 + 0.32 * freq);
+            const alpha = 0.5 + 0.35 * freq;
+            const x1 = cx + Math.cos(angle) * innerR;
+            const y1 = cy + Math.sin(angle) * innerR;
+            const x2 = cx + Math.cos(angle) * outerR;
+            const y2 = cy + Math.sin(angle) * outerR;
+            _ctx.beginPath();
+            _ctx.moveTo(x1, y1);
+            _ctx.lineTo(x2, y2);
+            _ctx.strokeStyle = `rgba(16, 185, 129, ${alpha})`;
+            _ctx.lineWidth = 2.8;
+            _ctx.lineCap = 'round';
+            _ctx.stroke();
+        }
+        // Teal center pulse
+        const p2 = R * 0.22 * (0.85 + 0.15 * Math.sin(t * 5));
+        const g2 = _ctx.createRadialGradient(cx, cy, 0, cx, cy, p2);
+        g2.addColorStop(0, 'rgba(6, 182, 212, 0.55)');
+        g2.addColorStop(1, 'rgba(16, 185, 129, 0)');
+        _ctx.beginPath();
+        _ctx.arc(cx, cy, p2, 0, Math.PI * 2);
+        _ctx.fillStyle = g2;
+        _ctx.fill();
+    }
+
+    function frame() {
+        _raf = requestAnimationFrame(frame);
+        if (!_canvas || !_ctx) return;
+
+        const W = _canvas.width;
+        const H = _canvas.height;
+        const cx = W / 2;
+        const cy = H / 2;
+        const R = Math.min(W, H) / 2;
+
+        _ctx.clearRect(0, 0, W, H);
+        _ctx.lineCap = 'round';
+        _ctx.lineJoin = 'round';
+
+        _t += 0.016;
+
+        switch (_state) {
+            case 'listening':  drawListening(cx, cy, R, _t);  break;
+            case 'thinking':   drawThinking(cx, cy, R, _t);   break;
+            case 'responding': drawResponding(cx, cy, R, _t); break;
+            default:           drawAmbient(cx, cy, R, _t);    break;
+        }
+    }
+
+    function mountCanvas() {
+        const orb = document.getElementById('zoeOrb') || document.querySelector('.zoe-orb');
+        if (!orb || _canvas) return;
+
+        _canvas = document.createElement('canvas');
+        _canvas.style.cssText = [
+            'position:absolute', 'inset:0', 'width:100%', 'height:100%',
+            'border-radius:50%', 'pointer-events:none',
+        ].join(';');
+        orb.style.position = 'relative';
+        orb.style.overflow = 'hidden';
+        orb.appendChild(_canvas);
+
+        function resize() {
+            const rect = orb.getBoundingClientRect();
+            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            _canvas.width = rect.width * dpr;
+            _canvas.height = rect.height * dpr;
+            _canvas.style.width = rect.width + 'px';
+            _canvas.style.height = rect.height + 'px';
+            _ctx = _canvas.getContext('2d');
+            _ctx.scale(dpr, dpr);
+            initParticles(rect.width / 2);
+        }
+
+        resize();
+        new ResizeObserver(resize).observe(orb);
+
+        if (!_raf) frame();
+        _initialized = true;
+    }
+
+    // Expose: hook called by touch-ui-executor.js → voice state changes
+    const _origSetOrbMode = window._zoeSetOrbMode;
+    window._zoeSetOrbMode = function (mode) {
+        _state = mode || 'ambient';
+        if (_origSetOrbMode) _origSetOrbMode(mode);
+    };
+
+    // Also handle voice events dispatched by executor's push WS directly.
+    document.addEventListener('zoe:voice:wake', function () {
+        _state = 'listening';
+    });
+
+    // Auto-mount when DOM is ready (works whether orb is in page or loaded via orb-loader.js).
+    function tryMount() {
+        if (!_initialized) mountCanvas();
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', tryMount);
+    } else {
+        tryMount();
+    }
+    // Also try after a short delay for pages that inject the orb late.
+    setTimeout(tryMount, 800);
+})();
 

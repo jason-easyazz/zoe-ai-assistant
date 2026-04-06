@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.17.5';
+const SW_VERSION = '4.24.0';
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -368,7 +368,115 @@ self.addEventListener('message', (event) => {
     if (event.data && event.data.type === 'GET_VERSION') {
         event.ports[0].postMessage({ version: SW_VERSION });
     }
+
+    // Panel executor control — sent by touch-ui-executor.js on init/destroy
+    if (event.data && event.data.type === 'START_PANEL_POLL') {
+        _startPanelPoll(event.data.panelId, event.data.sessionId);
+    }
+    if (event.data && event.data.type === 'STOP_PANEL_POLL') {
+        _stopPanelPoll();
+    }
 });
+
+// ===== PANEL EXECUTOR (cross-page navigation) =====
+// The service worker persists across page navigations and can drive panel actions
+// even when the page-level executor is not running (e.g. after navigating away from dashboard.html).
+
+let _panelPollTimer = null;
+let _panelId = null;
+let _panelSessionId = null;
+
+async function _panelFetch(path) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (_panelSessionId) headers['X-Session-ID'] = _panelSessionId;
+    const resp = await fetch(path, { headers, credentials: 'include' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+}
+
+async function _panelAck(actionId, status, errorCode, errorMessage) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (_panelSessionId) headers['X-Session-ID'] = _panelSessionId;
+    try {
+        await fetch(`/api/ui/actions/${actionId}/ack`, {
+            method: 'POST',
+            headers,
+            credentials: 'include',
+            body: JSON.stringify({ status, error_code: errorCode || null, error_message: errorMessage || null }),
+        });
+    } catch (_) {}
+}
+
+async function _panelPoll() {
+    if (!_panelId) return;
+    try {
+        const data = await _panelFetch(`/api/ui/actions/pending?panel_id=${encodeURIComponent(_panelId)}&limit=5`);
+        const actions = Array.isArray(data.actions) ? data.actions : [];
+        for (const action of actions) {
+            if (!action || !action.id) continue;
+            const type = action.action_type;
+            const payload = action.payload || {};
+
+            // Forward all actions to page clients — they will handle non-navigation actions.
+            // The SW handles navigation itself so it works even after a page transition.
+            const clientList = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+            let handled = false;
+
+            if (type === 'panel_navigate' || type === 'panel_navigate_fullscreen' || type === 'navigate' || type === 'refresh') {
+                const url = payload.url || payload.page || payload.path;
+                for (const client of clientList) {
+                    if (type === 'refresh') {
+                        client.postMessage({ type: 'SW_PANEL_ACTION', action });
+                        await _panelAck(action.id, 'success', null, null);
+                        handled = true;
+                    } else if (url) {
+                        try {
+                            await client.navigate(url);
+                            await _panelAck(action.id, 'success', null, null);
+                            handled = true;
+                        } catch (navErr) {
+                            client.postMessage({ type: 'SW_PANEL_ACTION', action });
+                            await _panelAck(action.id, 'success', null, null);
+                            handled = true;
+                        }
+                        break;
+                    }
+                }
+                if (!handled) await _panelAck(action.id, 'blocked', 'no_client', 'No open window to navigate');
+            } else {
+                // For non-navigation actions, delegate to the page executor.
+                for (const client of clientList) {
+                    client.postMessage({ type: 'SW_PANEL_ACTION', action });
+                }
+                // The page executor will ack via its own ackAction; SW optimistically acks here too
+                // only if no clients exist to handle it.
+                if (clientList.length === 0) {
+                    await _panelAck(action.id, 'blocked', 'no_client', 'No page executor available');
+                }
+                // Don't ack — let the page executor do it to avoid double-ack.
+            }
+        }
+    } catch (_) {
+        // Silently retry — network may be unavailable.
+    }
+}
+
+function _startPanelPoll(panelId, sessionId) {
+    _panelId = panelId;
+    _panelSessionId = sessionId || null;
+    if (_panelPollTimer) clearInterval(_panelPollTimer);
+    // 5s fallback poll — WS push now handles the fast path for instant delivery
+    _panelPollTimer = setInterval(_panelPoll, 5000);
+    _panelPoll(); // immediate first poll
+    console.log(`🎛️ SW panel executor started for panel=${panelId}`);
+}
+
+function _stopPanelPoll() {
+    if (_panelPollTimer) { clearInterval(_panelPollTimer); _panelPollTimer = null; }
+    _panelId = null;
+    _panelSessionId = null;
+    console.log('🎛️ SW panel executor stopped');
+}
 
 // ===== INSTALLATION & ACTIVATION =====
 self.addEventListener('install', (event) => {

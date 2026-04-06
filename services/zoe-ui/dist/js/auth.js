@@ -169,6 +169,10 @@
                     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
                     padding: 20px;
                 `;
+                const _fromTouch = window.location.pathname.startsWith('/touch/');
+                const _loginDest = _fromTouch ? '/touch/index.html' : '/index.html';
+                // Store the page we were trying to visit so login can redirect back
+                try { sessionStorage.setItem('zoe_redirect_after_login', window.location.pathname); } catch(_){}
                 errorDiv.innerHTML = `
                     <div style="text-align: center; max-width: 500px;">
                         <div style="font-size: 64px; margin-bottom: 20px;">🔐</div>
@@ -176,7 +180,7 @@
                         <p style="font-size: 16px; color: #ccc; margin-bottom: 30px;">
                             Your session has expired or is invalid. Please log in again to continue.
                         </p>
-                        <button onclick="localStorage.removeItem('zoe_session'); window.location.href='/index.html';" 
+                        <button onclick="localStorage.removeItem('zoe_session'); window.location.href='${_loginDest}';" 
                                 style="background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
                                        border: none; color: white; padding: 16px 32px; font-size: 16px; 
                                        border-radius: 12px; cursor: pointer; font-weight: 600;">

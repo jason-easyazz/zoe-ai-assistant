@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Zoe – People</title>
+  <link rel="stylesheet" href="/touch/css/touch-base.css">
+  <meta name="application-name" content="Zoe AI">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#7B61FF">
+  <link rel="manifest" href="/manifest.json">
+  <script src="/js/auth.js"></script>
+  <style>
+    :root {
+      --bg:           #0f0f1a;
+      --bg2:          #13131f;
+      --glass:        rgba(255,255,255,0.055);
+      --glass-hi:     rgba(255,255,255,0.10);
+      --glass-border: rgba(255,255,255,0.11);
+      --purple:       #7B61FF;
+      --teal:         #5AE0E0;
+      --grad:         linear-gradient(135deg,#7B61FF,#5AE0E0);
+      --text:         #ffffff;
+      --text-sec:     rgba(255,255,255,0.65);
+      --text-muted:   rgba(255,255,255,0.40);
+      --birthday-near:#FF8C00;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overflow: hidden;
+      touch-action: manipulation;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+    }
+
+    .page {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      height: 100dvh;
+    }
+
+    /* ── HEADER ─────────────────────────── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      background: rgba(13,13,24,0.92);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border-bottom: 1px solid var(--glass-border);
+      flex-shrink: 0;
+      min-height: 58px;
+    }
+    .header-title {
+      font-size: 19px;
+      font-weight: 600;
+      background: var(--grad);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .icon-btn {
+      width: 48px; height: 48px;
+      border: 1px solid var(--glass-border);
+      border-radius: 50%;
+      background: var(--glass);
+      color: var(--text);
+      font-size: 22px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      touch-action: manipulation;
+      transition: background 0.18s, transform 0.12s;
+      flex-shrink: 0;
+    }
+    .icon-btn:active { transform: scale(0.90); background: var(--glass-hi); }
+    .fab {
+      background: var(--grad);
+      border: none;
+      box-shadow: 0 4px 18px rgba(123,97,255,0.45);
+    }
+    .fab:active { transform: scale(0.88); }
+
+    /* ── SEARCH ─────────────────────────── */
+    .search-wrap {
+      padding: 10px 14px 6px;
+      background: rgba(13,13,24,0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--glass-border);
+    }
+    .search-input {
+      width: 100%;
+      padding: 10px 16px 10px 40px;
+      border-radius: 26px;
+      border: 1px solid var(--glass-border);
+      background: var(--glass);
+      color: var(--text);
+      font-size: 15px;
+      outline: none;
+      -webkit-appearance: none;
+      user-select: text;
+      -webkit-user-select: text;
+      position: relative;
+    }
+    .search-wrap { position: relative; }
+    .search-icon {
+      position: absolute;
+      left: 28px; top: 50%; transform: translateY(-50%);
+      font-size: 16px;
+      pointer-events: none;
+      opacity: 0.5;
+    }
+
+    /* ── CONTENT ────────────────────────── */
+    .content-area {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
+      padding: 12px 12px 80px;
+    }
+
+    /* ── PEOPLE GRID ────────────────────── */
+    .people-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 10px;
+    }
+
+    /* ── PERSON CARD ────────────────────── */
+    .person-card {
+      background: var(--glass);
+      border: 1px solid var(--glass-border);
+      border-radius: 18px;
+      padding: 16px 12px 14px;
+      display: flex; flex-direction: column;
+      align-items: center; gap: 8px;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+      text-align: center;
+    }
+    .person-card:active { transform: scale(0.95); }
+    .person-card:hover {
+      border-color: rgba(123,97,255,0.35);
+      box-shadow: 0 0 18px rgba(123,97,255,0.12);
+    }
+
+    /* ── AVATAR ─────────────────────────── */
+    .avatar {
+      width: 64px; height: 64px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px; font-weight: 700; color: #fff;
+      flex-shrink: 0;
+      position: relative;
+      overflow: hidden;
+      background: var(--grad);
+    }
+    .avatar img {
+      width: 100%; height: 100%;
+      object-fit: cover;
+      position: absolute; inset: 0;
+    }
+    .avatar-initials { position: relative; z-index: 1; }
+
+    .person-name {
+      font-size: 14px; font-weight: 600;
+      color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      width: 100%;
+    }
+
+    .rel-chip {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 11px; font-weight: 500;
+      background: rgba(123,97,255,0.18);
+      color: var(--purple);
+      border: 1px solid rgba(123,97,255,0.3);
+    }
+    .rel-chip.family  { background:rgba(90,224,224,0.12);  color:var(--teal);   border-color:rgba(90,224,224,0.3); }
+    .rel-chip.friend  { background:rgba(123,97,255,0.16);  color:#b39dff;       border-color:rgba(123,97,255,0.3); }
+    .rel-chip.work    { background:rgba(255,193,7,0.12);   color:#ffc107;       border-color:rgba(255,193,7,0.3); }
+
+    .birthday-tag {
+      font-size: 11px;
+      color: var(--birthday-near);
+      display: flex; align-items: center; gap: 4px;
+    }
+    .birthday-normal { color: var(--text-muted); }
+
+    /* ── EMPTY STATE ────────────────────── */
+    .empty-state {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 14px; padding: 50px 24px;
+      text-align: center; grid-column: 1/-1;
+    }
+    .empty-icon { font-size: 52px; opacity: 0.6; }
+    .empty-title { font-size: 18px; font-weight: 600; }
+    .empty-msg { font-size: 14px; color: var(--text-sec); max-width: 260px; line-height: 1.5; }
+
+    /* ── DETAIL PANEL ───────────────────── */
+    .panel-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.55);
+      z-index: 100;
+      opacity: 0; pointer-events: none;
+      transition: opacity 0.3s ease;
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+    }
+    .panel-overlay.open { opacity: 1; pointer-events: auto; }
+
+    .detail-panel {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      height: 82vh;
+      background: #14141f;
+      border-top: 1px solid var(--glass-border);
+      border-radius: 24px 24px 0 0;
+      z-index: 101;
+      display: flex; flex-direction: column;
+      transform: translateY(100%);
+      transition: transform 0.38s cubic-bezier(0.32,0.72,0,1);
+      overflow: hidden;
+    }
+    .detail-panel.open { transform: translateY(0); }
+
+    .panel-handle {
+      width: 40px; height: 4px; border-radius: 2px;
+      background: rgba(255,255,255,0.2);
+      margin: 12px auto 0;
+      flex-shrink: 0;
+    }
+    .panel-close {
+      position: absolute;
+      top: 12px; right: 16px;
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      border: 1px solid var(--glass-border);
+      background: var(--glass);
+      color: var(--text);
+      font-size: 18px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      touch-action: manipulation;
+      transition: background 0.15s;
+    }
+    .panel-close:active { background: var(--glass-hi); transform: scale(0.90); }
+
+    .panel-content {
+      flex: 1;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 16px 20px 24px;
+    }
+
+    /* Panel header */
+    .panel-profile {
+      display: flex; align-items: center; gap: 16px;
+      margin-bottom: 20px;
+    }
+    .panel-avatar {
+      width: 80px; height: 80px; border-radius: 50%;
+      background: var(--grad);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 32px; font-weight: 700; color: #fff;
+      flex-shrink: 0; position: relative; overflow: hidden;
+    }
+    .panel-avatar img {
+      position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+    }
+    .panel-info { flex: 1; min-width: 0; }
+    .panel-name { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+    .panel-birthday { font-size: 13px; color: var(--text-sec); margin-top: 4px; }
+    .panel-age { font-size: 12px; color: var(--text-muted); }
+
+    /* Notes section */
+    .section-heading {
+      font-size: 13px; font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 1.2px;
+      margin: 18px 0 10px;
+    }
+    .note-entry {
+      background: var(--glass);
+      border: 1px solid var(--glass-border);
+      border-radius: 12px;
+      padding: 10px 14px;
+      margin-bottom: 8px;
+    }
+    .note-text { font-size: 14px; color: var(--text-sec); line-height: 1.5; }
+    .note-date { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+    .add-note-area {
+      display: flex; flex-direction: column; gap: 8px;
+      margin-top: 4px;
+    }
+    .note-textarea {
+      width: 100%; min-height: 80px;
+      padding: 10px 14px;
+      border-radius: 12px;
+      border: 1px solid var(--glass-border);
+      background: var(--glass);
+      color: var(--text);
+      font-size: 14px; font-family: inherit;
+      resize: vertical;
+      outline: none;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+    .note-textarea:focus { border-color: rgba(123,97,255,0.5); }
+    .save-note-btn {
+      align-self: flex-end;
+      padding: 10px 22px;
+      border-radius: 22px;
+      background: var(--grad);
+      border: none;
+      color: #fff;
+      font-size: 14px; font-weight: 600;
+      cursor: pointer;
+      touch-action: manipulation;
+      min-height: 44px;
+      transition: transform 0.12s;
+    }
+    .save-note-btn:active { transform: scale(0.93); }
+
+    /* Events section */
+    .event-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--glass-border);
+    }
+    .event-row:last-child { border-bottom: none; }
+    .event-row-icon { font-size: 18px; flex-shrink: 0; }
+    .event-row-title { font-size: 14px; color: var(--text-sec); flex: 1; }
+    .event-row-date { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+
+    /* ── BOTTOM NAV ─────────────────────── */
+    .bottom-nav {
+      display: flex;
+      overflow-x: auto;
+      scrollbar-width: none;
+      background: rgba(10,10,20,0.96);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+      border-top: 1px solid var(--glass-border);
+      padding: 5px 6px;
+      gap: 2px;
+      flex-shrink: 0;
+    }
+    .bottom-nav::-webkit-scrollbar { display: none; }
+    .nav-item {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 2px;
+      padding: 5px 9px;
+      border-radius: 12px;
+      text-decoration: none;
+      color: var(--text-muted);
+      font-size: 10px; font-weight: 500;
+      white-space: nowrap;
+      min-width: 52px; min-height: 52px;
+      touch-action: manipulation;
+      transition: all 0.18s ease;
+      flex-shrink: 0;
+      border: 1px solid transparent;
+    }
+    .nav-item:active { transform: scale(0.90); }
+    .nav-icon { font-size: 20px; line-height: 1; }
+    .nav-item.active {
+      background: linear-gradient(135deg,rgba(123,97,255,0.22),rgba(90,224,224,0.12));
+      color: var(--teal);
+      border-color: rgba(90,224,224,0.28);
+    }
+    .nav-item.active .nav-icon { filter: drop-shadow(0 0 5px var(--teal)); }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- HEADER -->
+  <div class="header">
+    <button class="icon-btn" onclick="goBack()" aria-label="Back">‹</button>
+    <span class="header-title">👥 People</span>
+    <button class="icon-btn fab" onclick="openAddPerson()" aria-label="Add Person" title="Add Person">+</button>
+  </div>
+
+  <!-- SEARCH -->
+  <div class="search-wrap">
+    <span class="search-icon">🔍</span>
+    <input class="search-input" id="searchInput" type="text"
+           placeholder="Search people…"
+           oninput="filterPeople(this.value)"
+           autocomplete="off" autocorrect="off" spellcheck="false">
+  </div>
+
+  <!-- CONTENT -->
+  <div class="content-area">
+    <div class="people-grid" id="peopleGrid">
+      <!-- Skeleton cards while loading -->
+      <div style="border-radius:18px;min-height:180px;background:linear-gradient(90deg,rgba(255,255,255,0.04) 0%,rgba(255,255,255,0.08) 50%,rgba(255,255,255,0.04) 100%);background-size:200% 100%;animation:shimmer 1.6s ease-in-out infinite"></div>
+      <div style="border-radius:18px;min-height:180px;background:linear-gradient(90deg,rgba(255,255,255,0.04) 0%,rgba(255,255,255,0.08) 50%,rgba(255,255,255,0.04) 100%);background-size:200% 100%;animation:shimmer 1.6s ease-in-out infinite;animation-delay:0.2s"></div>
+      <div style="border-radius:18px;min-height:180px;background:linear-gradient(90deg,rgba(255,255,255,0.04) 0%,rgba(255,255,255,0.08) 50%,rgba(255,255,255,0.04) 100%);background-size:200% 100%;animation:shimmer 1.6s ease-in-out infinite;animation-delay:0.4s"></div>
+    </div>
+    <style>@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}</style>
+  </div>
+
+  <!-- BOTTOM NAV -->
+  <nav class="bottom-nav">
+    <a href="/touch/dashboard.html"  class="nav-item"><span class="nav-icon">🏠</span>Dashboard</a>
+    <a href="/touch/calendar.html"   class="nav-item"><span class="nav-icon">📅</span>Calendar</a>
+    <a href="/touch/lists.html"      class="nav-item"><span class="nav-icon">✅</span>Lists</a>
+    <a href="/touch/notes.html"      class="nav-item"><span class="nav-icon">📝</span>Notes</a>
+    <a href="/touch/journal.html"    class="nav-item"><span class="nav-icon">📔</span>Journal</a>
+    <a href="/touch/music.html"      class="nav-item"><span class="nav-icon">🎵</span>Music</a>
+    <a href="/touch/smart-home.html" class="nav-item"><span class="nav-icon">💡</span>Smart Home</a>
+    <a href="/touch/people.html"     class="nav-item active"><span class="nav-icon">👥</span>People</a>
+    <a href="/touch/memories.html"   class="nav-item"><span class="nav-icon">🖼️</span>Memories</a>
+    <a href="/touch/cooking.html"    class="nav-item"><span class="nav-icon">🍳</span>Cooking</a>
+    <a href="/touch/weather.html"    class="nav-item"><span class="nav-icon">⛅</span>Weather</a>
+    <a href="/touch/settings.html"   class="nav-item"><span class="nav-icon">⚙️</span>Settings</a>
+  </nav>
+
+</div><!-- /page -->
+
+<!-- DETAIL PANEL OVERLAY -->
+<div class="panel-overlay" id="panelOverlay" onclick="closePanel()"></div>
+<div class="detail-panel" id="detailPanel">
+  <div class="panel-handle"></div>
+  <button class="panel-close" onclick="closePanel()">×</button>
+  <div class="panel-content" id="panelContent"></div>
+</div>
+
+<script>
+// ─── ZOE HOOK ─────────────────────────────────────────────────────────────────
+window.ZOE_OPEN_FORM = null;
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let allPeople = [];
+let filteredPeople = [];
+let currentPersonId = null;
+
+const AVATAR_GRADIENTS = [
+  'linear-gradient(135deg,#7B61FF,#5AE0E0)',
+  'linear-gradient(135deg,#FF6B6B,#FF8E53)',
+  'linear-gradient(135deg,#06D6A0,#118AB2)',
+  'linear-gradient(135deg,#F72585,#7209B7)',
+  'linear-gradient(135deg,#4CC9F0,#4361EE)',
+  'linear-gradient(135deg,#E9C46A,#F4A261)',
+  'linear-gradient(135deg,#52B788,#1B4332)',
+  'linear-gradient(135deg,#C77DFF,#E0AAFF)',
+];
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  try {
+    const session = JSON.parse(localStorage.getItem('zoe_session') || '{}');
+    if (typeof ZoeWebSockets !== 'undefined') {
+      ZoeWebSockets.init(session.userId || session.user_id || 'guest');
+      // Refresh on people events
+      document.addEventListener('zoe:people:created', loadPeople);
+      document.addEventListener('zoe:people:updated', loadPeople);
+      document.addEventListener('zoe:people:deleted', loadPeople);
+    }
+  } catch(e) {}
+
+  document.querySelector('.nav-item.active')?.scrollIntoView({ inline: 'center', behavior: 'instant' });
+  loadPeople();
+});
+
+function goBack() { window.location.href = '/touch/dashboard.html'; }
+
+// ─── LOAD PEOPLE ──────────────────────────────────────────────────────────────
+async function loadPeople() {
+  try {
+    const res = await fetch('/api/people');
+    if (!res.ok) throw new Error('API error');
+    const data = await res.json();
+    allPeople = Array.isArray(data) ? data : (data.people || data.items || []);
+    if (allPeople.length === 0) allPeople = getDemoPeople();
+    filteredPeople = [...allPeople];
+    renderPeople();
+  } catch(e) {
+    allPeople = getDemoPeople();
+    filteredPeople = [...allPeople];
+    renderPeople();
+  }
+}
+
+function getDemoPeople() {
+  return [
+    { id:'1', name:'Sarah Johnson',  relationship:'Family', birthday:'1985-03-15', photo:null,
+      notes:[{text:'Loves hiking and photography',date:'2026-01-10'}] },
+    { id:'2', name:'Mike Chen',      relationship:'Friend', birthday:'1990-07-22', photo:null, notes:[] },
+    { id:'3', name:'Emma Wilson',    relationship:'Family', birthday:'2026-04-20', photo:null,
+      notes:[{text:'Prefers coffee over tea',date:'2025-12-01'}] },
+    { id:'4', name:'James Martinez', relationship:'Work',   birthday:'1978-11-05', photo:null, notes:[] },
+    { id:'5', name:'Lily Park',      relationship:'Friend', birthday:'1993-08-30', photo:null,
+      notes:[{text:'Birthday party planning in progress',date:'2026-03-20'}] },
+    { id:'6', name:'Oliver Brown',   relationship:'Family', birthday:'2015-01-08', photo:null, notes:[] },
+  ];
+}
+
+// ─── SEARCH / FILTER ──────────────────────────────────────────────────────────
+function filterPeople(query) {
+  const q = query.toLowerCase().trim();
+  filteredPeople = q
+    ? allPeople.filter(p => p.name.toLowerCase().includes(q) || (p.relationship||'').toLowerCase().includes(q))
+    : [...allPeople];
+  renderPeople();
+}
+
+// ─── RENDER ───────────────────────────────────────────────────────────────────
+function renderPeople() {
+  const grid = document.getElementById('peopleGrid');
+  grid.innerHTML = '';
+
+  if (filteredPeople.length === 0) {
+    grid.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">👤</div>
+        <div class="empty-title">No people found</div>
+        <div class="empty-msg">Try a different search, or tap + to add someone.</div>
+      </div>`;
+    return;
+  }
+
+  filteredPeople.forEach((person, idx) => {
+    const card = document.createElement('div');
+    card.className = 'person-card';
+    card.onclick = () => openDetail(person.id);
+
+    const initials = getInitials(person.name);
+    const gradient = AVATAR_GRADIENTS[idx % AVATAR_GRADIENTS.length];
+    const bdTag    = getBirthdayTag(person.birthday);
+    const relClass = (person.relationship||'').toLowerCase();
+
+    card.innerHTML = `
+      <div class="avatar" style="background:${gradient}">
+        ${person.photo ? `<img src="${escHtml(person.photo)}" alt="${escHtml(person.name)}">` : ''}
+        <span class="avatar-initials">${initials}</span>
+      </div>
+      <div class="person-name">${escHtml(person.name)}</div>
+      ${person.relationship ? `<span class="rel-chip ${relClass}">${escHtml(person.relationship)}</span>` : ''}
+      ${bdTag}`;
+
+    grid.appendChild(card);
+  });
+}
+
+function getInitials(name) {
+  return (name||'?').split(' ').slice(0,2).map(p => p[0]?.toUpperCase()||'').join('');
+}
+
+function getBirthdayTag(birthday) {
+  if (!birthday) return '';
+  try {
+    const today = new Date();
+    const bd    = new Date(birthday);
+    // Next birthday this year
+    let next = new Date(today.getFullYear(), bd.getMonth(), bd.getDate());
+    if (next < today) next.setFullYear(today.getFullYear() + 1);
+    const daysAway = Math.ceil((next - today) / 86400000);
+    const formatted = bd.toLocaleDateString('en-US', { month:'short', day:'numeric' });
+    if (daysAway <= 30) {
+      const label = daysAway === 0 ? 'Today! 🎉' : daysAway === 1 ? 'Tomorrow' : `In ${daysAway} days`;
+      return `<div class="birthday-tag">🎂 ${label}</div>`;
+    }
+    return `<div class="birthday-tag birthday-normal">🎂 ${formatted}</div>`;
+  } catch(e) { return ''; }
+}
+
+// ─── DETAIL PANEL ─────────────────────────────────────────────────────────────
+async function openDetail(personId) {
+  currentPersonId = personId;
+  const person = allPeople.find(p => p.id == personId);
+  if (!person) return;
+
+  // Fetch fresh detail
+  let detail = person;
+  try {
+    const res = await fetch(`/api/people/${personId}`);
+    if (res.ok) detail = await res.json();
+  } catch(e) {}
+
+  const initials = getInitials(detail.name);
+  const bdInfo   = formatBirthdayDetail(detail.birthday);
+  const relClass = (detail.relationship||'').toLowerCase();
+
+  const notesHtml = (detail.notes||[]).length > 0
+    ? (detail.notes||[]).map(n => `
+        <div class="note-entry">
+          <div class="note-text">${escHtml(n.text||n.content||'')}</div>
+          <div class="note-date">${formatDate(n.date||n.created_at)}</div>
+        </div>`).join('')
+    : `<div style="color:var(--text-muted);font-size:14px;padding:8px 0">No notes yet</div>`;
+
+  document.getElementById('panelContent').innerHTML = `
+    <div class="panel-profile">
+      <div class="panel-avatar" style="background:${AVATAR_GRADIENTS[allPeople.indexOf(detail)%AVATAR_GRADIENTS.length]}">
+        ${detail.photo ? `<img src="${escHtml(detail.photo)}" alt="${escHtml(detail.name)}">` : ''}
+        <span style="position:relative;z-index:1">${initials}</span>
+      </div>
+      <div class="panel-info">
+        <div class="panel-name">${escHtml(detail.name)}</div>
+        ${detail.relationship ? `<span class="rel-chip ${relClass}">${escHtml(detail.relationship)}</span>` : ''}
+        ${bdInfo.line1 ? `<div class="panel-birthday">${bdInfo.line1}</div>` : ''}
+        ${bdInfo.line2 ? `<div class="panel-age">${bdInfo.line2}</div>` : ''}
+      </div>
+    </div>
+
+    <div class="section-heading">Notes</div>
+    <div id="notesList">${notesHtml}</div>
+
+    <div class="section-heading">Add Note</div>
+    <div class="add-note-area">
+      <textarea class="note-textarea" id="noteInput"
+                placeholder="Write a note about ${escHtml(detail.name)}…"></textarea>
+      <button class="save-note-btn" onclick="saveNote()">Save Note</button>
+    </div>
+
+    <div class="section-heading">Upcoming Events</div>
+    <div id="upcomingEvents">
+      <div style="color:var(--text-muted);font-size:14px;padding:8px 0">Loading events…</div>
+    </div>`;
+
+  // Open the panel
+  document.getElementById('panelOverlay').classList.add('open');
+  document.getElementById('detailPanel').classList.add('open');
+
+  // Load upcoming events mentioning this person
+  loadPersonEvents(detail.name);
+}
+
+function formatBirthdayDetail(birthday) {
+  if (!birthday) return { line1:'', line2:'' };
+  try {
+    const bd      = new Date(birthday);
+    const today   = new Date();
+    const age     = today.getFullYear() - bd.getFullYear() -
+                    (today < new Date(today.getFullYear(), bd.getMonth(), bd.getDate()) ? 1 : 0);
+    const formatted = bd.toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' });
+    return { line1: `🎂 ${formatted}`, line2: `Age: ${age}` };
+  } catch(e) { return { line1:'', line2:'' }; }
+}
+
+async function loadPersonEvents(name) {
+  const el = document.getElementById('upcomingEvents');
+  if (!el) return;
+  try {
+    const res = await fetch(`/api/calendar/events?search=${encodeURIComponent(name)}&limit=5`);
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    const events = Array.isArray(data) ? data : (data.events || []);
+    if (events.length === 0) {
+      el.innerHTML = '<div style="color:var(--text-muted);font-size:14px;padding:8px 0">No upcoming events</div>';
+      return;
+    }
+    el.innerHTML = events.map(ev => `
+      <div class="event-row">
+        <span class="event-row-icon">📅</span>
+        <span class="event-row-title">${escHtml(ev.title)}</span>
+        <span class="event-row-date">${formatDate(ev.start_date||ev.start_time)}</span>
+      </div>`).join('');
+  } catch(e) {
+    el.innerHTML = '<div style="color:var(--text-muted);font-size:14px;padding:8px 0">No upcoming events</div>';
+  }
+}
+
+async function saveNote() {
+  const input = document.getElementById('noteInput');
+  const text  = input?.value?.trim();
+  if (!text || !currentPersonId) return;
+
+  const btn = document.querySelector('.save-note-btn');
+  btn.textContent = 'Saving…';
+  btn.disabled = true;
+
+  try {
+    const res = await fetch(`/api/people/${currentPersonId}/notes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
+    if (res.ok) {
+      // Prepend new note
+      const notesList = document.getElementById('notesList');
+      const newNote = document.createElement('div');
+      newNote.className = 'note-entry';
+      newNote.innerHTML = `<div class="note-text">${escHtml(text)}</div>
+        <div class="note-date">Just now</div>`;
+      if (notesList.querySelector('[style]')) notesList.innerHTML = '';
+      notesList.prepend(newNote);
+      // Update local data
+      const person = allPeople.find(p => p.id == currentPersonId);
+      if (person) {
+        if (!person.notes) person.notes = [];
+        person.notes.unshift({ text, date: new Date().toISOString() });
+      }
+      input.value = '';
+    }
+  } catch(e) {}
+
+  btn.textContent = 'Save Note';
+  btn.disabled = false;
+}
+
+function closePanel() {
+  document.getElementById('panelOverlay').classList.remove('open');
+  document.getElementById('detailPanel').classList.remove('open');
+  currentPersonId = null;
+}
+
+// ─── ADD PERSON ───────────────────────────────────────────────────────────────
+function openAddPerson() {
+  // Use ZoeWebSockets form if available, otherwise prompt
+  if (typeof window.ZOE_OPEN_FORM === 'function') {
+    window.ZOE_OPEN_FORM('add_person');
+  } else {
+    // Simple inline add — show a detail panel pre-filled for creation
+    currentPersonId = null;
+    document.getElementById('panelContent').innerHTML = `
+      <div style="padding:8px 0 16px">
+        <div class="panel-name" style="-webkit-text-fill-color:#fff">Add Person</div>
+      </div>
+      <div class="section-heading">Name</div>
+      <input id="newName" type="text" placeholder="Full name"
+             style="width:100%;padding:10px 14px;border-radius:12px;border:1px solid var(--glass-border);background:var(--glass);color:#fff;font-size:15px;outline:none;user-select:text;-webkit-user-select:text;margin-bottom:12px">
+      <div class="section-heading">Relationship</div>
+      <input id="newRel" type="text" placeholder="Family / Friend / Work…"
+             style="width:100%;padding:10px 14px;border-radius:12px;border:1px solid var(--glass-border);background:var(--glass);color:#fff;font-size:15px;outline:none;user-select:text;-webkit-user-select:text;margin-bottom:12px">
+      <div class="section-heading">Birthday (optional)</div>
+      <input id="newBday" type="date"
+             style="width:100%;padding:10px 14px;border-radius:12px;border:1px solid var(--glass-border);background:var(--glass);color:#fff;font-size:15px;outline:none;margin-bottom:20px">
+      <div class="add-note-area">
+        <button class="save-note-btn" style="width:100%" onclick="submitNewPerson()">Add Person</button>
+      </div>`;
+    document.getElementById('panelOverlay').classList.add('open');
+    document.getElementById('detailPanel').classList.add('open');
+  }
+}
+
+async function submitNewPerson() {
+  const name = document.getElementById('newName')?.value?.trim();
+  const rel  = document.getElementById('newRel')?.value?.trim();
+  const bday = document.getElementById('newBday')?.value;
+  if (!name) return;
+
+  const btn = document.querySelector('.save-note-btn');
+  btn.textContent = 'Saving…'; btn.disabled = true;
+
+  try {
+    const res = await fetch('/api/people', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, relationship: rel, birthday: bday })
+    });
+    if (res.ok) {
+      closePanel();
+      await loadPeople();
+    }
+  } catch(e) {}
+
+  btn.textContent = 'Add Person'; btn.disabled = false;
+}
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function formatDate(iso) {
+  if (!iso) return '';
+  try {
+    return new Date(iso).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+  } catch(e) { return iso; }
+}
+</script>
+
+<script src="/js/websocket-sync.js"></script>
+<script src="/js/touch-ui-executor.js"></script>
+<script src="/js/orb-loader.js"></script>
+<script src="/touch/js/gestures.js"></script>
+<script src="/touch/js/touch-menu.js"></script>
+<script>TouchMenu.init({ page: 'people' });</script>
+</body>
+</html>

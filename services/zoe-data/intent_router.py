@@ -15,10 +15,27 @@ import logging
 import os
 import re
 import shlex
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# Short user phrases → expanded OpenClaw task (see openclaw_user_message in chat router).
+# Imperative: models often answer "setup home automation" with generic menus unless told not to.
+HA_FULL_SETUP_OPENCLAW_MESSAGE = (
+    "[HA_PLATFORM_BOOTSTRAP — execute now, minimal chat]\n"
+    "Do NOT answer with generic smart-home ideas (lighting lists, security options, routines menus, or "
+    "\"what would you like to automate\"). The user asked to set up the Home Assistant platform on this server.\n"
+    "Your FIRST tool action: open the browser to http://localhost:8123 and inspect the page (snapshot). "
+    "If you see onboarding, complete it. Only if the form requires values you do not have, ask ONCE for "
+    "admin username/password; otherwise keep going without extra questions.\n"
+    "Then per the home-assistant skill: long-lived token named zoe-data, "
+    "sed HA_ACCESS_TOKEN into /home/zoe/assistant/.env, docker restart homeassistant-mcp-bridge, "
+    "add http trusted_proxies for the Zoe nginx reverse proxy in homeassistant configuration.yaml, "
+    "docker restart homeassistant, confirm control via browser. "
+    "Reply briefly only with progress/status — not a catalog of automation ideas."
+)
 
 MCPORTER = os.path.expanduser("~/bin/mcporter-safe")
 NODE_BIN = os.path.expanduser("~/.nvm/versions/node/v22.22.0/bin")
@@ -51,6 +68,63 @@ def _infer_event_category(text: str) -> str:
     return "general"
 
 
+def _normalize_chat_intent_text(raw: str) -> str:
+    """Lowercase, Unicode-normalize, collapse whitespace (UI often adds hidden chars)."""
+    s = unicodedata.normalize("NFKC", (raw or "").strip()).lower()
+    return re.sub(r"\s+", " ", s).strip()
+
+
+# Matches short setup commands; whole message must be this request (no extra clauses).
+_HA_FULL_SETUP_RE = re.compile(
+    r"^\s*(?:please\s+|can you\s+|could you\s+|will you\s+|help me\s+|i want to\s+|i need(?: you)? to\s+)?"
+    r"(?:(?:setup|set up|configure|install)\s+home\s+(?:assistant|automation)|"
+    r"home\s+(?:assistant|automation)\s+(?:setup|installation)|"
+    r"(?:setup|set up)\s+hass)\s*"
+    r"(?:please\s*)?[!?.…]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_ha_full_setup_message(t: str) -> bool:
+    """True when the user wants the full HA bootstrap (onboarding, token, proxy trust, bridge)."""
+    s = _normalize_chat_intent_text(t)
+    if not s:
+        return False
+    if _HA_FULL_SETUP_RE.match(s):
+        return True
+    # Exact phrases after normalization (backstop if regex ever misses)
+    cores = (
+        "setup home assistant",
+        "set up home assistant",
+        "configure home assistant",
+        "home assistant setup",
+        "setup home automation",
+        "set up home automation",
+        "configure home automation",
+        "home automation setup",
+        "install home assistant",
+        "set up hass",
+        "setup hass",
+    )
+    s2 = s.rstrip(".!?…").strip()
+    if s2 in cores:
+        return True
+    for prefix in (
+        "please ",
+        "can you ",
+        "could you ",
+        "will you ",
+        "i need you to ",
+        "i need to ",
+        "help me ",
+        "i want to ",
+    ):
+        if s2.startswith(prefix):
+            inner = re.sub(r"\s+", " ", s2[len(prefix) :].strip().rstrip(".!?…").strip())
+            if inner in cores:
+                return True
+    return False
+
 
 @dataclass
 class Intent:
@@ -59,9 +133,23 @@ class Intent:
     confidence: float = 0.9
 
 
+def openclaw_user_message(intent: Optional[Intent], user_text: str) -> str:
+    """Map intent + user text to the string sent to OpenClaw (expand shorthand tasks)."""
+    if intent is not None and intent.name == "ha_full_setup":
+        return HA_FULL_SETUP_OPENCLAW_MESSAGE
+    # Same phrases when intent fast path is off (e.g. force_openclaw) — still expand.
+    tnorm = _normalize_chat_intent_text(user_text)
+    if _is_ha_full_setup_message(tnorm):
+        return HA_FULL_SETUP_OPENCLAW_MESSAGE
+    return user_text
+
+
 def detect_intent(text: str) -> Optional[Intent]:
-    t = text.strip().lower()
-    t = re.sub(r"\s+", " ", t)
+    t = _normalize_chat_intent_text(text)
+
+    # Full Home Assistant / automation setup → OpenClaw (execute_intent returns None; chat expands message)
+    if _is_ha_full_setup_message(t):
+        return Intent("ha_full_setup", {})
 
     # === DOMAIN-SPECIFIC PATTERNS FIRST (to avoid list collisions) ===
 
@@ -264,6 +352,33 @@ def detect_intent(text: str) -> Optional[Intent]:
         if re.match(pattern, t):
             return Intent("daily_briefing", {})
 
+    # --- TIMER CREATE ---
+    for pattern in [
+        r"^(?:set|start|create|add) (?:a |an )?(?:(\d+)[\s\-]minute[s]?|(\d+)[\s\-]min[s]?) timer(?: (?:called|for|named) (.+))?$",
+        r"^(?:set|start|create) (?:a |an )?timer (?:for|of) (\d+) min(?:utes?)?(?:\s+(?:called|for|named) (.+))?$",
+        r"^(\d+) min(?:utes?)? timer(?: (?:for|called|named) (.+))?$",
+        r"^(?:set|start) (?:a |an )?timer$",
+    ]:
+        m = re.match(pattern, t)
+        if m:
+            groups = [g for g in (m.groups() if m.lastindex else []) if g]
+            mins = next((g for g in groups if g and g.isdigit()), "5")
+            label = next((g for g in groups if g and not g.isdigit()), "Timer")
+            return Intent("timer_create", {"minutes": int(mins), "label": label.title()})
+
+    # --- RECIPE SEARCH ---
+    m = re.match(
+        r"^(?:show|find|get|search|look up)(?: me)? (?:a )?recipe (?:for |to make )?(.+)$", t
+    )
+    if m:
+        return Intent("recipe_search", {"query": m.group(1).strip()})
+
+    m = re.match(
+        r"^how (?:do i |can i )?(?:make|cook|bake) (.+)$", t
+    )
+    if m:
+        return Intent("recipe_search", {"query": m.group(1).strip()})
+
     # === LIST PATTERNS (checked after domain-specific) ===
 
     # --- LIST ADD (with explicit list name) ---
@@ -373,6 +488,16 @@ async def _run_mcporter(cmd: str) -> Optional[str]:
 async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optional[str]:
     if intent.name == "daily_briefing":
         return await _execute_daily_briefing(user_id)
+
+    # Timer and recipe intents are handled client-side via panel actions — no backend call needed.
+    if intent.name == "timer_create":
+        mins = intent.slots.get("minutes", 5)
+        label = intent.slots.get("label", "Timer")
+        return f"Starting a {mins} minute timer for {label}."
+
+    if intent.name == "recipe_search":
+        query = intent.slots.get("query", "")
+        return f"Looking up a recipe for {query}."
 
     try:
         cmd = _build_command(intent, user_id)

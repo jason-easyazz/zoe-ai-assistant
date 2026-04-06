@@ -1340,7 +1340,16 @@
             const panelId = params.get('panel_id');
             const panelSuffix = panelId ? `?panel_id=${encodeURIComponent(panelId)}` : '';
             setTimeout(() => {
-                window.location.href = 'dashboard.html' + panelSuffix;
+                // Use stored destination if we were redirected here from a touch page
+                let dest = '/touch/dashboard.html';
+                try {
+                    const stored = sessionStorage.getItem('zoe_redirect_after_login');
+                    if (stored && stored.startsWith('/touch/')) {
+                        sessionStorage.removeItem('zoe_redirect_after_login');
+                        dest = stored;
+                    }
+                } catch(_) {}
+                window.location.href = dest + panelSuffix;
             }, 1500);
         }
 
@@ -1478,7 +1487,7 @@
                                 localStorage.removeItem('redirect_loop_detected');
                             }, 5000); // Clear flag after 5 seconds
                             
-                            window.location.href = 'dashboard.html';
+                            window.location.href = '/touch/dashboard.html';
                             return;
                         } else {
                             // Session expired

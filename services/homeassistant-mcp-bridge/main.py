@@ -22,6 +22,8 @@ app = FastAPI(title="Zoe Home Assistant MCP Bridge", version="1.0.0")
 # Configuration
 HA_BASE_URL = os.getenv("HA_BASE_URL", "http://homeassistant:8123")
 HA_ACCESS_TOKEN = os.getenv("HA_ACCESS_TOKEN", "")
+ZOE_HA_VOICE_INGRESS_URL = os.getenv("ZOE_HA_VOICE_INGRESS_URL", "http://host.docker.internal:8000").rstrip("/")
+ZOE_HA_VOICE_TOKEN = os.getenv("ZOE_HA_VOICE_TOKEN", "")
 
 # Initialize Home Assistant bridge service
 class HomeAssistantBridge:
@@ -127,6 +129,18 @@ class ScriptRunRequest(BaseModel):
     script_id: str
     variables: Optional[Dict[str, Any]] = None
 
+
+class VoiceWakeRequest(BaseModel):
+    panel_id: str = "zoe-touch-pi"
+    source: str = "ha_assist"
+
+
+class VoiceTurnRequest(BaseModel):
+    panel_id: str = "zoe-touch-pi"
+    transcript: str
+    session_id: Optional[str] = None
+    source: str = "ha_assist"
+
 # API Endpoints
 @app.get("/")
 async def root():
@@ -227,6 +241,14 @@ async def control_device(request: DeviceControlRequest):
         action = request.action
         data = request.data or {}
         
+        domain = entity_id.split(".")[0]
+
+        # input_number.set_value — used for thermostat sliders
+        if action == "set_value" and domain == "input_number":
+            service_data = {"entity_id": entity_id, "value": data.get("value", 0)}
+            result = await ha_bridge.call_service("input_number", "set_value", entity_id, service_data)
+            return {"message": f"Set {entity_id} to {data.get('value')}", "result": result}
+
         # Map common actions to Home Assistant services
         service_mapping = {
             "turn_on": "turn_on",
@@ -234,27 +256,42 @@ async def control_device(request: DeviceControlRequest):
             "toggle": "toggle",
             "set_brightness": "turn_on",
             "set_color": "turn_on",
-            "set_temperature": "turn_on"
+            "set_temperature": "turn_on",
+            # media_player
+            "media_play": "media_play",
+            "media_pause": "media_pause",
+            "media_next_track": "media_next_track",
+            "media_previous_track": "media_previous_track",
+            "volume_up": "volume_up",
+            "volume_down": "volume_down",
+            "volume_set": "volume_set",
+            "play_media": "play_media",
         }
         
         if action not in service_mapping:
             raise HTTPException(status_code=400, detail=f"Unsupported action: {action}")
         
         service = service_mapping[action]
-        domain = entity_id.split(".")[0]
         
         # Prepare service data
         service_data = {"entity_id": entity_id}
         
         if action == "set_brightness" and "brightness" in data:
             service_data["brightness"] = data["brightness"]
+        elif action == "set_brightness" and "brightness_pct" in data:
+            service_data["brightness_pct"] = data["brightness_pct"]
         elif action == "set_color" and "rgb_color" in data:
             service_data["rgb_color"] = data["rgb_color"]
-        elif action == "set_temperature" and "color_temp" in data:
-            service_data["color_temp"] = data["color_temp"]
+        elif action == "volume_set" and "volume_level" in data:
+            service_data["volume_level"] = data["volume_level"]
+        elif action == "play_media":
+            service_data["media_content_id"] = data.get("media_content_id", "")
+            service_data["media_content_type"] = data.get("media_content_type", "music")
         
-        # Add any additional data
-        service_data.update(data)
+        # Pass through any extra data fields
+        for k, v in data.items():
+            if k not in service_data:
+                service_data[k] = v
         
         result = await ha_bridge.call_service(domain, service, entity_id, service_data)
         
@@ -524,6 +561,40 @@ async def analyze_home_assistant():
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/voice/wake")
+async def ha_voice_wake(request: VoiceWakeRequest):
+    """Forward HA wake events to zoe-data HA voice ingress."""
+    headers = {"Content-Type": "application/json"}
+    if ZOE_HA_VOICE_TOKEN:
+        headers["X-HA-Voice-Token"] = ZOE_HA_VOICE_TOKEN
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            f"{ZOE_HA_VOICE_INGRESS_URL}/api/voice/ha/wake",
+            headers=headers,
+            json=request.model_dump(),
+        )
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
+
+
+@app.post("/voice/turn")
+async def ha_voice_turn(request: VoiceTurnRequest):
+    """Forward HA transcript turns to zoe-data -> Hermes voice ingress."""
+    headers = {"Content-Type": "application/json"}
+    if ZOE_HA_VOICE_TOKEN:
+        headers["X-HA-Voice-Token"] = ZOE_HA_VOICE_TOKEN
+    async with httpx.AsyncClient(timeout=90.0) as client:
+        resp = await client.post(
+            f"{ZOE_HA_VOICE_INGRESS_URL}/api/voice/ha/turn",
+            headers=headers,
+            json=request.model_dump(exclude_none=True),
+        )
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    return resp.json()
 
 if __name__ == "__main__":
     import uvicorn

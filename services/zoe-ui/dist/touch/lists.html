@@ -416,6 +416,7 @@
             }
         }
     </style>
+    <link rel="stylesheet" href="/touch/css/touch-base.css">
     <script src="/js/auth.js"></script>
 <!-- PWA Meta Tags -->
     <meta name="application-name" content="Zoe AI">
@@ -469,34 +470,46 @@
     </div>
 
     <script>
-        // Utility function to get user ID from session
-        function getUserId() {
+        function getAuthHeaders() {
             try {
-                const sessionData = localStorage.getItem('zoe_session');
-                if (sessionData) {
-                    const session = JSON.parse(sessionData);
-                    return session.user_info?.user_id || session.user_id || 'default';
-                }
-            } catch (e) {
-                console.warn('Failed to get user session:', e);
-            }
-            return 'default';
+                const session = JSON.parse(localStorage.getItem('zoe_session') || '{}');
+                const sid = session.session_id;
+                return sid ? { 'Content-Type': 'application/json', 'X-Session-ID': sid } : { 'Content-Type': 'application/json' };
+            } catch { return { 'Content-Type': 'application/json' }; }
         }
 
         let isDarkTheme = false;
-        let lists = [];
+        // listRegistry: { [listType]: { list_id, name, icon, items: [{id, text, completed, priority}] } }
+        const listRegistry = {};
 
-        // Initialize
         document.addEventListener('DOMContentLoaded', function() {
             loadLists();
             setupScrollIndicator();
-            
-            // Auto theme based on time
             const hour = new Date().getHours();
-            if (hour < 7 || hour > 19) {
-                toggleTheme(true);
-            }
+            if (hour < 7 || hour > 19) toggleTheme(true);
+            // ZoeWebSockets for live sync
+            try {
+                const session = JSON.parse(localStorage.getItem('zoe_session') || '{}');
+                const userId = session.user_id || session.user_info?.user_id;
+                if (userId && window.ZoeWebSockets) ZoeWebSockets.init(userId);
+            } catch {}
         });
+
+        // ZOE_OPEN_FORM: magic UI hook for voice-triggered item add
+        window.ZOE_OPEN_FORM = function(formType, prefill) {
+            if (formType === 'new_list_item') {
+                const listType = prefill?.list_type || 'shopping';
+                const inputs = document.querySelectorAll('.add-item-input');
+                // Find the right card's input
+                const card = document.querySelector(`[data-list-type="${listType}"]`);
+                const input = card ? card.querySelector('.add-item-input') : inputs[0];
+                if (input) {
+                    if (prefill?.item) input.value = prefill.item;
+                    input.focus();
+                    if (prefill?.item) input.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', bubbles: true }));
+                }
+            }
+        };
 
         function setupScrollIndicator() {
             const container = document.getElementById('listsContainer');
@@ -536,36 +549,38 @@
         }
 
         async function loadLists() {
-            try {
-                // Get user ID from session
-                const userId = getUserId();
-                
-                // Load different list types
-                const listTypes = ['personal_todos', 'work_todos', 'shopping', 'bucket'];
-                const listPromises = listTypes.map(type => fetch(`/api/lists/${type}?user_id=${userId}`));
-                
-                const responses = await Promise.all(listPromises);
-                const listData = await Promise.all(responses.map(r => r.json()));
-                
-                lists = [];
-                listData.forEach((data, index) => {
-                    if (data.lists && data.lists.length > 0) {
-                        lists.push({
-                            type: listTypes[index],
-                            name: getListDisplayName(listTypes[index]),
-                            icon: getListIcon(listTypes[index]),
-                            items: data.lists[0].items || []
-                        });
-                    }
-                });
-                
-                renderLists();
-            } catch (error) {
-                console.error('Failed to load lists:', error);
-                // Show empty lists on error
-                lists = [];
-                renderLists();
-            }
+            const listTypes = ['personal_todos', 'work_todos', 'shopping', 'bucket'];
+            const headers = getAuthHeaders();
+
+            await Promise.all(listTypes.map(async (type) => {
+                try {
+                    // Step 1: get list metadata (includes list_id)
+                    const metaResp = await fetch(`/api/lists/${type}`, { headers });
+                    if (!metaResp.ok) return;
+                    const meta = await metaResp.json();
+                    // meta.lists is an array; take the first list
+                    const listMeta = (meta.lists || [])[0] || meta;
+                    const listId = listMeta.id || listMeta.list_id;
+                    if (!listId) return;
+
+                    // Step 2: get list items
+                    const itemsResp = await fetch(`/api/lists/${type}/${listId}`, { headers });
+                    if (!itemsResp.ok) return;
+                    const itemsData = await itemsResp.json();
+                    const items = itemsData.items || itemsData.list?.items || [];
+
+                    listRegistry[type] = {
+                        list_id: listId,
+                        name: getListDisplayName(type),
+                        icon: getListIcon(type),
+                        items: items,
+                    };
+                } catch (e) {
+                    console.warn(`loadLists ${type}:`, e);
+                }
+            }));
+
+            renderLists();
         }
 
         function getListDisplayName(type) {
@@ -591,117 +606,120 @@
         function renderLists() {
             const grid = document.getElementById('listsGrid');
             grid.innerHTML = '';
-            
-            lists.forEach(list => {
+            const listTypes = ['personal_todos', 'work_todos', 'shopping', 'bucket'];
+
+            listTypes.forEach(type => {
+                const list = listRegistry[type];
+                const items = list ? list.items : [];
+                const name = list ? list.name : getListDisplayName(type);
+                const icon = list ? list.icon : getListIcon(type);
+
+                const completedCount = items.filter(i => i.completed).length;
+                const totalCount = items.length;
+
                 const listCard = document.createElement('div');
                 listCard.className = 'list-card';
-                
-                const completedCount = list.items.filter(item => item.completed).length;
-                const totalCount = list.items.length;
-                
+                listCard.setAttribute('data-list-type', type);
+
                 listCard.innerHTML = `
                     <div class="list-header">
-                        <div class="list-title">
-                            <span>${list.icon}</span>
-                            <span>${list.name}</span>
-                        </div>
+                        <div class="list-title"><span>${icon}</span><span>${name}</span></div>
                         <div class="list-count">${completedCount}/${totalCount}</div>
                     </div>
-                    <div class="list-items">
-                        ${list.items.slice(0, 5).map(item => `
-                            <div class="list-item">
-                                <div class="item-checkbox ${item.completed ? 'checked' : ''}" 
-                                     onclick="toggleItem('${list.type}', ${list.items.indexOf(item)}, ${item.completed})">
-                                    ${item.completed ? '✓' : ''}
-                                </div>
-                                <div class="item-text ${item.completed ? 'completed' : ''}">${item.text}</div>
-                                <div class="item-priority ${item.priority || 'low'}"></div>
+                    <div class="list-items" id="items-${type}">
+                        ${items.length === 0 ? `<div style="text-align:center;color:var(--text-secondary);padding:20px">No items yet</div>` : ''}
+                        ${items.map((item, idx) => `
+                            <div class="list-item" data-item-id="${item.id || idx}" style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:12px;cursor:pointer;touch-action:manipulation" onclick="toggleItem('${type}','${item.id || idx}',${!!item.completed})">
+                                <div class="item-checkbox ${item.completed ? 'checked' : ''}" style="width:24px;height:24px;border-radius:50%;border:2px solid #7B61FF;display:flex;align-items:center;justify-content:center;flex-shrink:0;${item.completed ? 'background:linear-gradient(135deg,#7B61FF,#5AE0E0);border-color:transparent;' : ''}">${item.completed ? '✓' : ''}</div>
+                                <div class="item-text ${item.completed ? 'completed' : ''}" style="${item.completed ? 'text-decoration:line-through;opacity:0.5;' : ''}flex:1;">${item.text || item.title || ''}</div>
                             </div>
                         `).join('')}
-                        ${list.items.length > 5 ? `<div style="text-align: center; color: var(--text-secondary); padding: 8px;">+${list.items.length - 5} more items</div>` : ''}
                     </div>
-                    <div class="add-item-form">
-                        <input type="text" class="add-item-input" placeholder="Add new item..." 
-                               onkeypress="if(event.key==='Enter') addItem('${list.type}', this)">
-                        <button class="add-item-button" onclick="addItem('${list.type}', this.previousElementSibling)">Add</button>
+                    <div class="add-item-form" style="margin-top:auto;padding-top:12px;display:flex;gap:8px;">
+                        <input type="text" class="add-item-input" placeholder="Add new item..." style="flex:1;padding:10px 14px;border-radius:12px;border:1px solid rgba(123,97,255,0.3);font-size:14px;background:rgba(123,97,255,0.05);touch-action:manipulation"
+                               onkeypress="if(event.key==='Enter'){addItem('${type}',this)}" />
+                        <button class="add-item-button" onclick="addItem('${type}',this.previousElementSibling)" style="padding:10px 16px;border-radius:12px;border:none;background:linear-gradient(135deg,#7B61FF,#5AE0E0);color:white;cursor:pointer;font-size:14px;touch-action:manipulation">Add</button>
                     </div>
                 `;
-                
+
                 grid.appendChild(listCard);
             });
         }
 
-        async function toggleItem(listType, itemIndex, currentStatus) {
-            try {
-                // Get user ID
-                const userId = getUserId();
-                
-                // Update via API
-                const response = await fetch(`/api/lists/${listType}?user_id=${userId}`, {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        items: await getUpdatedItems(listType, itemIndex, !currentStatus)
-                    })
-                });
-                
-                if (response.ok) {
-                    // Reload lists to reflect changes
-                    loadLists();
-                }
-            } catch (error) {
-                console.error('Failed to update item:', error);
-            }
-        }
+        async function toggleItem(listType, itemId, currentStatus) {
+            const entry = listRegistry[listType];
+            if (!entry || !entry.list_id) return;
+            const headers = getAuthHeaders();
+            const newStatus = !currentStatus;
 
-        async function getUpdatedItems(listType, itemIndex, completed) {
-            try {
-                const userId = getUserId();
-                const response = await fetch(`/api/lists/${listType}?user_id=${userId}`);
-                const data = await response.json();
-                
-                if (data.lists && data.lists[0].items) {
-                    data.lists[0].items[itemIndex].completed = completed;
-                    return data.lists[0].items;
+            // Optimistic UI update
+            const itemEl = document.querySelector(`[data-list-type="${listType}"] [data-item-id="${itemId}"]`);
+            if (itemEl) {
+                const cb = itemEl.querySelector('.item-checkbox');
+                const txt = itemEl.querySelector('.item-text');
+                if (newStatus) {
+                    cb.classList.add('checked');
+                    cb.textContent = '✓';
+                    cb.style.background = 'linear-gradient(135deg,#7B61FF,#5AE0E0)';
+                    cb.style.borderColor = 'transparent';
+                    txt.style.textDecoration = 'line-through';
+                    txt.style.opacity = '0.5';
+                } else {
+                    cb.classList.remove('checked');
+                    cb.textContent = '';
+                    cb.style.background = '';
+                    cb.style.borderColor = '';
+                    txt.style.textDecoration = '';
+                    txt.style.opacity = '';
                 }
-                
-                return [];
-            } catch (error) {
-                console.error('Failed to get items for update:', error);
-                return [];
+            }
+
+            try {
+                await fetch(`/api/lists/${listType}/${entry.list_id}/items/${itemId}`, {
+                    method: 'PUT',
+                    headers,
+                    body: JSON.stringify({ completed: newStatus }),
+                });
+                // Update local registry
+                const item = entry.items.find(i => String(i.id) === String(itemId));
+                if (item) item.completed = newStatus;
+            } catch (e) {
+                console.warn('toggleItem failed:', e);
+                loadLists(); // Revert on error
             }
         }
 
         async function addItem(listType, input) {
             const text = input.value.trim();
             if (!text) return;
-            
+            const entry = listRegistry[listType];
+            if (!entry || !entry.list_id) {
+                // List not loaded yet — try loading first
+                await loadLists();
+                return addItem(listType, input);
+            }
+            const headers = getAuthHeaders();
             try {
-                const userId = getUserId();
-                const response = await fetch(`/api/lists/${listType}?user_id=${userId}`, {
+                const resp = await fetch(`/api/lists/${listType}/${entry.list_id}/items`, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        text: text,
-                        priority: 'low',
-                        completed: false
-                    })
+                    headers,
+                    body: JSON.stringify({ text, priority: 'low', completed: false }),
                 });
-                
-                if (response.ok) {
+                if (resp.ok) {
                     input.value = '';
-                    loadLists(); // Reload to show new item
+                    loadLists();
                 }
-            } catch (error) {
-                console.error('Failed to add item:', error);
+            } catch (e) {
+                console.warn('addItem failed:', e);
             }
         }
     </script>
     <script src="/js/websocket-sync.js"></script>
     <script src="/js/touch-ui-executor.js"></script>
+    <script src="/js/orb-loader.js"></script>
+
+<script src="/touch/js/gestures.js"></script>
+<script src="/touch/js/touch-menu.js"></script>
+<script>TouchMenu.init({ page: 'lists' });</script>
 </body>
 </html>

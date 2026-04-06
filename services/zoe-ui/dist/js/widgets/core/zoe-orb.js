@@ -61,6 +61,18 @@ class ZoeOrbWidget extends WidgetModule {
             window.zoeWidgets = new Map();
         }
         window.zoeWidgets.set(this.type, this);
+
+        // Stable session ID for this widget — persists across page loads so the
+        // Hermes agent pool entry survives navigation and the user always gets
+        // a warm response after the first message.
+        this._sessionId = localStorage.getItem('orbWidgetSessionId');
+        if (!this._sessionId) {
+            this._sessionId = 'orb-widget-' + Math.random().toString(36).slice(2, 10);
+            localStorage.setItem('orbWidgetSessionId', this._sessionId);
+        }
+
+        // Pre-warm the Hermes session in the background so the first tap is fast.
+        this._warmSession();
         
         // Setup text input Enter key handler
         const input = this.element.querySelector(`#zoeInput-${this.type}`);
@@ -72,6 +84,15 @@ class ZoeOrbWidget extends WidgetModule {
                 }
             });
         }
+    }
+
+    _warmSession() {
+        const session = window.zoeAuth?.getCurrentSession();
+        const headers = { 'Content-Type': 'application/json' };
+        if (session?.session_id) headers['X-Session-ID'] = session.session_id;
+        fetch(`/api/chat/warm/${encodeURIComponent(this._sessionId)}`, {
+            method: 'POST', headers
+        }).catch(() => {});
     }
     
     async startConversation() {
@@ -218,7 +239,7 @@ class ZoeOrbWidget extends WidgetModule {
             
             // Step 1: Send text to Zoe's brain
             console.log('🎯 Sending to Zoe:', transcript);
-            const chatResponse = await fetch('/api/chat/', {
+            const chatResponse = await fetch('/api/chat/?stream=false', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -226,7 +247,7 @@ class ZoeOrbWidget extends WidgetModule {
                 },
                 body: JSON.stringify({
                     message: transcript,
-                    conversation_history: this.conversationHistory.slice(-10),
+                    session_id: this._sessionId,
                     mode: 'widget_chat'
                 })
             });
@@ -264,31 +285,16 @@ class ZoeOrbWidget extends WidgetModule {
         this.showTypingIndicator();
         
         try {
-            // Get session for authentication
             const session = window.zoeAuth?.getCurrentSession();
-            console.log('🎯 Orb widget - session:', session ? 'found' : 'NOT FOUND');
-            console.log('🎯 Orb widget - session_id:', session?.session_id);
+            const headers = { 'Content-Type': 'application/json' };
+            if (session?.session_id) headers['X-Session-ID'] = session.session_id;
             
-            const headers = {
-                'Content-Type': 'application/json'
-            };
-            
-            // Add session ID if available
-            if (session?.session_id) {
-                headers['X-Session-ID'] = session.session_id;
-                console.log('✅ Added session ID to headers');
-            } else {
-                console.warn('⚠️ No session ID available!');
-            }
-            
-            console.log('🎯 Sending message to /api/chat/:', transcript);
-            
-            const response = await fetch('/api/chat/', {
+            const response = await fetch('/api/chat/?stream=false', {
                 method: 'POST',
                 headers: headers,
                 body: JSON.stringify({
                     message: transcript,
-                    conversation_history: this.conversationHistory.slice(-10),
+                    session_id: this._sessionId,
                     mode: 'widget_chat'
                 })
             });

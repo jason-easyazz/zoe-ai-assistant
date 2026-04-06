@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Zoe – Notes</title>
+    <link rel="stylesheet" href="/touch/css/touch-base.css">
+    <style>
+        :root {
+            --purple: #7B61FF;
+            --teal: #5AE0E0;
+            --bg: #0f0f1a;
+            --surface: rgba(255,255,255,0.05);
+            --surface-hover: rgba(255,255,255,0.09);
+            --border: rgba(255,255,255,0.1);
+            --border-bright: rgba(123,97,255,0.45);
+            --text: #fff;
+            --text-2: rgba(255,255,255,0.7);
+            --text-3: rgba(255,255,255,0.42);
+            --radius: 16px;
+            --glass: rgba(255,255,255,0.055);
+            --glass-border: rgba(255,255,255,0.11);
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            width: 100%; height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            overflow: hidden;
+            touch-action: manipulation;
+        }
+
+        /* ── Ambient orbs ── */
+        .bg-orb {
+            position: fixed; border-radius: 50%; filter: blur(90px);
+            pointer-events: none; z-index: 0;
+        }
+        .bg-orb-1 { width: 350px; height: 350px; background: rgba(123,97,255,0.13); top: -80px; left: -60px; }
+        .bg-orb-2 { width: 280px; height: 280px; background: rgba(90,224,224,0.10); bottom: 40px; right: -40px; }
+
+        /* ── Layout ── */
+        .page-shell {
+            display: grid;
+            grid-template-rows: auto auto 1fr auto;
+            height: 100vh;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* ── Header ── */
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 20px;
+            background: rgba(15,15,26,0.85);
+            backdrop-filter: blur(24px);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .back-btn {
+            width: 44px; height: 44px;
+            border-radius: 50%;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-2);
+            font-size: 18px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; touch-action: manipulation;
+            text-decoration: none;
+            transition: background 0.2s, transform 0.15s;
+            flex-shrink: 0;
+        }
+        .back-btn:active { transform: scale(0.92); }
+
+        .header-title {
+            font-size: 20px; font-weight: 600;
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            flex: 1;
+        }
+
+        .fab-btn {
+            width: 48px; height: 48px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--purple), var(--teal));
+            border: none;
+            color: #fff;
+            font-size: 26px;
+            font-weight: 300;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; touch-action: manipulation;
+            box-shadow: 0 4px 18px rgba(123,97,255,0.45);
+            transition: transform 0.15s, box-shadow 0.2s;
+        }
+        .fab-btn:active { transform: scale(0.9); box-shadow: 0 2px 10px rgba(123,97,255,0.3); }
+
+        /* ── Search bar ── */
+        .search-bar {
+            padding: 10px 20px;
+            background: rgba(15,15,26,0.75);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .search-input-wrap {
+            display: flex; align-items: center; gap: 10px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            padding: 0 14px;
+            height: 44px;
+        }
+        .search-icon { font-size: 15px; color: var(--text-3); flex-shrink: 0; }
+        #searchInput {
+            flex: 1; background: none; border: none; outline: none;
+            color: var(--text); font-size: 15px; font-family: inherit;
+            -webkit-user-select: text; user-select: text;
+        }
+        #searchInput::placeholder { color: var(--text-3); }
+
+        /* ── Notes grid ── */
+        .notes-scroll {
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            padding: 16px 20px;
+        }
+        .notes-scroll::-webkit-scrollbar { width: 4px; }
+        .notes-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+
+        .notes-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            align-items: start;
+        }
+
+        .note-card {
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            padding: 14px 14px 14px 18px;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
+            position: relative;
+            overflow: hidden;
+            backdrop-filter: blur(12px);
+        }
+        .note-card::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            width: 4px;
+            border-radius: 4px 0 0 4px;
+            background: var(--card-color, var(--purple));
+        }
+        .note-card:active {
+            background: var(--surface-hover);
+            transform: scale(0.98);
+        }
+
+        .note-card-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 6px;
+            line-height: 1.3;
+        }
+        .note-card-preview {
+            font-size: 13px;
+            color: var(--text-2);
+            line-height: 1.45;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            margin-bottom: 10px;
+        }
+        .note-card-footer {
+            display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+        }
+        .note-date-chip {
+            font-size: 11px;
+            color: var(--text-3);
+            background: rgba(255,255,255,0.06);
+            border-radius: 8px;
+            padding: 2px 8px;
+        }
+        .note-tag-chip {
+            font-size: 11px;
+            border-radius: 8px;
+            padding: 2px 8px;
+            background: rgba(123,97,255,0.15);
+            color: rgba(123,97,255,0.9);
+            border: 1px solid rgba(123,97,255,0.2);
+        }
+
+        /* ── Empty state ── */
+        .empty-state {
+            grid-column: 1 / -1;
+            display: flex; flex-direction: column; align-items: center;
+            justify-content: center; gap: 14px;
+            padding: 48px 20px;
+            color: var(--text-3);
+            text-align: center;
+        }
+        .empty-icon { font-size: 52px; }
+        .empty-title { font-size: 17px; font-weight: 500; color: var(--text-2); }
+        .empty-body { font-size: 14px; line-height: 1.5; max-width: 260px; }
+
+        /* ── Editor overlay ── */
+        .editor-overlay {
+            position: fixed; inset: 0;
+            background: rgba(10,10,20,0.96);
+            backdrop-filter: blur(30px);
+            z-index: 200;
+            display: flex; flex-direction: column;
+            transform: translateY(100%);
+            transition: transform 0.35s cubic-bezier(0.4,0,0.2,1);
+        }
+        .editor-overlay.open { transform: translateY(0); }
+
+        .editor-header {
+            display: flex; align-items: center; gap: 12px;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .editor-close {
+            width: 44px; height: 44px;
+            border-radius: 50%;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-2);
+            font-size: 20px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; touch-action: manipulation;
+            transition: background 0.2s;
+        }
+        .editor-close:active { background: var(--surface-hover); }
+
+        .editor-header-title {
+            font-size: 16px; font-weight: 500; color: var(--text-2); flex: 1;
+        }
+
+        .editor-actions {
+            display: flex; gap: 10px;
+        }
+
+        .editor-delete-btn {
+            height: 44px; padding: 0 16px;
+            border-radius: 22px;
+            background: rgba(255,80,80,0.12);
+            border: 1px solid rgba(255,80,80,0.25);
+            color: #ff6b6b;
+            font-size: 14px; font-weight: 500;
+            cursor: pointer; touch-action: manipulation;
+            transition: background 0.2s;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .editor-delete-btn:active { background: rgba(255,80,80,0.22); }
+
+        .editor-save-btn {
+            height: 44px; padding: 0 22px;
+            border-radius: 22px;
+            background: linear-gradient(135deg, var(--purple), var(--teal));
+            border: none;
+            color: #fff;
+            font-size: 14px; font-weight: 600;
+            cursor: pointer; touch-action: manipulation;
+            box-shadow: 0 3px 14px rgba(123,97,255,0.4);
+            transition: opacity 0.2s, transform 0.15s;
+        }
+        .editor-save-btn:active { transform: scale(0.95); }
+
+        .editor-body {
+            flex: 1; overflow-y: auto; padding: 20px;
+            display: flex; flex-direction: column; gap: 14px;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        #noteTitleInput {
+            width: 100%; background: none; border: none; outline: none;
+            color: var(--text); font-size: 22px; font-weight: 600;
+            font-family: inherit; line-height: 1.3;
+            -webkit-user-select: text; user-select: text;
+        }
+        #noteTitleInput::placeholder { color: var(--text-3); }
+
+        .editor-divider {
+            height: 1px; background: var(--border);
+        }
+
+        #noteEditor {
+            flex: 1; width: 100%;
+            background: none; border: none; outline: none;
+            color: var(--text-2); font-size: 16px; font-family: inherit;
+            font-weight: 300; line-height: 1.7;
+            resize: none;
+            min-height: 200px;
+            -webkit-user-select: text; user-select: text;
+        }
+        #noteEditor::placeholder { color: var(--text-3); }
+
+        /* Tag & color row */
+        .tag-color-row {
+            display: flex; align-items: center; gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        #tagInput {
+            flex: 1; min-width: 120px;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: 10px;
+            padding: 8px 12px;
+            color: var(--text);
+            font-size: 14px; font-family: inherit;
+            outline: none;
+            height: 40px;
+            -webkit-user-select: text; user-select: text;
+        }
+        #tagInput::placeholder { color: var(--text-3); }
+
+        .color-picker-row {
+            display: flex; gap: 8px;
+        }
+        .color-swatch {
+            width: 28px; height: 28px;
+            border-radius: 50%;
+            border: 2px solid transparent;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: transform 0.15s;
+        }
+        .color-swatch:active { transform: scale(0.88); }
+        .color-swatch.selected { border-color: rgba(255,255,255,0.7); }
+
+        .tags-chips {
+            display: flex; gap: 6px; flex-wrap: wrap;
+        }
+        .tag-chip-item {
+            font-size: 12px; border-radius: 10px; padding: 4px 10px;
+            background: rgba(123,97,255,0.15);
+            color: rgba(123,97,255,0.95);
+            border: 1px solid rgba(123,97,255,0.2);
+            display: flex; align-items: center; gap: 4px;
+            cursor: pointer; touch-action: manipulation;
+        }
+        .tag-chip-remove { font-size: 14px; line-height: 1; opacity: 0.7; }
+
+        /* ── Bottom nav ── */
+        .bottom-nav {
+            display: flex;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+            background: rgba(15,15,26,0.96);
+            border-top: 1px solid var(--border);
+            padding: 0 8px;
+            flex-shrink: 0;
+        }
+        .bottom-nav::-webkit-scrollbar { display: none; }
+
+        .nav-item {
+            flex-shrink: 0;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            gap: 3px;
+            padding: 8px 14px;
+            min-width: 64px; min-height: 56px;
+            color: var(--text-3);
+            text-decoration: none;
+            font-size: 10px; font-weight: 500; letter-spacing: 0.3px;
+            touch-action: manipulation;
+            transition: color 0.2s;
+            border-bottom: 2px solid transparent;
+        }
+        .nav-item .nav-icon { font-size: 18px; line-height: 1; }
+        .nav-item:active { opacity: 0.7; }
+        .nav-item.active { color: var(--purple); border-bottom-color: var(--purple); }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 72px; left: 50%; transform: translateX(-50%) translateY(14px);
+            background: rgba(90,224,224,0.13);
+            border: 1px solid rgba(90,224,224,0.3);
+            color: var(--teal);
+            border-radius: 20px; padding: 10px 22px;
+            font-size: 14px; font-weight: 500;
+            opacity: 0; transition: opacity 0.3s, transform 0.3s;
+            pointer-events: none; z-index: 300; white-space: nowrap;
+        }
+        .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    </style>
+</head>
+<body>
+<div class="bg-orb bg-orb-1"></div>
+<div class="bg-orb bg-orb-2"></div>
+
+<div class="page-shell">
+
+    <!-- Header -->
+    <header class="header">
+        <a class="back-btn" href="/touch/dashboard.html" aria-label="Back">‹</a>
+        <span class="header-title">Notes</span>
+        <button class="fab-btn" onclick="openEditor(null)" aria-label="New note">+</button>
+    </header>
+
+    <!-- Search -->
+    <div class="search-bar">
+        <div class="search-input-wrap">
+            <span class="search-icon">🔍</span>
+            <input type="search" id="searchInput" placeholder="Search notes…" autocomplete="off" autocorrect="off">
+        </div>
+    </div>
+
+    <!-- Notes grid -->
+    <div class="notes-scroll">
+        <div class="notes-grid" id="notesGrid">
+            <div class="empty-state">
+                <div class="empty-icon">📝</div>
+                <div class="empty-title">No notes yet</div>
+                <div class="empty-body">Say "Hey Zoe, make a note about…" or tap + to create one.</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom nav -->
+    <nav class="bottom-nav" aria-label="Main navigation">
+        <a class="nav-item" href="/touch/dashboard.html"><span class="nav-icon">🏠</span>Dashboard</a>
+        <a class="nav-item" href="/touch/calendar.html"><span class="nav-icon">📅</span>Calendar</a>
+        <a class="nav-item" href="/touch/lists.html"><span class="nav-icon">✅</span>Lists</a>
+        <a class="nav-item active" href="/touch/notes.html"><span class="nav-icon">📝</span>Notes</a>
+        <a class="nav-item" href="/touch/journal.html"><span class="nav-icon">📔</span>Journal</a>
+        <a class="nav-item" href="/touch/music.html"><span class="nav-icon">🎵</span>Music</a>
+        <a class="nav-item" href="/touch/smart-home.html"><span class="nav-icon">💡</span>Smart Home</a>
+        <a class="nav-item" href="/touch/people.html"><span class="nav-icon">👥</span>People</a>
+        <a class="nav-item" href="/touch/memories.html"><span class="nav-icon">🌟</span>Memories</a>
+        <a class="nav-item" href="/touch/cooking.html"><span class="nav-icon">🍳</span>Cooking</a>
+        <a class="nav-item" href="/touch/weather.html"><span class="nav-icon">🌤</span>Weather</a>
+        <a class="nav-item" href="/touch/settings.html"><span class="nav-icon">⚙️</span>Settings</a>
+    </nav>
+</div>
+
+<!-- Editor overlay -->
+<div class="editor-overlay" id="editorOverlay" role="dialog" aria-modal="true" aria-label="Note editor">
+    <div class="editor-header">
+        <button class="editor-close" onclick="closeEditor()" aria-label="Close">×</button>
+        <span class="editor-header-title" id="editorHeaderTitle">New Note</span>
+        <div class="editor-actions">
+            <button class="editor-delete-btn" id="deleteBtn" onclick="deleteNote()" style="display:none">
+                🗑 Delete
+            </button>
+            <button class="editor-save-btn" onclick="saveNote()">Save</button>
+        </div>
+    </div>
+
+    <div class="editor-body">
+        <input type="text" id="noteTitleInput" placeholder="Title" autocomplete="off" autocorrect="on">
+        <div class="editor-divider"></div>
+        <textarea id="noteEditor" placeholder="Start writing…" autocorrect="on" spellcheck="true"></textarea>
+        <div class="editor-divider"></div>
+
+        <!-- Tags -->
+        <div>
+            <div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-3);margin-bottom:8px;">Tags</div>
+            <div class="tag-color-row">
+                <input type="text" id="tagInput" placeholder="Add tag, press Enter…">
+                <button onclick="addTagFromInput()" style="height:40px;padding:0 14px;border-radius:10px;background:var(--glass);border:1px solid var(--glass-border);color:var(--text-2);font-size:13px;cursor:pointer;touch-action:manipulation;">Add</button>
+            </div>
+            <div class="tags-chips" id="tagsChips" style="margin-top:8px;"></div>
+        </div>
+
+        <!-- Color -->
+        <div>
+            <div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-3);margin-bottom:8px;">Color</div>
+            <div class="color-picker-row" id="colorPicker">
+                <div class="color-swatch selected" data-color="#7B61FF" style="background:#7B61FF" onclick="selectColor(this)"></div>
+                <div class="color-swatch" data-color="#5AE0E0" style="background:#5AE0E0" onclick="selectColor(this)"></div>
+                <div class="color-swatch" data-color="#FF6B9D" style="background:#FF6B9D" onclick="selectColor(this)"></div>
+                <div class="color-swatch" data-color="#FFB347" style="background:#FFB347" onclick="selectColor(this)"></div>
+                <div class="color-swatch" data-color="#6BCB77" style="background:#6BCB77" onclick="selectColor(this)"></div>
+                <div class="color-swatch" data-color="#FF6B6B" style="background:#FF6B6B" onclick="selectColor(this)"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script src="/js/auth.js"></script>
+<script src="/js/websocket-sync.js"></script>
+<script src="/js/touch-ui-executor.js"></script>
+<script src="/js/orb-loader.js"></script>
+<script>
+const NOTE_COLORS = ['#7B61FF','#5AE0E0','#FF6B9D','#FFB347','#6BCB77','#FF6B6B'];
+
+let notes = [];
+let filteredNotes = [];
+let currentNoteId = null;
+let currentColor = '#7B61FF';
+let currentTags = [];
+let searchQuery = '';
+
+/* ── Init ── */
+document.addEventListener('DOMContentLoaded', async () => {
+    try {
+        const session = JSON.parse(localStorage.getItem('zoe_session') || '{}');
+        const userId = session.user_id || session.userId || 'anonymous';
+        if (typeof ZoeWebSockets !== 'undefined') {
+            ZoeWebSockets.init(userId);
+            ZoeWebSockets.on('note_created', loadNotes);
+            ZoeWebSockets.on('note_updated', loadNotes);
+            ZoeWebSockets.on('note_deleted', loadNotes);
+        }
+    } catch(e) { console.warn('WS init:', e); }
+
+    document.getElementById('searchInput').addEventListener('input', e => {
+        searchQuery = e.target.value.toLowerCase();
+        applyFilter();
+    });
+
+    document.getElementById('tagInput').addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); addTagFromInput(); }
+    });
+
+    await loadNotes();
+    document.querySelector('.nav-item.active')?.scrollIntoView({ inline: 'center', behavior: 'auto', block: 'nearest' });
+});
+
+/* ── Load notes ── */
+async function loadNotes() {
+    try {
+        const r = await fetch('/api/notes');
+        if (!r.ok) throw new Error();
+        const data = await r.json();
+        notes = Array.isArray(data) ? data : (data.notes || []);
+        applyFilter();
+    } catch {
+        notes = [];
+        renderNotes([]);
+    }
+}
+
+function applyFilter() {
+    if (!searchQuery) {
+        filteredNotes = [...notes];
+    } else {
+        filteredNotes = notes.filter(n =>
+            (n.title || '').toLowerCase().includes(searchQuery) ||
+            (n.content || '').toLowerCase().includes(searchQuery) ||
+            (n.tags || []).some(t => t.toLowerCase().includes(searchQuery))
+        );
+    }
+    renderNotes(filteredNotes);
+}
+
+/* ── Render ── */
+function renderNotes(list) {
+    const grid = document.getElementById('notesGrid');
+    if (!list.length) {
+        const msg = searchQuery
+            ? `<div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-title">No results</div><div class="empty-body">No notes match "${escHtml(searchQuery)}"</div></div>`
+            : `<div class="empty-state"><div class="empty-icon">📝</div><div class="empty-title">No notes yet</div><div class="empty-body">Say "Hey Zoe, make a note about…" or tap + to create one.</div></div>`;
+        grid.innerHTML = msg;
+        return;
+    }
+
+    grid.innerHTML = list.map(note => {
+        const color = note.color || NOTE_COLORS[Math.abs(hashStr(note.id || note.title || '')) % NOTE_COLORS.length];
+        const date = note.updated_at || note.created_at
+            ? new Date(note.updated_at || note.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+            : '';
+        const tags = (note.tags || []).slice(0, 2).map(t => `<span class="note-tag-chip">${escHtml(t)}</span>`).join('');
+        return `
+        <div class="note-card" style="--card-color:${color}" onclick='openEditor(${JSON.stringify(note)})'>
+            <div class="note-card-title">${escHtml(note.title || 'Untitled')}</div>
+            <div class="note-card-preview">${escHtml(note.content || '')}</div>
+            <div class="note-card-footer">
+                ${date ? `<span class="note-date-chip">${date}</span>` : ''}
+                ${tags}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+/* ── Editor ── */
+function openEditor(note) {
+    currentNoteId = note?.id || null;
+    currentColor = note?.color || '#7B61FF';
+    currentTags = Array.isArray(note?.tags) ? [...note.tags] : [];
+
+    document.getElementById('noteTitleInput').value = note?.title || '';
+    document.getElementById('noteEditor').value = note?.content || '';
+    document.getElementById('editorHeaderTitle').textContent = note ? 'Edit Note' : 'New Note';
+    document.getElementById('deleteBtn').style.display = note ? 'flex' : 'none';
+
+    updateTagsChips();
+    updateColorPicker();
+
+    document.getElementById('editorOverlay').classList.add('open');
+    setTimeout(() => document.getElementById('noteEditor').focus(), 350);
+}
+
+function closeEditor() {
+    document.getElementById('editorOverlay').classList.remove('open');
+    currentNoteId = null;
+    currentTags = [];
+}
+
+/* Tags */
+function addTagFromInput() {
+    const inp = document.getElementById('tagInput');
+    const val = inp.value.trim();
+    if (val && !currentTags.includes(val)) {
+        currentTags.push(val);
+        updateTagsChips();
+    }
+    inp.value = '';
+}
+
+function removeTag(tag) {
+    currentTags = currentTags.filter(t => t !== tag);
+    updateTagsChips();
+}
+
+function updateTagsChips() {
+    document.getElementById('tagsChips').innerHTML = currentTags.map(t =>
+        `<span class="tag-chip-item" onclick="removeTag('${escHtml(t)}')">${escHtml(t)}<span class="tag-chip-remove">×</span></span>`
+    ).join('');
+}
+
+/* Color */
+function selectColor(el) {
+    currentColor = el.dataset.color;
+    document.querySelectorAll('.color-swatch').forEach(s => s.classList.toggle('selected', s === el));
+}
+
+function updateColorPicker() {
+    document.querySelectorAll('.color-swatch').forEach(s => {
+        s.classList.toggle('selected', s.dataset.color === currentColor);
+    });
+}
+
+/* ── Save ── */
+async function saveNote() {
+    const title = document.getElementById('noteTitleInput').value.trim();
+    const content = document.getElementById('noteEditor').value.trim();
+    if (!title && !content) { showToast('⚠ Nothing to save'); return; }
+
+    const payload = { title: title || 'Untitled', content, tags: currentTags, color: currentColor };
+
+    try {
+        let r;
+        if (currentNoteId) {
+            r = await fetch(`/api/notes/${currentNoteId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        } else {
+            r = await fetch('/api/notes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+        }
+        if (!r.ok) throw new Error();
+        closeEditor();
+        showToast(currentNoteId ? '✓ Note updated' : '✓ Note created');
+        await loadNotes();
+    } catch {
+        showToast('⚠ Could not save');
+    }
+}
+
+/* ── Delete ── */
+async function deleteNote() {
+    if (!currentNoteId) return;
+    if (!confirm('Delete this note?')) return;
+    try {
+        const r = await fetch(`/api/notes/${currentNoteId}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error();
+        closeEditor();
+        showToast('Note deleted');
+        await loadNotes();
+    } catch {
+        showToast('⚠ Could not delete');
+    }
+}
+
+/* ── Helpers ── */
+function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+function escHtml(str) {
+    return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function hashStr(s) {
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+    return Math.abs(h);
+}
+
+/* ── ZOE_OPEN_FORM hook ── */
+window.ZOE_OPEN_FORM = function(formType, prefill) {
+    if (formType === 'new_note') {
+        openEditor(null);
+        if (prefill) {
+            if (prefill.title) document.getElementById('noteTitleInput').value = prefill.title;
+            if (prefill.content) document.getElementById('noteEditor').value = prefill.content;
+            if (prefill.tags) {
+                currentTags = Array.isArray(prefill.tags) ? prefill.tags : [prefill.tags];
+                updateTagsChips();
+            }
+        }
+        setTimeout(() => document.getElementById('noteEditor').focus(), 360);
+    }
+};
+</script>
+<script src="/touch/js/gestures.js"></script>
+<script src="/touch/js/touch-menu.js"></script>
+<script>TouchMenu.init({ page: 'notes' });</script>
+</body>
+</html>

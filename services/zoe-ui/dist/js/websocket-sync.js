@@ -274,6 +274,78 @@ window.ZoeWebSockets = {
         ['lists', 'calendar', 'people', 'reminders', 'notes', 'journal'].forEach(name => {
             if (this[name]) this[name].disconnect();
         });
+    },
+
+    // ── Panel push channel ──────────────────────────────────────────────────
+    // Connects to /ws/push and handles:
+    //   ui_action   → instantly execute panel commands (bypasses 2s poll)
+    //   voice:*     → drive orb state machine automatically
+    //   pin_request → show PIN pad
+    push: null,
+
+    initPush(panelId, sessionId) {
+        // Connect directly to /ws/push?channel=all (query param, not path segment).
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const pushUrl = `${protocol}//${window.location.host}/ws/push?channel=all`;
+        this.push = new ZoeWebSocketSync('/ws/push', 'all');
+        // Override the connect method to use the correct URL with query param.
+        const originalConnect = this.push.connect.bind(this.push);
+        this.push.connect = function() {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) return;
+            console.log('[ZoeWS] Connecting push channel:', pushUrl);
+            try {
+                this.ws = new WebSocket(pushUrl);
+                this.ws.onopen = () => {
+                    this.isConnected = true;
+                    this.reconnectAttempts = 0;
+                    this.startPingInterval();
+                    if (this.callbacks['connected']) this.callbacks['connected']();
+                };
+                this.ws.onmessage = (event) => {
+                    try { this.handleMessage(JSON.parse(event.data)); } catch(e) {}
+                };
+                this.ws.onclose = () => {
+                    this.isConnected = false;
+                    this.stopPingInterval();
+                    this.reconnect();
+                };
+                this.ws.onerror = () => { this.isConnected = false; };
+            } catch(e) { this.reconnect(); }
+        };
+
+        // ── Instant panel action delivery ──────────────────────────────────
+        this.push.on('ui_action', (data) => {
+            const action = data.action || data;
+            if (!action || !action.action_type) return;
+            // Delegate to touch-ui-executor if available, otherwise ignore
+            if (window._zoeExecuteAction && typeof window._zoeExecuteAction === 'function') {
+                window._zoeExecuteAction(action);
+            }
+        });
+
+        // ── Voice state machine ────────────────────────────────────────────
+        this.push.on('voice:listening_started', () => {
+            if (window._zoeSetOrbMode) window._zoeSetOrbMode('listening');
+        });
+        this.push.on('voice:thinking', () => {
+            if (window._zoeSetOrbMode) window._zoeSetOrbMode('thinking');
+        });
+        this.push.on('voice:done', () => {
+            if (window._zoeSetOrbMode) window._zoeSetOrbMode('ambient');
+        });
+        this.push.on('voice:responding', () => {
+            if (window._zoeSetOrbMode) window._zoeSetOrbMode('responding');
+        });
+
+        // ── PIN challenge ──────────────────────────────────────────────────
+        this.push.on('panel_pin_request', (data) => {
+            if (window._zoeShowPinPad && typeof window._zoeShowPinPad === 'function') {
+                window._zoeShowPinPad(data);
+            }
+        });
+
+        this.push.connect();
+        console.log('[ZoeWS] Panel push channel connected, panel_id:', panelId);
     }
 };
 

@@ -470,4 +470,63 @@ CREATE TABLE IF NOT EXISTS ui_action_ledger (
     FOREIGN KEY (action_id) REFERENCES ui_actions(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_ui_ledger_action ON ui_action_ledger(action_id);
+
+-- Touch Presence Platform: registered panels (Raspberry Pi kiosks, etc.)
+CREATE TABLE IF NOT EXISTS panels (
+    panel_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    location TEXT,
+    ip_address TEXT,
+    panel_type TEXT DEFAULT 'kiosk',
+    os TEXT,
+    notes TEXT,
+    is_active INTEGER DEFAULT 1,
+    last_seen_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Device tokens for Pi daemons (voice, presence sensors).
+-- Tokens are hashed before storage (SHA-256); the raw token is issued once.
+CREATE TABLE IF NOT EXISTS device_tokens (
+    id TEXT PRIMARY KEY,
+    panel_id TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'voice-daemon',
+    scopes TEXT DEFAULT '["voice"]',
+    expires_at TEXT,
+    revoked INTEGER DEFAULT 0,
+    revoked_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (panel_id) REFERENCES panels(panel_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_device_tokens_panel ON device_tokens(panel_id);
+CREATE INDEX IF NOT EXISTS idx_device_tokens_hash ON device_tokens(token_hash);
+
+-- Panel presence events (motion, face recognition, occupancy from Pi camera).
+CREATE TABLE IF NOT EXISTS panel_presence_events (
+    id TEXT PRIMARY KEY,
+    panel_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    payload TEXT,
+    confidence REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (panel_id) REFERENCES panels(panel_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_presence_panel_time ON panel_presence_events(panel_id, created_at);
+
+-- PIN auth challenges for high-privilege panel actions.
+CREATE TABLE IF NOT EXISTS panel_auth_challenges (
+    challenge_id TEXT PRIMARY KEY,
+    panel_id TEXT NOT NULL,
+    user_id TEXT,
+    action_context TEXT,
+    pin_hash TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    expires_at TEXT NOT NULL,
+    resolved_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_challenges_panel ON panel_auth_challenges(panel_id, status);
 """

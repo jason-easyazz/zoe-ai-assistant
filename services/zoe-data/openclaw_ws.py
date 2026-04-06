@@ -16,12 +16,37 @@ NVM_DIR = os.path.expanduser("~/.nvm")
 NODE_BIN = os.path.expanduser("~/.nvm/versions/node/v22.22.0/bin")
 OPENCLAW_CMD = os.path.join(NODE_BIN, "openclaw")
 GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
+# Align with nginx proxy_read_timeout for long browser/tool runs (seconds).
+# Jetson + large local prompt prefill can exceed 120s; default matches zoe-ui proxy (900s).
+OPENCLAW_AGENT_TIMEOUT_S = float(os.environ.get("OPENCLAW_AGENT_TIMEOUT_S", "900"))
 
 
-async def openclaw_cli(message: str, session_id: str, user_id: str = "family-admin") -> str:
+def _zoe_context_prefix(
+    user_id: str,
+    *,
+    user_role: str | None = None,
+    username: str | None = None,
+) -> str:
+    """Prepended so OpenClaw sees zoe-auth role (USER.md is not authoritative)."""
+    role = user_role if user_role is not None else "unknown"
+    name = (username or "").strip()
+    return f"[CONTEXT: user_id={user_id}, role={role}, name={name}]\n"
+
+
+async def openclaw_cli(
+    message: str,
+    session_id: str,
+    user_id: str = "family-admin",
+    *,
+    user_role: str | None = None,
+    username: str | None = None,
+    skip_context_prefix: bool = False,
+) -> str:
     """Send message through OpenClaw agent with full memory, tools, and personality.
     Each user_id gets an isolated session so memU scopes memories per family member."""
     user_session = f"zoe_{user_id}_{session_id}"
+    if not skip_context_prefix:
+        message = _zoe_context_prefix(user_id, user_role=user_role, username=username) + message
 
     env = os.environ.copy()
     env["PATH"] = f"{NODE_BIN}:/home/zoe/bin:{env.get('PATH', '')}"
@@ -39,7 +64,7 @@ async def openclaw_cli(message: str, session_id: str, user_id: str = "family-adm
         env=env,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=OPENCLAW_AGENT_TIMEOUT_S)
     except asyncio.TimeoutError:
         proc.kill()
         return "Sorry, that took too long. Could you try again?"

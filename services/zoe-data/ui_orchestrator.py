@@ -18,6 +18,17 @@ ALLOWED_ACTION_TYPES = {
     "notify",
     "refresh",
     "click",
+    # Touch panel control actions (consumed by touch-ui-executor.js on the kiosk)
+    "panel_navigate",
+    "panel_navigate_fullscreen",
+    "panel_clear",
+    "panel_browser_frame",
+    "panel_show_fullscreen",
+    "panel_announce",
+    "panel_request_auth",
+    "panel_set_mode",
+    "panel_show_smart_home",
+    "panel_show_media",
 }
 DANGEROUS_ACTION_TYPES = {"delete_record"}
 
@@ -64,6 +75,7 @@ async def enqueue_ui_action(
         raise ValueError(f"Unsupported action type: {action_type}")
 
     if not panel_id:
+        # No panel specified — find the requester's foreground panel.
         cursor = await db.execute(
             """SELECT panel_id
                FROM ui_panel_sessions
@@ -74,6 +86,19 @@ async def enqueue_ui_action(
         )
         row = await cursor.fetchone()
         panel_id = row["panel_id"] if row else None
+
+    if panel_id:
+        # Resolve the user that owns this panel (who will poll for its actions).
+        # This ensures actions are stored under the panel's user, not the requester's
+        # user — so the kiosk can always find its own actions regardless of who queued them.
+        cursor = await db.execute(
+            """SELECT user_id FROM ui_panel_sessions WHERE panel_id = ?
+               ORDER BY last_seen_at DESC LIMIT 1""",
+            (panel_id,),
+        )
+        row = await cursor.fetchone()
+        if row and row["user_id"]:
+            user_id = row["user_id"]
 
     if idempotency_key:
         cursor = await db.execute(

@@ -13,6 +13,7 @@ from .chat import router as chat_router
 from .ui_actions import router as ui_router
 from .voice_tts import router as voice_tts_router
 from .user_profile import router as user_profile_router
+from .panel_auth import router as panel_auth_router
 
 __all__ = [
     "people_router",
@@ -30,4 +31,5 @@ __all__ = [
     "ui_router",
     "voice_tts_router",
     "user_profile_router",
+    "panel_auth_router",
 ]

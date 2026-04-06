@@ -786,6 +786,7 @@
     <meta name="msapplication-tap-highlight" content="no">
     
     <!-- Icons & Manifest -->
+    <link rel="stylesheet" href="/touch/css/touch-base.css">
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
@@ -808,6 +809,7 @@
             <h1 class="page-title">📅 Calendar</h1>
         </div>
         <div class="header-right">
+            <button class="header-button" onclick="goToToday()" title="Go to Today" style="font-size:13px;font-weight:600;width:auto;padding:0 14px;border-radius:20px;">Today</button>
             <div class="view-toggle">
                 <button class="view-button active" id="monthViewBtn" onclick="switchView('month')">Month</button>
                 <button class="view-button" id="dayViewBtn" onclick="switchView('day')">Day</button>
@@ -817,6 +819,8 @@
             </button>
         </div>
     </div>
+    <!-- FAB: Create Event -->
+    <button onclick="showCreateEventModal({})" title="New Event" style="position:fixed;bottom:28px;right:28px;width:60px;height:60px;border-radius:50%;border:none;background:linear-gradient(135deg,#7B61FF,#5AE0E0);color:white;font-size:28px;cursor:pointer;z-index:900;box-shadow:0 4px 20px rgba(123,97,255,0.5);display:flex;align-items:center;justify-content:center;touch-action:manipulation">+</button>
 
     <!-- Main Content -->
     <div class="main-container">
@@ -1085,17 +1089,104 @@
             renderTasks();
         }
 
-        function toggleTask(taskId) {
+        async function toggleTask(taskId) {
             const task = tasks.find(t => t.id === taskId);
-            if (task) {
-                task.completed = !task.completed;
-                renderTasks();
+            if (!task) return;
+            task.completed = !task.completed;
+            renderTasks();
+            // BUG FIX: Persist toggle via API
+            if (task.list_id && task.list_type) {
+                try {
+                    await fetch(`/api/lists/${task.list_type}/${task.list_id}/items/${task.id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ completed: task.completed }),
+                    });
+                } catch (e) { /* non-fatal */ }
             }
         }
 
         function selectEvent(eventId) {
-            console.log('Selected event:', eventId);
-            // Could show event details modal
+            const event = events.find(e => e.id === eventId);
+            if (!event) return;
+            showEventModal(event);
+        }
+
+        function showEventModal(event) {
+            let modal = document.getElementById('eventDetailModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'eventDetailModal';
+                modal.style.cssText = 'position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:20px';
+                document.body.appendChild(modal);
+            }
+            const time = formatEventTime(event.start_time || event.time);
+            modal.innerHTML = `
+                <div style="background:var(--surface,#fff);border-radius:20px;padding:24px;max-width:400px;width:100%;position:relative">
+                    <button onclick="document.getElementById('eventDetailModal').remove()" style="position:absolute;top:12px;right:12px;border:none;background:none;font-size:22px;cursor:pointer;color:var(--text-secondary)">×</button>
+                    <div style="font-size:13px;color:#7B61FF;font-weight:600;margin-bottom:4px">${event.category || 'Event'}</div>
+                    <div style="font-size:20px;font-weight:600;margin-bottom:8px">${event.title}</div>
+                    <div style="color:var(--text-secondary);font-size:15px">${time}</div>
+                    ${event.description ? `<div style="margin-top:12px;color:var(--text-secondary);font-size:14px">${event.description}</div>` : ''}
+                </div>
+            `;
+            modal.style.display = 'flex';
+        }
+
+        // Create event form
+        window.ZOE_OPEN_FORM = function(formType, prefill) {
+            if (formType === 'new_event') showCreateEventModal(prefill);
+        };
+
+        function showCreateEventModal(prefill) {
+            let modal = document.getElementById('createEventModal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'createEventModal';
+                modal.style.cssText = 'position:fixed;inset:0;z-index:3001;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;padding:20px';
+                document.body.appendChild(modal);
+            }
+            const todayStr = selectedDate.toISOString().split('T')[0];
+            modal.innerHTML = `
+                <div style="background:var(--surface,#fff);border-radius:20px;padding:28px;max-width:440px;width:100%;position:relative">
+                    <button onclick="document.getElementById('createEventModal').remove()" style="position:absolute;top:12px;right:12px;border:none;background:none;font-size:24px;cursor:pointer">×</button>
+                    <h2 style="margin-bottom:20px;font-size:20px;background:linear-gradient(135deg,#7B61FF,#5AE0E0);-webkit-background-clip:text;-webkit-text-fill-color:transparent">New Event</h2>
+                    <div style="display:flex;flex-direction:column;gap:14px">
+                        <input id="ceTitle" type="text" placeholder="Event title" value="${prefill?.title || ''}" style="padding:14px;border-radius:12px;border:1px solid rgba(123,97,255,0.3);font-size:16px;width:100%">
+                        <input id="ceDate" type="date" value="${prefill?.date || todayStr}" style="padding:14px;border-radius:12px;border:1px solid rgba(123,97,255,0.3);font-size:16px;width:100%">
+                        <input id="ceTime" type="time" value="${prefill?.time || '09:00'}" style="padding:14px;border-radius:12px;border:1px solid rgba(123,97,255,0.3);font-size:16px;width:100%">
+                        <select id="ceCategory" style="padding:14px;border-radius:12px;border:1px solid rgba(123,97,255,0.3);font-size:16px;width:100%">
+                            <option value="personal">Personal</option>
+                            <option value="work">Work</option>
+                            <option value="family">Family</option>
+                            <option value="health">Health</option>
+                        </select>
+                        <button onclick="saveNewEvent()" style="padding:16px;border-radius:14px;border:none;background:linear-gradient(135deg,#7B61FF,#5AE0E0);color:white;font-size:16px;cursor:pointer;font-weight:600;touch-action:manipulation">Save Event</button>
+                    </div>
+                </div>
+            `;
+            modal.style.display = 'flex';
+            document.getElementById('ceTitle').focus();
+        }
+
+        async function saveNewEvent() {
+            const title = document.getElementById('ceTitle').value.trim();
+            const date = document.getElementById('ceDate').value;
+            const time = document.getElementById('ceTime').value;
+            const category = document.getElementById('ceCategory').value;
+            if (!title || !date) return;
+            const startTime = `${date}T${time || '00:00'}:00`;
+            try {
+                const resp = await fetch('/api/calendar/events', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, start_time: startTime, category }),
+                });
+                if (resp.ok) {
+                    document.getElementById('createEventModal').remove();
+                    loadEvents();
+                }
+            } catch (e) { console.warn('saveNewEvent:', e); }
         }
 
         function generateCalendar() {
@@ -1152,8 +1243,16 @@
 
         function selectDate(date) {
             selectedDate = new Date(date);
-            generateCalendar(); // Regenerate to show selection
-            updateDayView(); // Update day view if active
+            generateCalendar();
+            updateEventsList(); // BUG FIX: update sidebar for selected date
+            if (currentView === 'day') updateDayView();
+        }
+
+        function goToToday() {
+            selectedDate = new Date();
+            currentDate = new Date();
+            generateCalendar();
+            updateEventsList();
         }
 
         function getEventsForDate(date) {
@@ -1203,41 +1302,51 @@
         }
 
         async function loadTasks() {
-            try {
-                const response = await fetch('/api/lists/tasks');
-                const data = await response.json();
-                
-                if (data.lists) {
-                    tasks = [];
-                    data.lists.forEach(list => {
-                        if (list.items) {
-                            list.items.forEach(item => {
-                                tasks.push({
-                                    id: item.id,
-                                    text: item.text,
-                                    completed: item.completed,
-                                    category: list.id.includes('work') ? 'work' : 'personal'
-                                });
-                            });
-                        }
+            // BUG FIX: Fetch list metadata first, then fetch items using list_id
+            const taskListTypes = ['personal_todos', 'work_todos'];
+            tasks = [];
+            for (const listType of taskListTypes) {
+                try {
+                    const metaResp = await fetch(`/api/lists/${listType}`);
+                    if (!metaResp.ok) continue;
+                    const meta = await metaResp.json();
+                    const listMeta = (meta.lists || [])[0] || meta;
+                    const listId = listMeta.id || listMeta.list_id;
+                    if (!listId) continue;
+
+                    const itemsResp = await fetch(`/api/lists/${listType}/${listId}`);
+                    if (!itemsResp.ok) continue;
+                    const itemsData = await itemsResp.json();
+                    const items = itemsData.items || itemsData.list?.items || [];
+                    items.forEach(item => {
+                        tasks.push({
+                            id: item.id,
+                            list_id: listId,
+                            list_type: listType,
+                            text: item.text || item.title || '',
+                            completed: item.completed || false,
+                            category: listType.includes('work') ? 'work' : 'personal',
+                        });
                     });
-                    renderTasks();
-                }
-            } catch (error) {
-                console.error('Failed to load tasks:', error);
-                // Show empty tasks on error
-                tasks = [];
-                renderTasks();
+                } catch (e) { /* non-fatal */ }
             }
+            renderTasks();
         }
 
         function updateEventsList() {
             const eventsList = document.getElementById('eventsList');
-            const today = new Date().toISOString().split('T')[0];
+            // BUG FIX: Filter by selectedDate, not hardcoded today
+            const dateStr = selectedDate.toISOString().split('T')[0];
             const todaysEvents = events.filter(event => {
                 const eventDate = event.start_date || event.start_time?.split('T')[0];
-                return eventDate === today;
+                return eventDate === dateStr;
             });
+            // Update section title to reflect selected date
+            const title = document.querySelector('.day-events .section-title');
+            if (title) {
+                const today = new Date();
+                title.textContent = selectedDate.toDateString() === today.toDateString() ? "📅 Today's Events" : `📅 ${selectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} Events`;
+            }
             
             eventsList.innerHTML = '';
             
@@ -1289,5 +1398,9 @@
     </script>
     <script src="/js/websocket-sync.js"></script>
     <script src="/js/touch-ui-executor.js"></script>
+    <script src="/js/orb-loader.js"></script>
+<script src="/touch/js/gestures.js"></script>
+<script src="/touch/js/touch-menu.js"></script>
+<script>TouchMenu.init({ page: 'calendar' });</script>
 </body>
 </html>

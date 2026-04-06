@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Zoe – Journal</title>
+    <link rel="stylesheet" href="/touch/css/touch-base.css">
+    <style>
+        :root {
+            --purple: #7B61FF;
+            --teal: #5AE0E0;
+            --bg: #0f0f1a;
+            --surface: rgba(255,255,255,0.05);
+            --surface-hover: rgba(255,255,255,0.09);
+            --border: rgba(255,255,255,0.1);
+            --border-bright: rgba(123,97,255,0.4);
+            --text: #fff;
+            --text-2: rgba(255,255,255,0.7);
+            --text-3: rgba(255,255,255,0.45);
+            --radius: 16px;
+            --glass: rgba(255,255,255,0.06);
+            --glass-border: rgba(255,255,255,0.12);
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html, body {
+            width: 100%; height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            overflow: hidden;
+            touch-action: manipulation;
+        }
+
+        /* ── Layout shell ── */
+        .page-shell {
+            display: grid;
+            grid-template-rows: auto 1fr auto;
+            height: 100vh;
+            position: relative;
+        }
+
+        /* Ambient background orbs */
+        .bg-orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(80px);
+            pointer-events: none;
+            z-index: 0;
+        }
+        .bg-orb-1 { width: 400px; height: 400px; background: rgba(123,97,255,0.15); top: -120px; right: -80px; }
+        .bg-orb-2 { width: 300px; height: 300px; background: rgba(90,224,224,0.10); bottom: 60px; left: -60px; }
+
+        /* ── Header ── */
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 20px;
+            background: rgba(15,15,26,0.8);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+            position: relative;
+            z-index: 10;
+        }
+
+        .back-btn {
+            width: 44px; height: 44px;
+            border-radius: 50%;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-2);
+            font-size: 18px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: background 0.2s, transform 0.15s;
+            flex-shrink: 0;
+            text-decoration: none;
+        }
+        .back-btn:active { transform: scale(0.92); background: var(--surface-hover); }
+
+        .header-title {
+            font-size: 20px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .streak-badge {
+            display: flex; align-items: center; gap: 5px;
+            background: rgba(255,165,0,0.15);
+            border: 1px solid rgba(255,165,0,0.3);
+            border-radius: 20px;
+            padding: 4px 12px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #ffb347;
+        }
+
+        .header-date {
+            margin-left: auto;
+            font-size: 13px;
+            color: var(--text-3);
+            white-space: nowrap;
+        }
+
+        /* ── Scroll container ── */
+        .scroll-area {
+            overflow-y: auto;
+            overflow-x: hidden;
+            -webkit-overflow-scrolling: touch;
+            padding: 16px 20px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* ── Mood picker ── */
+        .mood-section { flex-shrink: 0; }
+        .section-label {
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 1.2px;
+            text-transform: uppercase;
+            color: var(--text-3);
+            margin-bottom: 10px;
+        }
+        .mood-strip {
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+            padding-bottom: 4px;
+        }
+        .mood-strip::-webkit-scrollbar { display: none; }
+
+        .mood-btn {
+            flex-shrink: 0;
+            width: 56px; height: 56px;
+            border-radius: 50%;
+            background: var(--surface);
+            border: 2px solid transparent;
+            font-size: 24px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: all 0.2s;
+            position: relative;
+        }
+        .mood-btn:active { transform: scale(0.88); }
+        .mood-btn.selected {
+            border-color: var(--purple);
+            background: rgba(123,97,255,0.2);
+            box-shadow: 0 0 16px rgba(123,97,255,0.4);
+        }
+        .mood-btn .mood-label {
+            position: absolute;
+            bottom: -18px;
+            font-size: 10px;
+            color: var(--text-3);
+            white-space: nowrap;
+        }
+        .mood-btn.selected .mood-label { color: var(--purple); }
+
+        /* ── Zoe prompt card ── */
+        .prompt-card {
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            padding: 16px 18px;
+            backdrop-filter: blur(20px);
+            position: relative;
+            overflow: hidden;
+        }
+        .prompt-card::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            width: 3px;
+            background: linear-gradient(180deg, var(--purple), var(--teal));
+            border-radius: 3px 0 0 3px;
+        }
+        .prompt-label {
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--teal);
+            margin-bottom: 8px;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .prompt-label::before { content: '✦'; font-size: 10px; }
+        .prompt-text {
+            font-size: 15px;
+            font-style: italic;
+            color: var(--text-2);
+            line-height: 1.55;
+        }
+
+        /* ── Textarea ── */
+        .textarea-wrapper {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        #journalTextarea {
+            width: 100%;
+            min-height: 36vh;
+            max-height: 50vh;
+            background: var(--glass);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius);
+            padding: 18px;
+            color: var(--text);
+            font-size: 18px;
+            font-family: inherit;
+            font-weight: 300;
+            line-height: 1.65;
+            resize: none;
+            outline: none;
+            touch-action: manipulation;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            -webkit-user-select: text;
+            user-select: text;
+        }
+        #journalTextarea::placeholder { color: var(--text-3); }
+        #journalTextarea:focus {
+            border-color: var(--border-bright);
+            box-shadow: 0 0 0 3px rgba(123,97,255,0.12);
+        }
+
+        /* ── Char count row ── */
+        .char-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .char-count {
+            font-size: 12px;
+            color: var(--text-3);
+        }
+
+        /* ── Past entries ── */
+        .past-section { padding-bottom: 8px; }
+        .section-header {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 10px;
+            cursor: pointer;
+            touch-action: manipulation;
+            min-height: 44px;
+        }
+        .section-toggle {
+            font-size: 12px;
+            color: var(--text-3);
+            transition: transform 0.25s;
+        }
+        .section-toggle.open { transform: rotate(180deg); }
+
+        .entries-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            overflow: hidden;
+            transition: max-height 0.35s cubic-bezier(0.4,0,0.2,1);
+            max-height: 0;
+        }
+        .entries-list.open { max-height: 800px; }
+
+        .entry-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px 16px;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: background 0.2s;
+        }
+        .entry-card:active { background: var(--surface-hover); }
+        .entry-card.expanded .entry-preview { display: none; }
+        .entry-card.expanded .entry-full { display: block; }
+
+        .entry-meta {
+            display: flex; align-items: center; gap: 8px;
+            margin-bottom: 6px;
+        }
+        .entry-mood { font-size: 18px; }
+        .entry-date {
+            font-size: 12px;
+            color: var(--text-3);
+            flex: 1;
+        }
+        .entry-preview {
+            font-size: 14px;
+            color: var(--text-2);
+            line-height: 1.4;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+        }
+        .entry-full {
+            font-size: 14px;
+            color: var(--text-2);
+            line-height: 1.6;
+            display: none;
+            white-space: pre-wrap;
+        }
+
+        /* ── Sticky save bar ── */
+        .save-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: rgba(15,15,26,0.9);
+            backdrop-filter: blur(20px);
+            border-top: 1px solid var(--border);
+            position: relative;
+            z-index: 10;
+        }
+
+        .save-char-count {
+            font-size: 13px;
+            color: var(--text-3);
+        }
+
+        .save-btn {
+            height: 48px;
+            padding: 0 28px;
+            border-radius: 24px;
+            background: linear-gradient(135deg, var(--purple), var(--teal));
+            border: none;
+            color: #fff;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: opacity 0.2s, transform 0.15s;
+            box-shadow: 0 4px 20px rgba(123,97,255,0.4);
+        }
+        .save-btn:active { transform: scale(0.95); opacity: 0.88; }
+        .save-btn:disabled { opacity: 0.4; pointer-events: none; }
+
+        /* Save feedback */
+        .save-toast {
+            position: fixed;
+            bottom: 80px; left: 50%; transform: translateX(-50%) translateY(20px);
+            background: rgba(90,224,224,0.15);
+            border: 1px solid rgba(90,224,224,0.35);
+            color: var(--teal);
+            border-radius: 20px;
+            padding: 10px 22px;
+            font-size: 14px;
+            font-weight: 500;
+            opacity: 0;
+            transition: opacity 0.3s, transform 0.3s;
+            pointer-events: none;
+            z-index: 100;
+            white-space: nowrap;
+        }
+        .save-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+        /* ── Bottom nav ── */
+        .bottom-nav {
+            display: flex;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+            background: rgba(15,15,26,0.95);
+            border-top: 1px solid var(--border);
+            padding: 0 8px;
+            position: relative;
+            z-index: 20;
+        }
+        .bottom-nav::-webkit-scrollbar { display: none; }
+
+        .nav-item {
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+            padding: 8px 14px;
+            min-width: 64px;
+            min-height: 56px;
+            color: var(--text-3);
+            text-decoration: none;
+            font-size: 10px;
+            font-weight: 500;
+            letter-spacing: 0.3px;
+            touch-action: manipulation;
+            transition: color 0.2s;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+        .nav-item .nav-icon { font-size: 18px; line-height: 1; }
+        .nav-item:active { opacity: 0.7; }
+        .nav-item.active {
+            color: var(--purple);
+            border-bottom-color: var(--purple);
+        }
+
+        /* ── Scrollbar styling ── */
+        .scroll-area::-webkit-scrollbar { width: 4px; }
+        .scroll-area::-webkit-scrollbar-track { background: transparent; }
+        .scroll-area::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+    </style>
+</head>
+<body>
+<div class="bg-orb bg-orb-1"></div>
+<div class="bg-orb bg-orb-2"></div>
+
+<div class="page-shell">
+
+    <!-- ── Header ── -->
+    <header class="header">
+        <a class="back-btn" href="/touch/dashboard.html" aria-label="Back">‹</a>
+        <span class="header-title">Journal</span>
+        <div class="streak-badge" id="streakBadge">🔥 — days</div>
+        <div class="header-date" id="headerDate"></div>
+    </header>
+
+    <!-- ── Scrollable content ── -->
+    <main class="scroll-area" id="scrollArea">
+
+        <!-- Mood picker -->
+        <section class="mood-section">
+            <div class="section-label">How are you feeling?</div>
+            <div class="mood-strip">
+                <button class="mood-btn" data-mood="happy"    aria-label="Happy">😊<span class="mood-label">Happy</span></button>
+                <button class="mood-btn" data-mood="neutral"  aria-label="Neutral">😐<span class="mood-label">Neutral</span></button>
+                <button class="mood-btn" data-mood="sad"      aria-label="Sad">😔<span class="mood-label">Sad</span></button>
+                <button class="mood-btn" data-mood="energized" aria-label="Energized">💪<span class="mood-label">Energized</span></button>
+                <button class="mood-btn" data-mood="tired"    aria-label="Tired">😴<span class="mood-label">Tired</span></button>
+                <button class="mood-btn" data-mood="thoughtful" aria-label="Thoughtful">🤔<span class="mood-label">Thoughtful</span></button>
+            </div>
+        </section>
+
+        <!-- Zoe prompt card -->
+        <div class="prompt-card" id="promptCard">
+            <div class="prompt-label">Today's prompt from Zoe</div>
+            <div class="prompt-text" id="promptText">Loading your prompt…</div>
+        </div>
+
+        <!-- Textarea -->
+        <div class="textarea-wrapper">
+            <div class="section-label">Your entry</div>
+            <textarea
+                id="journalTextarea"
+                placeholder="Write your thoughts for today…"
+                autocorrect="on"
+                spellcheck="true"
+            ></textarea>
+        </div>
+
+        <!-- Past entries -->
+        <section class="past-section">
+            <div class="section-header" id="entriesToggle" role="button" aria-expanded="false">
+                <div class="section-label" style="margin-bottom:0">Past entries</div>
+                <span class="section-toggle" id="toggleChevron">▼</span>
+            </div>
+            <div class="entries-list" id="entriesList"></div>
+        </section>
+
+    </main>
+
+    <!-- ── Sticky save bar ── -->
+    <div class="save-bar">
+        <span class="save-char-count" id="saveCharCount">0 characters</span>
+        <button class="save-btn" id="saveBtn" onclick="saveEntry()">Save Entry</button>
+    </div>
+
+    <!-- ── Bottom nav ── -->
+    <nav class="bottom-nav" aria-label="Main navigation">
+        <a class="nav-item" href="/touch/dashboard.html"><span class="nav-icon">🏠</span>Dashboard</a>
+        <a class="nav-item" href="/touch/calendar.html"><span class="nav-icon">📅</span>Calendar</a>
+        <a class="nav-item" href="/touch/lists.html"><span class="nav-icon">✅</span>Lists</a>
+        <a class="nav-item" href="/touch/notes.html"><span class="nav-icon">📝</span>Notes</a>
+        <a class="nav-item active" href="/touch/journal.html"><span class="nav-icon">📔</span>Journal</a>
+        <a class="nav-item" href="/touch/music.html"><span class="nav-icon">🎵</span>Music</a>
+        <a class="nav-item" href="/touch/smart-home.html"><span class="nav-icon">💡</span>Smart Home</a>
+        <a class="nav-item" href="/touch/people.html"><span class="nav-icon">👥</span>People</a>
+        <a class="nav-item" href="/touch/memories.html"><span class="nav-icon">🌟</span>Memories</a>
+        <a class="nav-item" href="/touch/cooking.html"><span class="nav-icon">🍳</span>Cooking</a>
+        <a class="nav-item" href="/touch/weather.html"><span class="nav-icon">🌤</span>Weather</a>
+        <a class="nav-item" href="/touch/settings.html"><span class="nav-icon">⚙️</span>Settings</a>
+    </nav>
+
+</div>
+
+<!-- Save toast -->
+<div class="save-toast" id="saveToast">✓ Entry saved</div>
+
+<script src="/js/auth.js"></script>
+<script src="/js/websocket-sync.js"></script>
+<script src="/js/touch-ui-executor.js"></script>
+<script src="/js/orb-loader.js"></script>
+<script>
+/* ── State ── */
+let selectedMood = null;
+let pastEntries = [];
+let entriesOpen = false;
+
+const moodEmojis = {
+    happy: '😊', neutral: '😐', sad: '😔',
+    energized: '💪', tired: '😴', thoughtful: '🤔'
+};
+
+/* ── Init ── */
+document.addEventListener('DOMContentLoaded', async () => {
+    // Date display
+    document.getElementById('headerDate').textContent = new Date().toLocaleDateString(undefined, {
+        weekday: 'long', month: 'long', day: 'numeric'
+    });
+
+    // WebSocket
+    try {
+        const session = JSON.parse(localStorage.getItem('zoe_session') || '{}');
+        const userId = session.user_id || session.userId || 'anonymous';
+        if (typeof ZoeWebSockets !== 'undefined') {
+            ZoeWebSockets.init(userId);
+            ZoeWebSockets.on('entry_created', loadPastEntries);
+        }
+    } catch(e) { console.warn('WS init:', e); }
+
+    // Character count wiring
+    const ta = document.getElementById('journalTextarea');
+    ta.addEventListener('input', updateCharCount);
+    updateCharCount();
+
+    // Mood buttons
+    document.querySelectorAll('.mood-btn').forEach(btn => {
+        btn.addEventListener('click', () => selectMood(btn.dataset.mood));
+    });
+
+    // Entries toggle
+    document.getElementById('entriesToggle').addEventListener('click', toggleEntries);
+
+    // Load data
+    await Promise.all([loadStreak(), loadPrompt(), loadPastEntries()]);
+
+    // Scroll active nav into view
+    document.querySelector('.nav-item.active')?.scrollIntoView({ inline: 'center', behavior: 'auto', block: 'nearest' });
+});
+
+/* ── Mood ── */
+function selectMood(mood) {
+    selectedMood = mood;
+    document.querySelectorAll('.mood-btn').forEach(btn => {
+        btn.classList.toggle('selected', btn.dataset.mood === mood);
+    });
+}
+
+/* ── Char count ── */
+function updateCharCount() {
+    const len = document.getElementById('journalTextarea').value.length;
+    document.getElementById('saveCharCount').textContent = `${len.toLocaleString()} character${len !== 1 ? 's' : ''}`;
+}
+
+/* ── API calls ── */
+async function loadStreak() {
+    try {
+        const r = await fetch('/api/journal/streak');
+        if (!r.ok) throw new Error();
+        const d = await r.json();
+        document.getElementById('streakBadge').textContent = `🔥 ${d.streak ?? 0} day${d.streak !== 1 ? 's' : ''}`;
+    } catch {
+        document.getElementById('streakBadge').textContent = '🔥 0 days';
+    }
+}
+
+async function loadPrompt() {
+    try {
+        const r = await fetch('/api/journal/prompts');
+        if (!r.ok) throw new Error();
+        const prompts = await r.json();
+        if (Array.isArray(prompts) && prompts.length) {
+            const pick = prompts[Math.floor(Math.random() * prompts.length)];
+            document.getElementById('promptText').textContent = typeof pick === 'string' ? pick : (pick.text || pick.prompt || JSON.stringify(pick));
+        } else {
+            document.getElementById('promptText').textContent = 'What moment from today would you like to remember forever?';
+        }
+    } catch {
+        document.getElementById('promptText').textContent = 'What made you smile today?';
+    }
+}
+
+async function loadPastEntries() {
+    try {
+        const r = await fetch('/api/journal/entries?limit=10');
+        if (!r.ok) throw new Error();
+        pastEntries = await r.json();
+        renderEntries();
+    } catch {
+        pastEntries = [];
+        renderEntries();
+    }
+}
+
+function renderEntries() {
+    const list = document.getElementById('entriesList');
+    if (!pastEntries.length) {
+        list.innerHTML = '<div style="color:var(--text-3);font-size:14px;padding:8px 0;">No past entries yet. Write your first one!</div>';
+        return;
+    }
+    list.innerHTML = pastEntries.map((entry, i) => {
+        const date = entry.date ? new Date(entry.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
+        const emoji = moodEmojis[entry.mood] || '📔';
+        const preview = (entry.content || '').slice(0, 100);
+        return `
+        <div class="entry-card" id="entry-${i}" onclick="toggleEntry(${i})">
+            <div class="entry-meta">
+                <span class="entry-mood">${emoji}</span>
+                <span class="entry-date">${date}</span>
+            </div>
+            <div class="entry-preview">${escHtml(preview)}${entry.content?.length > 100 ? '…' : ''}</div>
+            <div class="entry-full">${escHtml(entry.content || '')}</div>
+        </div>`;
+    }).join('');
+}
+
+function toggleEntry(i) {
+    document.getElementById(`entry-${i}`)?.classList.toggle('expanded');
+}
+
+function toggleEntries() {
+    entriesOpen = !entriesOpen;
+    document.getElementById('entriesList').classList.toggle('open', entriesOpen);
+    document.getElementById('toggleChevron').classList.toggle('open', entriesOpen);
+    document.getElementById('entriesToggle').setAttribute('aria-expanded', String(entriesOpen));
+}
+
+/* ── Save ── */
+async function saveEntry() {
+    const content = document.getElementById('journalTextarea').value.trim();
+    if (!content) return;
+
+    const btn = document.getElementById('saveBtn');
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+
+    try {
+        const r = await fetch('/api/journal/entries', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                content,
+                mood: selectedMood || 'neutral',
+                date: new Date().toISOString().split('T')[0]
+            })
+        });
+        if (!r.ok) throw new Error('Save failed');
+
+        showToast('✓ Entry saved');
+        document.getElementById('journalTextarea').value = '';
+        updateCharCount();
+        selectedMood = null;
+        document.querySelectorAll('.mood-btn').forEach(b => b.classList.remove('selected'));
+        await loadPastEntries();
+        await loadStreak();
+    } catch {
+        showToast('⚠ Could not save — try again');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save Entry';
+    }
+}
+
+function showToast(msg) {
+    const t = document.getElementById('saveToast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+function escHtml(str) {
+    return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+/* ── ZOE_OPEN_FORM hook ── */
+window.ZOE_OPEN_FORM = function(formType, prefill) {
+    if (formType === 'new_journal') {
+        const ta = document.getElementById('journalTextarea');
+        if (prefill && prefill.content) ta.value = prefill.content;
+        ta.focus();
+        ta.setSelectionRange(ta.value.length, ta.value.length);
+        ta.scrollTop = ta.scrollHeight;
+        updateCharCount();
+    }
+    if (formType === 'set_mood' && prefill && prefill.mood) {
+        selectMood(prefill.mood);
+    }
+};
+</script>
+<script src="/touch/js/gestures.js"></script>
+<script src="/touch/js/touch-menu.js"></script>
+<script>TouchMenu.init({ page: 'journal' });</script>
+</body>
+</html>

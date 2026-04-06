@@ -1,10 +1,132 @@
+# Home Assistant Configuration
+# Managed by Zoe
 
-# Loads default set of integrations. Do not remove.
+homeassistant:
+  name: Home
+  latitude: -31.9505
+  longitude: 115.8605
+  elevation: 26
+  unit_system: metric
+  currency: AUD
+  country: AU
+  time_zone: Australia/Perth
+
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 127.0.0.1
+
+# Default config includes
 default_config:
-
-# Load frontend themes from the themes folder
-frontend:
-  themes: !include_dir_merge_named themes
-
 automation: !include automations.yaml
-script: !include scripts.yaml
+
+# Zoe HA satellite bridge commands (hybrid rollout).
+rest_command:
+  zoe_voice_wake:
+    url: "http://homeassistant-mcp-bridge:8007/voice/wake"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"panel_id":"{{ panel_id | default('zoe-touch-pi') }}","source":"ha_assist"}
+  zoe_voice_turn:
+    url: "http://homeassistant-mcp-bridge:8007/voice/turn"
+    method: POST
+    content_type: "application/json"
+    payload: >
+      {"panel_id":"{{ panel_id | default('zoe-touch-pi') }}","session_id":"{{ session_id | default('') }}","source":"ha_assist","transcript":"{{ transcript }}"}
+
+script:
+  zoe_satellite_wake:
+    alias: Zoe Satellite Wake
+    mode: parallel
+    sequence:
+      - action: rest_command.zoe_voice_wake
+        data:
+          panel_id: "{{ panel_id | default('zoe-touch-pi') }}"
+  zoe_satellite_turn:
+    alias: Zoe Satellite Turn
+    mode: queued
+    fields:
+      transcript:
+        description: Transcript from Assist/satellite
+        required: true
+    sequence:
+      - action: rest_command.zoe_voice_turn
+        data:
+          panel_id: "{{ panel_id | default('zoe-touch-pi') }}"
+          session_id: "{{ session_id | default('') }}"
+          transcript: "{{ transcript }}"
+
+# ── Virtual helper devices (replace with real integrations as you add hardware) ──
+# Add physical lights via: Settings → Integrations → Philips Hue / LIFX / Z-Wave / etc.
+# Add thermostats via: Generic Thermostat, Nest, or similar integration.
+# Add media players via: Spotify, Chromecast, Sonos, or Plex integration.
+
+input_boolean:
+  living_room_light:
+    name: Living Room Light
+    icon: mdi:ceiling-light
+  kitchen_light:
+    name: Kitchen Light
+    icon: mdi:ceiling-light
+  bedroom_light:
+    name: Bedroom Light
+    icon: mdi:ceiling-light
+  porch_light:
+    name: Porch Light
+    icon: mdi:outdoor-lamp
+  fan:
+    name: Ceiling Fan
+    icon: mdi:fan
+  tv:
+    name: TV
+    icon: mdi:television
+
+input_number:
+  thermostat_temperature:
+    name: Thermostat
+    min: 16
+    max: 30
+    step: 0.5
+    unit_of_measurement: "°C"
+    icon: mdi:thermostat
+    mode: box
+
+# Template sensors to expose input_number as climate-friendly state
+template:
+  - sensor:
+      - name: "Current Temperature"
+        state: "{{ states('input_number.thermostat_temperature') }}"
+        unit_of_measurement: "°C"
+        icon: mdi:thermometer
+
+# Scene definitions (Good Morning / Good Night / Movie Time)
+scene:
+  - name: Good Morning
+    entities:
+      input_boolean.living_room_light:
+        state: "on"
+      input_boolean.kitchen_light:
+        state: "on"
+
+  - name: Good Night
+    entities:
+      input_boolean.living_room_light:
+        state: "off"
+      input_boolean.kitchen_light:
+        state: "off"
+      input_boolean.bedroom_light:
+        state: "off"
+      input_boolean.porch_light:
+        state: "off"
+      input_boolean.fan:
+        state: "off"
+
+  - name: Movie Time
+    entities:
+      input_boolean.living_room_light:
+        state: "off"
+      input_boolean.tv:
+        state: "on"
