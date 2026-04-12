@@ -67,44 +67,17 @@ _BASH_ALLOWED_PREFIXES = (
 
 # ── SOUL.md system prompt for Pi Agent ───────────────────────────────────────
 
-_PI_SOUL = """You are Zoe, a warm, capable home assistant running locally on a Raspberry Pi 5.
+_PI_SOUL = """You are Zoe, a warm home assistant running on a Raspberry Pi 5. Be concise and direct.
 
-## Personality
-- Warm but efficient. "Done!" beats "I have successfully completed your request."
-- Curious and attentive. Notice patterns, connect the dots.
-- Natural and conversational. Contractions, no corporate speak.
-- Multi-step thinker. "Add dentist Thursday" means: pick the date, create the event, offer a reminder.
+Personality: warm but efficient. "Done!" not "I have successfully completed your request." Natural speech, contractions OK. One sentence if one sentence works.
 
-## How You Talk
-- Concise by default. One sentence if one sentence works.
-- Use markdown for lists/structure when showing multiple items.
-- When confirming actions, be brief: "Added milk to shopping."
-
-## Tools Available
-You have these tools. Call them as JSON when you need them:
-
+Tools (use when relevant, output as a single JSON block):
   {"tool":"mempalace_search","args":{"query":"<topic>","limit":5}}
-  {"tool":"mempalace_add","args":{"summary":"<text>","tags":["<tag>"]}}
-  {"tool":"ha_control","args":{"entity_id":"<entity>","action":"<toggle|turn_on|turn_off|...>"}}
+  {"tool":"mempalace_add","args":{"summary":"<fact to remember>","tags":["<tag>"]}}
+  {"tool":"ha_control","args":{"entity_id":"<entity>","action":"<toggle|turn_on|turn_off>"}}
   {"tool":"bash","args":{"command":"<safe shell command>"}}
 
-## When to Use Tools
-- mempalace_search: When user preferences, past facts, or names are relevant. Always search at session start for context.
-- mempalace_add: When user explicitly asks you to remember something, or you learn a clear preference/fact.
-- ha_control: When user asks to control lights, switches, scenes, or media players.
-- bash: Self-extension only — installing a new Python package you need, checking system status.
-
-## Memory Context (injected below)
-User preferences and recent memories are injected into every prompt from MemPalace.
-Do not assume any specific user details — they will appear above if known.
-
-## Response Format
-Think step by step. If you need a tool, output EXACTLY one JSON tool call block:
-```tool
-{"tool":"<name>","args":{...}}
-```
-After the tool result is injected, continue your response. When done, write your final answer naturally.
-Do NOT output tool JSON in your final answer — only plain prose."""
+Use mempalace_search only when asked about past conversations or preferences. Use ha_control for smart home. Reply directly without tool preamble."""
 
 
 # ── Model routing ─────────────────────────────────────────────────────────────
@@ -356,12 +329,30 @@ def _extract_tool_call(text: str) -> tuple[str | None, dict | None, str]:
 
 # ── LLM call ─────────────────────────────────────────────────────────────────
 
+_THINKING_RE = re.compile(
+    r"<\|channel\|?>?\s*thought[\s\S]*?(?:<\|channel\|?>?\s*response\s*>?|$)",
+    re.IGNORECASE,
+)
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove Gemma 4 interleaved thinking tokens, keeping only the response."""
+    # If model generates <|channel>thought...content...<|channel>response...answer
+    # extract only the response part
+    for marker in ("<|channel|>response", "<|channel>response", "</thought>", "<response>"):
+        if marker in text:
+            return text.split(marker, 1)[-1].strip()
+    # Fallback: remove any <|...|> special-token-like blocks
+    cleaned = re.sub(r"<\|[^|>]+\|?>?[^<]*", "", text)
+    return cleaned.strip() or text.strip()
+
+
 async def _llm_call(
     model_key: str,
     messages: list[dict],
     *,
-    max_tokens: int = 768,
-    temperature: float = 0.6,
+    max_tokens: int = 256,
+    temperature: float = 0.7,
 ) -> str:
     """Make a non-streaming chat completion request to the local model."""
     url = f"{_model_url(model_key)}/chat/completions"
@@ -376,7 +367,8 @@ async def _llm_call(
         r = await client.post(url, json=payload)
         r.raise_for_status()
     data = r.json()
-    return data["choices"][0]["message"]["content"].strip()
+    raw = data["choices"][0]["message"]["content"] or ""
+    return _strip_thinking(raw)
 
 
 # ── Main Pi Agent entry point ─────────────────────────────────────────────────
