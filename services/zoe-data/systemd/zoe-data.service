@@ -6,7 +6,6 @@ Wants=bitnet-server.service gemma-server.service mempalace.service
 
 [Service]
 Type=simple
-User=pi
 WorkingDirectory=/home/pi/assistant/services/zoe-data
 EnvironmentFile=/home/pi/assistant/.env
 # Pi-specific env overrides (HERMES_FAST_PATH=false activates Pi Agent loop)
@@ -19,7 +18,7 @@ Environment=ZOE_CHAT_URL=http://127.0.0.1:8000
 # Remove Jetson-specific vars
 Environment=OPENCLAW_GATEWAY_URL=
 Environment=HERMES_API_URL=
-ExecStart=/home/pi/.local/bin/uvicorn main:app \
+ExecStart=/home/pi/.venv-zoe/bin/uvicorn main:app \
     --host 127.0.0.1 \
     --port 8000 \
     --workers 2 \

@@ -6,7 +6,6 @@ Wants=network.target
 
 [Service]
 Type=simple
-User=pi
 WorkingDirectory=/home/pi/llama.cpp
 # --model: Gemma 4 E2B Q4_K_M (~1.5 GB RAM)
 # --port 11435: separate from BitNet so both can run concurrently
