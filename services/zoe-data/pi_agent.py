@@ -123,15 +123,14 @@ def _model_name(model_key: str) -> str:
 # ── MemPalace integration (Python API — no subprocess) ───────────────────────
 
 async def _mempalace_search(query: str, limit: int = 5) -> list[dict]:
-    """Search MemPalace for relevant memories. Returns list of memory dicts."""
+    """Search MemPalace for relevant memories. Returns list of hit dicts."""
     try:
-        # Import lazily — MemPalace only installed on Pi
         from mempalace.searcher import search_memories  # type: ignore[import]
-        results = await asyncio.get_event_loop().run_in_executor(
+        raw = await asyncio.get_event_loop().run_in_executor(
             None,
-            lambda: search_memories(query, limit=limit, data_dir=_MEMPALACE_DATA),
+            lambda: search_memories(query, _MEMPALACE_DATA, n_results=limit),
         )
-        return results or []
+        return raw.get("results", []) if isinstance(raw, dict) else []
     except ImportError:
         logger.warning("MemPalace not installed — memory search skipped")
         return []
@@ -141,17 +140,26 @@ async def _mempalace_search(query: str, limit: int = 5) -> list[dict]:
 
 
 async def _mempalace_add(summary: str, tags: list[str] | None = None) -> bool:
-    """Add a memory to MemPalace. Returns True on success."""
-    try:
-        from mempalace.writer import add_drawer  # type: ignore[import]
-        await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: add_drawer(
-                content=summary,
-                tags=tags or [],
-                data_dir=_MEMPALACE_DATA,
-            ),
+    """Add a memory drawer to MemPalace via direct ChromaDB write."""
+    import hashlib
+
+    def _write() -> None:
+        from mempalace.palace import get_collection  # type: ignore[import]
+        col = get_collection(_MEMPALACE_DATA)
+        drawer_id = f"zoe_{hashlib.md5(summary.encode()).hexdigest()[:20]}"
+        col.add(
+            ids=[drawer_id],
+            documents=[summary],
+            metadatas=[{
+                "wing": "zoe",
+                "room": "conversations",
+                "added_by": "pi_agent",
+                "tags": ",".join(tags or []),
+            }],
         )
+
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, _write)
         return True
     except ImportError:
         logger.warning("MemPalace not installed — memory add skipped")
@@ -168,7 +176,7 @@ async def _build_memory_context(message: str) -> str:
         return ""
     lines = ["## Memory Context (from MemPalace)"]
     for m in memories:
-        content = m.get("content") or m.get("summary") or str(m)
+        content = m.get("text") or m.get("content") or m.get("summary") or str(m)
         lines.append(f"- {content[:200]}")
     return "\n".join(lines)
 
@@ -227,7 +235,7 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
             return "No matching memories found."
         lines = []
         for r in results:
-            content = r.get("content") or r.get("summary") or str(r)
+            content = r.get("text") or r.get("content") or r.get("summary") or str(r)
             lines.append(f"- {content[:300]}")
         return "\n".join(lines)
 
