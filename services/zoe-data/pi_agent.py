@@ -26,6 +26,9 @@ import subprocess
 import time
 from typing import AsyncIterator
 
+# Suppress ChromaDB ONNX runtime GPU-discovery noise on Pi (no GPU)
+os.environ.setdefault("ORT_DISABLE_GPU", "1")
+
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -110,14 +113,23 @@ def _check_fast_response(message: str) -> str | None:
     """Return an instant response for simple queries that don't need an LLM."""
     import datetime
     msg = message.lower().strip(" ?.")
-    # Time query
-    if any(w in msg for w in ("time", "clock")) and "?" not in message or msg.startswith("what") and "time" in msg:
-        now = datetime.datetime.now()
+    now = datetime.datetime.now()
+
+    # Time queries
+    if ("what" in msg or msg.startswith("what")) and "time" in msg:
         return f"It's {now.strftime('%-I:%M %p')} on {now.strftime('%A, %d %B %Y')}."
-    # Date query
-    if msg in ("what day is it", "what's the date", "whats the date", "what is today", "what date is it"):
-        now = datetime.datetime.now()
+    if msg in ("time", "the time", "current time", "what time", "clock"):
+        return f"It's {now.strftime('%-I:%M %p')}."
+
+    # Date queries
+    if msg in ("what day is it", "what's the date", "whats the date",
+               "what is today", "what date is it", "today's date", "today"):
         return f"Today is {now.strftime('%A, %d %B %Y')}."
+
+    # Uptime / status
+    if msg in ("status", "are you running", "are you there", "you there", "ping"):
+        return "I'm here and running on your Pi 5. How can I help?"
+
     return None
 
 
@@ -150,15 +162,24 @@ def _model_name(model_key: str) -> str:
 
 # ── MemPalace integration (Python API — no subprocess) ───────────────────────
 
-async def _mempalace_search(query: str, limit: int = 5) -> list[dict]:
-    """Search MemPalace for relevant memories. Returns list of hit dicts."""
+async def _mempalace_search(query: str, limit: int = 5, timeout_s: float = 2.0) -> list[dict]:
+    """Search MemPalace for relevant memories. Returns list of hit dicts.
+
+    Enforces a hard timeout so a slow ONNX embedding run never blocks inference.
+    """
     try:
         from mempalace.searcher import search_memories  # type: ignore[import]
-        raw = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: search_memories(query, _MEMPALACE_DATA, n_results=limit),
+        raw = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: search_memories(query, _MEMPALACE_DATA, n_results=limit),
+            ),
+            timeout=timeout_s,
         )
         return raw.get("results", []) if isinstance(raw, dict) else []
+    except asyncio.TimeoutError:
+        logger.debug("mempalace_search timed out after %.1fs — skipping", timeout_s)
+        return []
     except ImportError:
         logger.warning("MemPalace not installed — memory search skipped")
         return []
@@ -197,9 +218,31 @@ async def _mempalace_add(summary: str, tags: list[str] | None = None) -> bool:
         return False
 
 
+# Keywords that suggest the message benefits from memory context retrieval.
+# Queries without these skip MemPalace (saves 1-25s of ONNX inference time).
+_MEMORY_TRIGGER_WORDS = frozenset({
+    "remember", "recall", "did i", "have i", "last time", "before",
+    "you said", "we talked", "my name", "my preference", "i told you",
+    "favourite", "favorite", "usually", "always", "never", "often",
+    "who is", "what is my", "family", "remind me",
+})
+
+
+def _message_needs_memory(message: str) -> bool:
+    """Return True only if this message is likely to benefit from MemPalace context."""
+    msg_lower = message.lower()
+    return any(kw in msg_lower for kw in _MEMORY_TRIGGER_WORDS)
+
+
 async def _build_memory_context(message: str) -> str:
-    """Search MemPalace and build a context block for the system prompt."""
-    memories = await _mempalace_search(message, limit=6)
+    """Search MemPalace and build a context block for the system prompt.
+
+    Only runs for messages that look memory-relevant (saves 1-25s per query on CPU).
+    The `mempalace_search` tool is always available for explicit lookups.
+    """
+    if not _message_needs_memory(message):
+        return ""
+    memories = await _mempalace_search(message, limit=5, timeout_s=3.0)
     if not memories:
         return ""
     lines = ["## Memory Context (from MemPalace)"]
@@ -433,12 +476,17 @@ def _maybe_auto_store(user_message: str, response: str) -> None:
     lc = user_message.lower()
     if not any(kw in lc for kw in ("remember that", "remember this", "don't forget", "store this")):
         return
-    asyncio.ensure_future(
-        _mempalace_add(
-            summary=f"User asked to remember: {user_message[:300]}",
-            tags=["explicit_request"],
-        )
-    )
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(
+                _mempalace_add(
+                    summary=f"User asked to remember: {user_message[:300]}",
+                    tags=["explicit_request"],
+                )
+            )
+    except Exception:
+        pass
 
 
 # ── Streaming version for SSE chat endpoint ───────────────────────────────────
