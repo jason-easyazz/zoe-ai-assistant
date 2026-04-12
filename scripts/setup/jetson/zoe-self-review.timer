@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly Zoe self-review (Saturday 3 AM)
+
+[Timer]
+OnCalendar=Sat *-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target.wants
