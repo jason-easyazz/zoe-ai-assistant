@@ -1,7 +1,7 @@
 [Unit]
 Description=Gemma 4 E2B Inference Server (llama.cpp, Pi ARM NEON)
 Documentation=https://github.com/ggml-org/llama.cpp
-After=network.target bitnet-server.service
+After=network.target
 Wants=network.target
 
 [Service]
@@ -9,15 +9,19 @@ Type=simple
 WorkingDirectory=/home/pi/llama.cpp
 # --model: Gemma 4 E2B Q4_K_M (~3.5 GB) from bartowski/google_gemma-4-E2B-it-GGUF
 # Same model as Jetson — fine-tuned weights can be shared between devices
-# --port 11435: separate from BitNet so both can run concurrently
+# --port 11435: OpenAI-compatible endpoint (/v1/chat/completions, /v1/models)
 # --threads 4: Pi 5 has 4 performance cores (use --threads not --n-threads for b8763+)
-# --ctx-size 4096: Gemma 4 handles longer context for complex turns
+# --ctx-size 2048: sufficient for conversational turns; 4096 was unused and wastes RAM
+# --reasoning off: disable Gemma 4 interleaved thinking mode — without this the model
+#   burns ALL max_tokens on <|channel|>thought internal monologue and returns empty.
+#   b8763 supports -rea / --reasoning [on|off|auto] (default: auto = ON for Gemma 4)
 ExecStart=/home/pi/llama.cpp/build/bin/llama-server \
     --model /home/pi/models/google_gemma-4-E2B-it-Q4_K_M.gguf \
     --host 127.0.0.1 \
     --port 11435 \
     --threads 4 \
-    --ctx-size 4096 \
+    --ctx-size 2048 \
+    --reasoning off \
     --log-disable
 Restart=always
 RestartSec=5
