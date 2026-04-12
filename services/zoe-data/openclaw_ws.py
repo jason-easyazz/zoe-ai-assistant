@@ -55,6 +55,7 @@ async def openclaw_cli(
 
     proc = await asyncio.create_subprocess_exec(
         OPENCLAW_CMD, "agent",
+        "--local",          # Run embedded (no gateway channel needed) — avoids silent hangs
         "--agent", "main",
         "--session-id", user_session,
         "--message", message,
