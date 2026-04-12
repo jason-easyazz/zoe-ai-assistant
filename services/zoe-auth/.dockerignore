@@ -1,0 +1,13 @@
+# zoe-auth build context — only exclude cache/test/dev artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+tests/
+.git/
+*.md
+!README.md
+.env
+.env.*
+*.log
