@@ -1,18 +1,20 @@
 """
-Pi Agent — minimal Python agent loop for Raspberry Pi 5.
+Pi Agent — fast, minimal agent loop for Raspberry Pi 5.
 
-Replaces both Hermes (Bonsai fast path) and OpenClaw (full agent) on the Pi branch.
-Uses two local models:
-  - BitNet b1.58 on :11434  — fast, 1-bit, for short/conversational turns
-  - Gemma 4 E2B on  :11435  — richer, for complex/personality-heavy turns
+Model: Gemma 4 E2B (llama.cpp, --reasoning off, 7 TPS on Pi 5 ARM)
+  - Fast path: time/date/status answered in <100ms (no LLM)
+  - KV-cache warmup at startup so first real query skips re-processing the system prompt
+  - Smart background memory: Gemma classifier fires AFTER response delivery (non-blocking)
+  - Selective reasoning: hard queries (code, analysis) get more tokens; Pi routes simple queries
 
-Four tools available inside the loop:
-  1. mempalace_search     — recall memories by query
-  2. mempalace_add        — store a new memory (summary, preference, fact)
-  3. ha_control           — control Home Assistant entities
-  4. bash                 — run safe shell commands for self-extension
+Tools inside the loop:
+  1. mempalace_search  — recall memories by semantic query
+  2. mempalace_add     — store a fact/preference/name explicitly
+  3. ha_control        — control Home Assistant entities (lights, switches, media)
+  4. bash              — safe self-extension (install packages, check system status)
 
-Memory context is injected into every system prompt from MemPalace.
+Fine-tuning target: once the Gemma LoRA checkpoint is trained on Zoe's voice,
+the _PI_SOUL system prompt can be shrunk to ~10 tokens (saving ~500ms prefill).
 """
 
 from __future__ import annotations
@@ -67,17 +69,43 @@ _BASH_ALLOWED_PREFIXES = (
 
 # ── SOUL.md system prompt for Pi Agent ───────────────────────────────────────
 
-_PI_SOUL = """You are Zoe, a warm home assistant running on a Raspberry Pi 5. Be concise and direct. Reply immediately — no inner monologue.
+_PI_SOUL = """You are Zoe, a warm home assistant. Be concise — "Done!" not long confirmations. Natural speech, contractions OK. For hard questions, be thorough but efficient.
 
-Personality: warm but efficient. "Done!" not lengthy confirmations. Natural speech, contractions OK.
-
-Tools (output as one JSON block when needed):
+Tools (one JSON block when needed):
   {"tool":"mempalace_search","args":{"query":"<topic>","limit":5}}
   {"tool":"mempalace_add","args":{"summary":"<fact>","tags":["<tag>"]}}
   {"tool":"ha_control","args":{"entity_id":"<entity>","action":"<toggle|turn_on|turn_off>"}}
   {"tool":"bash","args":{"command":"<safe shell command>"}}
 
-Use ha_control for lights/devices. Use mempalace_search only when asked about past conversations. Reply directly."""
+Use ha_control for smart home. Only use mempalace_search when asked about past conversations."""
+
+# After Gemma LoRA fine-tuning on Zoe's voice, this shrinks to ~10 tokens:
+# _PI_SOUL = "You are Zoe. Tools: mempalace_search, mempalace_add, ha_control, bash."
+
+# ── Hard query detection ──────────────────────────────────────────────────────
+
+_HARD_QUERY_WORDS = frozenset({
+    "debug", "code", "algorithm", "step by step", "explain how", "why does",
+    "analyse", "analyze", "research", "implement", "compare and contrast",
+    "write a program", "script", "function", "class", "calculate", "derive",
+    "pros and cons", "in detail", "comprehensive", "thorough", "deeply",
+})
+
+
+def _is_hard_query(message: str) -> bool:
+    """Return True if this query warrants a larger token budget."""
+    msg_lower = message.lower()
+    return (
+        len(message) > 250
+        or any(kw in msg_lower for kw in _HARD_QUERY_WORDS)
+    )
+
+
+def _token_budget(message: str) -> int:
+    """Choose max_tokens based on query complexity."""
+    if _is_hard_query(message):
+        return 512  # Enough for detailed code/analysis explanations
+    return 256       # Fast conversational replies
 
 
 # ── Model routing ─────────────────────────────────────────────────────────────
@@ -329,6 +357,33 @@ def _extract_tool_call(text: str) -> tuple[str | None, dict | None, str]:
 
 # ── LLM call ─────────────────────────────────────────────────────────────────
 
+# ── KV cache warmup ───────────────────────────────────────────────────────────
+
+async def warmup_kv_cache() -> None:
+    """Pre-process the system prompt so the KV cache is hot before the first user query.
+
+    Without this, the first real query pays the full prefill cost (~500ms for the
+    system prompt). After warmup, the prompt tokens are cached and subsequent queries
+    only pay for their unique user message tokens.
+
+    Called from the zoe-data startup lifespan event.
+    """
+    await asyncio.sleep(3)  # Give Gemma time to finish loading the 3.5GB model
+    try:
+        await _llm_call(
+            "gemma",
+            [
+                {"role": "system", "content": _PI_SOUL},
+                {"role": "user", "content": "ready"},
+            ],
+            max_tokens=3,
+            temperature=0.0,
+        )
+        logger.info("pi_agent: Gemma KV cache warmed — first real query will be ~500ms faster")
+    except Exception as exc:
+        logger.warning("pi_agent: KV warmup failed (non-fatal): %s", exc)
+
+
 _THINKING_RE = re.compile(
     r"<\|channel\|?>?\s*thought[\s\S]*?(?:<\|channel\|?>?\s*response\s*>?|$)",
     re.IGNORECASE,
@@ -422,7 +477,7 @@ async def run_pi_agent(
     # Tool loop
     for iteration in range(_MAX_TOOL_ITERS + 1):
         try:
-            response_text = await _llm_call(model_key, messages)
+            response_text = await _llm_call(model_key, messages, max_tokens=_token_budget(message))
         except httpx.ConnectError:
             server_name = "Gemma" if model_key == "gemma" else "BitNet"
             logger.error("pi_agent: %s server unreachable at %s", server_name, _model_url(model_key))
@@ -458,28 +513,78 @@ async def run_pi_agent(
                 "pi_agent: done session=%s model=%s iters=%d elapsed=%.1fs",
                 session_id, model_key, iteration, elapsed,
             )
-            # Auto-store any explicit "remember this" patterns
-            _maybe_auto_store(message, response_text)
+            # Smart background memory capture (fires after response is returned)
+            _fire_memory_capture(message, response_text)
             return response_text
 
     # Should not reach here
     return response_text
 
 
-def _maybe_auto_store(user_message: str, response: str) -> None:
-    """Fire-and-forget: store an explicit memory if user said 'remember ...'."""
-    lc = user_message.lower()
-    if not any(kw in lc for kw in ("remember that", "remember this", "don't forget", "store this")):
+async def _smart_memory_capture(user_msg: str, assistant_reply: str) -> None:
+    """Background task: ask Gemma if this conversation turn is worth remembering.
+
+    Fires AFTER the main response is returned (non-blocking from user perspective).
+    Uses a tiny Gemma call (max_tokens=40) to decide whether to store the fact.
+
+    Examples of what gets saved:
+      - "My daughter's name is Emma" → fact: "User's daughter is named Emma"
+      - "I prefer the lights at 50% in the evenings" → preference saved
+      - "hello" / "tell me a joke" → save=false, nothing stored
+    """
+    # Skip trivial exchanges — not worth classifying
+    if len(user_msg) < 12 or len(assistant_reply) < 10:
         return
+
+    prompt = (
+        f"Conversation:\nUser: {user_msg[:300]}\nAssistant: {assistant_reply[:200]}\n\n"
+        "Does this contain a personal fact, preference, or name worth remembering? "
+        "Reply with JSON ONLY (no prose): "
+        '{"save":true,"fact":"brief memorable fact"} or {"save":false}'
+    )
+    try:
+        raw = await _llm_call(
+            "gemma",
+            [{"role": "user", "content": prompt}],
+            max_tokens=40,
+            temperature=0.1,
+        )
+        m = re.search(r'\{[^}]+\}', raw)
+        if not m:
+            return
+        data = json.loads(m.group())
+        if data.get("save") and data.get("fact"):
+            fact = str(data["fact"]).strip()[:300]
+            await _mempalace_add(fact, tags=["auto_captured"])
+            logger.info("pi_agent: auto-saved memory: %s", fact[:80])
+    except Exception as exc:
+        logger.debug("smart_memory_capture: skipped (%s)", exc)
+
+
+def _fire_memory_capture(user_msg: str, assistant_reply: str) -> None:
+    """Schedule smart memory capture as a background task (non-blocking)."""
+    lc = user_msg.lower()
+    # Always check for explicit "remember this" requests
+    if any(kw in lc for kw in ("remember that", "remember this", "don't forget", "store this")):
+        # Explicit request — use a simple direct save, no LLM classification needed
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.ensure_future(
+                    _mempalace_add(
+                        f"User asked to remember: {user_msg[:300]}",
+                        tags=["explicit_request"],
+                    )
+                )
+        except Exception:
+            pass
+        return
+
+    # Smart background classification for everything else
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            asyncio.ensure_future(
-                _mempalace_add(
-                    summary=f"User asked to remember: {user_message[:300]}",
-                    tags=["explicit_request"],
-                )
-            )
+            asyncio.ensure_future(_smart_memory_capture(user_msg, assistant_reply))
     except Exception:
         pass
 
@@ -519,17 +624,22 @@ async def run_pi_agent_streaming(
     messages.append({"role": "user", "content": message})
 
     url = f"{_model_url(model_key)}/chat/completions"
-    payload = {
-        "model": _model_name(model_key),
-        "messages": messages,
-        "max_tokens": 768,
-        "temperature": 0.6,
-        "stream": True,
-    }
+    token_budget = _token_budget(message)
+
+    def _make_payload(msgs: list[dict]) -> dict:
+        return {
+            "model": _model_name(model_key),
+            "messages": msgs,
+            "max_tokens": token_budget,
+            "temperature": 0.7,
+            "stream": True,
+            "thinking_budget": 0,  # Belt+suspenders: server already has --reasoning off
+        }
+
+    payload = _make_payload(messages)
 
     for iteration in range(_MAX_TOOL_ITERS + 1):
         collected = ""
-        heartbeat_task = None
 
         try:
             async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
@@ -597,13 +707,7 @@ async def run_pi_agent_streaming(
                 "role": "user",
                 "content": f"[Tool result for {tool_name}]\n{tool_result}\n\nNow continue your response.",
             })
-            payload = {
-                "model": _model_name(model_key),
-                "messages": messages,
-                "max_tokens": 768,
-                "temperature": 0.6,
-                "stream": True,
-            }
+            payload = _make_payload(messages)
             # Yield any text that appeared before the tool block
             if pre_tool_text.strip():
                 yield pre_tool_text
@@ -614,5 +718,5 @@ async def run_pi_agent_streaming(
                 "pi_agent streaming done: session=%s model=%s iters=%d elapsed=%.1fs",
                 session_id, model_key, iteration, elapsed,
             )
-            _maybe_auto_store(message, collected)
+            _fire_memory_capture(message, collected)
             return

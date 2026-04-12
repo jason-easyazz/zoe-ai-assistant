@@ -151,6 +151,17 @@ async def lifespan(app: FastAPI):
     _openclaw_bg_task = start_openclaw_background_tasks()
     _keepwarm_task = asyncio.create_task(_keepwarm_loop(), name="keepwarm")
     logger.info("Keep-warm task started (Hermes every %ds, session=%s)", _KEEPWARM_INTERVAL_S, _HERMES_WARMUP_SESSION)
+
+    # Pi Agent: warm Gemma's KV cache in background so first real query is fast
+    try:
+        from routers.chat import _PI_AGENT_MODE
+        if _PI_AGENT_MODE:
+            from pi_agent import warmup_kv_cache
+            asyncio.create_task(warmup_kv_cache(), name="gemma_kv_warmup")
+            logger.info("Pi Agent: KV cache warmup scheduled")
+    except Exception as _wup_exc:
+        logger.warning("Pi Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
+
     yield
     for task in (_openclaw_bg_task, _keepwarm_task):
         if task:
