@@ -1,0 +1,35 @@
+[Unit]
+Description=Zoe Data API (uvicorn, Pi Agent, all routers)
+Documentation=https://github.com/jason-easyazz/zoe-ai-assistant
+After=network.target bitnet-server.service gemma-server.service mempalace.service
+Wants=bitnet-server.service gemma-server.service mempalace.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/assistant/services/zoe-data
+EnvironmentFile=/home/pi/assistant/.env
+# Pi-specific env overrides (HERMES_FAST_PATH=false activates Pi Agent loop)
+Environment=HERMES_FAST_PATH=false
+Environment=BITNET_SERVER_URL=http://127.0.0.1:11434/v1
+Environment=GEMMA_SERVER_URL=http://127.0.0.1:11435/v1
+Environment=MEMPALACE_DATA_DIR=/home/pi/.mempalace
+# ZOE_CHAT_URL used by voice_tts.py to call itself — keep as localhost
+Environment=ZOE_CHAT_URL=http://127.0.0.1:8000
+# Remove Jetson-specific vars
+Environment=OPENCLAW_GATEWAY_URL=
+Environment=HERMES_API_URL=
+ExecStart=/home/pi/.local/bin/uvicorn main:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --workers 2 \
+    --log-level info \
+    --no-access-log
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

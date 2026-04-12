@@ -1,0 +1,23 @@
+[Unit]
+Description=MemPalace Hierarchical Memory Server (ChromaDB + SQLite)
+Documentation=https://github.com/mem-palace/mempalace
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi
+# MemPalace MCP server mode — optional, used only if Pi Agent switches to MCP stdio.
+# For production Pi Agent, we use Python API directly (faster, no subprocess).
+# The service is kept as a health endpoint and allows other tools to query memory.
+ExecStart=/home/pi/.local/bin/mempalace serve --host 127.0.0.1 --port 8001
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Environment=MEMPALACE_DATA_DIR=/home/pi/.mempalace
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target

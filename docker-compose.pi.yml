@@ -1,13 +1,34 @@
-# Raspberry Pi 5 CPU Override Configuration
-# Use with: docker-compose -f docker-compose.yml -f docker-compose.pi.yml up
+# =============================================================================
+# Raspberry Pi 5 Compose Override
+# Usage: docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d
+# =============================================================================
+# What this override changes vs the base docker-compose.yml:
+#
+#   zoe-ui      — remove port 18790 (OpenClaw UI, not present on Pi)
+#   wyoming-whisper — run tiny-int8 on CPU (Pi has no GPU)
+#   wyoming-piper   — use a lighter voice (en_US-lessac-low for CPU speed)
+#
+# What runs host-native (NOT in Docker) on the Pi:
+#   :8000  zoe-data (uvicorn, Pi Agent loop, BitNet + Gemma routing)
+#   :11434 bitnet-server (bitnet.cpp, Pi ARM NEON, 1-bit LLM)
+#   :11435 gemma-server  (llama.cpp, Gemma 4 E2B, complex turns)
+#   :8001  mempalace     (ChromaDB + SQLite hierarchical memory)
+#
+# =============================================================================
 
 services:
-  zoe-llamacpp:
-    environment:
-      - OLLAMA_NUM_THREADS=4
-      - N_GPU_LAYERS=0
 
-  zoe-whisper:
-    environment:
-      - WHISPER_DEVICE=cpu
+  # Remove the OpenClaw port — not present on Pi
+  zoe-ui:
+    ports:
+      - "80:80"
+      - "443:443"
+      # 18790 (OpenClaw UI) intentionally omitted on Pi
 
+  # Pi CPU-only Wyoming Whisper — tiny-int8 is ~4s on Pi 5 CPU
+  wyoming-whisper:
+    command: --model tiny-int8 --language en --uri tcp://0.0.0.0:10300 --device cpu
+
+  # Lighter TTS voice for faster synthesis on ARM CPU
+  wyoming-piper:
+    command: --voice en_US-lessac-low --uri tcp://0.0.0.0:10200

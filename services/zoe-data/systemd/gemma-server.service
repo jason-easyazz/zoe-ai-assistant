@@ -1,0 +1,29 @@
+[Unit]
+Description=Gemma 4 E2B Inference Server (llama.cpp, Pi ARM NEON)
+Documentation=https://github.com/ggml-org/llama.cpp
+After=network.target bitnet-server.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/llama.cpp
+# --model: Gemma 4 E2B Q4_K_M (~1.5 GB RAM)
+# --port 11435: separate from BitNet so both can run concurrently
+# --n-threads 4: Pi 5 performance cores
+# -c 4096: Gemma can handle longer context for complex personality turns
+ExecStart=/home/pi/llama.cpp/build/bin/llama-server \
+    --model /home/pi/models/gemma/gemma-4-e2b-it-Q4_K_M.gguf \
+    --host 127.0.0.1 \
+    --port 11435 \
+    --n-threads 4 \
+    --ctx-size 4096 \
+    --log-disable
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target
