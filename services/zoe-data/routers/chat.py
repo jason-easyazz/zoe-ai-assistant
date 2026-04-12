@@ -89,7 +89,12 @@ from ag_ui.encoder import EventEncoder
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 _MEMORY_AUTO_INGEST = os.environ.get("MEMORY_AUTO_INGEST", "false").lower() == "true"
-_GUARDED_AUTO = os.environ.get("OPENCLAW_GUARDED_AUTO", "true").lower() == "true"
+# Approval guard: disabled in Pi Agent mode — Pi Agent handles safety natively
+_PI_AGENT_MODE = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
+_GUARDED_AUTO = (
+    os.environ.get("OPENCLAW_GUARDED_AUTO", "true").lower() == "true"
+    and not _PI_AGENT_MODE
+)
 _ALL_TOOLS_ENABLED = os.environ.get("OPENCLAW_ALL_TOOLS_ENABLED", "true").lower() == "true"
 _WHATSAPP_FLOW_ENABLED = os.environ.get("WHATSAPP_FLOW_ENABLED", "true").lower() == "true"
 
@@ -97,10 +102,6 @@ _WHATSAPP_FLOW_ENABLED = os.environ.get("WHATSAPP_FLOW_ENABLED", "true").lower()
 # Set BONSAI_FAST_PATH=false to disable and always use OpenClaw.
 _BONSAI_FAST_PATH = os.environ.get("BONSAI_FAST_PATH", "true").lower() == "true"
 _BONSAI_URL = os.environ.get("BONSAI_URL", "http://127.0.0.1:11435")
-
-# Pi Agent mode: activated when HERMES_FAST_PATH=false (set in Pi systemd unit).
-# Replaces both Bonsai and OpenClaw with local BitNet + Gemma + MemPalace loop.
-_PI_AGENT_MODE = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
 
 # Keywords in Bonsai's response that signal it needs OpenClaw for this task.
 # Bonsai is instructed to say ESCALATE_TO_OPENCLAW when it can't handle something.

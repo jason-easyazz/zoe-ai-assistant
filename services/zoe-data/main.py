@@ -1,4 +1,5 @@
 import asyncio
+import os
 import time
 import uuid as _uuid_mod
 from contextlib import asynccontextmanager
@@ -153,14 +154,14 @@ async def lifespan(app: FastAPI):
     logger.info("Keep-warm task started (Hermes every %ds, session=%s)", _KEEPWARM_INTERVAL_S, _HERMES_WARMUP_SESSION)
 
     # Pi Agent: warm Gemma's KV cache in background so first real query is fast
-    try:
-        from routers.chat import _PI_AGENT_MODE
-        if _PI_AGENT_MODE:
+    # Check env directly to avoid circular import from routers.chat
+    if os.environ.get("HERMES_FAST_PATH", "true").lower() != "true":
+        try:
             from pi_agent import warmup_kv_cache
             asyncio.create_task(warmup_kv_cache(), name="gemma_kv_warmup")
-            logger.info("Pi Agent: KV cache warmup scheduled")
-    except Exception as _wup_exc:
-        logger.warning("Pi Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
+            logger.info("Pi Agent: Gemma KV cache warmup scheduled (fires in 3s)")
+        except Exception as _wup_exc:
+            logger.warning("Pi Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
 
     yield
     for task in (_openclaw_bg_task, _keepwarm_task):
