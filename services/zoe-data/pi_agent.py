@@ -38,7 +38,7 @@ _HA_BRIDGE    = os.environ.get("ZOE_HA_BRIDGE_URL",  "http://127.0.0.1:8007")
 _MEMPALACE_DATA = os.environ.get("MEMPALACE_DATA_DIR", os.path.expanduser("~/.mempalace"))
 
 _MAX_TOOL_ITERS   = int(os.environ.get("PI_AGENT_MAX_TOOL_ITERS", "5"))
-_LLM_TIMEOUT      = float(os.environ.get("PI_AGENT_LLM_TIMEOUT", "60.0"))
+_LLM_TIMEOUT      = float(os.environ.get("PI_AGENT_LLM_TIMEOUT", "120.0"))
 _TOOL_TIMEOUT     = float(os.environ.get("PI_AGENT_TOOL_TIMEOUT", "10.0"))
 
 # Heuristic thresholds for model selection
@@ -50,6 +50,10 @@ _GEMMA_KEYWORDS = frozenset({
     "why does", "how does", "what if", "tell me about", "help me",
     "difference between", "pros and cons", "should i",
 })
+
+# Simple queries answered without LLM (sub-millisecond)
+_TIME_WORDS = frozenset({"time", "clock", "date", "today", "day"})
+_DATE_WORDS = frozenset({"date", "today", "day of", "what day", "current date"})
 
 # Safe Bash allowlist (commands Pi Agent can self-extend with)
 _BASH_ALLOWED_PREFIXES = (
@@ -102,8 +106,32 @@ Do NOT output tool JSON in your final answer — only plain prose."""
 
 # ── Model routing ─────────────────────────────────────────────────────────────
 
+def _check_fast_response(message: str) -> str | None:
+    """Return an instant response for simple queries that don't need an LLM."""
+    import datetime
+    msg = message.lower().strip(" ?.")
+    # Time query
+    if any(w in msg for w in ("time", "clock")) and "?" not in message or msg.startswith("what") and "time" in msg:
+        now = datetime.datetime.now()
+        return f"It's {now.strftime('%-I:%M %p')} on {now.strftime('%A, %d %B %Y')}."
+    # Date query
+    if msg in ("what day is it", "what's the date", "whats the date", "what is today", "what date is it"):
+        now = datetime.datetime.now()
+        return f"Today is {now.strftime('%A, %d %B %Y')}."
+    return None
+
+
 def _route_to_model(message: str) -> str:
-    """Return 'bitnet' or 'gemma' based on message complexity heuristics."""
+    """Return 'bitnet' or 'gemma' based on message complexity heuristics.
+
+    NOTE: BitNet i2_s inference quality is poor (ternary weights need TL1 format).
+    For now, all queries route to Gemma. When TL1 conversion is fixed and validated,
+    re-enable BitNet for short/simple queries.
+    """
+    # TODO: Re-enable BitNet once TL1 GGUF conversion supports BitNetForCausalLM
+    return "gemma"
+
+    # Future routing logic (currently unreachable):
     if len(message) > _GEMMA_LENGTH_THRESHOLD:
         return "gemma"
     msg_lower = message.lower()
@@ -330,6 +358,13 @@ async def run_pi_agent(
         The final assistant response as a plain string.
     """
     t0 = time.monotonic()
+
+    # Fast path: answer trivial queries instantly without LLM
+    fast = _check_fast_response(message)
+    if fast:
+        logger.info("pi_agent: fast response for session=%s in <1ms", session_id)
+        return fast
+
     model_key = _route_to_model(message)
     logger.info("pi_agent: session=%s model=%s msg_len=%d", session_id, model_key, len(message))
 
