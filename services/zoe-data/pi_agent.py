@@ -145,7 +145,7 @@ def _model_url(model_key: str) -> str:
 
 
 def _model_name(model_key: str) -> str:
-    return "gemma-4-e2b" if model_key == "gemma" else "bitnet-b1.58-2b"
+    return "google_gemma-4-E2B-it-Q4_K_M" if model_key == "gemma" else "bitnet-b1.58-2b"
 
 
 # ── MemPalace integration (Python API — no subprocess) ───────────────────────

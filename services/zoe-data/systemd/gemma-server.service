@@ -7,12 +7,13 @@ Wants=network.target
 [Service]
 Type=simple
 WorkingDirectory=/home/pi/llama.cpp
-# --model: Gemma 4 E2B Q4_K_M (~1.5 GB RAM)
+# --model: Gemma 4 E2B Q4_K_M (~3.5 GB) from bartowski/google_gemma-4-E2B-it-GGUF
+# Same model as Jetson — fine-tuned weights can be shared between devices
 # --port 11435: separate from BitNet so both can run concurrently
-# --n-threads 4: Pi 5 performance cores
-# -c 4096: Gemma can handle longer context for complex personality turns
+# --threads 4: Pi 5 has 4 performance cores (use --threads not --n-threads for b8763+)
+# --ctx-size 4096: Gemma 4 handles longer context for complex turns
 ExecStart=/home/pi/llama.cpp/build/bin/llama-server \
-    --model /home/pi/models/gemma-3-4b-it-Q4_K_M.gguf \
+    --model /home/pi/models/google_gemma-4-E2B-it-Q4_K_M.gguf \
     --host 127.0.0.1 \
     --port 11435 \
     --threads 4 \

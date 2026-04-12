@@ -144,22 +144,18 @@ fi
 
 if [[ "$SKIP_MODELS" != "true" ]]; then
     log "Phase 4: Downloading Gemma 4 E2B model (BitNet model handled by setup_env.py above)"
-    mkdir -p "$MODELS_DIR/gemma"
+    mkdir -p "$MODELS_DIR"
     pip3 install --user huggingface_hub --quiet
 
-    # Gemma 4 E2B Q4_K_M (~900MB download, ~1.5GB RAM usage)
-    GEMMA_MODEL="$MODELS_DIR/gemma/gemma-4-e2b-it-Q4_K_M.gguf"
+    # Gemma 4 E2B Q4_K_M (~3.46GB) from bartowski's imatrix GGUF collection
+    # Same model as Jetson — fine-tuned weights can be shared between devices
+    GEMMA_MODEL="$MODELS_DIR/google_gemma-4-E2B-it-Q4_K_M.gguf"
     if [[ ! -f "$GEMMA_MODEL" ]]; then
-        log "Downloading Gemma 4 E2B Q4_K_M (~900MB)..."
-        python3 -c "
-from huggingface_hub import hf_hub_download
-hf_hub_download(
-    repo_id='google/gemma-4-e2b-it-GGUF',
-    filename='gemma-4-e2b-it-Q4_K_M.gguf',
-    local_dir='$MODELS_DIR/gemma',
-)
-print('Gemma model downloaded.')
-"
+        log "Downloading Gemma 4 E2B Q4_K_M (~3.46GB)..."
+        ~/.local/bin/huggingface-cli download \
+            bartowski/google_gemma-4-E2B-it-GGUF \
+            'google_gemma-4-E2B-it-Q4_K_M.gguf' \
+            --local-dir "$MODELS_DIR"
     else
         log "Gemma model already present: $GEMMA_MODEL"
     fi
