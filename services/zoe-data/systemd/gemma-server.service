@@ -12,7 +12,7 @@ WorkingDirectory=/home/pi/llama.cpp
 # --n-threads 4: Pi 5 performance cores
 # -c 4096: Gemma can handle longer context for complex personality turns
 ExecStart=/home/pi/llama.cpp/build/bin/llama-server \
-    --model /home/pi/models/gemma/gemma-4-e2b-it-Q4_K_M.gguf \
+    --model /home/pi/models/gemma-3-4b-it-Q4_K_M.gguf \
     --host 127.0.0.1 \
     --port 11435 \
     --n-threads 4 \
