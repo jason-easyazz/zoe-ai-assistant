@@ -15,7 +15,7 @@ ExecStart=/home/pi/llama.cpp/build/bin/llama-server \
     --model /home/pi/models/gemma-3-4b-it-Q4_K_M.gguf \
     --host 127.0.0.1 \
     --port 11435 \
-    --n-threads 4 \
+    --threads 4 \
     --ctx-size 4096 \
     --log-disable
 Restart=always
