@@ -118,7 +118,7 @@ services:
     image: rhasspy/wyoming-openwakeword:latest
     container_name: wyoming-openwakeword
     restart: unless-stopped
-    command: --preload-model ok_nabu --threshold 0.20 --trigger-level 0 --uri tcp://0.0.0.0:10400 --debug --debug-probability
+    command: --preload-model ok_nabu --threshold 0.08 --trigger-level 0 --uri tcp://0.0.0.0:10400 --debug --debug-probability
     ports:
     - 10400:10400
     volumes:

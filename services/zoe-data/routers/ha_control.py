@@ -99,14 +99,8 @@ async def ha_control(payload: dict, caller: dict = Depends(_require_caller)):
     entity_id = (payload.get("entity_id") or "").strip()
     action = (payload.get("action") or payload.get("service") or "").strip()
     params = payload.get("params") or payload.get("service_data") or {}
-
     if not entity_id:
         raise HTTPException(status_code=400, detail="entity_id is required")
-
-    # Resolve domain from entity_id if not provided
-    domain = payload.get("domain") or (entity_id.split(".")[0] if "." in entity_id else "")
-    if not domain:
-        raise HTTPException(status_code=400, detail="Cannot determine domain from entity_id")
 
     # Map friendly action names to HA service names
     action_map = {
@@ -123,8 +117,8 @@ async def ha_control(payload: dict, caller: dict = Depends(_require_caller)):
         raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
 
     try:
-        body = {"entity_id": entity_id, "domain": domain, "service": service, "service_data": params}
-        result = await _bridge_post("/service", body)
+        body = {"entity_id": entity_id, "action": service, "data": params}
+        result = await _bridge_post("/devices/control", body)
         logger.info("ha/control entity=%s service=%s caller=%s", entity_id, service, caller.get("user_id"))
         return {"ok": True, "entity_id": entity_id, "service": service, "result": result}
     except httpx.ConnectError:

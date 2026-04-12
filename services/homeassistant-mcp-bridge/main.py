@@ -12,6 +12,7 @@ import httpx
 import json
 import os
 import sys
+import asyncio
 from pathlib import Path
 
 # Add parent directory to path for imports
@@ -586,15 +587,34 @@ async def ha_voice_turn(request: VoiceTurnRequest):
     headers = {"Content-Type": "application/json"}
     if ZOE_HA_VOICE_TOKEN:
         headers["X-HA-Voice-Token"] = ZOE_HA_VOICE_TOKEN
-    async with httpx.AsyncClient(timeout=90.0) as client:
-        resp = await client.post(
-            f"{ZOE_HA_VOICE_INGRESS_URL}/api/voice/ha/turn",
-            headers=headers,
-            json=request.model_dump(exclude_none=True),
-        )
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    return resp.json()
+    last_status = 502
+    last_body = "voice turn forward failed"
+    payload = request.model_dump(exclude_none=True)
+    for attempt in (1, 2):
+        try:
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                resp = await client.post(
+                    f"{ZOE_HA_VOICE_INGRESS_URL}/api/voice/ha/turn",
+                    headers=headers,
+                    json=payload,
+                )
+            if resp.status_code < 400:
+                return resp.json()
+            last_status = resp.status_code
+            last_body = resp.text
+            # Retry only transient backend failures.
+            if attempt == 1 and resp.status_code in (500, 502, 503, 504):
+                await asyncio.sleep(0.35)
+                continue
+            break
+        except Exception as exc:
+            last_status = 502
+            last_body = str(exc)
+            if attempt == 1:
+                await asyncio.sleep(0.35)
+                continue
+            break
+    raise HTTPException(status_code=last_status, detail=last_body)
 
 if __name__ == "__main__":
     import uvicorn
