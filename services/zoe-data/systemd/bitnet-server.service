@@ -9,12 +9,12 @@ Type=simple
 WorkingDirectory=/home/pi/bitnet.cpp
 Environment=PATH=/home/pi/.local/bin:/home/pi/.venv-bitnet/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # run_inference_server.py wraps build/bin/llama-server (BitNet-modified llama.cpp)
-# --model: path set by setup_env.py (TL1 = ARM NEON lookup table, best for Pi 5)
+# --model: i2_s = 2-bit standard quant; pre-built GGUF from microsoft/bitnet-b1.58-2B-4T-gguf
 # --port 11434: OpenAI-compatible endpoint (/v1/chat/completions, /v1/models)
 # --threads 4: Pi 5 has 4 performance cores
 # --ctx-size 2048: enough for conversational turns
 ExecStart=/home/pi/.venv-bitnet/bin/python /home/pi/bitnet.cpp/run_inference_server.py \
-    --model /home/pi/bitnet.cpp/models/BitNet-b1.58-2B-4T/ggml-model-tl1.gguf \
+    --model /home/pi/bitnet.cpp/models/BitNet-b1.58-2B-4T/ggml-model-i2_s.gguf \
     --host 127.0.0.1 \
     --port 11434 \
     --threads 4 \
