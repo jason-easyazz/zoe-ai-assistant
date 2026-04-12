@@ -364,24 +364,31 @@ async def warmup_kv_cache() -> None:
 
     Without this, the first real query pays the full prefill cost (~500ms for the
     system prompt). After warmup, the prompt tokens are cached and subsequent queries
-    only pay for their unique user message tokens.
+    only pay for their unique user message tokens (~1s vs ~2s for uncached first query).
 
     Called from the zoe-data startup lifespan event.
     """
-    await asyncio.sleep(3)  # Give Gemma time to finish loading the 3.5GB model
-    try:
-        await _llm_call(
-            "gemma",
-            [
-                {"role": "system", "content": _PI_SOUL},
-                {"role": "user", "content": "ready"},
-            ],
-            max_tokens=3,
-            temperature=0.0,
-        )
-        logger.info("pi_agent: Gemma KV cache warmed — first real query will be ~500ms faster")
-    except Exception as exc:
-        logger.warning("pi_agent: KV warmup failed (non-fatal): %s", exc)
+    await asyncio.sleep(8)  # Give Gemma time to finish loading the 3.5GB model (~6s)
+    for attempt in range(3):
+        try:
+            await _llm_call(
+                "gemma",
+                [
+                    {"role": "system", "content": _PI_SOUL},
+                    {"role": "user", "content": "ready"},
+                ],
+                max_tokens=3,
+                temperature=0.0,
+            )
+            logger.info(
+                "pi_agent: ✅ Gemma KV cache warmed (attempt %d) — first query will be fast",
+                attempt + 1,
+            )
+            return
+        except Exception as exc:
+            logger.warning("pi_agent: KV warmup attempt %d failed: %s — retrying in 5s", attempt + 1, exc)
+            await asyncio.sleep(5)
+    logger.warning("pi_agent: KV warmup failed after 3 attempts (non-fatal — first query will be slower)")
 
 
 _THINKING_RE = re.compile(
@@ -521,6 +528,30 @@ async def run_pi_agent(
     return response_text
 
 
+# User message patterns that will NEVER contain memorable personal facts
+_SKIP_MEMORY_PATTERNS = frozenset({
+    "joke", "jok", "funny", "pun", "riddle", "poem", "story", "story",
+    "what is", "whats", "how do", "explain", "define", "tell me about",
+    "what time", "what day", "what date", "hello", "hi ", "hey", "morning",
+    "good night", "thanks", "thank you", "ok", "okay", "never mind",
+})
+
+
+def _should_classify_for_memory(user_msg: str) -> bool:
+    """Return True only if this message might contain memorable personal facts."""
+    msg_lower = user_msg.lower()
+    # Skip creative/informational/greeting requests
+    if any(p in msg_lower for p in _SKIP_MEMORY_PATTERNS):
+        return False
+    # Only classify if there's a personal-info signal
+    personal_signals = (
+        "my ", "i am", "i'm", "i have", "i like", "i love", "i hate",
+        "i prefer", "i usually", "we ", "our ", "remember", "name is",
+        "called ", "born ", "birthday", "favourite", "favorite",
+    )
+    return any(s in msg_lower for s in personal_signals)
+
+
 async def _smart_memory_capture(user_msg: str, assistant_reply: str) -> None:
     """Background task: ask Gemma if this conversation turn is worth remembering.
 
@@ -530,16 +561,18 @@ async def _smart_memory_capture(user_msg: str, assistant_reply: str) -> None:
     Examples of what gets saved:
       - "My daughter's name is Emma" → fact: "User's daughter is named Emma"
       - "I prefer the lights at 50% in the evenings" → preference saved
-      - "hello" / "tell me a joke" → save=false, nothing stored
+      - "hello" / "tell me a joke" / "what is X" → skipped immediately (no LLM call)
     """
-    # Skip trivial exchanges — not worth classifying
-    if len(user_msg) < 12 or len(assistant_reply) < 10:
+    # Fast pre-filter: skip if message can't contain personal facts
+    if len(user_msg) < 12 or not _should_classify_for_memory(user_msg):
         return
 
     prompt = (
         f"Conversation:\nUser: {user_msg[:300]}\nAssistant: {assistant_reply[:200]}\n\n"
-        "Does this contain a personal fact, preference, or name worth remembering? "
-        "Reply with JSON ONLY (no prose): "
+        "Does the USER'S message reveal a personal fact, name, preference, or habit "
+        "about themselves or their family that's worth remembering? "
+        "Ignore jokes, stories, or explanations — only save real personal facts. "
+        "Reply with JSON ONLY: "
         '{"save":true,"fact":"brief memorable fact"} or {"save":false}'
     )
     try:
