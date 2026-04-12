@@ -64,24 +64,92 @@ _BASH_ALLOWED_PREFIXES = (
 
 # ── SOUL.md system prompt for Pi Agent ───────────────────────────────────────
 
-_PI_SOUL = """You are Zoe, a warm home assistant. Be concise — "Done!" not long confirmations. Natural speech, contractions OK. For hard questions, be thorough but efficient.
+_PI_SOUL = """You are Zoe, a warm home assistant. Be concise and natural. Use contractions. For simple tasks say what you did, not "Done!". For questions, just answer. For hard problems be thorough.
 
-When you need a tool, output ONLY this block (nothing else on that line):
-```tool
-{"tool":"<name>","args":{...}}
-```
+Use tools via the function-call mechanism — never write tool JSON in your response text."""
 
-Available tools:
-  mempalace_search  — {"tool":"mempalace_search","args":{"query":"<topic>","limit":5}}
-  mempalace_add     — {"tool":"mempalace_add","args":{"summary":"<fact>","tags":["<tag>"]}}
-  ha_control        — {"tool":"ha_control","args":{"entity_id":"<entity>","action":"turn_on|turn_off|toggle"}}
-  bash              — {"tool":"bash","args":{"command":"<safe command>"}}
-  escalate_to_openclaw — {"tool":"escalate_to_openclaw","args":{"reason":"<why>","task":"<full task>"}}
+# OpenAI-compatible tool definitions sent in the API request.
+# llama.cpp routes these through delta.tool_calls, completely separate from text content.
+# This prevents the ``` leakage bug where text tool blocks partially render before interception.
+_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "mempalace_search",
+            "description": "Search the user's long-term memory for facts, preferences, names, or past conversations.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"},
+                    "limit": {"type": "integer", "description": "Max results", "default": 5},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "mempalace_add",
+            "description": "Store a fact, preference, or personal detail in the user's long-term memory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string", "description": "The fact to remember"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Optional tags"},
+                },
+                "required": ["summary"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ha_control",
+            "description": "Control a Home Assistant device (lights, switches, media players).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_id": {"type": "string", "description": "HA entity ID, e.g. light.kitchen"},
+                    "action": {"type": "string", "enum": ["turn_on", "turn_off", "toggle"], "description": "Action to perform"},
+                    "data": {"type": "object", "description": "Optional extra data (brightness, color, etc.)"},
+                },
+                "required": ["entity_id", "action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Run a safe shell command to check system status or install packages.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Shell command to run"},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "escalate_to_openclaw",
+            "description": "Hand off to OpenClaw for tasks requiring web search, browser access, multi-step automation, financial queries, or anything needing internet access.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "Why this needs OpenClaw"},
+                    "task": {"type": "string", "description": "Full enriched task description for OpenClaw"},
+                },
+                "required": ["reason", "task"],
+            },
+        },
+    },
+]
 
-Use ha_control for smart home. Use escalate_to_openclaw for: web search, browser research, multi-step automation, financial queries, anything needing internet access. Use mempalace_search when user asks about their preferences, name, or past conversations. Always wrap tool calls in the ```tool``` block."""
-
-# After Gemma LoRA fine-tuning on Zoe's voice, this shrinks to ~10 tokens:
-# _PI_SOUL = "You are Zoe. Tools: mempalace_search, mempalace_add, ha_control, bash, escalate_to_openclaw."
+# After Gemma LoRA fine-tuning on Zoe's voice, _PI_SOUL shrinks to ~10 tokens.
 
 # ── Hard query detection ──────────────────────────────────────────────────────
 
@@ -335,58 +403,7 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
     return f"[unknown tool: {tool_name}]"
 
 
-# ── Tool call extraction ───────────────────────────────────────────────────────
-
-_TOOL_BLOCK_RE = re.compile(r"```(?:tool)?\s*\n(\{.*?\})\s*\n```", re.DOTALL)
-# Also match bare JSON objects on their own line that look like tool calls
-_BARE_TOOL_RE = re.compile(r'^\s*(\{"tool"\s*:.*?\})\s*$', re.MULTILINE | re.DOTALL)
-_KNOWN_TOOLS = frozenset({
-    "mempalace_search", "mempalace_add", "ha_control", "bash", "escalate_to_openclaw"
-})
-
-
-def _extract_tool_call(text: str) -> tuple[str | None, dict | None, str]:
-    """
-    Extract the first tool call from the LLM response.
-
-    Handles two formats Gemma uses:
-    1. Code-fenced:  ```tool\\n{"tool":...}\\n```
-    2. Bare JSON:    {"tool": "mempalace_search", "args": {...}}
-
-    Returns (tool_name, args, text_without_block) or (None, None, text).
-    """
-    # Try code-fenced first (preferred format)
-    m = _TOOL_BLOCK_RE.search(text)
-    if m:
-        try:
-            payload = json.loads(m.group(1))
-            tool_name = payload.get("tool")
-            if tool_name in _KNOWN_TOOLS:
-                args = payload.get("args", {})
-                cleaned = text[: m.start()].rstrip() + text[m.end() :].lstrip()
-                return tool_name, args, cleaned
-        except json.JSONDecodeError:
-            pass
-
-    # Fallback: bare JSON object on its own line (Gemma sometimes skips fences)
-    m = _BARE_TOOL_RE.search(text)
-    if m:
-        try:
-            payload = json.loads(m.group(1))
-            tool_name = payload.get("tool")
-            if tool_name in _KNOWN_TOOLS:
-                args = payload.get("args", {})
-                cleaned = text[: m.start()].rstrip() + text[m.end() :].lstrip()
-                return tool_name, args, cleaned
-        except json.JSONDecodeError:
-            pass
-
-    return None, None, text
-
-
-# ── LLM call ─────────────────────────────────────────────────────────────────
-
-# ── KV cache warmup ───────────────────────────────────────────────────────────
+# ── LLM call / KV warmup ─────────────────────────────────────────────────────
 
 async def warmup_kv_cache() -> None:
     """Pre-process the system prompt so the KV cache is hot before the first user query.
@@ -407,6 +424,7 @@ async def warmup_kv_cache() -> None:
                 ],
                 max_tokens=3,
                 temperature=0.0,
+                use_tools=False,
             )
             logger.info(
                 "pi_agent: ✅ Gemma KV cache warmed (attempt %d) — first query will be fast",
@@ -436,25 +454,47 @@ async def _llm_call(
     *,
     max_tokens: int = 256,
     temperature: float = 0.7,
-) -> str:
-    """Make a non-streaming chat completion request to the local model."""
+    use_tools: bool = True,
+) -> tuple[str, str | None, dict | None]:
+    """Make a non-streaming chat completion request to the local model.
+
+    Returns:
+        (text, tool_name, tool_args) — tool_name/args are None if no tool call.
+        Uses the OpenAI tools API so tool calls come through delta.tool_calls,
+        never through text content (prevents the ``` leak bug).
+    """
     url = f"{_model_url()}/chat/completions"
-    payload = {
+    payload: dict = {
         "model": _model_name(),
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": temperature,
         "stream": False,
-        # Disable Gemma 4 thinking mode — without this, the model exhausts all
-        # tokens on internal reasoning (<|channel|>thought) with no visible reply.
         "thinking_budget": 0,
     }
+    if use_tools:
+        payload["tools"] = _TOOLS
+        payload["tool_choice"] = "auto"
+
     async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
         r = await client.post(url, json=payload)
         r.raise_for_status()
     data = r.json()
-    raw = data["choices"][0]["message"]["content"] or ""
-    return _strip_thinking(raw)
+    choice = data["choices"][0]["message"]
+
+    # Check for tool call via the proper API channel (never leaks to text)
+    tool_calls = choice.get("tool_calls") or []
+    if tool_calls:
+        tc = tool_calls[0]
+        tool_name = tc.get("function", {}).get("name")
+        try:
+            tool_args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+        except json.JSONDecodeError:
+            tool_args = {}
+        return "", tool_name, tool_args
+
+    raw = choice.get("content") or ""
+    return _strip_thinking(raw), None, None
 
 
 # ── Main Pi Agent entry point ─────────────────────────────────────────────────
@@ -501,10 +541,12 @@ async def run_pi_agent(
         messages.extend(history[-6:])
     messages.append({"role": "user", "content": message})
 
-    # Tool loop
+    # Tool loop — tool calls come through the API's tool_calls channel (never text)
     for iteration in range(_MAX_TOOL_ITERS + 1):
         try:
-            response_text = await _llm_call(messages, max_tokens=_token_budget(message))
+            response_text, tool_name, tool_args = await _llm_call(
+                messages, max_tokens=_token_budget(message)
+            )
         except httpx.ConnectError:
             logger.error("pi_agent: Gemma server unreachable at %s", _model_url())
             return (
@@ -514,9 +556,6 @@ async def run_pi_agent(
         except Exception as exc:
             logger.exception("pi_agent: LLM call failed (iter %d): %s", iteration, exc)
             return "Something went wrong — I couldn't generate a response. Please try again."
-
-        # Check for tool call
-        tool_name, tool_args, text_before_tool = _extract_tool_call(response_text)
 
         if tool_name and iteration < _MAX_TOOL_ITERS:
             logger.info(
@@ -532,24 +571,28 @@ async def run_pi_agent(
                 _fire_memory_capture(message, response_text)
                 return tool_result
 
-            # Add the assistant's (partial) response + tool result to conversation
-            messages.append({"role": "assistant", "content": response_text})
+            # Append tool call + result in OpenAI tool_calls format for context
             messages.append({
-                "role": "user",
-                "content": f"[Tool result for {tool_name}]\n{tool_result}\n\nNow continue your response.",
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": f"call_{iteration}", "type": "function",
+                                "function": {"name": tool_name, "arguments": json.dumps(tool_args or {})}}],
+            })
+            messages.append({
+                "role": "tool",
+                "tool_call_id": f"call_{iteration}",
+                "content": tool_result,
             })
         else:
-            # No tool call (or max iterations reached) — this is the final response
+            # No tool call (or max iterations reached) — final response
             elapsed = time.monotonic() - t0
             logger.info(
                 "pi_agent: done session=%s iters=%d elapsed=%.1fs",
                 session_id, iteration, elapsed,
             )
-            # Smart background memory capture (fires after response is returned)
             _fire_memory_capture(message, response_text)
             return response_text
 
-    # Should not reach here
     return response_text
 
 
@@ -601,10 +644,11 @@ async def _smart_memory_capture(user_msg: str, assistant_reply: str) -> None:
         '{"save":true,"fact":"brief memorable fact"} or {"save":false}'
     )
     try:
-        raw = await _llm_call(
+        raw, _, _ = await _llm_call(
             [{"role": "user", "content": prompt}],
             max_tokens=40,
             temperature=0.1,
+            use_tools=False,
         )
         m = re.search(r'\{[^}]+\}', raw)
         if not m:
@@ -696,13 +740,20 @@ async def run_pi_agent_streaming(
             "max_tokens": token_budget,
             "temperature": 0.7,
             "stream": True,
-            "thinking_budget": 0,  # Belt+suspenders: server already has --reasoning off
+            "thinking_budget": 0,
+            # Tool calls arrive via delta.tool_calls — completely separate from text.
+            # This eliminates the ``` leak: the model never writes tool JSON into content.
+            "tools": _TOOLS,
+            "tool_choice": "auto",
         }
 
     payload = _make_payload(messages)
 
     for iteration in range(_MAX_TOOL_ITERS + 1):
         collected = ""
+        # Accumulate streaming tool_calls deltas (function name + arguments)
+        streaming_tool_name: str | None = None
+        streaming_tool_args_buf = ""
 
         try:
             async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
@@ -717,19 +768,25 @@ async def run_pi_agent_streaming(
                             break
                         try:
                             chunk = json.loads(data_str)
-                            delta = chunk["choices"][0]["delta"].get("content", "")
-                            if delta:
-                                collected += delta
-                                # Yield text only if we're not in a tool block
-                                if "```tool" not in collected:
-                                    yield delta
-                                elif collected.count("```") % 2 == 0:
-                                    # Tool block just closed — hold back (will replay after)
-                                    pass
+                            delta = chunk["choices"][0]["delta"]
+
+                            # Regular text content — yield immediately, no buffering needed
+                            text_delta = delta.get("content") or ""
+                            if text_delta:
+                                collected += text_delta
+                                yield text_delta
+
+                            # Tool call delta — accumulate silently, nothing reaches the user
+                            tc_deltas = delta.get("tool_calls") or []
+                            for tc in tc_deltas:
+                                fn = tc.get("function", {})
+                                if fn.get("name"):
+                                    streaming_tool_name = fn["name"]
+                                streaming_tool_args_buf += fn.get("arguments", "")
+
                         except (json.JSONDecodeError, KeyError):
                             pass
 
-                        # Heartbeat every 4s
                         now = time.monotonic()
                         if on_heartbeat and (now - last_hb) >= 4.0:
                             last_hb = now
@@ -746,8 +803,14 @@ async def run_pi_agent_streaming(
             yield f"\n[Error: {exc}]"
             return
 
-        # Check for tool call in collected output
-        tool_name, tool_args, pre_tool_text = _extract_tool_call(collected)
+        # Tool call came through the API channel — parse and dispatch
+        tool_name = streaming_tool_name
+        tool_args: dict | None = None
+        if tool_name:
+            try:
+                tool_args = json.loads(streaming_tool_args_buf) if streaming_tool_args_buf else {}
+            except json.JSONDecodeError:
+                tool_args = {}
 
         if tool_name and iteration < _MAX_TOOL_ITERS:
             if on_tool_start:
@@ -756,6 +819,8 @@ async def run_pi_agent_streaming(
                 except Exception:
                     pass
 
+            logger.info("pi_agent streaming: iter=%d tool=%s args=%s",
+                        iteration, tool_name, json.dumps(tool_args)[:120])
             tool_result = await _dispatch_tool(tool_name, tool_args or {})
 
             # Escalation signal — yield marker and stop; chat.py handles routing
@@ -771,18 +836,22 @@ async def run_pi_agent_streaming(
                 except Exception:
                     pass
 
-            # Update messages and payload for next iteration
-            messages.append({"role": "assistant", "content": collected})
+            # Append in OpenAI tool_calls format so context stays consistent
             messages.append({
-                "role": "user",
-                "content": f"[Tool result for {tool_name}]\n{tool_result}\n\nNow continue your response.",
+                "role": "assistant",
+                "content": collected or None,
+                "tool_calls": [{"id": f"call_{iteration}", "type": "function",
+                                "function": {"name": tool_name,
+                                             "arguments": json.dumps(tool_args or {})}}],
+            })
+            messages.append({
+                "role": "tool",
+                "tool_call_id": f"call_{iteration}",
+                "content": tool_result,
             })
             payload = _make_payload(messages)
-            # Yield any text that appeared before the tool block
-            if pre_tool_text.strip():
-                yield pre_tool_text
         else:
-            # Done
+            # Done — no tool call in this iteration
             elapsed = time.monotonic() - t0
             logger.info(
                 "pi_agent streaming done: session=%s iters=%d elapsed=%.1fs",
