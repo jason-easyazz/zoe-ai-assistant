@@ -71,16 +71,50 @@ async def openclaw_cli(
         return "Sorry, that took too long. Could you try again?"
 
     raw = stdout.decode().strip()
+
+    # In --local mode the JSON result arrives on stderr (interspersed with diagnostic lines).
+    # If stdout is empty, reconstruct the JSON from stderr by stripping diagnostic lines
+    # (they all start with '[' or whitespace) and parsing what remains.
     if not raw:
-        return "I'm having trouble right now. Please try again in a moment."
+        stderr_text = stderr.decode() if stderr else ""
+        json_lines = [
+            ln for ln in stderr_text.splitlines()
+            if ln and not ln.startswith("[") and not ln.startswith(" ") and not ln.startswith("\t")
+            or ln.startswith("{") or ln.startswith("}")
+        ]
+        # Keep all non-diagnostic lines (indented JSON body + top-level braces)
+        all_lines = stderr_text.splitlines()
+        json_parts = []
+        in_json = False
+        for ln in all_lines:
+            if ln.startswith("{") and not in_json:
+                in_json = True
+            if in_json:
+                if ln.startswith("["):
+                    continue  # skip interspersed diagnostic lines
+                json_parts.append(ln)
+        raw = "\n".join(json_parts).strip()
+        if not raw:
+            logger.warning("openclaw_cli: empty response from --local agent (stderr was %d chars)", len(stderr_text))
+            return "I'm having trouble right now. Please try again in a moment."
 
     try:
         result = json.loads(raw)
+
+        # Format 1 (--local mode): {"payloads": [{"text": "..."}], "meta": {...}}
+        if isinstance(result, dict) and "payloads" in result and not result.get("status"):
+            payloads = result.get("payloads", [])
+            if payloads:
+                text = payloads[0].get("text", "I couldn't process that request.")
+                return _INJECT_ECHO.sub("", text).strip()
+
+        # Format 2 (gateway mode): {"status": "ok", "result": {"payloads": [...]}}
         if result.get("status") == "ok":
             payloads = result.get("result", {}).get("payloads", [])
             if payloads:
                 text = payloads[0].get("text", "I couldn't process that request.")
                 return _INJECT_ECHO.sub("", text).strip()
+
         if isinstance(result, dict) and "text" in result:
             return result["text"]
         if isinstance(result, dict) and "result" in result:
