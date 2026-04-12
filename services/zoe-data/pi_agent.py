@@ -66,14 +66,19 @@ _BASH_ALLOWED_PREFIXES = (
 
 _PI_SOUL = """You are Zoe, a warm home assistant. Be concise — "Done!" not long confirmations. Natural speech, contractions OK. For hard questions, be thorough but efficient.
 
-Tools (one JSON block when needed):
-  {"tool":"mempalace_search","args":{"query":"<topic>","limit":5}}
-  {"tool":"mempalace_add","args":{"summary":"<fact>","tags":["<tag>"]}}
-  {"tool":"ha_control","args":{"entity_id":"<entity>","action":"<toggle|turn_on|turn_off>"}}
-  {"tool":"bash","args":{"command":"<safe shell command>"}}
-  {"tool":"escalate_to_openclaw","args":{"reason":"<why>","task":"<enriched task description>"}}
+When you need a tool, output ONLY this block (nothing else on that line):
+```tool
+{"tool":"<name>","args":{...}}
+```
 
-Use ha_control for smart home. Use escalate_to_openclaw for: multi-step automation, browser research, financial queries, complex calendar changes, anything needing web access or long agentic loops. Only use mempalace_search when asked about past conversations."""
+Available tools:
+  mempalace_search  — {"tool":"mempalace_search","args":{"query":"<topic>","limit":5}}
+  mempalace_add     — {"tool":"mempalace_add","args":{"summary":"<fact>","tags":["<tag>"]}}
+  ha_control        — {"tool":"ha_control","args":{"entity_id":"<entity>","action":"turn_on|turn_off|toggle"}}
+  bash              — {"tool":"bash","args":{"command":"<safe command>"}}
+  escalate_to_openclaw — {"tool":"escalate_to_openclaw","args":{"reason":"<why>","task":"<full task>"}}
+
+Use ha_control for smart home. Use escalate_to_openclaw for: web search, browser research, multi-step automation, financial queries, anything needing internet access. Use mempalace_search when user asks about their preferences, name, or past conversations. Always wrap tool calls in the ```tool``` block."""
 
 # After Gemma LoRA fine-tuning on Zoe's voice, this shrinks to ~10 tokens:
 # _PI_SOUL = "You are Zoe. Tools: mempalace_search, mempalace_add, ha_control, bash, escalate_to_openclaw."
@@ -332,25 +337,51 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
 
 # ── Tool call extraction ───────────────────────────────────────────────────────
 
-_TOOL_BLOCK_RE = re.compile(r"```tool\s*\n(.*?)\n```", re.DOTALL)
+_TOOL_BLOCK_RE = re.compile(r"```(?:tool)?\s*\n(\{.*?\})\s*\n```", re.DOTALL)
+# Also match bare JSON objects on their own line that look like tool calls
+_BARE_TOOL_RE = re.compile(r'^\s*(\{"tool"\s*:.*?\})\s*$', re.MULTILINE | re.DOTALL)
+_KNOWN_TOOLS = frozenset({
+    "mempalace_search", "mempalace_add", "ha_control", "bash", "escalate_to_openclaw"
+})
 
 
 def _extract_tool_call(text: str) -> tuple[str | None, dict | None, str]:
     """
-    Extract the first ```tool ... ``` block from the LLM response.
+    Extract the first tool call from the LLM response.
+
+    Handles two formats Gemma uses:
+    1. Code-fenced:  ```tool\\n{"tool":...}\\n```
+    2. Bare JSON:    {"tool": "mempalace_search", "args": {...}}
+
     Returns (tool_name, args, text_without_block) or (None, None, text).
     """
+    # Try code-fenced first (preferred format)
     m = _TOOL_BLOCK_RE.search(text)
-    if not m:
-        return None, None, text
-    try:
-        payload = json.loads(m.group(1))
-        tool_name = payload.get("tool")
-        args = payload.get("args", {})
-        cleaned = text[: m.start()].rstrip() + text[m.end() :].lstrip()
-        return tool_name, args, cleaned
-    except json.JSONDecodeError:
-        return None, None, text
+    if m:
+        try:
+            payload = json.loads(m.group(1))
+            tool_name = payload.get("tool")
+            if tool_name in _KNOWN_TOOLS:
+                args = payload.get("args", {})
+                cleaned = text[: m.start()].rstrip() + text[m.end() :].lstrip()
+                return tool_name, args, cleaned
+        except json.JSONDecodeError:
+            pass
+
+    # Fallback: bare JSON object on its own line (Gemma sometimes skips fences)
+    m = _BARE_TOOL_RE.search(text)
+    if m:
+        try:
+            payload = json.loads(m.group(1))
+            tool_name = payload.get("tool")
+            if tool_name in _KNOWN_TOOLS:
+                args = payload.get("args", {})
+                cleaned = text[: m.start()].rstrip() + text[m.end() :].lstrip()
+                return tool_name, args, cleaned
+        except json.JSONDecodeError:
+            pass
+
+    return None, None, text
 
 
 # ── LLM call ─────────────────────────────────────────────────────────────────
