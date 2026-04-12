@@ -8,18 +8,17 @@ Wants=network.target
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/bitnet.cpp
-# --model: path to downloaded BitNet 2B-4T gguf
-# --host 127.0.0.1: localhost only, nginx proxies externally if needed
-# --port 11434: OpenAI-compatible endpoint (matches BITNET_SERVER_URL in .env)
-# --n-threads 4: Pi 5 has 4 performance cores
-# -c 2048: context window (BitNet 2B is fast enough for this)
-ExecStart=/home/pi/bitnet.cpp/build/bin/llama-server \
-    --model /home/pi/models/bitnet/bitnet-b1.58-2B-4T-gguf/ggml-model-i2_s.gguf \
+# run_inference_server.py wraps build/bin/llama-server (BitNet-modified llama.cpp)
+# --model: path set by setup_env.py (TL1 = ARM NEON lookup table, best for Pi 5)
+# --port 11434: OpenAI-compatible endpoint (/v1/chat/completions, /v1/models)
+# --threads 4: Pi 5 has 4 performance cores
+# --ctx-size 2048: enough for conversational turns
+ExecStart=/usr/bin/python3 /home/pi/bitnet.cpp/run_inference_server.py \
+    --model /home/pi/bitnet.cpp/models/BitNet-b1.58-2B-4T/ggml-model-tl1.gguf \
     --host 127.0.0.1 \
     --port 11434 \
-    --n-threads 4 \
-    --ctx-size 2048 \
-    --log-disable
+    --threads 4 \
+    --ctx-size 2048
 Restart=always
 RestartSec=5
 StandardOutput=journal

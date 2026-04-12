@@ -102,23 +102,24 @@ clang --version || warn "Clang 18 not found — bitnet.cpp build may fail"
 # ── Phase 2: Build bitnet.cpp ─────────────────────────────────────────────────
 
 if [[ "$SKIP_BUILD" != "true" ]]; then
-    log "Phase 2: Building bitnet.cpp (ARM NEON, Clang 18)"
+    log "Phase 2: Setting up BitNet b1.58 (ARM TL1, via setup_env.py)"
     if [[ ! -d "$BITNET_DIR" ]]; then
         git clone --depth 1 https://github.com/microsoft/BitNet.git "$BITNET_DIR"
     else
         cd "$BITNET_DIR" && git pull --rebase
     fi
     cd "$BITNET_DIR"
-    mkdir -p build
-    cd build
-    cmake .. -G Ninja \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_C_COMPILER=clang-18 \
-        -DCMAKE_CXX_COMPILER=clang++-18 \
-        -DLLAMA_NATIVE=ON \
-        -DLLAMA_ARM_FP16=ON
-    ninja -j4
-    log "bitnet.cpp built: $(ls $BITNET_DIR/build/bin/llama-server)"
+    # Install BitNet Python dependencies (includes huggingface_hub for model download)
+    pip3 install --user -r requirements.txt --quiet
+    # setup_env.py: builds bitnet.cpp kernel + downloads BitNet 2B-4T model
+    # --quant-type tl1: ARM NEON lookup table (best for Pi 5 aarch64)
+    # --use-pretuned: use Microsoft's pretuned kernel parameters for speed
+    # Model is saved to: $BITNET_DIR/models/BitNet-b1.58-2B-4T/ggml-model-tl1.gguf
+    python3 setup_env.py \
+        --hf-repo microsoft/BitNet-b1.58-2B-4T \
+        --quant-type tl1 \
+        --use-pretuned
+    log "BitNet setup done: $(ls $BITNET_DIR/models/BitNet-b1.58-2B-4T/ 2>/dev/null)"
 
     # ── Phase 3: Build standard llama.cpp (Gemma) ────────────────────────────
 
@@ -129,8 +130,7 @@ if [[ "$SKIP_BUILD" != "true" ]]; then
         cd "$LLAMA_DIR" && git pull --rebase
     fi
     cd "$LLAMA_DIR"
-    mkdir -p build
-    cd build
+    mkdir -p build && cd build
     cmake .. -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DLLAMA_NATIVE=ON
@@ -143,28 +143,11 @@ fi
 # ── Phase 4: Download models ──────────────────────────────────────────────────
 
 if [[ "$SKIP_MODELS" != "true" ]]; then
-    log "Phase 4: Downloading AI models"
-    mkdir -p "$MODELS_DIR/bitnet" "$MODELS_DIR/gemma"
+    log "Phase 4: Downloading Gemma 4 E2B model (BitNet model handled by setup_env.py above)"
+    mkdir -p "$MODELS_DIR/gemma"
+    pip3 install --user huggingface_hub --quiet
 
-    # BitNet b1.58 2B-4T (official HuggingFace release, ~400MB)
-    BITNET_MODEL_DIR="$MODELS_DIR/bitnet/bitnet-b1.58-2B-4T-gguf"
-    if [[ ! -f "$BITNET_MODEL_DIR/ggml-model-i2_s.gguf" ]]; then
-        log "Downloading BitNet b1.58 2B-4T model (~400MB)..."
-        pip3 install huggingface_hub --quiet
-        python3 -c "
-from huggingface_hub import snapshot_download
-snapshot_download(
-    repo_id='microsoft/bitnet-b1.58-2B-4T-gguf',
-    local_dir='$BITNET_MODEL_DIR',
-    ignore_patterns=['*.md', 'config.json'],
-)
-print('BitNet model downloaded.')
-"
-    else
-        log "BitNet model already present: $BITNET_MODEL_DIR"
-    fi
-
-    # Gemma 4 E2B Q4_K_M (~1.5GB RAM usage)
+    # Gemma 4 E2B Q4_K_M (~900MB download, ~1.5GB RAM usage)
     GEMMA_MODEL="$MODELS_DIR/gemma/gemma-4-e2b-it-Q4_K_M.gguf"
     if [[ ! -f "$GEMMA_MODEL" ]]; then
         log "Downloading Gemma 4 E2B Q4_K_M (~900MB)..."
