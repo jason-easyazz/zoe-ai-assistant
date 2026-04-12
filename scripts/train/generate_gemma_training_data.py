@@ -176,27 +176,38 @@ def extract_real_conversations(db_path: str, limit: int = 200) -> list[dict]:
     try:
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
+        # Pair consecutive user+assistant rows within each session into turns.
+        # Schema: chat_messages(role TEXT, content TEXT, chat_session_id TEXT, created_at TEXT)
         cur.execute("""
-            SELECT user_message, assistant_response
+            SELECT role, content, chat_session_id, created_at
             FROM chat_messages
-            WHERE user_message IS NOT NULL
-              AND assistant_response IS NOT NULL
-              AND length(user_message) > 5
-              AND length(assistant_response) > 5
-              AND assistant_response NOT LIKE '%error%'
-              AND assistant_response NOT LIKE '%sorry%I cannot%'
-            ORDER BY created_at DESC
-            LIMIT ?
-        """, (limit,))
+            WHERE role IN ('user', 'assistant')
+              AND content IS NOT NULL
+              AND length(content) > 5
+              AND content NOT LIKE '%error%'
+              AND content NOT LIKE '%sorry%I cannot%'
+            ORDER BY chat_session_id, created_at ASC
+        """)
         rows = cur.fetchall()
         conn.close()
-        for user_msg, assistant_msg in rows:
-            examples.append({
-                "conversations": [
-                    {"from": "human", "value": user_msg.strip()},
-                    {"from": "gpt", "value": assistant_msg.strip()},
-                ]
-            })
+
+        # Build pairs: user turn immediately followed by assistant turn in same session
+        i = 0
+        count = 0
+        while i < len(rows) - 1 and count < limit:
+            role, content, session_id, _ = rows[i]
+            next_role, next_content, next_session_id, _ = rows[i + 1]
+            if role == "user" and next_role == "assistant" and session_id == next_session_id:
+                examples.append({
+                    "conversations": [
+                        {"from": "human", "value": content.strip()},
+                        {"from": "gpt", "value": next_content.strip()},
+                    ]
+                })
+                count += 1
+                i += 2
+            else:
+                i += 1
         print(f"  Extracted {len(examples)} real conversations from {db_path}")
     except Exception as e:
         print(f"  Warning: Could not read {db_path}: {e}")

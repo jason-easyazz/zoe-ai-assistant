@@ -391,12 +391,6 @@ async def warmup_kv_cache() -> None:
     logger.warning("pi_agent: KV warmup failed after 3 attempts (non-fatal — first query will be slower)")
 
 
-_THINKING_RE = re.compile(
-    r"<\|channel\|?>?\s*thought[\s\S]*?(?:<\|channel\|?>?\s*response\s*>?|$)",
-    re.IGNORECASE,
-)
-
-
 def _strip_thinking(text: str) -> str:
     """Remove Gemma 4 interleaved thinking tokens, keeping only the response."""
     # If model generates <|channel>thought...content...<|channel>response...answer
@@ -644,6 +638,13 @@ async def run_pi_agent_streaming(
         on_tool_end(tool_name, result) — after tool execution
         on_heartbeat(elapsed_s)        — every ~4s while waiting
     """
+    # Fast path — instant replies for time/date/status, no LLM needed
+    fast = _check_fast_response(message)
+    if fast:
+        logger.info("pi_agent streaming: fast-path hit for session=%s", session_id)
+        yield fast
+        return
+
     t0 = time.monotonic()
     model_key = _route_to_model(message)
     logger.info("pi_agent streaming: session=%s model=%s", session_id, model_key)

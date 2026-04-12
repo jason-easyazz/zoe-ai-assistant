@@ -75,9 +75,11 @@ async def _keepwarm_loop():
       refresh its TTL so returning users get sub-2s responses, not a 45s cold start.
     """
     import httpx
-    from routers.chat import _HERMES_API_URL, _HERMES_FAST_PATH
     from database import DB_PATH
     import aiosqlite
+
+    _HERMES_API_URL = os.environ.get("HERMES_API_URL", "http://127.0.0.1:11435")
+    _HERMES_FAST_PATH = os.environ.get("HERMES_FAST_PATH", "true").lower() == "true"
 
     await asyncio.sleep(_KEEPWARM_INITIAL_DELAY_S)
 
@@ -159,7 +161,7 @@ async def lifespan(app: FastAPI):
         try:
             from pi_agent import warmup_kv_cache
             asyncio.create_task(warmup_kv_cache(), name="gemma_kv_warmup")
-            logger.info("Pi Agent: Gemma KV cache warmup scheduled (fires in 3s)")
+            logger.info("Pi Agent: Gemma KV cache warmup scheduled (fires in 8s)")
         except Exception as _wup_exc:
             logger.warning("Pi Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
 

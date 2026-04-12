@@ -77,6 +77,7 @@ from ag_ui.core import (
     StateSnapshotEvent,
     StepFinishedEvent,
     StepStartedEvent,
+    TextMessageChunkEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
     ToolCallArgsEvent,
@@ -838,16 +839,14 @@ async def chat_stream_generator(
                     yield line
         else:
             if _PI_AGENT_MODE:
-                # ── Pi Agent: BitNet b1.58 or Gemma 4 E2B with MemPalace + tools ──
-                from pi_agent import _route_to_model
-                model_label = "BitNet" if _route_to_model(message_for_processing) == "bitnet" else "Gemma"
+                # ── Pi Agent: Gemma 4 E2B with MemPalace + tools — true SSE streaming ──
                 yield emit(
                     StateSnapshotEvent(
                         type=EventType.STATE_SNAPSHOT,
                         snapshot={
                             "status": "generating",
                             "phase": "pi_agent",
-                            "model": f"Zoe ({model_label})",
+                            "model": "Zoe (Gemma)",
                             "detail": "Thinking…",
                         },
                     )
@@ -855,20 +854,42 @@ async def chat_stream_generator(
                 yield emit(
                     CustomEvent(
                         name="zoe.run_log",
-                        value={"level": "info", "message": f"Pi Agent running ({model_label})…"},
+                        value={"level": "info", "message": "Pi Agent streaming…"},
                     )
                 )
-                task = asyncio.create_task(
-                    run_pi_agent(message_for_processing, session_id, user_id)
+                yield recorder.emit(
+                    enc,
+                    TextMessageStartEvent(
+                        type=EventType.TEXT_MESSAGE_START,
+                        message_id=assistant_message_id,
+                        role="assistant",
+                    ),
                 )
-                async for hb in _iter_openclaw_heartbeats(emit, task, phase_label=f"Pi Agent ({model_label})"):
-                    yield hb
-                response_text = await task
-                asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
-                async for line in _stream_openclaw_assistant_ag(
-                    enc, recorder, assistant_message_id, response_text
+                full_response = ""
+                async for chunk in run_pi_agent_streaming(
+                    message_for_processing,
+                    session_id,
+                    user_id,
                 ):
-                    yield line
+                    full_response += chunk
+                    yield recorder.emit(
+                        enc,
+                        TextMessageChunkEvent(
+                            type=EventType.TEXT_MESSAGE_CHUNK,
+                            message_id=assistant_message_id,
+                            role="assistant",
+                            delta=chunk,
+                        ),
+                    )
+                yield recorder.emit(
+                    enc,
+                    TextMessageEndEvent(
+                        type=EventType.TEXT_MESSAGE_END,
+                        message_id=assistant_message_id,
+                    ),
+                )
+                response_text = full_response
+                asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
 
             else:
                 # ── Jetson: Tier 2 Bonsai-8B fast path ──
