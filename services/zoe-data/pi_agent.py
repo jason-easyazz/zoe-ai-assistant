@@ -111,21 +111,34 @@ def _check_fast_response(message: str) -> str | None:
     import datetime
     msg = message.lower().strip(" ?.")
     now = datetime.datetime.now()
+    words = set(msg.split())  # whole-word matching to avoid "times" → "time"
 
-    # Time queries
-    if ("what" in msg or msg.startswith("what")) and "time" in msg:
-        return f"It's {now.strftime('%-I:%M %p')} on {now.strftime('%A, %d %B %Y')}."
+    # Time queries — only if "time" is an actual word (not inside "times", "sometimes" etc.)
+    if "time" in words or "clock" in words:
+        if any(w in msg for w in ("what", "tell", "current", "now")):
+            return f"It's {now.strftime('%-I:%M %p')} on {now.strftime('%A, %d %B %Y')}."
     if msg in ("time", "the time", "current time", "what time", "clock"):
         return f"It's {now.strftime('%-I:%M %p')}."
 
-    # Date queries
-    if msg in ("what day is it", "what's the date", "whats the date",
-               "what is today", "what date is it", "today's date", "today"):
+    # Date queries — match several natural phrasings
+    _date_triggers = {
+        "what day is it", "what's the date", "whats the date",
+        "what is today", "what date is it", "today's date", "today",
+        "what day is it today", "what is the date today", "what is todays date",
+        "what is today's date", "what day is today",
+    }
+    if msg in _date_triggers or ("date" in words and "what" in words) or \
+       ("day" in words and "today" in words):
         return f"Today is {now.strftime('%A, %d %B %Y')}."
 
     # Uptime / status
-    if msg in ("status", "are you running", "are you there", "you there", "ping"):
-        return "I'm here and running on your Pi 5. How can I help?"
+    _status_triggers = {
+        "status", "are you running", "are you there", "you there", "ping",
+        "are you online", "are you up", "you online", "are you working",
+    }
+    tier = "Jetson GPU" if _JETSON_MODE else "Pi 5"
+    if msg in _status_triggers:
+        return f"I'm here and running on your {tier}. How can I help?"
 
     return None
 
@@ -201,8 +214,10 @@ async def _mempalace_add(summary: str, tags: list[str] | None = None) -> bool:
 _MEMORY_TRIGGER_WORDS = frozenset({
     "remember", "recall", "did i", "have i", "last time", "before",
     "you said", "we talked", "my name", "my preference", "i told you",
-    "favourite", "favorite", "usually", "always", "never", "often",
-    "who is", "what is my", "family", "remind me",
+    "favourite", "favorite", "prefer", "like", "usually", "always", "never", "often",
+    "who is", "what is my", "what do i", "what's my", "family", "remind me",
+    "do i have", "my favourite", "my favorite", "my usual", "i usually", "i like",
+    "i prefer", "i love", "i hate", "i enjoy", "do you know my",
 })
 
 
@@ -220,7 +235,8 @@ async def _build_memory_context(message: str) -> str:
     """
     if not _message_needs_memory(message):
         return ""
-    memories = await _mempalace_search(message, limit=5, timeout_s=3.0)
+    _mp_timeout = 5.0 if _JETSON_MODE else 3.0  # Jetson can afford slightly longer ONNX wait
+    memories = await _mempalace_search(message, limit=5, timeout_s=_mp_timeout)
     if not memories:
         return ""
     lines = ["## Memory Context (from MemPalace)"]
