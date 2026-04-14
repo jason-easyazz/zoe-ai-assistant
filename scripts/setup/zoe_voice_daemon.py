@@ -67,6 +67,8 @@ VERIFY_SSL = os.environ.get("VERIFY_SSL", "true").lower() not in ("false", "0", 
 WAKEWORD_DEBUG = os.environ.get("WAKEWORD_DEBUG", "").lower() in ("1", "true", "yes")
 # ── Barge-in: Silero VAD during TTS playback ─────────────────────────────
 BARGE_IN_ENABLED = os.environ.get("BARGE_IN_ENABLED", "true").lower() in ("1", "true", "yes")
+# Speaker identification via resemblyzer (disable until profiles are enrolled).
+SPEAKER_ID_ENABLED = os.environ.get("SPEAKER_ID_ENABLED", "false").lower() in ("1", "true", "yes")
 # VAD probability threshold for barge-in detection (0.0-1.0).
 BARGE_IN_THRESHOLD = float(os.environ.get("BARGE_IN_THRESHOLD", "0.5"))
 # Guard window after TTS ends — ignore VAD for this many ms (Jabra AEC residual).
@@ -114,6 +116,30 @@ _barge_in_requested = threading.Event()
 # Current TTS subprocess (aplay/mpg123) so we can kill it on barge-in.
 _tts_process: subprocess.Popen | None = None
 _tts_process_lock = threading.Lock()
+
+# ── Resemblyzer singleton (cached to avoid ~60s reload per call on Pi) ───────
+_voice_encoder = None
+_voice_encoder_lock = threading.Lock()
+
+
+def _get_voice_encoder():
+    global _voice_encoder
+    if _voice_encoder is not None:
+        return _voice_encoder
+    with _voice_encoder_lock:
+        if _voice_encoder is not None:
+            return _voice_encoder
+        try:
+            from resemblyzer import VoiceEncoder  # type: ignore
+            log.info("Loading resemblyzer VoiceEncoder (one-time, ~5s)...")
+            _voice_encoder = VoiceEncoder()
+            log.info("Resemblyzer VoiceEncoder ready.")
+        except ImportError:
+            log.debug("resemblyzer not installed; speaker ID disabled")
+        except Exception as exc:
+            log.warning("VoiceEncoder load failed: %s", exc)
+    return _voice_encoder
+
 
 # ── Recording-active flag (B14) ──────────────────────────────────────────────
 # Set to True during the entire wake→record→STT cycle so ambient thread pauses.
@@ -514,20 +540,22 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> str | None:
     """Compute resemblyzer embedding and POST to Jetson /api/voice/identify.
 
     Returns the identified user_id string, or None if identification fails or
-    resemblyzer is unavailable.
+    resemblyzer is unavailable. Uses a module-level cached VoiceEncoder to
+    avoid the ~60s reload cost on Pi hardware.
     """
+    if not SPEAKER_ID_ENABLED:
+        return None
+    encoder = _get_voice_encoder()
+    if encoder is None:
+        return None
     try:
-        from resemblyzer import VoiceEncoder, preprocess_wav  # type: ignore
-        import io as _io, wave as _wave
-        import tempfile as _tmp, os as _os
+        from resemblyzer import preprocess_wav  # type: ignore
+        import tempfile as _tmp, os as _os, base64 as _b64, numpy as _np
 
-        # Write wav_bytes to a temp file (resemblyzer needs a file path).
         with _tmp.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             f.write(wav_bytes)
             wav_path = f.name
-
         try:
-            encoder = VoiceEncoder()
             wav = preprocess_wav(wav_path)
             embedding = encoder.embed_utterance(wav)
         finally:
@@ -536,10 +564,9 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> str | None:
             except OSError:
                 pass
 
-        import base64 as _b64, numpy as _np
         emb_bytes = embedding.astype(_np.float32).tobytes()
         emb_b64 = _b64.b64encode(emb_bytes).decode()
-        resp = _api_post("/api/voice/identify", {"audio_base64": emb_b64}, timeout=10)
+        resp = _api_post("/api/voice/identify", {"audio_base64": emb_b64}, timeout=5)
         if resp.get("identified"):
             return resp.get("user_id")
         return None
@@ -772,6 +799,10 @@ def main():
         log.info("Barge-in VAD thread started.")
     else:
         log.info("Barge-in disabled (BARGE_IN_ENABLED=false).")
+
+    # Pre-warm resemblyzer encoder in background so first command isn't delayed.
+    if SPEAKER_ID_ENABLED:
+        threading.Thread(target=_get_voice_encoder, daemon=True, name="resemblyzer-warmup").start()
 
     _ambient_thread = threading.Thread(
         target=_ambient_capture_thread, daemon=True, name="ambient-capture"
