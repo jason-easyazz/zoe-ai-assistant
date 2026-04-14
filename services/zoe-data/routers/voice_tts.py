@@ -560,6 +560,83 @@ async def _run_whisper_cpp(wav_path: str) -> str:
     return text
 
 
+# Cached faster-whisper model instance to avoid ~1s reload per call
+_faster_whisper_model = None
+_faster_whisper_model_name: str = ""
+_faster_whisper_lock = asyncio.Lock()
+
+
+async def _get_faster_whisper_model():
+    """Lazy-load and cache a faster-whisper WhisperModel instance."""
+    global _faster_whisper_model, _faster_whisper_model_name
+    model_name = (os.environ.get("ZOE_WHISPER_MODEL") or "base.en").strip()
+    async with _faster_whisper_lock:
+        if _faster_whisper_model is not None and _faster_whisper_model_name == model_name:
+            return _faster_whisper_model
+        try:
+            from faster_whisper import WhisperModel  # type: ignore
+            device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
+            compute_type = "float16" if device == "cuda" else "int8"
+            logger.info("Loading faster-whisper model=%s device=%s", model_name, device)
+            _faster_whisper_model = WhisperModel(model_name, device=device, compute_type=compute_type)
+            _faster_whisper_model_name = model_name
+            logger.info("faster-whisper model loaded: %s", model_name)
+            return _faster_whisper_model
+        except ImportError:
+            logger.debug("faster-whisper not installed")
+            return None
+        except Exception as exc:
+            logger.warning("faster-whisper model load failed: %s", exc)
+            return None
+
+
+async def _run_faster_whisper(wav_path: str) -> str:
+    """Transcribe using faster-whisper Python library (fallback when whisper.cpp unavailable)."""
+    model = await _get_faster_whisper_model()
+    if model is None:
+        raise RuntimeError("faster-whisper not available; install with: pip install faster-whisper")
+    lang = (os.environ.get("ZOE_WHISPER_LANG") or "en").strip()
+    vad_threshold = float(os.environ.get("ZOE_WHISPER_VAD_THRESHOLD", "0.50"))
+    min_speech_ms = int(os.environ.get("ZOE_WHISPER_MIN_SPEECH_MS", "120"))
+    min_silence_ms = int(os.environ.get("ZOE_WHISPER_MIN_SILENCE_MS", "350"))
+    speech_pad_ms = int(os.environ.get("ZOE_WHISPER_SPEECH_PAD_MS", "220"))
+    timeout = float(os.environ.get("ZOE_WHISPER_TIMEOUT_S", "20"))
+
+    def _transcribe_sync():
+        segments, _info = model.transcribe(
+            wav_path,
+            language=lang,
+            vad_filter=True,
+            vad_parameters={
+                "threshold": vad_threshold,
+                "min_speech_duration_ms": min_speech_ms,
+                "min_silence_duration_ms": min_silence_ms,
+                "speech_pad_ms": speech_pad_ms,
+            },
+        )
+        return " ".join(seg.text.strip() for seg in segments).strip()
+
+    loop = asyncio.get_event_loop()
+    text = await asyncio.wait_for(
+        loop.run_in_executor(None, _transcribe_sync),
+        timeout=timeout,
+    )
+    return text
+
+
+async def _transcribe_audio(wav_path: str) -> str:
+    """
+    Transcription waterfall:
+    1. whisper.cpp CLI (if binary + ggml model configured)
+    2. faster-whisper Python (auto-downloaded model, GPU/CPU)
+    """
+    if _whisper_cpp_binary():
+        model = (os.environ.get("ZOE_WHISPER_MODEL") or "").strip()
+        if model and os.path.isfile(model):
+            return await _run_whisper_cpp(wav_path)
+    return await _run_faster_whisper(wav_path)
+
+
 @router.post("/transcribe")
 async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_auth)):
     """
@@ -587,7 +664,7 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
             tmp.write(raw)
             wav_path = tmp.name
         try:
-            text = await _run_whisper_cpp(wav_path)
+            text = await _transcribe_audio(wav_path)
         finally:
             try:
                 os.unlink(wav_path)
