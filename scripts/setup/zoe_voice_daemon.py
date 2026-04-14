@@ -680,9 +680,9 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes) -> bool:
 def _follow_up_listen(pa: pyaudio.PyAudio) -> bytes | None:
     """Listen for speech without wake word for FOLLOW_UP_LISTEN_S seconds.
 
-    Uses Silero VAD on a fresh mic stream. If speech is detected, records
-    a full command and returns the WAV bytes. Returns None if silence
-    throughout the window.
+    Uses Silero VAD on a fresh mic stream. If speech is detected, continues
+    recording on the SAME stream (no gap where words get lost) and returns
+    the WAV bytes. Returns None if silence throughout the window.
     """
     model, _ = _get_silero_vad()
     if model is None:
@@ -701,24 +701,71 @@ def _follow_up_listen(pa: pyaudio.PyAudio) -> bytes | None:
         log.debug("Follow-up mic open failed: %s", exc)
         return None
 
+    # Drain a few chunks to skip any residual beep/echo from the follow-up chime.
+    drain_chunks = max(1, int(0.15 * SAMPLE_RATE / CHUNK_SIZE))
+    for _ in range(drain_chunks):
+        try:
+            stream.read(CHUNK_SIZE, exception_on_overflow=False)
+        except Exception:
+            break
+
     deadline = time.monotonic() + FOLLOW_UP_LISTEN_S
     speech_detected = False
+    pre_frames: list[bytes] = []
     try:
         while time.monotonic() < deadline:
             data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
             prob = _vad_prob(model, np.frombuffer(data, dtype=np.int16))
             if prob >= FOLLOW_UP_VAD_THRESHOLD:
                 speech_detected = True
+                pre_frames.append(data)
                 log.info("Follow-up speech detected (VAD=%.2f), recording...", prob)
                 break
-    finally:
+
+        if not speech_detected:
+            stream.stop_stream()
+            stream.close()
+            return None
+
+        # Continue recording on the same stream — no mic close/reopen gap.
+        log.info("Recording follow-up command (max %ds)...", RECORD_SECONDS)
+        frames = list(pre_frames)
+        silent_chunks = 0
+        max_silent = int(SILENCE_TIMEOUT_S * SAMPLE_RATE / CHUNK_SIZE)
+        max_chunks = int(RECORD_SECONDS * SAMPLE_RATE / CHUNK_SIZE)
+        for _ in range(max_chunks):
+            data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
+            frames.append(data)
+            amplitude = np.abs(np.frombuffer(data, dtype=np.int16)).mean()
+            if amplitude < 300:
+                silent_chunks += 1
+                if silent_chunks >= max_silent and len(frames) > int(0.5 * SAMPLE_RATE / CHUNK_SIZE):
+                    break
+            else:
+                silent_chunks = 0
         stream.stop_stream()
         stream.close()
 
-    if not speech_detected:
-        return None
+        if len(frames) < int(0.3 * SAMPLE_RATE / CHUNK_SIZE):
+            log.info("Follow-up too short, ignoring.")
+            return None
 
-    return record_command(pa)
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(pa.get_sample_size(pyaudio.paInt16))
+            wf.setframerate(SAMPLE_RATE)
+            wf.writeframes(b"".join(frames))
+        return buf.getvalue()
+
+    except Exception as exc:
+        log.warning("Follow-up listen error: %s", exc)
+        try:
+            stream.stop_stream()
+            stream.close()
+        except Exception:
+            pass
+        return None
 
 
 def voice_command(pa: pyaudio.PyAudio, oww) -> None:
