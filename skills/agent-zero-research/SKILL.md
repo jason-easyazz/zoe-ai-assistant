@@ -1,6 +1,6 @@
 ---
 name: agent-zero-research
-description: Deep research, analysis, and comparison tasks using Agent Zero
+description: "Delegate deep research, multi-source analysis, and comparison tasks to Agent Zero. Use when the user asks to research a topic, compare options, investigate something, or wants a 'deep dive' with cited sources."
 version: 1.0.0
 author: zoe-team
 api_only: true
@@ -15,6 +15,9 @@ triggers:
   - "find out about"
   - "what are the best"
   - "pros and cons"
+  - "evaluate"
+  - "review options"
+  - "summarize findings"
 allowed_endpoints:
   - "POST /api/agent-zero/research"
   - "POST /api/agent-zero/task"
@@ -27,20 +30,22 @@ tags:
 # Agent Zero Research
 
 ## When to Use
-User wants deep research, multi-source analysis, comparison studies, or any task that requires browsing the web, reading documents, or synthesizing information from multiple sources.
 
-## How to Handle
+The user wants deep research, multi-source analysis, comparison studies, or any task requiring web browsing, document reading, or synthesizing information. Triggers include "research", "compare", "deep dive", "pros and cons", or "look into".
 
-1. Identify what the user wants to research or analyze
-2. Determine the type: research, comparison, analysis, investigation
-3. Delegate to Agent Zero with clear instructions
-4. Present findings to the user in a clear, structured format
+## Workflow
+
+1. **Identify the task type** — research (open-ended query), comparison (two+ options), or analysis (structured evaluation)
+2. **Inform the user** — tell them research is underway and may take 30–60 seconds
+3. **Submit to Agent Zero** — use the appropriate endpoint (see below)
+4. **Poll for completion** — check `GET /api/agent-zero/status` until the task finishes
+5. **Present findings** — format results clearly: use tables for comparisons, bullet points for research summaries, and always cite sources when available
 
 ## API Endpoints
 
-### Submit Research Task
-POST http://localhost:8101/tools/research
-```json
+### Submit a research task
+```
+POST /api/agent-zero/research
 {
   "query": "Best solar panels for residential use in 2026",
   "depth": "thorough",
@@ -48,27 +53,40 @@ POST http://localhost:8101/tools/research
 }
 ```
 
-### Submit General Task
-POST http://localhost:8101/tools/task
-```json
+### Submit a general task (comparisons, analysis)
+```
+POST /api/agent-zero/task
 {
   "task": "Compare Tesla Powerwall vs BYD battery for home storage",
   "context": "User is considering home battery storage"
 }
 ```
 
-### Check Task Status
-GET http://localhost:8101/tools/status
+### Check task status
+```
+GET /api/agent-zero/status
+```
+Returns the current state (`pending`, `running`, `completed`, `failed`) and results when complete.
 
-## Examples
-- "Research the best solar panels" -> research task with depth: thorough
-- "Compare Tesla vs BYD" -> comparison task with both items
-- "Look into home automation trends" -> research task
-- "Analyze my energy usage patterns" -> analysis task
+## Example
 
-## Important Notes
-- Research tasks can take 30-60 seconds to complete
-- Always tell the user you're researching and will report back
-- Present findings in a clear, structured format
-- Cite sources when available
-- For comparisons, use a pros/cons or table format
+**User:** "Compare Tesla Powerwall vs BYD battery for my home"
+
+**Steps:**
+- Identify: comparison task with two items
+- Respond: "Let me research that for you — this may take about a minute."
+- Submit: `POST /api/agent-zero/task` with task and context
+- Poll: `GET /api/agent-zero/status` until `completed`
+- Present: table with capacity, price, warranty, pros/cons for each option, with source links
+
+## Error Handling
+
+- **Task timeout** (>120s): Inform the user the research is taking longer than expected and offer to retry or narrow the scope
+- **Task failed**: Check the error from the status endpoint and relay a user-friendly message (e.g., "Agent Zero couldn't complete the research — want to try a more specific query?")
+- **No results**: Suggest the user rephrase or narrow the research topic
+
+## Formatting Guidelines
+
+- **Research results**: Bullet-point summaries with source citations
+- **Comparisons**: Side-by-side table with key attributes
+- **Analysis**: Numbered findings with supporting evidence
