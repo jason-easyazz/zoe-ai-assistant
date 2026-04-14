@@ -730,6 +730,11 @@ def main():
             card_num = int(hw_match.group(1)) if hw_match else None
             for i in range(pa.get_device_count()):
                 info = pa.get_device_info_by_index(i)
+                # Only consider devices that actually have input channels.
+                # Some hw: entries appear as output-only even when the same
+                # physical device supports capture (e.g. Jabra Speak 750).
+                if int(info.get("maxInputChannels", 0)) == 0:
+                    continue
                 name = str(info.get("name", ""))
                 if card_num is not None and f"(hw:{card_num}," in name:
                     dev_idx = i
@@ -738,7 +743,10 @@ def main():
                     dev_idx = i
                     break
             if dev_idx is None:
-                log.warning("Could not resolve AUDIO_DEVICE=%s — using default input", AUDIO_DEVICE)
+                log.warning(
+                    "Could not resolve AUDIO_DEVICE=%s to an input-capable device — using default input",
+                    AUDIO_DEVICE,
+                )
 
     _INPUT_DEVICE_INDEX = dev_idx
     if dev_idx is not None:
