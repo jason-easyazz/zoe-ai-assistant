@@ -323,17 +323,19 @@ async def _synthesize_kokoro(text: str, voice: str = "af_sky") -> Optional[bytes
         import wave
         import io
 
-        # Kokoro returns (samples: np.ndarray, sample_rate: int)
-        samples, sample_rate = kokoro.create(text, voice=voice, speed=1.0, lang="en-us")
-        samples_int16 = (samples * 32767).astype(np.int16)
+        def _kokoro_sync():
+            samples, sample_rate = kokoro.create(text, voice=voice, speed=1.0, lang="en-us")
+            samples_int16 = (samples * 32767).astype(np.int16)
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(sample_rate)
+                wf.writeframes(samples_int16.tobytes())
+            return buf.getvalue()
 
-        buf = io.BytesIO()
-        with wave.open(buf, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sample_rate)
-            wf.writeframes(samples_int16.tobytes())
-        return buf.getvalue()
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _kokoro_sync)
     except Exception as exc:
         logger.warning("Kokoro TTS failed: %s", exc)
         return None
@@ -961,6 +963,69 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
         "audio_base64": audio_b64,
         "content_type": content_type,
     }
+
+
+@router.post("/turn")
+async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth)):
+    """Combined STT + LLM + TTS in a single HTTP call.
+
+    Accepts raw audio (base64 WAV), transcribes it, sends the transcript through
+    the chat pipeline, synthesizes the reply, and returns everything in one response.
+    Eliminates the extra network round-trip of separate /transcribe + /command calls.
+
+    Request: { "audio_base64": "...", "panel_id": "...", "identified_user_id": "..." }
+    """
+    b64 = str((payload or {}).get("audio_base64") or "").strip()
+    panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or "unknown"))
+    if not b64:
+        raise HTTPException(status_code=400, detail="audio_base64 is required")
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
+
+    suffix = ".wav" if (len(raw) >= 4 and raw[:4] == b"RIFF") else ".raw"
+
+    # ── Phase 1: STT ──
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(raw)
+            wav_path = tmp.name
+        try:
+            transcript = await _transcribe_audio(wav_path)
+        finally:
+            try:
+                os.unlink(wav_path)
+            except OSError:
+                pass
+    except Exception as exc:
+        logger.error("voice/turn STT failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {exc}") from exc
+
+    transcript = transcript.strip()
+    if not transcript:
+        return {"ok": True, "panel_id": panel_id, "text": "", "reply": "", "audio_base64": None}
+
+    logger.info("voice/turn panel=%s transcript=%r", panel_id, transcript[:80])
+
+    # Broadcast transcript so UI shows what was heard.
+    try:
+        from push import broadcaster as _bc_t
+        await _bc_t.broadcast("all", "voice:transcript", {"panel_id": panel_id, "text": transcript})
+    except Exception:
+        pass
+
+    # ── Phase 2+3: Delegate to /command handler (LLM + TTS) ──
+    command_payload = {
+        "text": transcript,
+        "panel_id": panel_id,
+    }
+    if (payload or {}).get("identified_user_id"):
+        command_payload["identified_user_id"] = payload["identified_user_id"]
+
+    result = await voice_command(command_payload, caller=caller)
+    result["text"] = transcript
+    return result
 
 
 @router.post("/wake")

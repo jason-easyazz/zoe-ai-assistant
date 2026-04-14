@@ -90,9 +90,13 @@ WAKE_BEEP_VOLUME = float(os.environ.get("WAKE_BEEP_VOLUME", "0.22"))  # 0..1
 # Route playback explicitly (default to same ALSA device family as mic).
 AUDIO_OUTPUT_DEVICE = os.environ.get("AUDIO_OUTPUT_DEVICE", AUDIO_DEVICE).strip() or "default"
 # After TTS plays on the same speakerphone as the mic, ignore wake scores for this long (echo / Whisper "yes" loop).
-POST_PLAY_COOLDOWN_S = float(os.environ.get("POST_PLAY_COOLDOWN_S", "4.0"))
+POST_PLAY_COOLDOWN_S = float(os.environ.get("POST_PLAY_COOLDOWN_S", "1.5"))
 # Extra settle time after playback before arming wake again (room reverb).
 POST_PLAY_TAIL_S = float(os.environ.get("POST_PLAY_TAIL_S", "0.8"))
+# ── Follow-up listening: after TTS, wait for speech without requiring wake word ──
+FOLLOW_UP_LISTEN_S = float(os.environ.get("FOLLOW_UP_LISTEN_S", "3.0"))
+FOLLOW_UP_MAX_TURNS = int(os.environ.get("FOLLOW_UP_MAX_TURNS", "5"))
+FOLLOW_UP_VAD_THRESHOLD = float(os.environ.get("FOLLOW_UP_VAD_THRESHOLD", "0.45"))
 # Note: debounce_time on oww.predict() requires a matching `threshold` dict in some openwakeword versions
 # and was crashing the daemon — post-play cooldown + oww.reset() handle repeats instead.
 # Transcripts (usually Whisper hallucinations on silence or TTS bleed) — do not send to chat.
@@ -431,17 +435,54 @@ def play_wake_beep() -> None:
         log.warning("Wake beep failed: %s", exc)
 
 
+def _notify_wake_background():
+    """Fire-and-forget: tell Jetson about the wake event (UI update only)."""
+    try:
+        if VOICE_ROUTE_MODE in {"ha_bridge", "hybrid"}:
+            _bridge_post("/voice/wake", {"panel_id": PANEL_ID, "source": "satellite_pi"}, timeout=3)
+        else:
+            _api_post("/api/voice/wake", {"panel_id": PANEL_ID}, timeout=3)
+    except Exception as exc:
+        log.debug("Background wake notify failed (non-critical): %s", exc)
+
+
 def on_wake():
     """Called when wake word is detected."""
     log.info("Wake word detected! Notifying Jetson...")
     play_wake_beep()
-    if VOICE_ROUTE_MODE in {"ha_bridge", "hybrid"}:
-        resp = _bridge_post("/voice/wake", {"panel_id": PANEL_ID, "source": "satellite_pi"})
-    else:
-        resp = _api_post("/api/voice/wake", {"panel_id": PANEL_ID})
-    ack = resp.get("ack_audio_base64")
-    if ack:
-        play_audio_b64(ack, resp.get("content_type", "audio/wav"))
+    threading.Thread(target=_notify_wake_background, daemon=True, name="wake-notify").start()
+
+
+def play_follow_up_beep() -> None:
+    """Play a soft single-tone beep to signal follow-up listening is active."""
+    try:
+        freq = int(WAKE_BEEP_FREQ_HZ * 1.5)
+        dur_ms = max(30, WAKE_BEEP_DURATION_MS // 2)
+        amp = max(0.0, min(1.0, WAKE_BEEP_VOLUME * 0.6))
+        n_frames = max(1, int(SAMPLE_RATE * (dur_ms / 1000.0)))
+        frames = bytearray()
+        for i in range(n_frames):
+            t = i / max(1, n_frames - 1)
+            env = min(1.0, t * 20.0) * min(1.0, (1.0 - t) * 20.0)
+            sample = int(32767.0 * amp * env * math.sin(2.0 * math.pi * freq * (i / SAMPLE_RATE)))
+            b = sample.to_bytes(2, byteorder="little", signed=True)
+            frames.extend(b)
+            frames.extend(b)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            fpath = f.name
+        with wave.open(fpath, "wb") as wf:
+            wf.setnchannels(2)
+            wf.setsampwidth(2)
+            wf.setframerate(SAMPLE_RATE)
+            wf.writeframes(bytes(frames))
+        cmd = ["aplay", "-q"]
+        if AUDIO_OUTPUT_DEVICE != "default":
+            cmd += ["-D", AUDIO_OUTPUT_DEVICE]
+        cmd.append(fpath)
+        subprocess.run(cmd, check=False, timeout=3)
+        os.unlink(fpath)
+    except Exception as exc:
+        log.debug("Follow-up beep failed: %s", exc)
 
 
 def record_command(pa: pyaudio.PyAudio) -> bytes | None:
@@ -577,62 +618,133 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> str | None:
         return None
 
 
+def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes) -> bool:
+    """Process one recorded WAV: combined STT+LLM+TTS via /api/voice/turn.
+
+    Returns True if audio was played (eligible for follow-up listening).
+    Uses a single HTTP round-trip instead of separate transcribe + command calls.
+    """
+    audio_b64_wav = base64.b64encode(wav).decode()
+
+    identified_user_id: str | None = None
+    try:
+        identified_user_id = _identify_speaker_from_wav(wav)
+        if identified_user_id:
+            log.info("Speaker identified: %s", identified_user_id)
+    except Exception:
+        pass
+
+    turn_payload: dict = {"audio_base64": audio_b64_wav, "panel_id": PANEL_ID}
+    if identified_user_id:
+        turn_payload["identified_user_id"] = identified_user_id
+
+    ok = False
+    if VOICE_ROUTE_MODE == "ha_bridge":
+        resp = _bridge_post(
+            "/voice/turn",
+            {"panel_id": PANEL_ID, "source": "satellite_pi", "audio_base64": audio_b64_wav},
+        )
+        ok = resp.get("ok", False)
+    else:
+        resp = _api_post("/api/voice/turn", turn_payload)
+        ok = resp.get("ok", False)
+
+    transcript = resp.get("text", "")
+    if transcript:
+        if _is_junk_transcript(transcript):
+            log.info("Ignoring junk/hallucination transcript: %r", transcript)
+            return False
+        log.info("Transcript: %r", transcript)
+    elif not resp.get("audio_base64"):
+        log.info("Empty transcript, skipping.")
+        return False
+
+    if not ok and not resp.get("audio_base64"):
+        log.warning("Jetson API unavailable — playing local espeak fallback")
+        _recording_active.clear()
+        _espeak_local("Zoe is not available right now. Please check the connection.")
+        return False
+
+    audio_b64 = resp.get("audio_base64")
+    if audio_b64:
+        _recording_active.clear()
+        play_audio_b64(audio_b64, resp.get("content_type", "audio/wav"))
+        return True
+    else:
+        reply = resp.get("reply") or resp.get("response") or ""
+        if reply:
+            log.info("Reply (no audio): %s", reply)
+        return False
+
+
+def _follow_up_listen(pa: pyaudio.PyAudio) -> bytes | None:
+    """Listen for speech without wake word for FOLLOW_UP_LISTEN_S seconds.
+
+    Uses Silero VAD on a fresh mic stream. If speech is detected, records
+    a full command and returns the WAV bytes. Returns None if silence
+    throughout the window.
+    """
+    model, _ = _get_silero_vad()
+    if model is None:
+        return None
+
+    kw: dict = dict(
+        format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE,
+        input=True, frames_per_buffer=CHUNK_SIZE,
+    )
+    if _INPUT_DEVICE_INDEX is not None:
+        kw["input_device_index"] = _INPUT_DEVICE_INDEX
+
+    try:
+        stream = pa.open(**kw)
+    except OSError as exc:
+        log.debug("Follow-up mic open failed: %s", exc)
+        return None
+
+    deadline = time.monotonic() + FOLLOW_UP_LISTEN_S
+    speech_detected = False
+    try:
+        while time.monotonic() < deadline:
+            data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
+            prob = _vad_prob(model, np.frombuffer(data, dtype=np.int16))
+            if prob >= FOLLOW_UP_VAD_THRESHOLD:
+                speech_detected = True
+                log.info("Follow-up speech detected (VAD=%.2f), recording...", prob)
+                break
+    finally:
+        stream.stop_stream()
+        stream.close()
+
+    if not speech_detected:
+        return None
+
+    return record_command(pa)
+
+
 def voice_command(pa: pyaudio.PyAudio, oww) -> None:
-    """Record, transcribe, send command, play response; then cool down and reset wake buffers."""
+    """Record, transcribe, send command, play response, then follow-up listen."""
     global _ignore_wake_until
     _recording_active.set()
+    turn = 0
     try:
         wav = record_command(pa)
         if not wav:
             return
-        transcript = stt_on_jetson(wav)
-        if not transcript:
-            log.info("Empty transcript, skipping.")
-            return
-        if _is_junk_transcript(transcript):
-            log.info("Ignoring junk/hallucination transcript: %r (set VOICE_IGNORE_TRANSCRIPTS to tune)", transcript)
-            return
-        log.info("Transcript: %r", transcript)
 
-        # Speaker identification (optional — requires resemblyzer on Pi).
-        identified_user_id: str | None = None
-        try:
-            identified_user_id = _identify_speaker_from_wav(wav)
-            if identified_user_id:
-                log.info("Speaker identified: %s", identified_user_id)
-        except Exception:
-            pass
+        played_audio = _do_single_turn(pa, wav)
+        turn += 1
 
-        cmd_payload: dict = {"text": transcript, "panel_id": PANEL_ID}
-        if identified_user_id:
-            cmd_payload["identified_user_id"] = identified_user_id
+        while played_audio and FOLLOW_UP_LISTEN_S > 0 and turn < FOLLOW_UP_MAX_TURNS:
+            play_follow_up_beep()
+            log.info("Follow-up listening (turn %d, %.1fs window)...", turn + 1, FOLLOW_UP_LISTEN_S)
+            _recording_active.set()
+            follow_wav = _follow_up_listen(pa)
+            if follow_wav is None:
+                log.info("No follow-up speech detected, returning to wake mode.")
+                break
+            played_audio = _do_single_turn(pa, follow_wav)
+            turn += 1
 
-        ok = False
-        if VOICE_ROUTE_MODE == "ha_bridge":
-            resp = _bridge_post(
-                "/voice/turn",
-                {"panel_id": PANEL_ID, "source": "satellite_pi", "transcript": transcript},
-            )
-            ok = resp.get("ok", False)
-        else:
-            resp = _api_post("/api/voice/command", cmd_payload)
-            ok = resp.get("ok", False)
-
-        if not ok and not resp.get("audio_base64"):
-            # Jetson API unreachable or returned an error — speak a local fallback phrase.
-            log.warning("Jetson API unavailable — playing local espeak fallback")
-            _recording_active.clear()
-            _espeak_local("Zoe is not available right now. Please check the connection.")
-            return
-
-        audio_b64 = resp.get("audio_base64")
-        if audio_b64:
-            _recording_active.clear()
-            play_audio_b64(audio_b64, resp.get("content_type", "audio/wav"))
-        else:
-            reply = resp.get("reply") or resp.get("response") or ""
-            if reply:
-                log.info("Reply (no audio): %s", reply)
         if POST_PLAY_TAIL_S > 0:
             time.sleep(POST_PLAY_TAIL_S)
     finally:
