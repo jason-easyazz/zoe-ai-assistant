@@ -185,12 +185,22 @@ def _get_silero_vad():
             return None, None
 
 
+_SILERO_WINDOW = 512  # Silero VAD requires exactly 512 samples at 16kHz
+
+
 def _vad_prob(model, chunk_int16: np.ndarray, sample_rate: int = 16000) -> float:
-    """Return speech probability [0,1] for a 30ms PCM chunk."""
+    """Return max speech probability across 512-sample windows in the chunk."""
     try:
         import torch  # type: ignore
-        tensor = torch.from_numpy(chunk_int16.astype(np.float32) / 32768.0)
-        return float(model(tensor, sample_rate).item())
+        float32 = chunk_int16.astype(np.float32) / 32768.0
+        max_prob = 0.0
+        for start in range(0, len(float32) - _SILERO_WINDOW + 1, _SILERO_WINDOW):
+            window = float32[start:start + _SILERO_WINDOW]
+            tensor = torch.from_numpy(window)
+            prob = float(model(tensor, sample_rate).item())
+            if prob > max_prob:
+                max_prob = prob
+        return max_prob
     except Exception:
         return 0.0
 
@@ -712,10 +722,15 @@ def _follow_up_listen(pa: pyaudio.PyAudio) -> bytes | None:
     deadline = time.monotonic() + FOLLOW_UP_LISTEN_S
     speech_detected = False
     pre_frames: list[bytes] = []
+    max_prob_seen = 0.0
+    chunk_count = 0
     try:
         while time.monotonic() < deadline:
             data = stream.read(CHUNK_SIZE, exception_on_overflow=False)
             prob = _vad_prob(model, np.frombuffer(data, dtype=np.int16))
+            chunk_count += 1
+            if prob > max_prob_seen:
+                max_prob_seen = prob
             if prob >= FOLLOW_UP_VAD_THRESHOLD:
                 speech_detected = True
                 pre_frames.append(data)
@@ -723,6 +738,8 @@ def _follow_up_listen(pa: pyaudio.PyAudio) -> bytes | None:
                 break
 
         if not speech_detected:
+            log.info("Follow-up VAD: no speech in %d chunks, max_prob=%.3f threshold=%.2f",
+                     chunk_count, max_prob_seen, FOLLOW_UP_VAD_THRESHOLD)
             stream.stop_stream()
             stream.close()
             return None
