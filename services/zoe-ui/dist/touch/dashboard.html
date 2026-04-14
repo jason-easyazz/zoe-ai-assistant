@@ -8,11 +8,6 @@
     <meta name="theme-color" content="#060610">
     <title>Zoe — Touch Dashboard</title>
 
-    <!-- Poppins for screensaver clock -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@100;200;300;400&display=swap" rel="stylesheet">
-
     <!-- Gridstack CSS -->
     <link rel="stylesheet" href="/lib/gridstack/gridstack.min.css">
     <link rel="stylesheet" href="/lib/gridstack/gridstack-extra.min.css">
@@ -438,7 +433,7 @@
     }
 
     #ss-clock {
-        font-family:'Poppins', -apple-system, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
         font-size: clamp(72px, 16vw, 148px);
         font-weight:100;
         color:rgba(255,255,255,.38);
@@ -449,7 +444,7 @@
     }
 
     #ss-date {
-        font-family:'Poppins', -apple-system, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
         font-size: clamp(15px, 2.8vw, 24px);
         font-weight:300;
         color:rgba(255,255,255,.22);
@@ -617,6 +612,48 @@
     </nav>
 </div>
 
+<!-- ════════════════════════════════════════════════════════
+     VOICE CARD OVERLAY (Google Home-style response cards)
+════════════════════════════════════════════════════════ -->
+
+<!-- Waveform bar: 60px strip at bottom, shown on wake word / orb tap -->
+<div id="zoe-wave-bar" style="
+    display:none; position:fixed; bottom:0; left:0; right:0; height:60px;
+    background:rgba(6,6,18,0.92); backdrop-filter:blur(18px);
+    border-top:1px solid rgba(123,97,255,0.35);
+    align-items:center; justify-content:center; gap:12px; z-index:3000;
+    transition:opacity .3s;
+">
+    <div id="zoe-wave-anim" style="display:flex;align-items:center;gap:3px;">
+        <span class="wave-bar"></span><span class="wave-bar"></span>
+        <span class="wave-bar"></span><span class="wave-bar"></span>
+        <span class="wave-bar"></span>
+    </div>
+    <span id="zoe-wave-status" style="color:rgba(255,255,255,.75);font-size:13px;letter-spacing:.5px;">Listening…</span>
+</div>
+<style>
+.wave-bar{display:inline-block;width:4px;height:16px;border-radius:2px;background:var(--grad,#7B61FF);animation:wave-bounce 1.1s ease-in-out infinite}
+.wave-bar:nth-child(1){animation-delay:0s}.wave-bar:nth-child(2){animation-delay:.15s}.wave-bar:nth-child(3){animation-delay:.3s}.wave-bar:nth-child(4){animation-delay:.45s}.wave-bar:nth-child(5){animation-delay:.6s}
+@keyframes wave-bounce{0%,100%{transform:scaleY(.4)}50%{transform:scaleY(1.1)}}
+</style>
+
+<!-- Response card: slides up from the waveform bar -->
+<div id="zoe-response-card" style="
+    display:none; position:fixed; bottom:60px; left:0; right:0;
+    max-height:42vh; background:rgba(12,12,28,0.97);
+    backdrop-filter:blur(24px); border-top:1px solid rgba(123,97,255,.4);
+    border-radius:24px 24px 0 0; padding:20px 24px 16px;
+    z-index:2999; overflow-y:auto;
+    transform:translateY(100%); transition:transform .35s cubic-bezier(.22,.68,0,1.2);
+">
+    <div id="zoe-card-content" style="min-height:40px;font-size:clamp(18px,3.5vw,28px);font-weight:300;color:#fff;line-height:1.4;"></div>
+    <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;" id="zoe-card-actions"></div>
+    <button onclick="window._zoeCardDismiss && window._zoeCardDismiss()" style="
+        position:absolute;top:12px;right:16px;background:none;border:none;
+        color:rgba(255,255,255,.4);font-size:22px;cursor:pointer;padding:4px;
+    ">×</button>
+</div>
+
 <!-- Save Toast -->
 <div id="save-toast">Layout Saved</div>
 
@@ -707,6 +744,144 @@
      TOUCH DASHBOARD CONTROLLER
 ════════════════════════════════════════════════════════ -->
 <script>
+/* =================================================================
+   ZOE VOICE CARD SYSTEM — Google Home-style response overlay
+================================================================= */
+(function () {
+    const _bar  = document.getElementById('zoe-wave-bar');
+    const _card = document.getElementById('zoe-response-card');
+    const _content = document.getElementById('zoe-card-content');
+    const _actions = document.getElementById('zoe-card-actions');
+    const _status  = document.getElementById('zoe-wave-status');
+    let _dismissTimer = null;
+
+    function _showBar(status) {
+        if (!_bar) return;
+        _bar.style.display = 'flex';
+        if (_status) _status.textContent = status || 'Listening…';
+    }
+    function _hideBar() {
+        if (_bar) _bar.style.display = 'none';
+    }
+    function _showCard(html, actions) {
+        if (!_card || !_content) return;
+        _content.innerHTML = html || '';
+        _actions.innerHTML = '';
+        (actions || []).forEach(function(a) {
+            const btn = document.createElement('button');
+            btn.textContent = a.label;
+            btn.style.cssText = 'padding:10px 18px;border-radius:10px;border:1px solid rgba(123,97,255,.5);background:rgba(123,97,255,.15);color:#fff;font-size:14px;cursor:pointer;';
+            btn.onclick = function() { if (a.url) window.location.assign(a.url); };
+            _actions.appendChild(btn);
+        });
+        _card.style.display = 'block';
+        requestAnimationFrame(function() { _card.style.transform = 'translateY(0)'; });
+        clearTimeout(_dismissTimer);
+        _dismissTimer = setTimeout(window._zoeCardDismiss, 15000);
+    }
+    window._zoeCardDismiss = function() {
+        clearTimeout(_dismissTimer);
+        if (_card) { _card.style.transform = 'translateY(100%)'; setTimeout(function(){ _card.style.display='none'; }, 380); }
+        _hideBar();
+    };
+
+    // Build intent-specific card HTML from a show_card WS action.
+    function _renderCard(type, data) {
+        data = data || {};
+        if (type === 'weather') {
+            return '<div style="font-size:clamp(14px,2.5vw,20px);color:rgba(255,255,255,.7);margin-bottom:4px;">Weather</div>' +
+                '<div style="font-size:clamp(24px,5vw,48px);font-weight:200;">' + (data.condition || '') + ' ' + (data.temp || '') + '</div>' +
+                (data.summary ? '<div style="margin-top:6px;font-size:clamp(13px,2vw,16px);color:rgba(255,255,255,.6);">' + data.summary + '</div>' : '');
+        }
+        if (type === 'calendar') {
+            return '<div style="font-size:clamp(14px,2.5vw,20px);color:rgba(255,255,255,.7);">📅 ' + (data.action || 'Calendar') + '</div>' +
+                '<div style="font-size:clamp(20px,3.5vw,32px);font-weight:300;margin-top:6px;">' + (data.title || '') + '</div>' +
+                (data.date ? '<div style="color:rgba(255,255,255,.6);font-size:clamp(13px,2vw,16px);margin-top:4px;">' + data.date + (data.time ? ' at ' + data.time : '') + '</div>' : '');
+        }
+        if (type === 'list') {
+            return '<div style="font-size:clamp(14px,2.5vw,20px);color:rgba(255,255,255,.7);">✅ ' + (data.list_name || 'List') + '</div>' +
+                '<div style="font-size:clamp(20px,3.5vw,32px);font-weight:300;margin-top:6px;">Added: ' + (data.item || '') + '</div>';
+        }
+        if (type === 'timer') {
+            return '<div style="font-size:clamp(14px,2.5vw,20px);color:rgba(255,255,255,.7);">⏱ Timer</div>' +
+                '<div style="font-size:clamp(24px,5vw,48px);font-weight:200;">' + (data.minutes || '') + ' min</div>' +
+                (data.label ? '<div style="color:rgba(255,255,255,.6);font-size:16px;">' + data.label + '</div>' : '');
+        }
+        if (type === 'smart_home') {
+            var devices = Array.isArray(data.devices) ? data.devices : [];
+            var grid = devices.map(function(d) {
+                var icon = d.state === 'on' ? '💡' : d.state === 'off' ? '⬛' : '🏠';
+                var color = d.state === 'on' ? 'rgba(90,224,224,.9)' : 'rgba(255,255,255,.35)';
+                return '<div style="display:flex;flex-direction:column;align-items:center;gap:4px;' +
+                    'padding:10px;border-radius:12px;background:rgba(255,255,255,.06);min-width:70px;">' +
+                    '<span style="font-size:22px;">' + icon + '</span>' +
+                    '<span style="font-size:12px;color:' + color + ';text-align:center;">' + (d.name || '') + '</span>' +
+                    '<span style="font-size:11px;color:rgba(255,255,255,.45);">' + (d.state || '') + '</span>' +
+                    '</div>';
+            }).join('');
+            return '<div style="font-size:clamp(14px,2.5vw,20px);color:rgba(255,255,255,.7);margin-bottom:10px;">🏠 ' +
+                (data.title || 'Smart Home') + '</div>' +
+                '<div style="display:flex;gap:8px;flex-wrap:wrap;">' + grid + '</div>' +
+                (data.summary ? '<div style="margin-top:8px;font-size:14px;color:rgba(255,255,255,.5);">' + data.summary + '</div>' : '');
+        }
+        if (type === 'doorbell') {
+            return '<div style="font-size:clamp(14px,2.5vw,20px);color:rgba(255,255,255,.7);">🔔 Doorbell</div>' +
+                '<div style="font-size:clamp(18px,3vw,28px);font-weight:300;margin-top:6px;">' +
+                (data.location || 'Front door') + '</div>' +
+                (data.snapshot_url ? '<img src="' + data.snapshot_url + '" style="max-width:100%;border-radius:10px;margin-top:10px;">' : '');
+        }
+        // Default: answer card
+        return '<div style="font-size:clamp(16px,3vw,24px);font-weight:300;">' + (data.text || '') + '</div>';
+    }
+
+    // Listen for voice events from the executor.
+    document.addEventListener('zoe:voice:wake', function() {
+        _showBar('Listening…');
+        _card.style.display = 'none';
+        _card.style.transform = 'translateY(100%)';
+    });
+    document.addEventListener('zoe:voice:thinking', function() { _showBar('Thinking…'); });
+    document.addEventListener('zoe:voice:responding', function(e) {
+        _showBar('Zoe is speaking');
+        const text = e.detail && e.detail.text ? e.detail.text : '';
+        if (text) _showCard(_renderCard('answer', { text: text }), [{ label: 'View in Chat', url: '/touch/chat.html' }]);
+    });
+    document.addEventListener('zoe:voice:done', function() {
+        _showBar('');
+        setTimeout(function() { if (_card.style.transform !== 'translateY(0px)' && _card.style.transform !== 'translateY(0)') _hideBar(); }, 200);
+    });
+
+    // ── Swipe-down-to-dismiss on the response card ────────────────────
+    (function() {
+        if (!_card) return;
+        var _touchStartY = 0;
+        var _touchStartX = 0;
+        _card.addEventListener('touchstart', function(e) {
+            _touchStartY = e.touches[0].clientY;
+            _touchStartX = e.touches[0].clientX;
+        }, { passive: true });
+        _card.addEventListener('touchmove', function(e) {
+            var dy = e.touches[0].clientY - _touchStartY;
+            var dx = e.touches[0].clientX - _touchStartX;
+            // Only handle predominantly vertical swipes.
+            if (dy > 30 && Math.abs(dy) > Math.abs(dx)) {
+                _card.style.transform = 'translateY(' + Math.min(dy, 200) + 'px)';
+            }
+        }, { passive: true });
+        _card.addEventListener('touchend', function(e) {
+            var dy = e.changedTouches[0].clientY - _touchStartY;
+            if (dy > 80) {
+                window._zoeCardDismiss && window._zoeCardDismiss();
+            } else {
+                _card.style.transform = 'translateY(0)';
+            }
+        }, { passive: true });
+    })();
+
+    // Expose globally so touch-ui-executor.js VoiceOverlay can dispatch events here.
+    window.ZoeVoiceCard = { showBar: _showBar, hideBar: _hideBar, showCard: _showCard, renderCard: _renderCard };
+})();
+
 /* =================================================================
    ZOE TOUCH DASHBOARD — Main Controller
    Uses WidgetManager (from widget-system.js) + GridStack 10.x

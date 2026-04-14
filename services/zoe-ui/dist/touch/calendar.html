@@ -1402,5 +1402,15 @@
 <script src="/touch/js/gestures.js"></script>
 <script src="/touch/js/touch-menu.js"></script>
 <script>TouchMenu.init({ page: 'calendar' });</script>
+<script>
+// Auto-trigger dark mode when loaded from touch panel context.
+(function() {
+    var isKiosk = window.location.search.includes('panel_id=') || localStorage.getItem('zoe_touch_panel_id');
+    if (isKiosk) { document.body.classList.add('dark-theme'); }
+})();
+// NOTE: ZOE_OPEN_FORM is defined earlier in this page (calls showCreateEventModal)
+// and correctly uses the actual modal field IDs: #ceTitle, #ceDate, #ceTime.
+// Do NOT redefine it here — the earlier definition at line ~1137 is the authoritative one.
+</script>
 </body>
 </html>

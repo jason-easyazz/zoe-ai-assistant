@@ -529,4 +529,52 @@ CREATE TABLE IF NOT EXISTS panel_auth_challenges (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_challenges_panel ON panel_auth_challenges(panel_id, status);
+
+-- Ambient memory: always-on VAD captures room speech even without wake word.
+-- Raw audio is never stored — only the Whisper transcript text.
+-- Privacy: per-panel toggle in settings; ambient_capture_enabled env var defaults off.
+CREATE TABLE IF NOT EXISTS ambient_memory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    panel_id TEXT,
+    room TEXT,
+    transcript TEXT NOT NULL,
+    speaker_id TEXT,
+    duration_seconds REAL,
+    source TEXT DEFAULT 'ambient',  -- 'ambient' | 'wake_word' | 'call'
+    embedding BLOB                  -- optional semantic embedding for MemPalace search
+);
+CREATE INDEX IF NOT EXISTS idx_ambient_panel_time ON ambient_memory(panel_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_ambient_speaker ON ambient_memory(speaker_id);
+-- FTS5 virtual table for full-text search over ambient transcripts ("What did Brad say?")
+CREATE VIRTUAL TABLE IF NOT EXISTS ambient_memory_fts
+    USING fts5(transcript, content='ambient_memory', content_rowid='id');
+-- Triggers to keep FTS5 external-content table in sync with ambient_memory.
+-- Without these the FTS index stays empty and all text searches return nothing.
+CREATE TRIGGER IF NOT EXISTS ambient_memory_ai AFTER INSERT ON ambient_memory BEGIN
+    INSERT INTO ambient_memory_fts(rowid, transcript) VALUES (new.id, new.transcript);
+END;
+CREATE TRIGGER IF NOT EXISTS ambient_memory_ad AFTER DELETE ON ambient_memory BEGIN
+    INSERT INTO ambient_memory_fts(ambient_memory_fts, rowid, transcript)
+        VALUES('delete', old.id, old.transcript);
+END;
+CREATE TRIGGER IF NOT EXISTS ambient_memory_au AFTER UPDATE ON ambient_memory BEGIN
+    INSERT INTO ambient_memory_fts(ambient_memory_fts, rowid, transcript)
+        VALUES('delete', old.id, old.transcript);
+    INSERT INTO ambient_memory_fts(rowid, transcript) VALUES (new.id, new.transcript);
+END;
+
+-- Speaker profiles: resemblyzer 256-dim embeddings for voice identification on the Pi.
+-- Enrollment via POST /api/voice/enroll; real-time ID via POST /api/voice/identify.
+CREATE TABLE IF NOT EXISTS speaker_profiles (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    embedding_blob BLOB NOT NULL,   -- 256-float32 resemblyzer embedding, serialised as bytes
+    enrolled_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    sample_count INTEGER DEFAULT 0, -- number of utterances used for this embedding
+    panel_id TEXT,                  -- panel where enrollment was performed
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_speaker_profiles_user ON speaker_profiles(user_id);
 """

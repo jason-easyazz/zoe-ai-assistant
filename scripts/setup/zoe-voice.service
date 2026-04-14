@@ -17,11 +17,18 @@ EnvironmentFile=-/home/zoe/.zoe-voice/.env.voice
 # Run via the Python venv (adjust path if venv is elsewhere)
 ExecStart=/home/zoe/venv/bin/python3 /home/zoe/assistant/scripts/setup/zoe_voice_daemon.py
 
-# Restart on failure with backoff
+# Restart on any failure with exponential-like backoff
 Restart=always
 RestartSec=5
-StartLimitInterval=60
+StartLimitInterval=120
 StartLimitBurst=5
+
+# Systemd watchdog: if the process hangs (e.g., blocked on ALSA) for more than
+# WatchdogSec seconds, systemd will SIGABRT and restart the daemon.
+# The daemon does not call sd_notify — systemd monitors the main PID directly.
+# For sd_notify support, add python-systemd to pi-requirements.txt and call:
+#   import systemd.daemon; systemd.daemon.notify("WATCHDOG=1")  inside the main loop.
+WatchdogSec=90
 
 # Logging
 StandardOutput=journal
@@ -29,8 +36,11 @@ StandardError=journal
 SyslogIdentifier=zoe-voice
 
 # Resource limits
-TimeoutStartSec=30
-TimeoutStopSec=10
+TimeoutStartSec=60
+TimeoutStopSec=15
+
+# Nice level — voice daemon should be responsive; keep it slightly elevated.
+Nice=-5
 
 [Install]
 WantedBy=multi-user.target

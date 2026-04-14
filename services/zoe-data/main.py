@@ -29,7 +29,8 @@ from routers import (
 from routers.dashboard import router as dashboard_router
 from routers.stubs import router as stubs_router
 from routers.push import router as push_router
-from routers.system import start_openclaw_background_tasks
+from routers.system import start_openclaw_background_tasks, start_memory_digest_background
+from routers.openclaw import router as openclaw_router
 import logging
 
 logging.basicConfig(
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 _REQUEST_ID_CTX_VAR = None  # set after app creation to avoid import cycles
 _openclaw_bg_task = None
+_digest_bg_task = None
 _keepwarm_task = None
 
 # --- Keep-warm constants --------------------------------------------------
@@ -137,10 +139,16 @@ async def _keepwarm_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _openclaw_bg_task, _keepwarm_task
+    global _openclaw_bg_task, _digest_bg_task, _keepwarm_task
     logger.info("Initializing zoe-data database...")
     await init_db()
     logger.info("Database initialized. zoe-data is ready.")
+    # One-time MemPalace migration: re-tag legacy records from wing="zoe" to wing="family-admin"
+    try:
+        from pi_agent import migrate_mempalace_legacy_records
+        await asyncio.get_event_loop().run_in_executor(None, migrate_mempalace_legacy_records)
+    except Exception as _mig_exc:
+        logger.warning("MemPalace migration (non-fatal): %s", _mig_exc)
     # Load device tokens into memory so voice daemons can authenticate.
     try:
         import aiosqlite
@@ -152,6 +160,7 @@ async def lifespan(app: FastAPI):
     except Exception as _exc:
         logger.warning("Could not pre-load device tokens: %s", _exc)
     _openclaw_bg_task = start_openclaw_background_tasks()
+    _digest_bg_task = start_memory_digest_background()
     _keepwarm_task = asyncio.create_task(_keepwarm_loop(), name="keepwarm")
     logger.info("Keep-warm task started (Hermes every %ds, session=%s)", _KEEPWARM_INTERVAL_S, _HERMES_WARMUP_SESSION)
 
@@ -169,7 +178,7 @@ async def lifespan(app: FastAPI):
             logger.warning("Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
 
     yield
-    for task in (_openclaw_bg_task, _keepwarm_task):
+    for task in (_openclaw_bg_task, _digest_bg_task, _keepwarm_task):
         if task:
             task.cancel()
             try:
@@ -246,6 +255,7 @@ app.include_router(system_router)
 app.include_router(notifications_router)
 app.include_router(chat_router)
 app.include_router(ui_router)
+app.include_router(openclaw_router)
 app.include_router(voice_tts_router)
 app.include_router(user_profile_router)
 app.include_router(dashboard_router)
@@ -273,8 +283,21 @@ async def internal_broadcast(payload: dict):
 
 
 @app.websocket("/ws/push")
-async def websocket_push(websocket: WebSocket, channel: str = Query("all")):
-    await broadcaster.connect(websocket, channel)
+async def websocket_push(
+    websocket: WebSocket,
+    channel: str = Query("all"),
+    panel_id: str = Query(default=""),
+):
+    """WebSocket push endpoint.
+
+    Clients may connect with ?panel_id=<id> to subscribe to their dedicated
+    panel channel (receives both global 'all' events AND panel-specific events).
+    Without panel_id, falls back to the plain channel subscription.
+    """
+    if panel_id:
+        await broadcaster.connect_panel(websocket, panel_id)
+    else:
+        await broadcaster.connect(websocket, channel)
     try:
         while True:
             data = await websocket.receive_text()
@@ -284,7 +307,10 @@ async def websocket_push(websocket: WebSocket, channel: str = Query("all")):
                 seq = int(data.split(":")[1])
                 await broadcaster.catchup(websocket, seq)
     except WebSocketDisconnect:
-        broadcaster.disconnect(websocket, channel)
+        if panel_id:
+            broadcaster.disconnect(websocket, f"panel_{panel_id}")
+        else:
+            broadcaster.disconnect(websocket, channel)
 
 
 @app.websocket("/api/calendar/ws/{user_id}")

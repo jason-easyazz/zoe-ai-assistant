@@ -482,6 +482,68 @@
                     <span class="status-label" id="daemonLabel">Checking…</span>
                 </div>
             </div>
+            <div class="setting-row">
+                <div class="row-left">
+                    <span class="row-label">Wake Sensitivity</span>
+                    <span class="row-sublabel">Lower = more sensitive (more false wakes)</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <input type="range" id="wakeThresholdSlider" min="1" max="9" step="1" value="3"
+                           style="width:120px;accent-color:var(--purple,#7B61FF);"
+                           oninput="saveVoiceSetting('WAKEWORD_THRESHOLD', (this.value/10).toFixed(1)); document.getElementById('wakeThresholdVal').textContent=(this.value/10).toFixed(1);">
+                    <span id="wakeThresholdVal" style="min-width:30px;color:var(--text-2,rgba(255,255,255,.58));">0.3</span>
+                </div>
+            </div>
+            <div class="setting-row">
+                <div class="row-left">
+                    <span class="row-label">Ambient Listening</span>
+                    <span class="row-sublabel">Always-on capture for memory search (offline)</span>
+                </div>
+                <div class="toggle-wrap">
+                    <input type="checkbox" id="ambientToggle" class="toggle-input"
+                           onchange="toggleAmbientCapture(this.checked)">
+                    <label for="ambientToggle" class="toggle-label"></label>
+                </div>
+            </div>
+            <div class="setting-row" id="ambientClearRow" style="display:none;">
+                <div class="row-left">
+                    <span class="row-label">Ambient History</span>
+                    <span class="row-sublabel" id="ambientCountLabel">Loading…</span>
+                </div>
+                <button class="seg-btn" style="border-color:rgba(255,80,80,.5);color:rgba(255,120,120,.9);"
+                        onclick="clearAmbientHistory()">Clear History</button>
+            </div>
+            <div class="setting-row">
+                <div class="row-left">
+                    <span class="row-label">TTS Voice Preview</span>
+                    <span class="row-sublabel">Test current voice settings</span>
+                </div>
+                <button class="seg-btn" id="voicePreviewBtn" onclick="previewVoice()">▶ Play</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ══ Speaker Profiles ══ -->
+    <div class="settings-section">
+        <div class="section-header">Speaker Recognition</div>
+        <div class="settings-card">
+            <div class="setting-row">
+                <div class="row-left">
+                    <span class="row-label">Enroll Your Voice</span>
+                    <span class="row-sublabel">Speak 5–10 seconds so Zoe can identify you</span>
+                </div>
+                <button class="seg-btn" id="enrollBtn" onclick="startVoiceEnrollment()">🎤 Record</button>
+            </div>
+            <div id="enrollStatus" style="padding:0 16px 12px;font-size:13px;color:rgba(255,255,255,.5);display:none;"></div>
+            <div id="speakerProfileList" style="padding:0 16px 12px;"></div>
+            <div class="setting-row">
+                <div class="row-left">
+                    <span class="row-label">Test Recognition</span>
+                    <span class="row-sublabel">Speak to see who Zoe thinks you are</span>
+                </div>
+                <button class="seg-btn" id="testRecognitionBtn" onclick="testSpeakerRecognition()">🔍 Test</button>
+            </div>
+            <div id="recognitionResult" style="padding:0 16px 12px;font-size:13px;color:rgba(90,224,224,.8);display:none;"></div>
         </div>
     </div>
 
@@ -729,6 +791,192 @@
     // ── ZOE_OPEN_FORM – not needed for settings ────────────────────
     window.ZOE_OPEN_FORM = function () {};
 
+    // ── Voice settings helpers ─────────────────────────────────────
+    window.saveVoiceSetting = function(key, value) {
+        const store = JSON.parse(localStorage.getItem('zoe_voice_settings') || '{}');
+        store[key] = value;
+        localStorage.setItem('zoe_voice_settings', JSON.stringify(store));
+    };
+
+    function loadVoiceSettings() {
+        const store = JSON.parse(localStorage.getItem('zoe_voice_settings') || '{}');
+        const threshold = parseFloat(store['WAKEWORD_THRESHOLD'] || '0.28');
+        const sliderVal = Math.round(threshold * 10);
+        const slider = document.getElementById('wakeThresholdSlider');
+        if (slider) {
+            slider.value = Math.max(1, Math.min(9, sliderVal));
+            document.getElementById('wakeThresholdVal').textContent = threshold.toFixed(1);
+        }
+        const ambientOn = store['AMBIENT_CAPTURE_ENABLED'] === 'true';
+        const toggle = document.getElementById('ambientToggle');
+        if (toggle) toggle.checked = ambientOn;
+        const clearRow = document.getElementById('ambientClearRow');
+        if (clearRow) clearRow.style.display = ambientOn ? '' : 'none';
+        if (ambientOn) refreshAmbientCount();
+    }
+
+    window.toggleAmbientCapture = function(enabled) {
+        saveVoiceSetting('AMBIENT_CAPTURE_ENABLED', enabled ? 'true' : 'false');
+        const clearRow = document.getElementById('ambientClearRow');
+        if (clearRow) clearRow.style.display = enabled ? '' : 'none';
+        if (enabled) refreshAmbientCount();
+    };
+
+    async function refreshAmbientCount() {
+        try {
+            const r = await fetch('/api/system/status');
+            const d = await r.json();
+            const count = d.ambient_memory_count || 0;
+            const el = document.getElementById('ambientCountLabel');
+            if (el) el.textContent = count + ' transcript' + (count !== 1 ? 's' : '') + ' stored';
+        } catch (_) {}
+    }
+
+    window.clearAmbientHistory = async function() {
+        if (!confirm('Clear all ambient transcripts? This cannot be undone.')) return;
+        try {
+            const sessRaw = localStorage.getItem('zoe_session');
+            const token = sessRaw ? JSON.parse(sessRaw).token : '';
+            await fetch('/api/voice/ambient', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json', 'X-Session-ID': token },
+            });
+            const el = document.getElementById('ambientCountLabel');
+            if (el) el.textContent = '0 transcripts stored';
+        } catch (e) {
+            alert('Could not clear history: ' + e.message);
+        }
+    };
+
+    window.previewVoice = async function() {
+        const btn = document.getElementById('voicePreviewBtn');
+        if (btn) { btn.textContent = '⏳ …'; btn.disabled = true; }
+        try {
+            const sessRaw = localStorage.getItem('zoe_session');
+            const token = sessRaw ? JSON.parse(sessRaw).token : '';
+            const r = await fetch('/api/voice/speak', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Session-ID': token },
+                body: JSON.stringify({ text: "Hello! I'm Zoe, your home assistant. How can I help you today?" }),
+            });
+            const d = await r.json();
+            if (d.audio_base64) {
+                const audio = new Audio('data:' + (d.content_type || 'audio/wav') + ';base64,' + d.audio_base64);
+                audio.play();
+            }
+        } catch (e) {
+            console.warn('Voice preview failed:', e);
+        } finally {
+            if (btn) { btn.textContent = '▶ Play'; btn.disabled = false; }
+        }
+    };
+
+    // ── Speaker enrollment ─────────────────────────────────────────
+    let _enrollMediaRecorder = null;
+    let _enrollChunks = [];
+
+    window.startVoiceEnrollment = async function() {
+        const btn = document.getElementById('enrollBtn');
+        const status = document.getElementById('enrollStatus');
+        if (_enrollMediaRecorder && _enrollMediaRecorder.state === 'recording') {
+            _enrollMediaRecorder.stop();
+            return;
+        }
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            _enrollChunks = [];
+            _enrollMediaRecorder = new MediaRecorder(stream);
+            _enrollMediaRecorder.ondataavailable = e => _enrollChunks.push(e.data);
+            _enrollMediaRecorder.onstop = async () => {
+                stream.getTracks().forEach(t => t.stop());
+                const blob = new Blob(_enrollChunks, { type: 'audio/webm' });
+                const arrayBuf = await blob.arrayBuffer();
+                const b64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuf)));
+                if (status) { status.style.display = ''; status.textContent = 'Sending to Zoe…'; }
+                try {
+                    const sessRaw = localStorage.getItem('zoe_session');
+                    const token = sessRaw ? JSON.parse(sessRaw).token : '';
+                    const userId = getUserId();
+                    const displayName = localStorage.getItem('zoe_display_name') || userId;
+                    const r = await fetch('/api/voice/enroll', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-Session-ID': token },
+                        body: JSON.stringify({ audio_base64: b64, user_id: userId, display_name: displayName }),
+                    });
+                    const d = await r.json();
+                    if (d.ok) {
+                        if (status) status.textContent = '✓ Enrolled as ' + d.display_name;
+                        loadSpeakerProfiles();
+                    } else {
+                        if (status) status.textContent = '✗ Enrollment failed: ' + (d.detail || JSON.stringify(d));
+                    }
+                } catch (e) {
+                    if (status) status.textContent = '✗ Error: ' + e.message;
+                }
+                if (btn) { btn.textContent = '🎤 Record'; }
+            };
+            _enrollMediaRecorder.start();
+            if (btn) btn.textContent = '⏹ Stop';
+            if (status) { status.style.display = ''; status.textContent = 'Recording… speak naturally for 5–10 seconds, then tap Stop.'; }
+            setTimeout(() => { if (_enrollMediaRecorder && _enrollMediaRecorder.state === 'recording') _enrollMediaRecorder.stop(); }, 12000);
+        } catch (e) {
+            if (status) { status.style.display = ''; status.textContent = '✗ Microphone access denied: ' + e.message; }
+        }
+    };
+
+    async function loadSpeakerProfiles() {
+        const list = document.getElementById('speakerProfileList');
+        if (!list) return;
+        // Show enrolled profiles from local storage cache.
+        const profiles = JSON.parse(localStorage.getItem('zoe_speaker_profiles') || '[]');
+        if (!profiles.length) { list.innerHTML = '<div style="font-size:13px;color:rgba(255,255,255,.4);padding-bottom:8px;">No profiles enrolled yet.</div>'; return; }
+        list.innerHTML = profiles.map(p =>
+            '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06);">' +
+            '<span style="font-size:14px;">' + (p.display_name || p.user_id) + '</span>' +
+            '</div>'
+        ).join('');
+    }
+
+    window.testSpeakerRecognition = async function() {
+        const btn = document.getElementById('testRecognitionBtn');
+        const result = document.getElementById('recognitionResult');
+        if (btn) { btn.textContent = '⏳ …'; btn.disabled = true; }
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const chunks = [];
+            const recorder = new MediaRecorder(stream);
+            recorder.ondataavailable = e => chunks.push(e.data);
+            recorder.onstop = async () => {
+                stream.getTracks().forEach(t => t.stop());
+                const blob = new Blob(chunks, { type: 'audio/webm' });
+                const b64 = btoa(String.fromCharCode(...new Uint8Array(await blob.arrayBuffer())));
+                const sessRaw = localStorage.getItem('zoe_session');
+                const token = sessRaw ? JSON.parse(sessRaw).token : '';
+                try {
+                    const r = await fetch('/api/voice/identify', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-Session-ID': token },
+                        body: JSON.stringify({ audio_base64: b64 }),
+                    });
+                    const d = await r.json();
+                    if (d.identified) {
+                        if (result) { result.style.display = ''; result.textContent = '✓ Identified as: ' + d.display_name + ' (' + Math.round(d.confidence * 100) + '% confidence)'; }
+                    } else {
+                        if (result) { result.style.display = ''; result.textContent = 'Could not identify speaker (best match: ' + Math.round((d.best_confidence || 0) * 100) + '%)'; }
+                    }
+                } catch (e) {
+                    if (result) { result.style.display = ''; result.textContent = 'Error: ' + e.message; }
+                }
+                if (btn) { btn.textContent = '🔍 Test'; btn.disabled = false; }
+            };
+            recorder.start();
+            setTimeout(() => recorder.stop(), 4000);
+        } catch (e) {
+            if (result) { result.style.display = ''; result.textContent = 'Microphone access denied.'; }
+            if (btn) { btn.textContent = '🔍 Test'; btn.disabled = false; }
+        }
+    };
+
     // ── Init ───────────────────────────────────────────────────────
     document.addEventListener('DOMContentLoaded', function () {
         const userId = getUserId();
@@ -741,6 +989,8 @@
         loadPanelName();
         loadPanelId();
         loadWakeWord();
+        loadVoiceSettings();
+        loadSpeakerProfiles();
 
         // Initial status check + poll every 30s
         pollDaemonStatus();
