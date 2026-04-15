@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.24.0';
+const SW_VERSION = '4.26.0';
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -30,10 +30,14 @@ if (workbox) {
     workbox.core.skipWaiting();
     workbox.core.clientsClaim();
 
-    // Force all fetch requests to use HTTPS (prevents mixed content)
+    // Force all fetch requests to HTTPS when the SW itself is on HTTPS.
+    // This includes local IPs (192.168.x, 127.x) since an HTTPS-served SW cannot
+    // make mixed-content HTTP requests — FastAPI redirect responses to http://localhost
+    // would be blocked by the browser's mixed-content policy.
     self.addEventListener('fetch', (event) => {
+        if (self.location.protocol !== 'https:') return; // only apply on HTTPS
         const url = new URL(event.request.url);
-        if (url.protocol === 'http:' && url.hostname !== 'localhost' && !url.hostname.startsWith('127.') && !url.hostname.startsWith('192.168.')) {
+        if (url.protocol === 'http:') {
             const httpsUrl = event.request.url.replace('http://', 'https://');
             event.respondWith(fetch(new Request(httpsUrl, event.request)));
             return;
@@ -65,7 +69,9 @@ if (workbox) {
                 p === '/modules/qd' ||
                 p.startsWith('/modules/qd/') ||
                 p === '/modules/jag-board' ||
-                p.startsWith('/modules/jag-board/')
+                p.startsWith('/modules/jag-board/') ||
+                p === '/modules/orbit' ||
+                p.startsWith('/modules/orbit/')
             );
         },
         new workbox.strategies.NetworkOnly()
@@ -113,15 +119,16 @@ if (workbox) {
         })
     );
     
-    // Other JavaScript - Cache First
+    // Other JavaScript - Network First (ensures auth/executor fixes deploy instantly)
     workbox.routing.registerRoute(
         ({ request }) => request.destination === 'script',
-        new workbox.strategies.CacheFirst({
+        new workbox.strategies.NetworkFirst({
             cacheName: 'zoe-js',
+            networkTimeoutSeconds: 3,
             plugins: [
                 new workbox.expiration.ExpirationPlugin({
                     maxEntries: 60,
-                    maxAgeSeconds: 30 * 24 * 60 * 60 // 30 days
+                    maxAgeSeconds: 24 * 60 * 60 // 1 day
                 }),
                 new workbox.cacheableResponse.CacheableResponsePlugin({
                     statuses: [0, 200]
@@ -150,15 +157,16 @@ if (workbox) {
         })
     );
     
-    // Other CSS - Cache First
+    // Other CSS - Network First (ensures style fixes deploy instantly)
     workbox.routing.registerRoute(
         ({ request }) => request.destination === 'style',
-        new workbox.strategies.CacheFirst({
+        new workbox.strategies.NetworkFirst({
             cacheName: 'zoe-css',
+            networkTimeoutSeconds: 3,
             plugins: [
                 new workbox.expiration.ExpirationPlugin({
                     maxEntries: 30,
-                    maxAgeSeconds: 30 * 24 * 60 * 60 // 30 days
+                    maxAgeSeconds: 24 * 60 * 60 // 1 day
                 }),
                 new workbox.cacheableResponse.CacheableResponsePlugin({
                     statuses: [0, 200]
@@ -423,7 +431,16 @@ async function _panelPoll() {
             let handled = false;
 
             if (type === 'panel_navigate' || type === 'panel_navigate_fullscreen' || type === 'navigate' || type === 'refresh') {
-                const url = payload.url || payload.page || payload.path;
+                let url = payload.url || payload.page || payload.path;
+                // Preserve kiosk and panel_id params so touch-panel auth bypass survives navigation.
+                if (url && _panelId) {
+                    try {
+                        const dest = new URL(url, self.location.origin);
+                        if (!dest.searchParams.has('kiosk')) dest.searchParams.set('kiosk', '1');
+                        if (!dest.searchParams.has('panel_id')) dest.searchParams.set('panel_id', _panelId);
+                        url = dest.pathname + dest.search;
+                    } catch (_) {}
+                }
                 for (const client of clientList) {
                     if (type === 'refresh') {
                         client.postMessage({ type: 'SW_PANEL_ACTION', action });
@@ -486,13 +503,17 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
     console.log(`✅ Service Worker ${SW_VERSION} activated`);
     
-    // Clean up old caches
+    // Clean up OLD version caches only — keep current version's precache and all runtime caches.
+    // Pattern: delete versioned precache caches from previous SW versions (e.g. zoe-precache-v2-4.18.0)
+    // but NOT the current version's precache or named runtime caches (zoe-api, zoe-css, etc.).
+    const currentPrecache = `zoe-precache-v2-${SW_VERSION}`;
     event.waitUntil(
         caches.keys().then((cacheNames) => {
             return Promise.all(
                 cacheNames
                     .filter((cacheName) => {
-                        return cacheName.startsWith('zoe-') && cacheName !== CACHE_NAME;
+                        // Only delete versioned precaches from older SW versions
+                        return /^zoe-precache-v\d+-/.test(cacheName) && cacheName !== currentPrecache;
                     })
                     .map((cacheName) => {
                         console.log(`🗑️ Deleting old cache: ${cacheName}`);
@@ -553,7 +574,9 @@ self.addEventListener('activate', (event) => {
                                     p === '/modules/qd' ||
                                     p.startsWith('/modules/qd/') ||
                                     p === '/modules/jag-board' ||
-                                    p.startsWith('/modules/jag-board/')
+                                    p.startsWith('/modules/jag-board/') ||
+                                    p === '/modules/orbit' ||
+                                    p.startsWith('/modules/orbit/')
                                 );
                             })
                             .map(r => cache.delete(r))

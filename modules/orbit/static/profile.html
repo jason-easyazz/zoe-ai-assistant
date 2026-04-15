@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your Profile — Orbit</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/modules/orbit/static/css/orbit.css?v=2">
+</head>
+<body>
+<div class="page">
+  <div class="page-header">
+    <div class="logo">Orbit</div>
+    <div class="tagline">Who's in your orbit tonight?</div>
+  </div>
+
+  <div class="content">
+
+    <!-- Screen 1: Name -->
+    <div class="screen active" id="screen-name">
+      <h1 class="mt-16">What do people call you?</h1>
+      <p class="text-muted mt-8">Doesn't have to be your real name. Whatever you go by tonight.</p>
+      <div class="mt-24">
+        <input type="text" id="input-name" placeholder="Tall Dave, The Redhead, Jess..." maxlength="30" autocomplete="off">
+      </div>
+      <div class="mt-16">
+        <button class="btn btn-primary" id="btn-name-next">Continue →</button>
+      </div>
+    </div>
+
+    <!-- Screen 2: Interests -->
+    <div class="screen" id="screen-interests">
+      <h1>What are you into?</h1>
+      <p class="text-muted mt-8">Tap once to add. Tap again to mark it as a big part of your life. Those matches mean more.</p>
+      <div class="chip-grid mt-16" id="interest-chips"></div>
+      <p class="hint mt-16">💡 Tap twice on anything you're seriously into</p>
+      <div class="mt-24">
+        <button class="btn btn-primary" id="btn-interests-next">Continue →</button>
+      </div>
+      <button class="btn btn-ghost text-center mt-8" id="btn-back-name">← Back</button>
+    </div>
+
+    <!-- Screen 3: Values -->
+    <div class="screen" id="screen-values">
+      <h1>What matters to you?</h1>
+      <p class="text-muted mt-8">Pick your top 3. These help us find people on the same wavelength.</p>
+      <div class="chip-grid mt-16" id="value-chips"></div>
+      <p class="hint mt-16" id="values-hint">Select 3 values</p>
+      <div class="mt-24">
+        <button class="btn btn-primary" id="btn-values-next" disabled>Continue →</button>
+      </div>
+      <button class="btn btn-ghost text-center mt-8" id="btn-back-interests">← Back</button>
+    </div>
+
+    <!-- Screen 4: Quiz (optional) -->
+    <div class="screen" id="screen-quiz">
+      <h1>Quick personality snapshot</h1>
+      <p class="text-muted mt-8">10 questions, ~90 seconds. Totally optional — skip if you want. Helps us find better matches without you doing anything extra.</p>
+
+      <div class="progress-bar mt-16">
+        <div class="progress-fill" id="quiz-progress" style="width:0%"></div>
+      </div>
+      <p class="hint" id="quiz-q-count">Question 1 of 10</p>
+
+      <div id="quiz-question" class="mt-24">
+        <div class="quiz-q">
+          <p class="q-text" id="q-text"></p>
+          <div class="scale-row" id="scale-row"></div>
+          <div class="scale-labels">
+            <span>Disagree</span>
+            <span>Agree</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-16" style="display:flex; gap:10px;">
+        <button class="btn btn-secondary" id="btn-quiz-skip" style="flex:1">Skip quiz</button>
+        <button class="btn btn-primary" id="btn-quiz-next" disabled style="flex:2">Next →</button>
+      </div>
+    </div>
+
+    <!-- Screen 5: Defaults + Intents -->
+    <div class="screen" id="screen-defaults">
+      <h1>Last bit</h1>
+      <p class="text-muted mt-8">These are your defaults when you check in. You can always change them on the night.</p>
+
+      <div class="mt-24">
+        <span class="label">I'm here for… <span class="hint">(pick any)</span></span>
+        <div class="chip-grid mt-8" id="intents-public">
+          <div class="chip" data-intent="social">🟢 Just socialising</div>
+          <div class="chip" data-intent="activities">🟡 Up for activities</div>
+          <div class="chip" data-intent="friends">🔵 Open to new friends</div>
+          <div class="chip" data-intent="romantic">🔴 Looking for a date</div>
+        </div>
+      </div>
+
+      <div class="mt-24">
+        <span class="label">Default visibility</span>
+        <label class="toggle-row" id="visibility-toggle">
+          <div>
+            <div style="font-weight:600">Keep it low-key</div>
+            <div class="hint">Only show me to the best matches</div>
+          </div>
+          <div class="toggle-switch"></div>
+        </label>
+      </div>
+
+      <div class="mt-24">
+        <details id="desires-section">
+          <summary style="cursor:pointer;color:var(--text-muted);font-size:0.875rem;user-select:none;">
+            🔒 More options <span style="font-size:0.78rem;opacity:0.6">(private — only shown to mutual matches)</span>
+          </summary>
+          <div class="mt-12">
+            <p class="hint" style="margin-bottom:10px;">These are never shown publicly. They only appear on the connect screen if the other person chose the same thing.</p>
+            <div class="chip-grid" id="intents-private">
+              <div class="chip" data-desire="casual">Something casual</div>
+              <div class="chip" data-desire="real">Something real</div>
+              <div class="chip" data-desire="adventure">Open to adventure</div>
+              <div class="chip" data-desire="wild">A bit wild 🔥</div>
+              <div class="chip" data-desire="seewhere">Let's see where it goes</div>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <div class="mt-24">
+        <button class="btn btn-primary" id="btn-save">Save profile ✓</button>
+      </div>
+      <button class="btn btn-ghost text-center mt-8" id="btn-back-quiz">← Back</button>
+    </div>
+
+    <!-- Screen 6: Done -->
+    <div class="screen" id="screen-done">
+      <div class="text-center mt-24">
+        <div style="font-size:3rem">✓</div>
+        <h1 class="mt-16">You're all set</h1>
+        <p class="text-muted mt-8">Your profile lives on this phone. Next time you scan into a venue, check-in takes about 10 seconds.</p>
+        <div id="redirect-msg" class="mt-24"></div>
+        <button class="btn btn-primary mt-16" id="btn-done">Enter Orbit →</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="/modules/orbit/static/js/profile.js?v=5"></script>
+</body>
+</html>

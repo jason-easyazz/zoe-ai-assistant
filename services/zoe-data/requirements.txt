@@ -8,3 +8,16 @@ websockets==14.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 ag-ui-protocol==0.1.14
+
+# ── Voice dependencies (Jetson/server-side) ───────────────────────────────
+# Cloud TTS fallback (fast, AU Neural voice)
+edge-tts>=6.1.12
+# Primary offline TTS: ~82M ONNX model, sub-100ms on Jetson CUDA
+# Install model: https://github.com/thewh1teagle/kokoro-onnx/releases
+kokoro-onnx>=0.4.0
+# STT via Python API (faster than whisper.cpp CLI on Jetson with CUDA)
+faster-whisper>=1.0.3
+# Speaker diarization for ambient memory (Jetson CUDA only)
+pyannote.audio>=3.3.2
+# VAD for barge-in and ambient capture (server-side copy; Pi uses same package)
+silero-vad>=5.1

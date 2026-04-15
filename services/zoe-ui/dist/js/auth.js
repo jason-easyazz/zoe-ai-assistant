@@ -123,12 +123,20 @@
     function enforceAuth() {
         const currentPath = window.location.pathname;
         const search = window.location.search || '';
-        const isKioskMode = currentPath.startsWith('/touch/') && search.includes('kiosk=1');
+        // Persist kiosk mode in localStorage so navigations within the touch UI
+        // don't lose it (voice commands navigate to /touch/calendar.html etc. without query params).
+        if (currentPath.startsWith('/touch/') && search.includes('kiosk=1')) {
+            try { localStorage.setItem('zoe_kiosk', '1'); } catch(_){}
+        }
+        const kioskStored = currentPath.startsWith('/touch/') && (function(){ try { return localStorage.getItem('zoe_kiosk') === '1'; } catch(_){ return false; } })();
+        const isKioskMode = kioskStored || (currentPath.startsWith('/touch/') && search.includes('kiosk=1'));
         const isPublicGameModule =
             currentPath === '/modules/qd' ||
             currentPath.startsWith('/modules/qd/') ||
             currentPath === '/modules/jag-board' ||
-            currentPath.startsWith('/modules/jag-board/');
+            currentPath.startsWith('/modules/jag-board/') ||
+            currentPath === '/modules/orbit' ||
+            currentPath.startsWith('/modules/orbit/');
         // Only allow the main login pages and auth.html to skip authentication
         const isLoginPage = currentPath === '/index.html' || 
                            currentPath === '/' || 

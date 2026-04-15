@@ -55,6 +55,7 @@ def _visibility_filter_sql() -> str:
 
 
 async def _store_journal_memory(db, user_id: str, entry: dict, action: str):
+    import asyncio
     content = (entry.get("content") or "")[:800]
     if not content:
         return
@@ -73,6 +74,15 @@ async def _store_journal_memory(db, user_id: str, entry: dict, action: str):
             content[:220],
         ),
     )
+    # Mirror to MemPalace so agent memory stays current
+    try:
+        from pi_agent import _mempalace_add  # type: ignore[import]
+        mood = entry.get("mood") or ""
+        mood_str = f" [mood: {mood}]" if mood else ""
+        fact = f"Journal entry{mood_str}: {content[:400]}"
+        asyncio.ensure_future(_mempalace_add(fact, user_id=user_id, tags=["journal", action]))
+    except Exception:
+        pass
 
 
 @router.get("/entries", response_model=dict)

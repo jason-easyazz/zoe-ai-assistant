@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Optional
@@ -37,8 +38,11 @@ HA_FULL_SETUP_OPENCLAW_MESSAGE = (
     "Reply briefly only with progress/status — not a catalog of automation ideas."
 )
 
-MCPORTER = os.path.expanduser("~/bin/mcporter-safe")
-NODE_BIN = os.path.expanduser("~/.nvm/versions/node/v22.22.0/bin")
+MCPORTER = shutil.which("mcporter-safe") or os.path.expanduser("~/bin/mcporter-safe")
+# Resolve the Node bin dir dynamically — prefer the directory containing the located binary,
+# fall back to the nvm path so existing installs don't break.
+_node_which = shutil.which("node")
+NODE_BIN = os.path.dirname(_node_which) if _node_which else os.path.expanduser("~/.nvm/versions/node/v22.22.0/bin")
 
 SHOPPING_KEYWORDS = {
     "milk", "eggs", "bread", "butter", "cheese", "chicken", "beef", "pork",
@@ -144,12 +148,36 @@ def openclaw_user_message(intent: Optional[Intent], user_text: str) -> str:
     return user_text
 
 
+_TIME_QUERY_RE = re.compile(
+    r"^(what'?s?\s+the\s+time|what\s+time\s+is\s+it(\s+(right\s+now|now))?"
+    r"|tell\s+me\s+the\s+time|current\s+time|time\s+now|time\s+please|what\s+time\s+is\s+it)\??$",
+    re.IGNORECASE,
+)
+
+_DATE_QUERY_RE = re.compile(
+    r"^(what'?s?\s+today'?s?\s+date|what\s+(is\s+)?the\s+date(\s+today)?"
+    r"|what\s+day\s+(is\s+it|of\s+the\s+week(\s+is\s+it)?)|today'?s?\s+date"
+    r"|what\s+year\s+is\s+it(\s+now)?|what\s+month\s+is\s+it(\s+now)?"
+    r"|day\s+of\s+the\s+week|what'?s?\s+the\s+date(\s+today)?)\??$",
+    re.IGNORECASE,
+)
+
+
 def detect_intent(text: str) -> Optional[Intent]:
     t = _normalize_chat_intent_text(text)
 
     # Full Home Assistant / automation setup → OpenClaw (execute_intent returns None; chat expands message)
     if _is_ha_full_setup_message(t):
         return Intent("ha_full_setup", {})
+
+    # === CLOCK / CALENDAR QUERIES — checked before domain patterns (no slots needed) ===
+
+    # Modelled on HA's HassGetCurrentTime and HassGetCurrentDate — two separate intents
+    if _TIME_QUERY_RE.match(t):
+        return Intent("time_query", {})
+
+    if _DATE_QUERY_RE.match(t):
+        return Intent("date_query", {})
 
     # === DOMAIN-SPECIFIC PATTERNS FIRST (to avoid list collisions) ===
 
@@ -489,14 +517,31 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
     if intent.name == "daily_briefing":
         return await _execute_daily_briefing(user_id)
 
-    # Timer and recipe intents are handled client-side via panel actions — no backend call needed.
+    # Clock queries — instant Python datetime, no LLM, no network (mirrors HA's HassGetCurrentTime/Date)
+    if intent.name == "time_query":
+        from datetime import datetime
+        import platform
+        now = datetime.now()
+        fmt = "%-I:%M %p" if platform.system() != "Windows" else "%I:%M %p"
+        return f"It's {now.strftime(fmt)} on {now.strftime('%A, %d %B %Y')}."
+
+    if intent.name == "date_query":
+        from datetime import datetime
+        now = datetime.now()
+        return f"Today is {now.strftime('%A, %d %B %Y')}."
+
+    # Timer and recipe intents need panel navigation — emit a nav action so the cooking
+    # page opens and the timer/recipe widget is pre-filled.  The text response is spoken
+    # by the voice daemon; the panel action is dispatched by _broadcast_intent_nav in chat.py.
     if intent.name == "timer_create":
         mins = intent.slots.get("minutes", 5)
         label = intent.slots.get("label", "Timer")
-        return f"Starting a {mins} minute timer for {label}."
+        mins_str = f"{mins} minute" if int(mins) == 1 else f"{mins} minute"
+        return f"Starting a {mins_str} timer for {label}."
 
     if intent.name == "recipe_search":
         query = intent.slots.get("query", "")
+        # Panel nav to cooking page handled by _broadcast_intent_nav in chat.py.
         return f"Looking up a recipe for {query}."
 
     try:

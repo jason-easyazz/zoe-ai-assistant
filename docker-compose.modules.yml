@@ -94,6 +94,27 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+  orbit:
+    build: ./modules/orbit
+    container_name: zoe-orbit
+    ports:
+    - 8202:8202
+    volumes:
+    - ./modules/orbit/data:/app/data
+    environment:
+    - PYTHONUNBUFFERED=1
+    networks:
+    - zoe-network
+    restart: unless-stopped
+    healthcheck:
+      test:
+      - CMD
+      - curl
+      - -f
+      - http://localhost:8202/health
+      interval: 30s
+      timeout: 10s
+      retries: 3
 networks:
   zoe-network:
     name: zoe-network

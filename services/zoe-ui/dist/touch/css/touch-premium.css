@@ -1,0 +1,66 @@
+/**
+ * Zoe Touch Premium — design system shim
+ *
+ * The touch UI now uses the desktop widget CSS directly.
+ * This file only adds the dark-mode token overrides and any
+ * touch-specific variables that touch-adapter.css references.
+ *
+ * Load order:  widgets-premium.css → widgets-fluid.css → this → touch-adapter.css
+ */
+
+/* ── Touch-specific variables ──────────────────────────── */
+:root {
+    --nav-height: 64px;      /* consumed by touch-adapter.css padding-top */
+    --space-xs:   4px;
+    --space-sm:   8px;
+    --space-md:   16px;
+    --space-lg:   24px;
+    --space-xl:   32px;
+    --space-2xl:  48px;
+    --text-sm:    0.8125rem;
+    --text-base:  1rem;
+    --text-lg:    1.125rem;
+    --text-xl:    1.25rem;
+    --weight-light:    300;
+    --weight-regular:  400;
+    --weight-medium:   500;
+    --weight-semibold: 600;
+}
+
+/* ── Dark mode body + token overrides ─────────────────── */
+html.dark-mode,
+html.dark-mode body {
+    --background: linear-gradient(135deg, #060610 0%, #0d0d1a 100%);
+    --surface: rgba(255, 255, 255, 0.06);
+    --surface-hover: rgba(255, 255, 255, 0.09);
+    --text-primary: rgba(255, 255, 255, 0.93);
+    --text-secondary: rgba(255, 255, 255, 0.55);
+    --border: rgba(255, 255, 255, 0.1);
+
+    background: var(--background);
+    color: var(--text-primary);
+}
+
+/* Glass cards in dark mode */
+html.dark-mode .widget,
+html.dark-mode .widget-content,
+html.dark-mode [data-widget-type] {
+    background: rgba(255, 255, 255, 0.055) !important;
+    border-color: rgba(255, 255, 255, 0.09) !important;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* Nav bar in dark mode — handled by touch-menu.js injected styles,
+   but we reinforce here for the brief flash before JS runs */
+html.dark-mode #ztm-nav {
+    background: rgba(6, 6, 16, 0.88) !important;
+    border-bottom-color: rgba(123, 97, 255, 0.2) !important;
+}
+
+/* Time widget: keep the purple gradient, just deepen bg */
+html.dark-mode .widget[data-widget-type="time"] {
+    background: linear-gradient(135deg, #3d2a8a 0%, #1a4060 100%) !important;
+}
+
+/* Weather widget condition classes stay as-is in dark mode
+   (they are already dark-gradient by design) */

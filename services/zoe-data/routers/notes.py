@@ -38,6 +38,7 @@ def _visibility_filter_sql() -> str:
 
 
 async def _store_note_memory(db, user_id: str, note: dict, action: str):
+    import asyncio
     title = note.get("title") or "Note"
     content = (note.get("content") or "")[:800]
     if not content:
@@ -58,6 +59,13 @@ async def _store_note_memory(db, user_id: str, note: dict, action: str):
             note.get("visibility") or "personal",
         ),
     )
+    # Mirror to MemPalace so agent memory stays current
+    try:
+        from pi_agent import _mempalace_add  # type: ignore[import]
+        fact = f"User {action} note titled '{title}': {content[:300]}"
+        asyncio.ensure_future(_mempalace_add(fact, user_id=user_id, tags=["note", action]))
+    except Exception:
+        pass
 
 
 @router.get("/", response_model=dict)

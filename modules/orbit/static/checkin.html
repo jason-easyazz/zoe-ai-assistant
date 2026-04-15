@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Check In — Orbit</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/modules/orbit/static/css/orbit.css?v=5">
+</head>
+<body>
+<div class="page">
+  <div class="page-header">
+    <div class="logo">Orbit</div>
+    <div class="tagline">Who's in your orbit tonight?</div>
+  </div>
+
+  <div class="content">
+
+    <!-- Loading -->
+    <div class="screen active" id="screen-loading">
+      <div class="text-center mt-24">
+        <div class="spinner"></div>
+        <p class="text-muted mt-16">One sec...</p>
+      </div>
+    </div>
+
+    <!-- Join screen (primary — code + name) -->
+    <div class="screen" id="screen-join">
+      <h1 class="mt-16">Join tonight's orbit</h1>
+      <p class="text-muted mt-8">Enter the 4-letter code shown at the venue</p>
+
+      <div class="mt-24">
+        <label class="label">Join Code</label>
+        <input type="text" id="join-code"
+          placeholder="e.g. XKBV"
+          maxlength="4"
+          autocomplete="off"
+          autocorrect="off"
+          spellcheck="false"
+          style="text-transform:uppercase;font-size:2rem;letter-spacing:0.3em;text-align:center;font-family:'Space Grotesk',sans-serif;font-weight:700;">
+        <p id="code-error" class="hint mt-8" style="color:var(--accent-romantic);display:none;">No active session found for that code. Check with your host.</p>
+      </div>
+
+      <div class="mt-24">
+        <label class="label">Your name <span id="name-hint" style="font-weight:400;opacity:0.6"></span></label>
+        <input type="text" id="join-name" placeholder="What should people call you?" maxlength="30" autocomplete="off">
+      </div>
+
+      <div class="mt-24">
+        <button class="btn btn-primary" id="btn-join" disabled>Enter Orbit →</button>
+      </div>
+
+      <div class="text-center mt-16">
+        <button class="btn btn-ghost" id="btn-setup-profile">Set up full profile first</button>
+      </div>
+    </div>
+
+    <!-- Welcome back (returning user, confirms intent) -->
+    <div class="screen" id="screen-welcome">
+      <h1 class="mt-16">Welcome back, <span id="welcome-name"></span> 👋</h1>
+      <p class="text-muted mt-8">What are you here for tonight?</p>
+
+      <div class="chip-grid mt-24" id="intent-chips">
+        <div class="chip" data-intent="social">🟢 Just socialising</div>
+        <div class="chip" data-intent="activities">🟡 Up for activities</div>
+        <div class="chip" data-intent="friends">🔵 Open to new friends</div>
+        <div class="chip" data-intent="romantic">🔴 Looking for a date</div>
+      </div>
+      <p class="hint mt-8">Pick anything that applies — your private preferences are already saved</p>
+
+      <div class="mt-24">
+        <span class="label">Where are you?</span>
+        <div class="zone-grid" id="zone-grid">
+          <button class="zone-btn" data-zone="bar">🍺 Bar</button>
+          <button class="zone-btn" data-zone="beer-garden">🌿 Beer Garden</button>
+          <button class="zone-btn" data-zone="pool-area">🎱 Pool Area</button>
+          <button class="zone-btn" data-zone="outside">🌙 Outside</button>
+        </div>
+      </div>
+
+      <div class="mt-24">
+        <button class="btn btn-primary" id="btn-checkin">Enter Orbit →</button>
+      </div>
+
+      <div class="text-center mt-16">
+        <button class="btn btn-ghost" id="btn-edit-profile">Edit profile</button>
+      </div>
+    </div>
+
+    <!-- Activities (shown when activity intent selected) -->
+    <div class="screen" id="screen-activities">
+      <h1>What do you want to do?</h1>
+      <p class="text-muted mt-8">Tap everything you're up for tonight.</p>
+      <div class="chip-grid mt-16" id="activity-chips">
+        <div class="chip" data-activity="pool">🎱 Pool</div>
+        <div class="chip" data-activity="darts">🎯 Darts</div>
+        <div class="chip" data-activity="quiz">🧠 Quiz</div>
+        <div class="chip" data-activity="karaoke">🎤 Karaoke</div>
+        <div class="chip" data-activity="table-football">⚽ Table Football</div>
+        <div class="chip" data-activity="board-games">🎲 Board Games</div>
+        <div class="chip" data-activity="dancing">💃 Dancing</div>
+        <div class="chip" data-activity="live-music">🎸 Live Music</div>
+      </div>
+      <div class="mt-24">
+        <button class="btn btn-primary" id="btn-activity-confirm">Enter Orbit →</button>
+      </div>
+      <button class="btn btn-ghost text-center mt-8" id="btn-back-intent">← Back</button>
+    </div>
+
+    <!-- Checking in -->
+    <div class="screen" id="screen-entering">
+      <div class="text-center mt-24">
+        <div style="font-size:3rem">🌌</div>
+        <h1 class="mt-16">Entering orbit...</h1>
+        <p class="text-muted mt-8">Finding your people</p>
+        <div class="spinner mt-16"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="/modules/orbit/static/js/checkin.js?v=6"></script>
+</body>
+</html>
