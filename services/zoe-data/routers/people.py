@@ -81,6 +81,7 @@ async def _upsert_custom_fields(db, person_id: str, custom_fields: Optional[dict
 
 
 async def _store_person_memory(db, user_id: str, person: dict, action: str):
+    import asyncio
     summary = f"{person.get('name')} ({person.get('relationship') or 'contact'})"
     await db.execute(
         """INSERT INTO memory_items
@@ -98,6 +99,14 @@ async def _store_person_memory(db, user_id: str, person: dict, action: str):
             person.get("visibility") or "family",
         ),
     )
+    # Mirror to MemPalace so agent memory stays current
+    try:
+        from pi_agent import _mempalace_add  # type: ignore[import]
+        notes = person.get("notes") or ""
+        fact = f"Person in contacts: {summary}. {notes[:200]}".strip().rstrip(".")
+        asyncio.ensure_future(_mempalace_add(fact, user_id=user_id, tags=["person", action]))
+    except Exception:
+        pass
 
 
 def _visibility_filter_sql() -> str:

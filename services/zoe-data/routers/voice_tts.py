@@ -324,7 +324,8 @@ async def _synthesize_kokoro(text: str, voice: str = "af_sky") -> Optional[bytes
         import io
 
         def _kokoro_sync():
-            samples, sample_rate = kokoro.create(text, voice=voice, speed=1.0, lang="en-us")
+            kokoro_speed = float(os.environ.get("ZOE_KOKORO_SPEED", "1.15"))
+            samples, sample_rate = kokoro.create(text, voice=voice, speed=kokoro_speed, lang="en-us")
             samples_int16 = (samples * 32767).astype(np.int16)
             buf = io.BytesIO()
             with wave.open(buf, "wb") as wf:
@@ -871,11 +872,13 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
     content_type = "audio/wav"
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        t_chat_start = time.monotonic()
+        voice_timeout = float(os.environ.get("ZOE_VOICE_CHAT_TIMEOUT_S", "20"))
+        async with httpx.AsyncClient(timeout=voice_timeout) as client:
             chat_url = os.environ.get("ZOE_CHAT_URL", "http://localhost:8000")
             headers: dict[str, str] = {
                 "Content-Type": "application/json",
-                "X-Voice-Mode": "true",  # Signals chat router to use voice system prompt
+                "X-Voice-Mode": "true",
             }
             if device_token:
                 headers["X-Device-Token"] = device_token
@@ -885,6 +888,7 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
                     "message": text,
                     "session_id": session_id,
                     "panel_id": panel_id,
+                    "max_tokens": int(os.environ.get("ZOE_VOICE_MAX_TOKENS", "150")),
                     **({"identified_user_id": identified_user_id} if identified_user_id else {}),
                 },
                 headers=headers,
@@ -892,6 +896,7 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
             r.raise_for_status()
             reply_json = r.json()
             reply_text = reply_json.get("response") or reply_json.get("reply") or reply_json.get("message") or ""
+        logger.info("voice/command LLM %.1fs reply=%d chars", time.monotonic() - t_chat_start, len(reply_text))
     except Exception as exc:
         logger.error("voice/command chat error: %s", exc)
         # Speak an error fallback — never let the panel go silent after wake word.
@@ -909,45 +914,42 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
             "content_type": content_type,
         }
 
-    # Broadcast responding state so orb animates while TTS plays.
+    # Fire broadcasts and TTS concurrently — TTS is the slow path (~1-2s).
     if reply_text:
-        try:
-            from push import broadcaster as _bc2
-            await _bc2.broadcast("all", "voice:responding", {
-                "panel_id": panel_id,
-                "text": reply_text[:200],
-            })
-        except Exception:
-            pass
+        async def _broadcast_response():
+            try:
+                from push import broadcaster as _bc2
+                await _bc2.broadcast("all", "voice:responding", {
+                    "panel_id": panel_id,
+                    "text": reply_text[:200],
+                })
+                await _bc2.broadcast("all", "ui_action", {
+                    "action": {
+                        "id": f"voice_card_{panel_id}",
+                        "action_type": "show_card",
+                        "payload": {
+                            "type": "answer",
+                            "data": {"text": reply_text[:300]},
+                            "panel_id": panel_id,
+                        },
+                    }
+                })
+            except Exception:
+                pass
 
-    # Emit show_card so the dashboard card overlay displays the reply text.
-    if reply_text:
-        try:
-            from push import broadcaster as _bc_card
-            card_payload: dict = {
-                "card_type": "answer",
-                "card_data": {"text": reply_text[:300]},
-                "panel_id": panel_id,
-            }
-            await _bc_card.broadcast("all", "ui_action", {
-                "action": {
-                    "id": f"voice_card_{panel_id}",
-                    "action_type": "show_card",
-                    "payload": card_payload,
-                }
-            })
-        except Exception:
-            pass
+        async def _run_tts():
+            nonlocal audio_b64, content_type
+            try:
+                t0 = time.monotonic()
+                audio_resp = await synthesize({"text": reply_text}, caller=caller)
+                audio_b64 = base64.b64encode(audio_resp.body).decode("ascii")
+                content_type = audio_resp.media_type
+                logger.info("voice/command TTS %.1fs for %d chars", time.monotonic() - t0, len(reply_text))
+            except Exception as exc:
+                logger.warning("voice/command TTS failed: %s", exc)
+                audio_b64, content_type = await _make_fallback_audio()
 
-    if reply_text:
-        try:
-            audio_resp = await synthesize({"text": reply_text}, caller=caller)
-            audio_b64 = base64.b64encode(audio_resp.body).decode("ascii")
-            content_type = audio_resp.media_type
-        except Exception as exc:
-            logger.warning("voice/command TTS failed: %s", exc)
-            # TTS failed but we have text — try fallback voice
-            audio_b64, content_type = await _make_fallback_audio()
+        await asyncio.gather(_broadcast_response(), _run_tts())
 
     # Broadcast done so orb returns to idle.
     try:
@@ -987,6 +989,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth))
     suffix = ".wav" if (len(raw) >= 4 and raw[:4] == b"RIFF") else ".raw"
 
     # ── Phase 1: STT ──
+    t_turn_start = time.monotonic()
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(raw)
@@ -1002,11 +1005,12 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth))
         logger.error("voice/turn STT failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Transcription failed: {exc}") from exc
 
+    t_stt = time.monotonic() - t_turn_start
     transcript = transcript.strip()
     if not transcript:
         return {"ok": True, "panel_id": panel_id, "text": "", "reply": "", "audio_base64": None}
 
-    logger.info("voice/turn panel=%s transcript=%r", panel_id, transcript[:80])
+    logger.info("voice/turn panel=%s STT=%.1fs transcript=%r", panel_id, t_stt, transcript[:80])
 
     # Broadcast transcript so UI shows what was heard.
     try:
@@ -1025,6 +1029,8 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth))
 
     result = await voice_command(command_payload, caller=caller)
     result["text"] = transcript
+    t_total = time.monotonic() - t_turn_start
+    logger.info("voice/turn total=%.1fs (STT=%.1fs LLM+TTS=%.1fs)", t_total, t_stt, t_total - t_stt)
     return result
 
 

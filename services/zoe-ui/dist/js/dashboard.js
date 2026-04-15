@@ -378,20 +378,17 @@ class Dashboard {
     createDefaultLayout() {
         console.log('📐 Creating default layout');
         
-        // Get dashboard-specific widgets from manifest
-        const availableWidgets = WidgetManager.getAvailableWidgets('dashboard');
-        const defaults = availableWidgets.slice(0, 5).map(w => ({ type: w.id }));
+        // Default layout: clock, weather, events, notes, home, reminders
+        const defaults = [
+            { type: 'time',      x: 0, y: 0, w: 4, h: 3 },
+            { type: 'weather',   x: 4, y: 0, w: 4, h: 3 },
+            { type: 'events',    x: 0, y: 3, w: 4, h: 4 },
+            { type: 'notes',     x: 4, y: 3, w: 4, h: 4 },
+            { type: 'home',      x: 0, y: 7, w: 4, h: 3 },
+            { type: 'reminders', x: 4, y: 7, w: 4, h: 3 },
+        ];
         
-        if (defaults.length === 0) {
-            // Fallback if manifest not loaded
-            const fallback = ['time', 'weather', 'events', 'tasks', 'home'];
-            defaults.push(...fallback.map(type => ({ type })));
-        }
-        
-        defaults.forEach(item => {
-            this.addWidget(item.type);
-        });
-        
+        this.loadFromData(defaults);
         this.saveLayout();
     }
 }

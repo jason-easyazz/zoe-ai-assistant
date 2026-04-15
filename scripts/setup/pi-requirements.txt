@@ -1,0 +1,27 @@
+# Pi voice daemon dependencies (ARM64 / Raspberry Pi 4+)
+# Install: pip3 install -r pi-requirements.txt
+#
+# Note: torch for Silero VAD — use the ARM-optimised wheel, NOT the CUDA wheel.
+# For Pi 4/5: pip3 install torch --index-url https://download.pytorch.org/whl/cpu
+# or use the pre-built Pi wheel: https://github.com/ljk53/portable-pytorch
+
+# Audio capture and playback
+pyaudio>=0.2.14
+numpy>=1.26.0
+
+# Wake word detection (OpenWakeWord ONNX backend)
+openwakeword>=0.6.0
+onnxruntime>=1.18.0
+
+# VAD for barge-in and ambient capture
+# silero-vad requires torch — see note above
+silero-vad>=5.1
+
+# Optional: noise suppression for wake word accuracy in noisy rooms
+# speexdsp-ns>=0.1.2
+
+# Speaker identification (resemblyzer — 256-dim embeddings, ARM CPU ~20ms)
+resemblyzer>=0.1.3
+
+# HTTP client for Jetson API calls
+requests>=2.32.0

@@ -64,9 +64,41 @@ _BASH_ALLOWED_PREFIXES = (
 
 # ── SOUL.md system prompt for Pi Agent ───────────────────────────────────────
 
-_PI_SOUL = """You are Zoe, a warm home assistant. Be concise and natural. Use contractions. For simple tasks say what you did, not "Done!". For questions, just answer. For hard problems be thorough.
+_PI_SOUL_STATIC = """You are Zoe, a warm home assistant. Be concise and natural. Use contractions. For simple tasks say what you did, not "Done!". For questions, just answer. For hard problems be thorough.
 
-Use tools via the function-call mechanism — never write tool JSON in your response text."""
+Answer everyday questions — recipes, cooking, how-to, science, history, maths, general knowledge — directly from your own knowledge. Only defer to a tool or say you can't help when the task genuinely requires live data (weather, news, prices) or system access.
+
+When asked to run, execute, or use bash — or when the user gives you a shell command or python3 invocation to run — always call the bash tool and report its actual output. Never simulate or guess what a command would output.
+
+Use tools via the function-call mechanism — never write tool JSON in your response text.
+
+VISUAL TOOLS — call these instead of describing the result in text:
+- show_map: any request about a place, location, address, directions, or "show on a map". Use your knowledge of lat/lng for cities and landmarks to populate markers directly.
+- show_chart: any request for a chart, graph, or when the user gives you data to visualise (e.g. "Mon 5mm, Tue 12mm"). Do not describe the chart — render it.
+- show_action_menu: when you want to offer the user 2-5 distinct next steps or choices.
+- setup_telegram: any request to set up, connect, or configure Telegram.
+- list_openclaw_plugins: any request about plugins, add-ons, or extensions.
+- list_openclaw_skills: any request about skills, workspace abilities, or what Zoe can do.
+  When you cannot do something and a skill would enable it, ALWAYS call this with
+  highlight set to the skill name — do not omit highlight in the proactive case.
+  Example: user asks "send me a Discord notification" →
+  call list_openclaw_skills(highlight="discord"), say "I can't do that yet — installing
+  the Discord skill would enable it.\""""
+
+# Legacy alias — code that imports _PI_SOUL directly still works
+_PI_SOUL = _PI_SOUL_STATIC
+
+
+def _pi_soul(username: str = "", user_id: str = "") -> str:
+    """Build the Pi Agent system prompt with live datetime and user identity stamped in."""
+    import datetime
+    now = datetime.datetime.now()
+    dt_line = now.strftime("%A, %d %B %Y — %I:%M %p")
+    user_line = f"The logged-in user is {username} (user_id: {user_id})." if username else (
+        f"The logged-in user_id is {user_id}." if user_id else ""
+    )
+    header = f"[{dt_line}]\n{user_line}".strip()
+    return f"{header}\n\n{_PI_SOUL_STATIC}"
 
 # OpenAI-compatible tool definitions sent in the API request.
 # llama.cpp routes these through delta.tool_calls, completely separate from text content.
@@ -142,9 +174,131 @@ _TOOLS = [
                 "properties": {
                     "reason": {"type": "string", "description": "Why this needs OpenClaw"},
                     "task": {"type": "string", "description": "Full enriched task description for OpenClaw"},
+                    "background": {"type": "boolean", "description": "Set true if user wants the task done in background and to be notified when complete"},
                 },
                 "required": ["reason", "task"],
             },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "show_map",
+            "description": "Show an interactive map with one or more named locations. Use when answering questions about places, addresses, or directions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Map title, e.g. 'Bottle shops in Geraldton'"},
+                    "markers": {
+                        "type": "array",
+                        "description": "List of locations to pin on the map",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string", "description": "Display name for the pin"},
+                                "lat": {"type": "number", "description": "Latitude"},
+                                "lng": {"type": "number", "description": "Longitude"},
+                            },
+                            "required": ["label", "lat", "lng"],
+                        },
+                    },
+                    "zoom": {"type": "integer", "description": "Initial zoom level (1-19)", "default": 13},
+                },
+                "required": ["title", "markers"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "show_chart",
+            "description": "Render a bar, line, or pie chart to visualise data. Use when comparing numbers, showing trends, or presenting stats.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chart_type": {"type": "string", "enum": ["bar", "line", "pie", "doughnut"], "description": "Chart type"},
+                    "title": {"type": "string", "description": "Chart title"},
+                    "labels": {"type": "array", "items": {"type": "string"}, "description": "X-axis labels or pie slice names"},
+                    "datasets": {
+                        "type": "array",
+                        "description": "One or more data series",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string"},
+                                "data": {"type": "array", "items": {"type": "number"}},
+                            },
+                            "required": ["data"],
+                        },
+                    },
+                },
+                "required": ["chart_type", "title", "labels", "datasets"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "show_action_menu",
+            "description": "Present the user with a set of large clickable options (2-5 choices). Use when you want to offer follow-up actions or let the user choose a direction.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "Short question or instruction above the options"},
+                    "options": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "icon": {"type": "string", "description": "Emoji icon"},
+                                "label": {"type": "string", "description": "Button label"},
+                                "message": {"type": "string", "description": "Message to send when clicked"},
+                            },
+                            "required": ["label", "message"],
+                        },
+                    },
+                },
+                "required": ["prompt", "options"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_openclaw_plugins",
+            "description": "Show the OpenClaw plugin manager so the user can install, remove, or browse available plugins.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_openclaw_skills",
+            "description": (
+                "Show the OpenClaw skills manager (browse, install, update, remove). "
+                "When the user wants something you cannot do and installing a skill would enable it, "
+                "you MUST call this with highlight='<skill-name>' (e.g. highlight='discord'). "
+                "Never omit highlight in the proactive case. "
+                "Also call when the user asks about capabilities, skills, or what Zoe can do."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "highlight": {
+                        "type": "string",
+                        "description": "Optional skill name to pre-select/highlight in the manager (e.g. 'discord')",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "setup_telegram",
+            "description": "Show the Telegram setup wizard in chat so the user can connect their Telegram bot to Zoe. Use when the user asks to set up, connect, or configure Telegram.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
 ]
@@ -226,8 +380,13 @@ def _model_name() -> str:
 
 # ── MemPalace integration (Python API — no subprocess) ───────────────────────
 
-async def _mempalace_search(query: str, limit: int = 5, timeout_s: float = 2.0) -> list[dict]:
-    """Search MemPalace for relevant memories. Returns list of hit dicts.
+async def _mempalace_search(
+    query: str,
+    user_id: str = "family-admin",
+    limit: int = 5,
+    timeout_s: float = 2.0,
+) -> list[dict]:
+    """Semantic search of this user's MemPalace facts (wing-filtered, ONNX-based).
 
     Enforces a hard timeout so a slow ONNX embedding run never blocks inference.
     """
@@ -236,7 +395,7 @@ async def _mempalace_search(query: str, limit: int = 5, timeout_s: float = 2.0) 
         raw = await asyncio.wait_for(
             asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: search_memories(query, _MEMPALACE_DATA, n_results=limit),
+                lambda: search_memories(query, _MEMPALACE_DATA, wing=user_id, n_results=limit),
             ),
             timeout=timeout_s,
         )
@@ -252,22 +411,34 @@ async def _mempalace_search(query: str, limit: int = 5, timeout_s: float = 2.0) 
         return []
 
 
-async def _mempalace_add(summary: str, tags: list[str] | None = None) -> bool:
-    """Add a memory drawer to MemPalace via direct ChromaDB write."""
+async def _mempalace_add(
+    summary: str,
+    user_id: str = "family-admin",
+    tags: list[str] | None = None,
+    added_by: str = "pi_agent",
+) -> bool:
+    """Upsert a memory fact into MemPalace scoped to user_id.
+
+    Uses upsert (not add) so updating an existing fact works correctly.
+    Stores added_at ISO timestamp so _mempalace_load_user_facts can sort by recency.
+    """
     import hashlib
+    import datetime
 
     def _write() -> None:
         from mempalace.palace import get_collection  # type: ignore[import]
         col = get_collection(_MEMPALACE_DATA)
-        drawer_id = f"zoe_{hashlib.md5(summary.encode()).hexdigest()[:20]}"
-        col.add(
+        # Include user_id in hash so each user gets their own record for same fact
+        drawer_id = f"zoe_{user_id}_{hashlib.md5(summary.encode()).hexdigest()[:16]}"
+        col.upsert(
             ids=[drawer_id],
             documents=[summary],
             metadatas=[{
-                "wing": "zoe",
+                "wing": user_id,            # wing=user_id enables per-user filter
                 "room": "conversations",
-                "added_by": "pi_agent",
+                "added_by": added_by,
                 "tags": ",".join(tags or []),
+                "added_at": datetime.datetime.now().isoformat(),
             }],
         )
 
@@ -282,8 +453,45 @@ async def _mempalace_add(summary: str, tags: list[str] | None = None) -> bool:
         return False
 
 
+async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
+    """Load a user's MemPalace facts sorted by recency. No ONNX — metadata filter only.
+
+    Uses collection.get(where={"wing": user_id}) which is a pure metadata filter
+    with no vector/ONNX cost — safe to call on every Bonsai/OpenClaw/Pi turn.
+    Sorts by added_at timestamp in application code (Chroma get() has no sort).
+    """
+    def _get() -> list[str]:
+        from mempalace.palace import get_collection  # type: ignore[import]
+        col = get_collection(_MEMPALACE_DATA)
+        result = col.get(
+            where={"wing": user_id},
+            include=["documents", "metadatas"],
+        )
+        docs = result.get("documents") or []
+        metas = result.get("metadatas") or []
+        # Sort most-recent first using added_at, fall back to "" (sorts last)
+        pairs = sorted(zip(docs, metas), key=lambda x: x[1].get("added_at", ""), reverse=True)
+        return [doc for doc, _ in pairs[:limit]]
+
+    try:
+        docs = await asyncio.get_event_loop().run_in_executor(None, _get)
+        if not docs:
+            return ""
+        lines = ["## What I know about you:"]
+        for doc in docs:
+            lines.append(f"- {doc[:200]}")
+        return "\n".join(lines)
+    except ImportError:
+        logger.warning("MemPalace not installed — skipping user facts load")
+        return ""
+    except Exception as exc:
+        logger.debug("_mempalace_load_user_facts failed (non-fatal): %s", exc)
+        return ""
+
+
 # Keywords that suggest the message benefits from memory context retrieval.
-# Queries without these skip MemPalace (saves 1-25s of ONNX inference time).
+# Queries without these skip MemPalace semantic search (saves 1-25s of ONNX inference time).
+# Note: _mempalace_load_user_facts() (fast metadata filter) runs on EVERY turn regardless.
 _MEMORY_TRIGGER_WORDS = frozenset({
     "remember", "recall", "did i", "have i", "last time", "before",
     "you said", "we talked", "my name", "my preference", "i told you",
@@ -291,28 +499,31 @@ _MEMORY_TRIGGER_WORDS = frozenset({
     "who is", "what is my", "what do i", "what's my", "family", "remind me",
     "do i have", "my favourite", "my favorite", "my usual", "i usually", "i like",
     "i prefer", "i love", "i hate", "i enjoy", "do you know my",
+    # Added: common personal-fact retrieval phrases
+    "born", "age", "years old", "my age", "how old", "my birthday", "birthday",
+    "my full name", "called", "known as", "allerg", "condition", "medical",
 })
 
 
 def _message_needs_memory(message: str) -> bool:
-    """Return True only if this message is likely to benefit from MemPalace context."""
+    """Return True only if this message is likely to benefit from MemPalace semantic search."""
     msg_lower = message.lower()
     return any(kw in msg_lower for kw in _MEMORY_TRIGGER_WORDS)
 
 
-async def _build_memory_context(message: str) -> str:
-    """Search MemPalace and build a context block for the system prompt.
+async def _build_memory_context(message: str, user_id: str = "family-admin") -> str:
+    """Semantic search of user's MemPalace facts — keyword-gated to avoid ONNX cost on every turn.
 
-    Only runs for messages that look memory-relevant (saves 1-25s per query on CPU).
-    The `mempalace_search` tool is always available for explicit lookups.
+    Only runs for messages containing _MEMORY_TRIGGER_WORDS.
+    The fast _mempalace_load_user_facts() is called separately and always runs.
     """
     if not _message_needs_memory(message):
         return ""
-    _mp_timeout = 5.0 if _JETSON_MODE else 3.0  # Jetson can afford slightly longer ONNX wait
-    memories = await _mempalace_search(message, limit=5, timeout_s=_mp_timeout)
+    _mp_timeout = 5.0 if _JETSON_MODE else 3.0
+    memories = await _mempalace_search(message, user_id=user_id, limit=5, timeout_s=_mp_timeout)
     if not memories:
         return ""
-    lines = ["## Memory Context (from MemPalace)"]
+    lines = ["## Relevant memories (semantic match):"]
     for m in memories:
         content = m.get("text") or m.get("content") or m.get("summary") or str(m)
         lines.append(f"- {content[:200]}")
@@ -363,11 +574,11 @@ async def _bash(command: str) -> str:
 
 # ── Tool dispatch ─────────────────────────────────────────────────────────────
 
-async def _dispatch_tool(tool_name: str, args: dict) -> str:
+async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "family-admin") -> str:
     """Dispatch a tool call and return result as string."""
     if tool_name == "mempalace_search":
         results = await _mempalace_search(
-            args.get("query", ""), limit=int(args.get("limit", 5))
+            args.get("query", ""), user_id=user_id, limit=int(args.get("limit", 5))
         )
         if not results:
             return "No matching memories found."
@@ -380,6 +591,7 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
     if tool_name == "mempalace_add":
         ok = await _mempalace_add(
             summary=args.get("summary", ""),
+            user_id=user_id,
             tags=args.get("tags"),
         )
         return "Memory stored." if ok else "Memory storage failed (MemPalace unavailable)."
@@ -398,7 +610,77 @@ async def _dispatch_tool(tool_name: str, args: dict) -> str:
     if tool_name == "escalate_to_openclaw":
         reason = args.get("reason", "complex task")
         task = args.get("task", "")
+        background = args.get("background", False)
+        if background:
+            return f"__ESCALATE_BG__:{reason}|{task}"
         return f"__ESCALATE__:{reason}|{task}"
+
+    if tool_name == "show_map":
+        payload = {
+            "component": "map_embed",
+            "props": {
+                "title": args.get("title", "Map"),
+                "markers": args.get("markers", []),
+                "zoom": args.get("zoom", 13),
+            },
+        }
+        return f"__UI__:{json.dumps(payload)}"
+
+    if tool_name == "show_chart":
+        payload = {
+            "component": "chart",
+            "props": {
+                "chart_type": args.get("chart_type", "bar"),
+                "title": args.get("title", ""),
+                "labels": args.get("labels", []),
+                "datasets": args.get("datasets", []),
+            },
+        }
+        return f"__UI__:{json.dumps(payload)}"
+
+    if tool_name == "show_action_menu":
+        payload = {
+            "component": "action_menu",
+            "props": {
+                "prompt": args.get("prompt", ""),
+                "options": args.get("options", []),
+            },
+        }
+        return f"__UI__:{json.dumps(payload)}"
+
+    if tool_name == "setup_telegram":
+        payload = {
+            "component": "telegram_setup",
+            "props": {},
+        }
+        return f"__UI__:{json.dumps(payload)}"
+
+    if tool_name == "list_openclaw_plugins":
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                r = await client.get("http://localhost:8000/api/openclaw/plugins")
+                plugin_data = r.json() if r.status_code == 200 else {"plugins": []}
+        except Exception:
+            plugin_data = {"plugins": []}
+        payload = {
+            "component": "openclaw_manager",
+            "props": plugin_data,
+        }
+        return f"__UI__:{json.dumps(payload)}"
+
+    if tool_name == "list_openclaw_skills":
+        try:
+            async with httpx.AsyncClient(timeout=8) as client:
+                r = await client.get("http://localhost:8000/api/openclaw/skills")
+                skill_data = r.json() if r.status_code == 200 else {"skills": []}
+        except Exception:
+            skill_data = {"skills": []}
+        highlight = args.get("highlight", "")
+        payload = {
+            "component": "skills_manager",
+            "props": {**skill_data, "highlight": highlight},
+        }
+        return f"__UI__:{json.dumps(payload)}"
 
     return f"[unknown tool: {tool_name}]"
 
@@ -505,15 +787,18 @@ async def run_pi_agent(
     user_id: str = "family-admin",
     *,
     history: list[dict] | None = None,
+    db_memory_context: str | None = None,
+    max_tokens_override: int = 0,
 ) -> str:
     """
     Run the Pi Agent loop for a single turn.
 
     Args:
-        message:    The user's message.
-        session_id: Session identifier for logging.
-        user_id:    Authenticated user id.
-        history:    Optional prior messages for context window.
+        message:           The user's message.
+        session_id:        Session identifier for logging.
+        user_id:           Authenticated user id.
+        history:           Optional prior messages for context window.
+        db_memory_context: Pre-loaded approved memory facts from memory_items (fast DB query).
 
     Returns:
         The final assistant response as a plain string.
@@ -528,24 +813,25 @@ async def run_pi_agent(
 
     logger.info("pi_agent: session=%s jetson=%s msg_len=%d", session_id, _JETSON_MODE, len(message))
 
-    # Build memory context block
-    memory_ctx = await _build_memory_context(message)
-    system_prompt = _PI_SOUL
-    if memory_ctx:
-        system_prompt = f"{_PI_SOUL}\n\n{memory_ctx}"
+    # Load user facts from MemPalace (fast metadata filter — no ONNX) + optional semantic hit
+    mp_facts = await _mempalace_load_user_facts(user_id)
+    memory_ctx = await _build_memory_context(message, user_id=user_id)
+    extras = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx]))
+    system_prompt = f"{_pi_soul(user_id=user_id)}\n\n{extras}" if extras else _pi_soul(user_id=user_id)
 
     # Build initial messages list
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
-        # Include last N turns for context (keep context window manageable)
-        messages.extend(history[-6:])
+        # Use full window loaded from DB (matches Hermes full-session approach)
+        messages.extend(history[-12:])
     messages.append({"role": "user", "content": message})
 
     # Tool loop — tool calls come through the API's tool_calls channel (never text)
     for iteration in range(_MAX_TOOL_ITERS + 1):
         try:
+            budget = max_tokens_override if max_tokens_override > 0 else _token_budget(message)
             response_text, tool_name, tool_args = await _llm_call(
-                messages, max_tokens=_token_budget(message)
+                messages, max_tokens=budget
             )
         except httpx.ConnectError:
             logger.error("pi_agent: Gemma server unreachable at %s", _model_url())
@@ -562,13 +848,13 @@ async def run_pi_agent(
                 "pi_agent: iter=%d tool=%s args=%s",
                 iteration, tool_name, json.dumps(tool_args)[:120],
             )
-            tool_result = await _dispatch_tool(tool_name, tool_args or {})
+            tool_result = await _dispatch_tool(tool_name, tool_args or {}, user_id=user_id)
             logger.debug("pi_agent: tool_result=%s", tool_result[:200])
 
             # Escalation signal — return immediately for chat.py to handle
             if tool_result.startswith("__ESCALATE__:"):
                 logger.info("pi_agent: escalation triggered — %s", tool_result[13:80])
-                _fire_memory_capture(message, response_text)
+                _fire_memory_capture(message, response_text, user_id=user_id)
                 return tool_result
 
             # Append tool call + result in OpenAI tool_calls format for context
@@ -590,102 +876,136 @@ async def run_pi_agent(
                 "pi_agent: done session=%s iters=%d elapsed=%.1fs",
                 session_id, iteration, elapsed,
             )
-            _fire_memory_capture(message, response_text)
+            _fire_memory_capture(message, response_text, user_id=user_id)
             return response_text
 
     return response_text
 
 
 # User message patterns that will NEVER contain memorable personal facts
-_SKIP_MEMORY_PATTERNS = frozenset({
-    "joke", "jok", "funny", "pun", "riddle", "poem", "story", "story",
-    "what is", "whats", "how do", "explain", "define", "tell me about",
-    "what time", "what day", "what date", "hello", "hi ", "hey", "morning",
-    "good night", "thanks", "thank you", "ok", "okay", "never mind",
+# Rule-based memory extraction patterns — pure Python, zero GPU cost.
+# Replaces the _smart_memory_capture Gemma classifier to eliminate GPU contention
+# on the next chat request. Modelled on what the Gemma classifier was catching,
+# plus broader coverage for locations, relationships, ages, and identifiers.
+_MEM_EXTRACT_PATTERNS: list[tuple[str, str]] = [
+    # Explicit storage requests (always save verbatim)
+    (r"(?:please\s+)?remember\s+(?:that\s+|this\s+)?(.{10,300})", "User asked to remember: {0}"),
+    (r"don'?t\s+forget\s+(?:that\s+)?(.{10,200})", "Note: {0}"),
+    (r"store\s+this[:\s]+(.{10,200})", "Stored fact: {0}"),
+    # Personal identity
+    (r"my\s+(?:full\s+)?name\s+is\s+(.{2,60})", "User's name is {0}"),
+    (r"i(?:'m|\s+am)\s+(?:called|named|known\s+as)\s+([A-Za-z][A-Za-z\s]{1,40})", "User's name is {0}"),
+    (r"call\s+me\s+([A-Za-z][A-Za-z\s]{1,30})", "User goes by: {0}"),
+    # Birth / age
+    (r"i\s+was\s+born\s+(?:on\s+)?(.{3,50})", "User was born on: {0}"),
+    (r"my\s+(?:birthday|birth\s+date)\s+is\s+(.{3,40})", "User's birthday is {0}"),
+    (r"i(?:'m|\s+am)\s+(\d{1,3})\s+years?\s+old", "User is {0} years old"),
+    # Health / allergies
+    (r"i(?:'m|\s+am)\s+allergic\s+to\s+(.{3,80})", "User is allergic to: {0}"),
+    (r"i\s+have\s+(diabetes|asthma|coeliac|celiac|hypertension|[a-z]+\s+allergy)", "User has: {0}"),
+    # Preferences
+    (r"i\s+prefer\s+(.{3,80})\s+over\s+(.{3,80})", "User prefers {0} over {1}"),
+    (r"i\s+(?:prefer|like|love|enjoy|adore)\s+(.{3,120})", "User prefers/likes: {0}"),
+    (r"i\s+(?:don'?t\s+like|dislike|hate|can'?t\s+stand|detest)\s+(.{3,80})", "User dislikes: {0}"),
+    (r"my\s+favou?rite\s+(?:\w+\s+)?is\s+(.{3,80})", "User's favourite: {0}"),
+    # Family / relationships
+    (r"my\s+(?:wife|husband|partner|girlfriend|boyfriend)'?s?\s+(?:name\s+)?is\s+(?:called\s+|named\s+)?([A-Za-z][A-Za-z\s]{1,40})", "User's partner is {0}"),
+    (r"my\s+(?:son|daughter|kid|child)'?s?\s+(?:name\s+)?is\s+(?:called\s+|named\s+)?([A-Za-z][A-Za-z\s]{1,40})", "User's child is {0}"),
+    (r"my\s+(?:dog|cat|pet)'?s?\s+(?:name\s+)?is\s+(?:called\s+|named\s+)?([A-Za-z][A-Za-z\s]{1,30})", "User's pet is called {0}"),
+    (r"my\s+(?:mum|mom|dad|father|mother|brother|sister)'?s?\s+(?:name\s+)?is\s+(.{2,50})", "User's family member: {0}"),
+    # Numbers / identifiers
+    (r"my\s+(?:lucky\s+)?number\s+is\s+(\d+)", "User's lucky number is {0}"),
+    # Location / work
+    (r"i\s+live\s+in\s+(.{3,60})", "User lives in {0}"),
+    (r"i\s+work\s+(?:at|for)\s+(.{3,80})", "User works at/for: {0}"),
+    (r"i(?:'m|\s+am)\s+from\s+(.{3,60})", "User is from {0}"),
+    (r"i\s+grew\s+up\s+in\s+(.{3,60})", "User grew up in {0}"),
+    # Habits / routines
+    (r"i\s+usually\s+(.{5,100})", "User's habit: {0}"),
+    (r"i\s+always\s+(.{5,100})", "User always: {0}"),
+    (r"every\s+(?:morning|evening|night|day|week)\s+i\s+(.{5,100})", "User's routine: {0}"),
+]
+
+_MEM_SKIP_PREFIXES = frozenset({
+    "what is", "what are", "how do", "how does", "explain", "tell me about",
+    "what time", "what day", "what date", "what year", "what month",
+    "hello", "hi ", "hey", "good morning", "good night", "good evening",
+    "thanks", "thank you", "ok", "okay", "never mind", "never",
+    "tell me a joke", "write me", "can you write", "can you give me",
 })
 
 
-def _should_classify_for_memory(user_msg: str) -> bool:
-    """Return True only if this message might contain memorable personal facts."""
-    msg_lower = user_msg.lower()
-    # Skip creative/informational/greeting requests
-    if any(p in msg_lower for p in _SKIP_MEMORY_PATTERNS):
-        return False
-    # Only classify if there's a personal-info signal
-    personal_signals = (
-        "my ", "i am", "i'm", "i have", "i like", "i love", "i hate",
-        "i prefer", "i usually", "we ", "our ", "remember", "name is",
-        "called ", "born ", "birthday", "favourite", "favorite",
-    )
-    return any(s in msg_lower for s in personal_signals)
+def _fast_memory_extract(user_msg: str, _assistant_reply: str = "") -> list[str]:
+    """Extract memorable facts from a message using pure-Python regex rules.
 
-
-async def _smart_memory_capture(user_msg: str, assistant_reply: str) -> None:
-    """Background task: ask Gemma if this conversation turn is worth remembering.
-
-    Fires AFTER the main response is returned (non-blocking from user perspective).
-    Uses a tiny Gemma call (max_tokens=40) to decide whether to store the fact.
-
-    Examples of what gets saved:
-      - "My daughter's name is Emma" → fact: "User's daughter is named Emma"
-      - "I prefer the lights at 50% in the evenings" → preference saved
-      - "hello" / "tell me a joke" / "what is X" → skipped immediately (no LLM call)
+    Zero GPU cost. Returns a list of short fact strings ready to store in MemPalace.
     """
-    # Fast pre-filter: skip if message can't contain personal facts
-    if len(user_msg) < 12 or not _should_classify_for_memory(user_msg):
-        return
+    if len(user_msg) < 8:
+        return []
+    lc = user_msg.lower().strip()
+    # Quick skip for clearly non-personal messages
+    if any(lc.startswith(p) for p in _MEM_SKIP_PREFIXES):
+        return []
 
-    prompt = (
-        f"Conversation:\nUser: {user_msg[:300]}\nAssistant: {assistant_reply[:200]}\n\n"
-        "Does the USER'S message reveal a personal fact, name, preference, or habit "
-        "about themselves or their family that's worth remembering? "
-        "Ignore jokes, stories, or explanations — only save real personal facts. "
-        "Reply with JSON ONLY: "
-        '{"save":true,"fact":"brief memorable fact"} or {"save":false}'
-    )
-    try:
-        raw, _, _ = await _llm_call(
-            [{"role": "user", "content": prompt}],
-            max_tokens=40,
-            temperature=0.1,
-            use_tools=False,
-        )
-        m = re.search(r'\{[^}]+\}', raw)
-        if not m:
-            return
-        data = json.loads(m.group())
-        if data.get("save") and data.get("fact"):
-            fact = str(data["fact"]).strip()[:300]
-            await _mempalace_add(fact, tags=["auto_captured"])
-            logger.info("pi_agent: auto-saved memory: %s", fact[:80])
-    except Exception as exc:
-        logger.debug("smart_memory_capture: skipped (%s)", exc)
+    facts: list[str] = []
+    for pattern, template in _MEM_EXTRACT_PATTERNS:
+        m = re.search(pattern, user_msg, re.IGNORECASE)
+        if m:
+            groups = [g.strip() if g else "" for g in m.groups()]
+            try:
+                fact = template.format(*groups).strip()
+                if fact and len(fact) > 8:
+                    facts.append(fact[:300])
+            except (IndexError, KeyError):
+                pass
+
+    # Deduplicate: remove facts where >70% words overlap with an already-included fact
+    deduped: list[str] = []
+    for fact in facts:
+        fact_words = set(fact.lower().split())
+        if not any(
+            len(fact_words & set(f.lower().split())) / max(len(fact_words), 1) > 0.7
+            for f in deduped
+        ):
+            deduped.append(fact)
+    return deduped
 
 
-def _fire_memory_capture(user_msg: str, assistant_reply: str) -> None:
-    """Schedule smart memory capture as a background task (non-blocking)."""
-    lc = user_msg.lower()
-    # Always check for explicit "remember this" requests
-    if any(kw in lc for kw in ("remember that", "remember this", "don't forget", "store this")):
-        # Explicit request — use a simple direct save, no LLM classification needed
+async def _background_memory_save(
+    user_msg: str, assistant_reply: str, user_id: str = "family-admin"
+) -> None:
+    """Async background task: extract facts and write to MemPalace with dedup check.
+
+    Runs entirely on CPU — no llama-server calls. ChromaDB writes are fast (~5ms).
+    Dedup is user-scoped so we don't skip writes based on another user's facts.
+    """
+    facts = _fast_memory_extract(user_msg, assistant_reply)
+    for fact in facts:
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(
-                    _mempalace_add(
-                        f"User asked to remember: {user_msg[:300]}",
-                        tags=["explicit_request"],
-                    )
-                )
-        except Exception:
-            pass
-        return
+            # Dedup: search within THIS user's facts only
+            existing = await _mempalace_search(fact, user_id=user_id, limit=1, timeout_s=1.5)
+            if existing:
+                top_text = existing[0].get("text") or existing[0].get("content") or ""
+                fact_words = set(fact.lower().split())
+                top_words = set(top_text.lower().split())
+                overlap = len(fact_words & top_words) / max(len(fact_words), 1)
+                if overlap > 0.65:
+                    logger.debug("pi_agent: memory dedup skip (%.0f%% overlap): %s", overlap * 100, fact[:60])
+                    continue
+            await _mempalace_add(fact, user_id=user_id, tags=["auto_rule"])
+            logger.info("pi_agent: rule-captured memory for %s: %s", user_id, fact[:80])
+        except Exception as exc:
+            logger.debug("background_memory_save: skipped (%s)", exc)
 
-    # Smart background classification for everything else
+
+def _fire_memory_capture(
+    user_msg: str, assistant_reply: str, user_id: str = "family-admin"
+) -> None:
+    """Schedule rule-based memory extraction as a background task (non-blocking, zero GPU)."""
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            asyncio.ensure_future(_smart_memory_capture(user_msg, assistant_reply))
+            asyncio.ensure_future(_background_memory_save(user_msg, assistant_reply, user_id))
     except Exception:
         pass
 
@@ -698,6 +1018,7 @@ async def run_pi_agent_streaming(
     user_id: str = "family-admin",
     *,
     history: list[dict] | None = None,
+    db_memory_context: str | None = None,
     on_tool_start: "asyncio.coroutines.Coroutine | None" = None,
     on_tool_end: "asyncio.coroutines.Coroutine | None" = None,
     on_heartbeat: "asyncio.coroutines.Coroutine | None" = None,
@@ -722,12 +1043,16 @@ async def run_pi_agent_streaming(
     t0 = time.monotonic()
     logger.info("pi_agent streaming: session=%s jetson=%s", session_id, _JETSON_MODE)
 
-    memory_ctx = await _build_memory_context(message)
-    system_prompt = f"{_PI_SOUL}\n\n{memory_ctx}" if memory_ctx else _PI_SOUL
+    # Load user facts (fast metadata filter) + optional semantic search hit
+    mp_facts = await _mempalace_load_user_facts(user_id)
+    memory_ctx = await _build_memory_context(message, user_id=user_id)
+    extras = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx]))
+    system_prompt = f"{_pi_soul(user_id=user_id)}\n\n{extras}" if extras else _pi_soul(user_id=user_id)
 
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
-        messages.extend(history[-6:])
+        # Use the full window loaded from DB (matches Hermes full-session approach)
+        messages.extend(history[-12:])
     messages.append({"role": "user", "content": message})
 
     url = f"{_model_url()}/chat/completions"
@@ -821,14 +1146,20 @@ async def run_pi_agent_streaming(
 
             logger.info("pi_agent streaming: iter=%d tool=%s args=%s",
                         iteration, tool_name, json.dumps(tool_args)[:120])
-            tool_result = await _dispatch_tool(tool_name, tool_args or {})
+            tool_result = await _dispatch_tool(tool_name, tool_args or {}, user_id=user_id)
 
             # Escalation signal — yield marker and stop; chat.py handles routing
             if tool_result.startswith("__ESCALATE__:"):
                 logger.info("pi_agent streaming: escalation triggered — %s", tool_result[13:80])
-                _fire_memory_capture(message, collected)
+                _fire_memory_capture(message, collected, user_id=user_id)
                 yield tool_result
                 return
+
+            # UI component — yield marker so chat.py can emit zoe.ui_component event;
+            # fall through to append tool messages and let the model produce follow-up text
+            if tool_result.startswith("__UI__:"):
+                logger.info("pi_agent streaming: UI component — %s", tool_result[7:60])
+                yield tool_result
 
             if on_tool_end:
                 try:
@@ -857,5 +1188,50 @@ async def run_pi_agent_streaming(
                 "pi_agent streaming done: session=%s iters=%d elapsed=%.1fs",
                 session_id, iteration, elapsed,
             )
-            _fire_memory_capture(message, collected)
+            _fire_memory_capture(message, collected, user_id=user_id)
             return
+
+
+# ── One-time MemPalace legacy migration ──────────────────────────────────────
+
+_MIGRATION_DONE_FLAG = os.path.join(
+    os.environ.get("MEMPALACE_DATA_DIR", os.path.expanduser("~/.mempalace")),
+    ".migration_v1_done",
+)
+
+
+def migrate_mempalace_legacy_records(default_user_id: str = "family-admin") -> None:
+    """One-time migration: re-tag legacy records (wing='zoe') to wing=default_user_id.
+
+    Also stamps added_at on any records missing it.
+    Safe to call at startup — exits immediately if already done.
+    """
+    if os.path.exists(_MIGRATION_DONE_FLAG):
+        return
+    try:
+        import datetime
+        from mempalace.palace import get_collection  # type: ignore[import]
+        col = get_collection(_MEMPALACE_DATA)
+        old = col.get(where={"wing": "zoe"}, include=["documents", "metadatas"])
+        ids = old.get("ids") or []
+        docs = old.get("documents") or []
+        metas = old.get("metadatas") or []
+        if ids:
+            now_iso = datetime.datetime.now().isoformat()
+            updated_metas = []
+            for m in metas:
+                m = dict(m)
+                m["wing"] = default_user_id
+                if "added_at" not in m:
+                    m["added_at"] = now_iso
+                updated_metas.append(m)
+            col.upsert(ids=ids, documents=docs, metadatas=updated_metas)
+            logger.info("mempalace: migrated %d legacy records → wing=%s", len(ids), default_user_id)
+        # Mark done
+        os.makedirs(os.path.dirname(_MIGRATION_DONE_FLAG), exist_ok=True)
+        with open(_MIGRATION_DONE_FLAG, "w") as f:
+            f.write(f"migrated {len(ids)} records\n")
+    except ImportError:
+        pass  # MemPalace not installed — nothing to migrate
+    except Exception as exc:
+        logger.warning("mempalace migration failed (non-fatal): %s", exc)

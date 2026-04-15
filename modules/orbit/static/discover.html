@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Orbit</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/modules/orbit/static/css/orbit.css?v=2">
+</head>
+<body>
+<div class="page">
+  <div class="page-header" style="display:flex; align-items:center; justify-content:space-between; padding:16px 20px;">
+    <div class="logo"><span class="logo-dot">●</span> Orbit</div>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <button class="btn btn-ghost btn-sm" id="btn-show-qr" title="Show my code">QR</button>
+      <button class="btn btn-ghost btn-sm" id="btn-leave" style="color:var(--text-muted)">Leave</button>
+    </div>
+  </div>
+
+  <div class="content" style="padding-bottom:24px;">
+
+    <!-- Match cards -->
+    <div id="matches-section">
+      <div class="section-title">In your orbit</div>
+      <div id="match-cards">
+        <div class="empty-state" id="matches-empty" style="display:none">
+          <div class="empty-icon">🌌</div>
+          <p>No matches yet — check back as more people arrive</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Connections (QR scans) -->
+    <div id="connections-section" style="display:none">
+      <div class="section-title">
+        Connections
+        <span class="section-badge" id="connections-badge" style="display:none">!</span>
+      </div>
+      <div id="connection-cards"></div>
+    </div>
+
+    <!-- Confirmed meets + contact exchange -->
+    <div id="met-section" style="display:none">
+      <div class="section-title">People you met</div>
+      <div id="met-cards"></div>
+    </div>
+
+    <!-- Contact exchange modal -->
+    <div class="modal-overlay hidden" id="contact-modal">
+      <div class="modal-box">
+        <h2>Share your details</h2>
+        <p>Share only what you're comfortable with. Nothing is required.</p>
+        <div style="text-align:left;">
+          <input type="tel" id="contact-phone" placeholder="Phone number" class="mt-8">
+          <input type="text" id="contact-instagram" placeholder="Instagram @handle" class="mt-8">
+          <input type="tel" id="contact-whatsapp" placeholder="WhatsApp number" class="mt-8">
+          <input type="text" id="contact-other" placeholder="Anything else..." class="mt-8">
+        </div>
+        <div style="display:flex; gap:10px; margin-top:20px;">
+          <button class="btn btn-secondary btn-sm" id="btn-contact-cancel">Cancel</button>
+          <button class="btn btn-primary btn-sm" id="btn-contact-send" style="flex:2">Share ✓</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- View received contact modal -->
+    <div class="modal-overlay hidden" id="received-contact-modal">
+      <div class="modal-box">
+        <h2>Contact details 📬</h2>
+        <p id="received-contact-from"></p>
+        <div id="received-contact-data" style="text-align:left; margin-top:16px;"></div>
+        <button class="btn btn-primary mt-16" id="btn-close-received">Got it ✓</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- QR Modal -->
+<div class="modal-overlay hidden" id="qr-modal">
+  <div class="modal-box">
+    <h2>Your code</h2>
+    <p>Show this to someone and ask "can I scan you?" — or let them ask you.</p>
+    <div id="qr-canvas" style="margin:20px auto;"></div>
+    <p class="hint">They'll see your profile privately on their phone</p>
+    <button class="btn btn-secondary mt-16" id="btn-close-qr">Close</button>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<script src="/modules/orbit/static/js/discover.js?v=2"></script>
+</body>
+</html>

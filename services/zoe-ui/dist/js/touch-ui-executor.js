@@ -29,6 +29,7 @@
         'panel_open_form',
         'panel_stream_text',
         'panel_dismiss_ambient',
+        'show_card',           // Google Home-style intent response card
     ]);
 
     const state = {
@@ -412,17 +413,17 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             if (msgs) msgs.innerHTML = '';
         }
 
-        // State machine
+        // State machine — also dispatches document events so the card overlay (dashboard.html) can react.
         function onListeningStarted() {
             if (!_el) _build();
             clearMessages();
             _setStatus('Listening…', 'listening');
             addMessage('status', '🎤 Listening…');
             show();
+            document.dispatchEvent(new CustomEvent('zoe:voice:wake'));
         }
 
         function onTranscript(text) {
-            // Replace the "Listening…" status message with actual user words
             const msgs = document.getElementById('zvo-messages');
             if (msgs) {
                 const statusMsgs = msgs.querySelectorAll('.zvo-msg.status');
@@ -435,13 +436,13 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             _setStatus('Thinking…', 'thinking');
             removeThinkingDots();
             addThinkingDots();
+            document.dispatchEvent(new CustomEvent('zoe:voice:thinking'));
         }
 
         function onResponding(text) {
             _setStatus('Responding…', 'responding');
             removeThinkingDots();
             if (text) {
-                // Stream the text into a new assistant bubble
                 const existing = document.getElementById('zvo-responding');
                 if (existing) {
                     existing.textContent = text;
@@ -452,18 +453,22 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 const msgs = document.getElementById('zvo-messages');
                 if (msgs) msgs.scrollTop = msgs.scrollHeight;
             }
+            document.dispatchEvent(new CustomEvent('zoe:voice:responding', { detail: { text } }));
         }
 
         function onDone() {
             _setStatus('Done', '');
             removeThinkingDots();
-            // Auto-dismiss 5 seconds after conversation ends
             clearTimeout(_dismissTimer);
             _dismissTimer = setTimeout(() => dismiss(false), 5000);
+            document.dispatchEvent(new CustomEvent('zoe:voice:done'));
         }
 
         return { show, dismiss, onListeningStarted, onTranscript, onThinking, onResponding, onDone };
     })();
+
+    // Expose VoiceOverlay globally so dashboard.html inline scripts can access it.
+    window.VoiceOverlay = VoiceOverlay;
 
     function setOrbMode(mode) {
         const orb = document.getElementById('zoeOrb') || document.querySelector('.zoe-orb');
@@ -605,33 +610,38 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                         }
                     }
                     // Voice state machine — drive orb + conversation overlay from backend events.
-                    if (msg.type === 'voice:listening_started') {
-                        setOrbMode('listening');
-                        // Dismiss screensaver and enter orb phase.
-                        if (typeof zoeAmbient !== 'undefined' && zoeAmbient.exit) zoeAmbient.exit();
-                        document.dispatchEvent(new CustomEvent('zoe:voice:wake'));
-                        // Show voice conversation overlay
-                        VoiceOverlay.onListeningStarted();
-                    }
-                    if (msg.type === 'voice:transcript') {
-                        // User's words from STT — show in overlay
-                        VoiceOverlay.onTranscript((msg.data && msg.data.text) ? msg.data.text : '');
-                    }
-                    if (msg.type === 'voice:thinking') {
-                        setOrbMode('thinking');
-                        VoiceOverlay.onThinking();
-                    }
-                    if (msg.type === 'voice:responding') {
-                        setOrbMode('responding');
-                        const text = (msg.data && msg.data.text) ? msg.data.text : '';
-                        VoiceOverlay.onResponding(text);
-                        if (text && typeof showAmbientStatus === 'function') {
-                            showAmbientStatus(text);
+                    // Panel-ID filter: only react to voice events from our own panel (or global ones without panel_id).
+                    if (msg.type && msg.type.startsWith('voice:')) {
+                        const _vPanel = msg.data && msg.data.panel_id;
+                        if (_vPanel && _vPanel !== state.panelId) {
+                            // Event belongs to a different panel — ignore entirely.
+                        } else {
+                            if (msg.type === 'voice:listening_started') {
+                                setOrbMode('listening');
+                                if (typeof zoeAmbient !== 'undefined' && zoeAmbient.exit) zoeAmbient.exit();
+                                document.dispatchEvent(new CustomEvent('zoe:voice:wake'));
+                                VoiceOverlay.onListeningStarted();
+                            }
+                            if (msg.type === 'voice:transcript') {
+                                VoiceOverlay.onTranscript((msg.data && msg.data.text) ? msg.data.text : '');
+                            }
+                            if (msg.type === 'voice:thinking') {
+                                setOrbMode('thinking');
+                                VoiceOverlay.onThinking();
+                            }
+                            if (msg.type === 'voice:responding') {
+                                setOrbMode('responding');
+                                const text = (msg.data && msg.data.text) ? msg.data.text : '';
+                                VoiceOverlay.onResponding(text);
+                                if (text && typeof showAmbientStatus === 'function') {
+                                    showAmbientStatus(text);
+                                }
+                            }
+                            if (msg.type === 'voice:done') {
+                                setOrbMode('ambient');
+                                VoiceOverlay.onDone();
+                            }
                         }
-                    }
-                    if (msg.type === 'voice:done') {
-                        setOrbMode('ambient');
-                        VoiceOverlay.onDone();
                     }
                     // Instant UI action delivery.
                     if (msg.type === 'ui_action' && msg.data) {
@@ -714,8 +724,17 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             }
 
             if (actionType === 'panel_navigate' || actionType === 'panel_navigate_fullscreen') {
-                const url = payload.url || payload.page || payload.path;
+                if (payload.panel_id && payload.panel_id !== state.panelId) {
+                    return { status: 'skipped', error_code: 'wrong_panel' };
+                }
+                let url = payload.url || payload.page || payload.path;
                 if (!url) return { status: 'failed', error_code: 'missing_url', error_message: 'Missing url for panel_navigate' };
+                // Preserve kiosk and panel_id query params across navigation.
+                const cur = new URLSearchParams(window.location.search);
+                const dest = new URL(url, window.location.origin);
+                if (cur.has('kiosk') && !dest.searchParams.has('kiosk')) dest.searchParams.set('kiosk', cur.get('kiosk'));
+                if (cur.has('panel_id') && !dest.searchParams.has('panel_id')) dest.searchParams.set('panel_id', cur.get('panel_id'));
+                url = dest.pathname + dest.search;
                 const label = payload.label || url;
                 showToast(String(label).slice(0, 120));
                 setTimeout(() => { window.location.assign(url); }, 200);
@@ -833,8 +852,31 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 return { status: 'success' };
             }
 
+            // ── Google Home-style response card ────────────────────────────
+            if (actionType === 'show_card') {
+                // Ignore cards targeting a different panel.
+                if (payload.panel_id && payload.panel_id !== state.panelId) {
+                    return { status: 'skipped', error_code: 'wrong_panel' };
+                }
+                const cardType = payload.type || 'answer';
+                const cardData = payload.data || {};
+                const cardActions = payload.actions || [];
+                if (window.ZoeVoiceCard && typeof window.ZoeVoiceCard.showCard === 'function') {
+                    const html = window.ZoeVoiceCard.renderCard(cardType, cardData);
+                    window.ZoeVoiceCard.showCard(html, cardActions);
+                    window.ZoeVoiceCard.showBar('');
+                } else {
+                    showToast((cardData.text || cardData.title || 'Zoe').slice(0, 80));
+                }
+                return { status: 'success' };
+            }
+
             // ── Open a creation form on the current page ───────────────────
             if (actionType === 'panel_open_form') {
+                // Ignore form actions targeting a different panel.
+                if (payload.panel_id && payload.panel_id !== state.panelId) {
+                    return { status: 'skipped', error_code: 'wrong_panel' };
+                }
                 const form = payload.form || '';
                 const prefill = payload.prefill || {};
                 // Dismiss screensaver if active.

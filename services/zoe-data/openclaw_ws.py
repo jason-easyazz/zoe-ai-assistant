@@ -1,12 +1,21 @@
 """
-OpenClaw gateway client: CLI-based communication with the OpenClaw agent
-and gateway for chat and injection.
+OpenClaw gateway client: ACP-based communication with the OpenClaw agent.
+
+Uses the Agent Client Protocol (ACP) over stdio instead of the brittle
+--local subprocess approach.  This gives us:
+  • Browser / CDP tool support (gateway manages Chromium CDP)
+  • Proper session continuity
+  • Clean JSON-RPC protocol — no stderr parsing hacks
+
+Legacy helpers (chat_inject, openclaw_gateway_call) are retained as-is.
 """
 import asyncio
 import json
 import logging
 import os
 import re
+
+from zoe_acp_client import openclaw_acp, openclaw_acp_stream  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +35,21 @@ def _zoe_context_prefix(
     *,
     user_role: str | None = None,
     username: str | None = None,
+    memories: str | None = None,
 ) -> str:
-    """Prepended so OpenClaw sees zoe-auth role (USER.md is not authoritative)."""
+    """Prepended so OpenClaw sees zoe-auth role, current datetime, and user facts.
+
+    Includes datetime so OpenClaw always knows when it is running.
+    Includes MemPalace facts so OpenClaw has long-term user context from the start.
+    """
+    import datetime
     role = user_role if user_role is not None else "unknown"
     name = (username or "").strip()
-    return f"[CONTEXT: user_id={user_id}, role={role}, name={name}]\n"
+    now_str = datetime.datetime.now().strftime("%A, %d %B %Y — %I:%M %p")
+    prefix = f"[CONTEXT: user_id={user_id}, role={role}, name={name}, datetime={now_str}]\n"
+    if memories:
+        prefix += f"{memories}\n"
+    return prefix
 
 
 async def openclaw_cli(
@@ -41,91 +60,27 @@ async def openclaw_cli(
     user_role: str | None = None,
     username: str | None = None,
     skip_context_prefix: bool = False,
+    memories: str | None = None,
 ) -> str:
-    """Send message through OpenClaw agent with full memory, tools, and personality.
-    Each user_id gets an isolated session so memU scopes memories per family member."""
-    user_session = f"zoe_{user_id}_{session_id}"
+    """Send message through OpenClaw agent via ACP (browser, tools, memory, personality).
+
+    Each user_id maps to its own gateway session so memU scopes memories per
+    family member.  The ACP bridge connects to the running openclaw-gateway,
+    giving access to the browser tool and other gateway-managed resources.
+    """
+    gateway_session_key = f"agent:main:zoe_{user_id}_{session_id}"
     if not skip_context_prefix:
-        message = _zoe_context_prefix(user_id, user_role=user_role, username=username) + message
+        message = _zoe_context_prefix(
+            user_id, user_role=user_role, username=username, memories=memories
+        ) + message
 
-    env = os.environ.copy()
-    env["PATH"] = f"{NODE_BIN}:/home/zoe/bin:{env.get('PATH', '')}"
-    env["NVM_DIR"] = NVM_DIR
-    env["OPENCLAW_GATEWAY_TOKEN"] = GATEWAY_TOKEN
-
-    proc = await asyncio.create_subprocess_exec(
-        OPENCLAW_CMD, "agent",
-        "--local",          # Run embedded (no gateway channel needed) — avoids silent hangs
-        "--agent", "main",
-        "--session-id", user_session,
-        "--message", message,
-        "--json",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=env,
+    text = await openclaw_acp(
+        message,
+        gateway_session_key,
+        timeout=OPENCLAW_AGENT_TIMEOUT_S,
     )
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=OPENCLAW_AGENT_TIMEOUT_S)
-    except asyncio.TimeoutError:
-        proc.kill()
-        return "Sorry, that took too long. Could you try again?"
-
-    raw = stdout.decode().strip()
-
-    # In --local mode the JSON result arrives on stderr (interspersed with diagnostic lines).
-    # If stdout is empty, reconstruct the JSON from stderr by stripping diagnostic lines
-    # (they all start with '[' or whitespace) and parsing what remains.
-    if not raw:
-        stderr_text = stderr.decode() if stderr else ""
-        json_lines = [
-            ln for ln in stderr_text.splitlines()
-            if ln and not ln.startswith("[") and not ln.startswith(" ") and not ln.startswith("\t")
-            or ln.startswith("{") or ln.startswith("}")
-        ]
-        # Keep all non-diagnostic lines (indented JSON body + top-level braces)
-        all_lines = stderr_text.splitlines()
-        json_parts = []
-        in_json = False
-        for ln in all_lines:
-            if ln.startswith("{") and not in_json:
-                in_json = True
-            if in_json:
-                if ln.startswith("["):
-                    continue  # skip interspersed diagnostic lines
-                json_parts.append(ln)
-        raw = "\n".join(json_parts).strip()
-        if not raw:
-            logger.warning("openclaw_cli: empty response from --local agent (stderr was %d chars)", len(stderr_text))
-            return "I'm having trouble right now. Please try again in a moment."
-
-    try:
-        result = json.loads(raw)
-
-        # Format 1 (--local mode): {"payloads": [{"text": "..."}], "meta": {...}}
-        if isinstance(result, dict) and "payloads" in result and not result.get("status"):
-            payloads = result.get("payloads", [])
-            if payloads:
-                text = payloads[0].get("text", "I couldn't process that request.")
-                return _INJECT_ECHO.sub("", text).strip()
-
-        # Format 2 (gateway mode): {"status": "ok", "result": {"payloads": [...]}}
-        if result.get("status") == "ok":
-            payloads = result.get("result", {}).get("payloads", [])
-            if payloads:
-                text = payloads[0].get("text", "I couldn't process that request.")
-                return _INJECT_ECHO.sub("", text).strip()
-
-        if isinstance(result, dict) and "text" in result:
-            return result["text"]
-        if isinstance(result, dict) and "result" in result:
-            r = result["result"]
-            if isinstance(r, str):
-                return r
-            if isinstance(r, dict) and "text" in r:
-                return r["text"]
-        return raw if len(raw) < 2000 else "Something went wrong. Please try again."
-    except json.JSONDecodeError:
-        return raw if len(raw) < 2000 else "I'm having trouble right now. Please try again."
+    # Strip the injected echo prefix if it bled into the reply
+    return _INJECT_ECHO.sub("", text).strip()
 
 
 async def chat_inject(message: str, user_id: str = "family-admin", session_id: str = "web") -> bool:

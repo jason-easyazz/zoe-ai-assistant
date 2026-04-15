@@ -59,8 +59,8 @@ DEVICE_TOKEN = os.environ.get("DEVICE_TOKEN", "")
 AUDIO_DEVICE = os.environ.get("AUDIO_DEVICE", "default")
 SAMPLE_RATE = int(os.environ.get("SAMPLE_RATE", "16000"))
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1280"))
-RECORD_SECONDS = int(os.environ.get("RECORD_SECONDS_MAX", "8"))
-SILENCE_TIMEOUT_S = float(os.environ.get("SILENCE_TIMEOUT_S", "1.5"))
+RECORD_SECONDS = int(os.environ.get("RECORD_SECONDS_MAX", "5"))
+SILENCE_TIMEOUT_S = float(os.environ.get("SILENCE_TIMEOUT_S", "1.0"))
 # Default 0.28 — 0.35 misses many real mics/rooms; tune via WAKEWORD_THRESHOLD.
 WAKEWORD_THRESHOLD = float(os.environ.get("WAKEWORD_THRESHOLD", "0.28"))
 VERIFY_SSL = os.environ.get("VERIFY_SSL", "true").lower() not in ("false", "0", "no")
@@ -92,7 +92,7 @@ AUDIO_OUTPUT_DEVICE = os.environ.get("AUDIO_OUTPUT_DEVICE", AUDIO_DEVICE).strip(
 # After TTS plays on the same speakerphone as the mic, ignore wake scores for this long (echo / Whisper "yes" loop).
 POST_PLAY_COOLDOWN_S = float(os.environ.get("POST_PLAY_COOLDOWN_S", "1.5"))
 # Extra settle time after playback before arming wake again (room reverb).
-POST_PLAY_TAIL_S = float(os.environ.get("POST_PLAY_TAIL_S", "0.8"))
+POST_PLAY_TAIL_S = float(os.environ.get("POST_PLAY_TAIL_S", "0.4"))
 # ── Follow-up listening: after TTS, wait for speech without requiring wake word ──
 FOLLOW_UP_LISTEN_S = float(os.environ.get("FOLLOW_UP_LISTEN_S", "3.0"))
 FOLLOW_UP_MAX_TURNS = int(os.environ.get("FOLLOW_UP_MAX_TURNS", "5"))

@@ -344,3 +344,51 @@ def start_openclaw_background_tasks():
     if os.environ.get("OPENCLAW_BACKGROUND_VERSION_CHECK", "true").lower() != "true":
         return None
     return asyncio.create_task(openclaw_background_loop(), name="openclaw_version_check")
+
+
+# ── Nightly memory digest background loop ────────────────────────────────────
+
+async def _memory_digest_loop():
+    """Wait until 3am, then run LLM digest for all active users daily."""
+    import datetime
+    # Initial delay: sleep until next 3am
+    while True:
+        now = datetime.datetime.now()
+        next_run = now.replace(hour=3, minute=0, second=0, microsecond=0)
+        if next_run <= now:
+            next_run += datetime.timedelta(days=1)
+        delay_s = (next_run - now).total_seconds()
+        logger.info("memory_digest: next run in %.0f minutes", delay_s / 60)
+        await asyncio.sleep(delay_s)
+        try:
+            from memory_digest import run_digest_for_all_active_users  # type: ignore[import]
+            results = await run_digest_for_all_active_users()
+            logger.info("memory_digest: nightly run complete — %d users processed", len(results))
+        except Exception as exc:
+            logger.error("memory_digest: nightly loop error: %s", exc, exc_info=True)
+
+
+def start_memory_digest_background():
+    """Start the nightly memory digest loop (if not disabled)."""
+    if os.environ.get("MEMORY_DIGEST_ENABLED", "true").lower() != "true":
+        return None
+    return asyncio.create_task(_memory_digest_loop(), name="memory_digest_nightly")
+
+
+@router.post("/memories/digest")
+async def trigger_memory_digest(
+    user_id: str = Query(None),
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Manually trigger the LLM memory digest for a user (or the requesting user)."""
+    from memory_digest import run_memory_digest, run_digest_for_all_active_users  # type: ignore[import]
+    target_user = user_id or user["user_id"]
+    # Only admins can trigger digest for other users
+    if target_user != user["user_id"] and user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required to digest another user")
+    if user_id == "all" and user.get("role") == "admin":
+        results = await run_digest_for_all_active_users(db=db)
+        return {"results": results}
+    result = await run_memory_digest(target_user, db=db)
+    return result

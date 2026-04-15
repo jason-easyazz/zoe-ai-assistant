@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connect — Orbit</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/modules/orbit/static/css/orbit.css?v=4">
+  <style>
+    .compat-section { margin:20px 0 0; }
+    .compat-label { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+    .compat-label span { font-size:0.78rem; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); font-weight:600; }
+    .compat-pct { font-size:1.2rem; font-weight:700; color:var(--accent); font-family:'Space Grotesk',sans-serif; }
+    .compat-bar-track { background:rgba(255,255,255,0.07); border-radius:6px; height:8px; overflow:hidden; }
+    .compat-bar-fill { height:100%; border-radius:6px; background:linear-gradient(90deg,#7c3aed,#c084fc,#f472b6); width:0; transition:width 1.2s cubic-bezier(.2,1,.3,1); box-shadow:0 0 8px #c084fc; }
+    .bullets { margin:14px 0 0; list-style:none; padding:0; }
+    .bullets li { font-size:0.875rem; color:var(--text-muted); padding:3px 0; }
+    .bullets li::before { content:'✓ '; color:#34d399; font-weight:700; }
+    .intents-row { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
+    .badge-intent { padding:4px 10px; border-radius:20px; font-size:0.78rem; font-weight:600; border:1px solid rgba(167,139,250,.3); color:#c4b5fd; background:rgba(124,58,237,.12); }
+    .private-match-card {
+      margin:16px 0 0;
+      background:rgba(0,0,0,0.4);
+      border:1px solid rgba(244,114,182,0.25);
+      border-radius:12px;
+      padding:14px 16px;
+    }
+    .private-match-card .pm-header { font-size:0.78rem; color:rgba(244,114,182,0.7); text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px; }
+    .private-match-card .pm-items { display:flex; flex-wrap:wrap; gap:6px; }
+    .pm-chip { padding:4px 12px; border-radius:20px; font-size:0.83rem; font-weight:500; background:rgba(244,114,182,0.15); border:1px solid rgba(244,114,182,0.3); color:#f9a8d4; }
+    .quiz-card {
+      margin:16px 0 0;
+      background:rgba(251,191,36,0.07);
+      border:1px solid rgba(251,191,36,0.25);
+      border-radius:14px;
+      padding:16px;
+    }
+    .quiz-card .quiz-q { font-size:0.95rem; font-weight:500; margin-bottom:12px; line-height:1.4; }
+    .quiz-opts { display:flex; flex-direction:column; gap:8px; }
+    .quiz-opt {
+      background:rgba(255,255,255,0.04);
+      border:1px solid rgba(255,255,255,0.12);
+      border-radius:10px;
+      padding:10px 14px;
+      text-align:left;
+      font-size:0.9rem;
+      color:var(--text);
+      cursor:pointer;
+      transition:all .15s;
+    }
+    .quiz-opt:hover { border-color:rgba(251,191,36,0.5); background:rgba(251,191,36,0.08); }
+    .quiz-opt.correct { border-color:#34d399; background:rgba(52,211,153,0.12); color:#34d399; }
+    .quiz-opt.wrong   { border-color:#f87171; background:rgba(248,113,113,0.08); color:#f87171; }
+    .quiz-result { font-size:0.875rem; text-align:center; padding:8px 0; font-weight:600; }
+    .sd-timer-section { margin:20px 0 0; text-align:center; }
+    .sd-timer-label { font-size:0.78rem; text-transform:uppercase; letter-spacing:.08em; color:rgba(251,191,36,0.7); margin-bottom:6px; }
+    .sd-timer-display { font-size:3.5rem; font-weight:800; font-family:'Space Grotesk',sans-serif; color:#fbbf24; letter-spacing:-.02em; line-height:1; text-shadow:0 0 30px rgba(251,191,36,0.4); }
+    .sd-timer-sub { font-size:0.85rem; color:var(--text-muted); margin-top:6px; }
+    .reaction-row { display:flex; gap:16px; justify-content:center; margin-top:16px; }
+    .reaction-btn { font-size:2.2rem; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12); border-radius:50%; width:64px; height:64px; cursor:pointer; transition:all .2s; }
+    .reaction-btn:hover { transform:scale(1.12); }
+    .reaction-btn.yes:hover { background:rgba(52,211,153,0.15); border-color:#34d399; }
+    .reaction-btn.no:hover  { background:rgba(248,113,113,0.12); border-color:#f87171; }
+  </style>
+</head>
+<body>
+<div class="page">
+  <div class="page-header">
+    <div class="logo">Orbit</div>
+  </div>
+
+  <div class="content">
+
+    <!-- Loading -->
+    <div class="screen active" id="screen-loading">
+      <div class="text-center mt-24">
+        <div class="spinner"></div>
+        <p class="text-muted mt-16">Scanning...</p>
+      </div>
+    </div>
+
+    <!-- Profile view -->
+    <div class="screen" id="screen-profile">
+      <div class="connect-profile">
+        <div class="connect-avatar" id="connect-avatar"></div>
+        <h1 id="connect-name"></h1>
+        <div id="connect-intents-row" class="intents-row" style="justify-content:center;margin-top:8px;"></div>
+        <div id="connect-zone" class="text-muted" style="font-size:0.875rem;margin-top:4px;"></div>
+      </div>
+
+      <!-- Compatibility -->
+      <div class="compat-section" id="compat-section" style="display:none;">
+        <div class="compat-label">
+          <span>Compatibility</span>
+          <span class="compat-pct" id="compat-pct">—</span>
+        </div>
+        <div class="compat-bar-track">
+          <div class="compat-bar-fill" id="compat-bar"></div>
+        </div>
+        <ul class="bullets" id="compat-bullets"></ul>
+        <p id="personality-note" class="hint mt-8" style="display:none;font-style:italic;"></p>
+      </div>
+
+      <!-- Private match -->
+      <div class="private-match-card" id="private-match-card" style="display:none;">
+        <div class="pm-header">🔒 Private match</div>
+        <div class="pm-items" id="private-match-items"></div>
+      </div>
+
+      <!-- Interests & activities -->
+      <div class="mt-16">
+        <span class="label">Interests</span>
+        <div class="chip-grid mt-8" id="connect-interests"></div>
+      </div>
+
+      <div id="connect-values-wrap" class="mt-12" style="display:none">
+        <span class="label">Values</span>
+        <div class="chip-grid mt-8" id="connect-values"></div>
+      </div>
+
+      <!-- Quiz card (if challenge active) -->
+      <div class="quiz-card" id="quiz-card" style="display:none;">
+        <div style="font-size:0.72rem;text-transform:uppercase;letter-spacing:.08em;color:rgba(251,191,36,0.7);margin-bottom:8px;">🎯 Scan Challenge</div>
+        <div class="quiz-q" id="quiz-question-text"></div>
+        <div class="quiz-opts" id="quiz-options"></div>
+        <div class="quiz-result" id="quiz-result" style="display:none;"></div>
+      </div>
+
+      <!-- Speed dating timer (if SD active) -->
+      <div class="sd-timer-section" id="sd-timer-section" style="display:none;">
+        <div class="sd-timer-label">⏱ Speed Dating Round</div>
+        <div class="sd-timer-display" id="sd-timer-display">5:00</div>
+        <div class="sd-timer-sub">Stay, chat, see where it goes</div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div id="not-in-orbit" style="display:none">
+        <div class="empty-state">
+          <div class="empty-icon">🌑</div>
+          <p>You're not checked into Orbit right now. Scan a venue QR to join first.</p>
+          <button class="btn btn-primary mt-16" id="btn-go-checkin">Check in now</button>
+        </div>
+      </div>
+
+      <!-- Normal connect buttons (hidden during SD timer) -->
+      <div id="send-section">
+        <p class="text-muted text-center" style="font-size:0.8rem; margin-bottom:16px;">
+          Only you can see this scan. They won't know unless you send a connection.
+        </p>
+        <button class="btn btn-primary" id="btn-connect">Send a connection ✦</button>
+        <button class="btn btn-ghost text-center mt-8" id="btn-no">Not for me</button>
+      </div>
+
+      <!-- Speed dating reaction buttons (shown after timer) -->
+      <div id="sd-reaction-section" style="display:none;">
+        <p class="text-muted text-center" style="font-size:0.875rem;margin-bottom:8px;">Time's up! What did you think?</p>
+        <div class="reaction-row">
+          <button class="reaction-btn yes" id="btn-sd-yes">👍</button>
+          <button class="reaction-btn no" id="btn-sd-no">👎</button>
+        </div>
+        <p class="hint text-center mt-8">Mutual 👍 creates a silent connection. No pressure.</p>
+      </div>
+    </div>
+
+    <!-- Sent -->
+    <div class="screen" id="screen-sent">
+      <div class="text-center mt-24">
+        <div style="font-size:3rem">✓</div>
+        <h1 class="mt-16">Connection sent</h1>
+        <p class="text-muted mt-8">They'll see a quiet notification. No pressure either way.</p>
+        <button class="btn btn-primary mt-24" id="btn-back-discover">Back to Orbit →</button>
+      </div>
+    </div>
+
+    <!-- Mutual -->
+    <div class="screen" id="screen-mutual">
+      <div class="text-center mt-24">
+        <div style="font-size:3rem">✦</div>
+        <h1 class="mt-16">It's mutual</h1>
+        <p class="text-muted mt-8" id="mutual-msg">You both scanned each other. You're connected.</p>
+        <button class="btn btn-primary mt-24" id="btn-mutual-discover">Back to Orbit →</button>
+      </div>
+    </div>
+
+    <!-- Error -->
+    <div class="screen" id="screen-error">
+      <div class="empty-state mt-24">
+        <div class="empty-icon">🌑</div>
+        <h2 id="error-msg">This code has expired</h2>
+        <p>The person may have left Orbit, or the session has ended.</p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="/modules/orbit/static/js/connect.js?v=4"></script>
+</body>
+</html>

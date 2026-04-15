@@ -26,6 +26,7 @@ from intent_router import detect_intent, execute_intent, openclaw_user_message
 # Intent → touch panel navigation map (page + optional form to open).
 _INTENT_PANEL_NAV = {
     "calendar_create":   ("/touch/calendar.html", "new_event"),
+    "calendar_show":     ("/touch/calendar.html", None),
     "note_create":       ("/touch/notes.html",    "new_note"),
     "journal_create":    ("/touch/journal.html",  "new_journal"),
     "weather":           ("/touch/weather.html",  None),
@@ -47,6 +48,14 @@ def _intent_card_data(intent) -> dict:
                 "title": slots.get("title") or slots.get("event") or "",
                 "date": slots.get("date") or "",
                 "time": slots.get("time") or "",
+            },
+        }
+    if name == "calendar_show":
+        return {
+            "type": "calendar",
+            "data": {
+                "action": "Showing calendar",
+                "qualifier": slots.get("qualifier") or "today",
             },
         }
     if name == "list_add":
@@ -114,7 +123,7 @@ async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
             })
         # Emit a show_card action so the dashboard overlay shows intent-specific info.
         card = _intent_card_data(intent)
-        card_payload: dict = {"card_type": card["type"], "card_data": card["data"]}
+        card_payload: dict = {"type": card["type"], "data": card["data"]}
         if panel_id:
             card_payload["panel_id"] = panel_id
         await broadcaster.broadcast("all", "ui_action", {
@@ -550,6 +559,7 @@ async def run_bonsai_agent(
     session_id: str,
     user_id: str = "family-admin",
     username: str = "",
+    max_tokens_override: int = 0,
 ) -> tuple[str, bool]:
     """
     Call Bonsai-8B for a fast conversational response.
@@ -595,7 +605,7 @@ async def run_bonsai_agent(
             *prior_history,
             {"role": "user", "content": message},
         ],
-        "max_tokens": 512,
+        "max_tokens": max_tokens_override if max_tokens_override > 0 else 512,
         "temperature": 0.5,
         "stream": False,
     }
@@ -1445,12 +1455,9 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
     session_id = body.get("session_id", f"web_{uuid.uuid4().hex[:8]}")
     user_id = user["user_id"]
     force_openclaw = bool(body.get("force_openclaw", False))
-    # panel_id forwarded by voice_command so intent nav targets the correct panel.
     req_panel_id: str | None = body.get("panel_id") or None
-    # Voice mode: inject spoken-language suffix AFTER intent detection (see non-streaming path).
-    # The suffix must not be present when detect_intent() runs because many patterns use
-    # end-of-string anchors that would never match if the suffix is appended early.
     is_voice_mode = request.headers.get("X-Voice-Mode", "").lower() in ("true", "1", "yes")
+    voice_max_tokens = int(body.get("max_tokens", 0)) if is_voice_mode else 0
 
     if not message:
         return {"error": "No message provided"}
@@ -1564,7 +1571,8 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
         if _USE_PI_AGENT:
             expanded_msg = openclaw_user_message(intent, message_for_processing) if intent else message_for_processing
             response_text = await run_pi_agent(
-                expanded_msg, session_id, user_id, db_memory_context=None
+                expanded_msg, session_id, user_id, db_memory_context=None,
+                max_tokens_override=voice_max_tokens,
             )
             # If Pi Agent signals escalation, route to OpenClaw
             if response_text.startswith("__ESCALATE__:"):
@@ -1581,7 +1589,11 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
         else:
             # Try Bonsai fast path first for conversational messages
             if _BONSAI_FAST_PATH and not force_openclaw:
-                bonsai_text, needs_escalation = await run_bonsai_agent(message_for_processing, session_id, user_id, username=user.get("username") or "")
+                bonsai_text, needs_escalation = await run_bonsai_agent(
+                    message_for_processing, session_id, user_id,
+                    username=user.get("username") or "",
+                    max_tokens_override=voice_max_tokens,
+                )
                 if not needs_escalation and bonsai_text:
                     asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, bonsai_text))
                     _fire_memory_capture(message_for_processing, bonsai_text, user_id=user_id)
