@@ -11,17 +11,17 @@
 'use strict';
 
 const TouchMenu = (() => {
-    const NAV_H = 64;
+    const NAV_H = 72;
 
     const PRIMARY = [
-        { id: 'dashboard', path: '/touch/dashboard.html',  icon: '⊞',  label: 'Home'     },
+        { id: 'dashboard', path: '/touch/dashboard.html',  icon: '🏠', label: 'Home'     },
         { id: 'calendar',  path: '/touch/calendar.html',   icon: '📅', label: 'Calendar' },
-        { id: 'lists',     path: '/touch/lists.html',      icon: '✅', label: 'Lists'    },
+        { id: 'lists',     path: '/touch/lists.html',      icon: '☰',  label: 'Lists'    },
         { id: 'chat',      path: '/touch/chat.html',       icon: '💬', label: 'Chat'     },
     ];
 
     const ALL_PAGES = [
-        { id: 'dashboard',  path: '/touch/dashboard.html',  icon: '⊞',  label: 'Home'       },
+        { id: 'dashboard',  path: '/touch/dashboard.html',  icon: '🏠', label: 'Home'       },
         { id: 'calendar',   path: '/touch/calendar.html',   icon: '📅', label: 'Calendar'   },
         { id: 'lists',      path: '/touch/lists.html',      icon: '✅', label: 'Lists'      },
         { id: 'notes',      path: '/touch/notes.html',      icon: '📝', label: 'Notes'      },
@@ -74,7 +74,7 @@ const TouchMenu = (() => {
     border-right: 1px solid var(--glass-border, rgba(0,0,0,0.07));
 }
 #ztm-orb-dot {
-    width: 36px; height: 36px; border-radius: 50%;
+    width: 40px; height: 40px; border-radius: 50%;
     background: var(--primary-gradient, linear-gradient(135deg, #7B61FF, #5AE0E0));
     box-shadow: 0 0 18px rgba(123,97,255,0.50);
     animation: ztm-breathe 4s ease-in-out infinite;
@@ -88,43 +88,45 @@ const TouchMenu = (() => {
 
 /* Primary tab strip */
 #ztm-tabs {
-    flex: 1; display: flex; align-items: stretch; min-width: 0;
+    flex: 1; display: flex; align-items: center; min-width: 0; padding: 0 4px;
 }
 .ztm-tab {
     flex: 1;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 3px; text-decoration: none;
-    color: var(--text-muted, #999);
-    font-size: 11px; font-weight: 600; letter-spacing: 0.3px;
-    text-transform: uppercase; white-space: nowrap;
-    position: relative;
-    transition: color 0.15s, background 0.15s;
-    cursor: pointer; min-width: 64px;
-    -webkit-tap-highlight-color: transparent; padding: 0 4px;
+    gap: 4px; text-decoration: none;
+    color: var(--text-muted, #aaa);
+    font-size: 11px; font-weight: 500; letter-spacing: 0.1px;
+    white-space: nowrap;
+    border-radius: 14px;
+    transition: color 0.18s, background 0.18s;
+    cursor: pointer; min-width: 60px;
+    -webkit-tap-highlight-color: transparent;
+    padding: 8px 6px; margin: 0 2px;
 }
-.ztm-tab:active { background: rgba(123,97,255,0.06); }
-.ztm-tab.active { color: var(--primary-purple, #7B61FF); }
-.ztm-tab.active::after {
-    content: ''; position: absolute;
-    bottom: 0; left: 20%; right: 20%; height: 3px;
-    background: var(--primary-gradient, #7B61FF);
-    border-radius: 2px 2px 0 0;
+.ztm-tab:active { background: rgba(123,97,255,0.08); transform: scale(0.94); }
+.ztm-tab.active {
+    color: var(--primary-purple, #7B61FF);
+    background: rgba(123,97,255,0.13);
 }
-.ztm-tab-icon { font-size: 22px; line-height: 1; }
-.ztm-tab-label { font-size: 11px; line-height: 1; }
+.dark-mode .ztm-tab.active { background: rgba(123,97,255,0.22); }
+.ztm-tab-icon { font-size: 26px; line-height: 1; }
+.ztm-tab-label { font-size: 10px; line-height: 1; font-weight: 600; letter-spacing: 0.2px; }
 
 /* More button */
 #ztm-more-btn {
-    flex-shrink: 0; min-width: 64px;
+    flex-shrink: 0; min-width: 60px;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 3px; color: var(--text-muted, #999);
-    font-size: 11px; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase;
+    gap: 4px; color: var(--text-muted, #aaa);
+    font-size: 11px; font-weight: 500;
     cursor: pointer; border: none; background: transparent;
-    padding: 0 8px; -webkit-tap-highlight-color: transparent; transition: color 0.15s;
+    border-radius: 14px;
+    padding: 8px 6px; margin: 0 2px;
+    -webkit-tap-highlight-color: transparent; transition: color 0.18s, background 0.18s;
     font-family: var(--font-family, inherit);
 }
-#ztm-more-btn:active { background: rgba(123,97,255,0.06); }
-#ztm-more-btn .ztm-tab-icon { font-size: 22px; }
+#ztm-more-btn:active { background: rgba(123,97,255,0.08); }
+#ztm-more-btn.active { color: var(--primary-purple, #7B61FF); background: rgba(123,97,255,0.13); }
+#ztm-more-btn .ztm-tab-icon { font-size: 26px; }
 
 /* Right actions */
 #ztm-right {
@@ -370,18 +372,22 @@ const TouchMenu = (() => {
     }
 
     function adjustLayout(pageId) {
+        // Set CSS variable so all pages can reference actual nav height
+        document.documentElement.style.setProperty('--ztm-nav-h', NAV_H + 'px');
+
         if (pageId === 'dashboard') {
             const app = document.getElementById('app');
             if (app) {
                 app.style.top    = NAV_H + 'px';
-                app.style.height = `calc(100vh - ${NAV_H}px)`;
+                app.style.height = `calc(100dvh - ${NAV_H}px)`;
                 app.style.bottom = '0';
             }
         } else {
             document.body.style.paddingTop = NAV_H + 'px';
         }
-        const ss = document.getElementById('ss');
-        if (ss) { ss.style.top = '0'; ss.style.height = '100vh'; }
+        // Screensaver always covers full viewport (above nav)
+        const ss = document.getElementById('zoe-ss');
+        if (ss) { ss.style.top = '0'; ss.style.height = '100dvh'; }
         const np = document.getElementById('notifications-panel');
         if (np) np.style.top = NAV_H + 'px';
     }

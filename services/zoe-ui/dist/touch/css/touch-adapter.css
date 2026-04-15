@@ -46,7 +46,7 @@
    ═══════════════════════════════════════════════ */
 
 :root {
-    --ta-nav-h: 64px;   /* must match TouchMenu NAV_H */
+    --ta-nav-h: 72px;   /* must match TouchMenu NAV_H */
 }
 
 /* Anything that was anchored below the 60px desktop nav */
