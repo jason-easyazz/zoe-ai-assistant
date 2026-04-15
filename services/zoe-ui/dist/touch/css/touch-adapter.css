@@ -1,0 +1,395 @@
+/**
+ * Zoe Touch Adapter
+ * Applied on top of ported desktop pages to make them touch-friendly.
+ * This file overrides — it does not replace — the desktop inline styles.
+ *
+ * Load order: desktop inline <style> → widgets-premium.css → this file → touch-menu.js injects #ztm-nav
+ */
+
+/* ═══════════════════════════════════════════════
+   1. HIDE DESKTOP CHROME (replaced by touch-menu.js)
+   ═══════════════════════════════════════════════ */
+
+/* Desktop nav bar */
+.nav-bar                  { display: none !important; }
+
+/* Desktop "More" sheet and mobile hamburger menu — handled by touch-menu "More" grid */
+#moreOverlay,
+.more-overlay,
+#mobileNavMenu,
+.mobile-nav-menu,
+#mobileNavOverlay,
+.mobile-nav-overlay       { display: none !important; }
+
+/* Desktop floating action buttons (edit layout, add widget) — not relevant on kiosk */
+.fab-edit-btn,
+.fab-add-widget           { display: none !important; }
+
+/* Widget library overlay triggered by FAB */
+#widgetLibraryOverlay,
+.widget-library-overlay   { display: none !important; }
+
+/* Pull-to-refresh affordance (no pull gesture in kiosk) */
+#pullToRefreshIndicator,
+.pull-to-refresh          { display: none !important; }
+
+/* Desktop notifications panel slide-in — handled via WS toasts on touch */
+#notificationsPanel,
+.notifications-panel      { display: none !important; }
+
+/* Auth overlay that may appear on music page */
+#authOverlay              { display: none !important; }
+
+
+/* ═══════════════════════════════════════════════
+   2. LAYOUT — make room for touch-menu.js nav bar
+   ═══════════════════════════════════════════════ */
+
+:root {
+    --ta-nav-h: 64px;   /* must match TouchMenu NAV_H */
+}
+
+/* Anything that was anchored below the 60px desktop nav */
+.main-container,
+.app-container,
+main,
+.main-layout,
+.main-content,
+.settings-layout,
+.page-header {
+    padding-top: var(--ta-nav-h) !important;
+    margin-top: 0 !important;
+}
+
+/* Full-height layouts that use 100vh need adjustment */
+.main-layout,
+.canvas-container {
+    height: calc(100dvh - var(--ta-nav-h)) !important;
+    max-height: calc(100dvh - var(--ta-nav-h)) !important;
+}
+
+/* Grid scroll area */
+.grid-stack-container,
+.grid-stack {
+    margin-top: 0;
+}
+
+/* chat.html specific: the app grid sits margin-top:60px from desktop */
+#appContainer {
+    margin-top: var(--ta-nav-h) !important;
+}
+
+
+/* ═══════════════════════════════════════════════
+   3. TOUCH TARGETS — 44px minimum per HIG / WCAG
+   ═══════════════════════════════════════════════ */
+
+button,
+[role="button"],
+a.nav-item,
+.tab-btn,
+.view-toggle-btn,
+.control-btn,
+.filter-chip,
+.seg-btn,
+.keypad-btn,
+.key-btn,
+.profile-card,
+.people-item,
+.sidebar-item,
+.mobile-nav-item,
+select,
+input[type="checkbox"],
+input[type="radio"] {
+    min-height: 44px !important;
+    min-width: 44px !important;
+}
+
+/* Inputs should be comfortable to tap */
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="search"],
+input[type="number"],
+textarea,
+select {
+    min-height: 44px;
+    font-size: 16px !important; /* prevents iOS zoom */
+    padding: 10px 14px;
+}
+
+/* Checkbox & radio — make the whole row tappable */
+.setting-item,
+.setting-row {
+    min-height: 52px;
+    cursor: pointer;
+}
+
+
+/* ═══════════════════════════════════════════════
+   4. BASE TYPOGRAPHY — legible at arm's length
+   ═══════════════════════════════════════════════ */
+
+html {
+    font-size: clamp(15px, 2vw, 18px);
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+}
+
+body {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    overflow-x: hidden;
+}
+
+/* Allow text selection inside chat and notes areas */
+.messages-container,
+.message-content,
+.notes-content,
+.entry-card,
+.journal-content {
+    -webkit-user-select: text;
+    user-select: text;
+}
+
+
+/* ═══════════════════════════════════════════════
+   5. GRIDSTACK — lock layout on touch kiosk
+   ═══════════════════════════════════════════════ */
+
+/* Remove drag handles; grid is view-only in kiosk */
+.grid-stack-item-handle,
+.gs-item-handle,
+.widget-drag-handle      { display: none !important; }
+
+.grid-stack-item         { cursor: default !important; }
+
+/* Disable Gridstack touch-move dragging via pointer-events on the
+   placeholder (JS lock: dashboard calls grid.setStatic(true) on load) */
+.grid-stack-placeholder  { display: none !important; }
+
+
+/* ═══════════════════════════════════════════════
+   6. REMOVE HOVER — replace with :active feedback
+   ═══════════════════════════════════════════════ */
+
+/* Cards lift on hover — replace with tap feedback */
+.widget:hover,
+.glass-card:hover,
+.forecast-day:hover,
+.people-item:hover,
+.nav-item:hover           { transform: none !important; box-shadow: inherit !important; }
+
+button:active,
+[role="button"]:active,
+.tab-btn:active,
+.filter-chip:active,
+.view-toggle-btn:active {
+    transform: scale(0.96) !important;
+    opacity: 0.85 !important;
+    transition: transform 0.1s ease, opacity 0.1s ease !important;
+}
+
+
+/* ═══════════════════════════════════════════════
+   7. DARK MODE SUPPORT
+   ═══════════════════════════════════════════════ */
+
+html.dark-mode body {
+    background: linear-gradient(135deg, #060610 0%, #0d0d1a 100%) !important;
+    color: rgba(255,255,255,0.93) !important;
+}
+
+html.dark-mode .nav-bar,
+html.dark-mode #ztm-nav {
+    background: rgba(6, 6, 16, 0.85) !important;
+    border-bottom-color: rgba(123,97,255,0.2) !important;
+}
+
+html.dark-mode .widget,
+html.dark-mode [class*="glass"],
+html.dark-mode .card,
+html.dark-mode .settings-section,
+html.dark-mode .settings-card,
+html.dark-mode .sidebar,
+html.dark-mode .people-sidebar,
+html.dark-mode .insights-sidebar {
+    background: rgba(255,255,255,0.055) !important;
+    border-color: rgba(255,255,255,0.09) !important;
+    color: rgba(255,255,255,0.93) !important;
+}
+
+html.dark-mode input,
+html.dark-mode textarea,
+html.dark-mode select {
+    background: rgba(255,255,255,0.07) !important;
+    color: rgba(255,255,255,0.93) !important;
+    border-color: rgba(255,255,255,0.15) !important;
+}
+
+html.dark-mode .entry-card,
+html.dark-mode .entry-title,
+html.dark-mode .entry-content {
+    background: rgba(255,255,255,0.055) !important;
+    color: rgba(255,255,255,0.93) !important;
+}
+
+html.dark-mode h1, html.dark-mode h2, html.dark-mode h3,
+html.dark-mode h4, html.dark-mode h5, html.dark-mode h6,
+html.dark-mode p, html.dark-mode span, html.dark-mode label,
+html.dark-mode .setting-label, html.dark-mode .section-header {
+    color: rgba(255,255,255,0.93) !important;
+}
+
+html.dark-mode .text-secondary,
+html.dark-mode .subtitle,
+html.dark-mode .caption {
+    color: rgba(255,255,255,0.55) !important;
+}
+
+
+/* ═══════════════════════════════════════════════
+   8. SCROLLING — smooth momentum scrolling
+   ═══════════════════════════════════════════════ */
+
+.main-container,
+.app-container,
+main,
+.main-layout,
+.settings-layout,
+.messages-container,
+.timeline-entries,
+.people-list,
+#insightsList,
+#peopleList {
+    -webkit-overflow-scrolling: touch;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* Hide scrollbars visually (still scrollable) */
+* {
+    scrollbar-width: none;
+}
+*::-webkit-scrollbar {
+    display: none;
+}
+
+
+/* ═══════════════════════════════════════════════
+   9. PAGE FADE-IN TRANSITION
+   ═══════════════════════════════════════════════ */
+
+@keyframes ta-fade-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.main-container,
+.app-container,
+main,
+.main-layout {
+    animation: ta-fade-in 0.3s ease-out;
+}
+
+
+/* ═══════════════════════════════════════════════
+   10. CALENDAR TOUCH FIXES
+   ═══════════════════════════════════════════════ */
+
+/* Calendar cells need to be tappable */
+.day-cell,
+.week-slot,
+.timeline-slot,
+.event-chip {
+    min-height: 44px;
+}
+
+.calendar-container {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+
+/* ═══════════════════════════════════════════════
+   11. MUSIC PAGE TOUCH FIXES
+   ═══════════════════════════════════════════════ */
+
+.player-controls button,
+.track-item,
+.playlist-item {
+    min-height: 52px;
+}
+
+.volume-slider,
+.seek-bar {
+    height: 32px; /* fat touch target for range inputs */
+}
+
+
+/* ═══════════════════════════════════════════════
+   12. PEOPLE / MEMORIES CANVAS TOUCH FIXES
+   ═══════════════════════════════════════════════ */
+
+/* Sidebar should scroll, canvas fills remaining space */
+.people-sidebar,
+.insights-sidebar {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    min-width: 220px;
+    max-width: 260px;
+}
+
+#peopleCanvas,
+#memoryCanvas {
+    touch-action: none; /* let our JS handle pinch/pan */
+}
+
+
+/* ═══════════════════════════════════════════════
+   13. SETTINGS TOUCH FIXES
+   ═══════════════════════════════════════════════ */
+
+.section-header {
+    min-height: 52px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    padding: 0 20px;
+}
+
+.section-content {
+    padding: 0 20px 16px;
+}
+
+
+/* ═══════════════════════════════════════════════
+   14. CHAT TOUCH FIXES
+   ═══════════════════════════════════════════════ */
+
+/* Sessions panel hidden on small screens */
+@media (max-width: 900px) {
+    .sessions-panel,
+    .context-panel,
+    .agent-panel {
+        display: none !important;
+    }
+    #appContainer {
+        grid-template-columns: 1fr !important;
+    }
+}
+
+.send-btn,
+#sendBtn,
+.stop-btn {
+    min-width: 52px !important;
+    min-height: 52px !important;
+}
+
+#chatInput,
+#messageInput,
+.message-input {
+    font-size: 16px !important;
+    min-height: 52px;
+}

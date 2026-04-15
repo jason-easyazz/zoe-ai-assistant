@@ -8,6 +8,38 @@
     <meta http-equiv="Expires" content="0">
     <title>Zoe - AI Chat</title>
     <style>
+        :root {
+            --clr-primary: #7B61FF;
+            --clr-primary-rgb: 123,97,255;
+            --clr-gradient: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            /* Glass surfaces — aligns with Zoe glass.css naming */
+            --clr-glass-bg: rgba(255,255,255,0.9);
+            --clr-glass-bg-2: rgba(255,255,255,0.7);
+            --clr-glass-border: rgba(255,255,255,0.3);
+            /* Content borders — keep same name to avoid breakage */
+            --clr-border: rgba(0,0,0,0.08);
+            --clr-surface: #ffffff;
+            --clr-surface-2: #f8f9fb;
+            --clr-text: #333;
+            --clr-text-2: #666;
+            --clr-text-3: #999;
+            /* Radii — align with Zoe glass.css scale */
+            --radius: 12px;
+            --radius-sm: 8px;
+            --radius-lg: 16px;
+            /* Shadows — match dashboard widget scale */
+            --shadow-sm: 0 2px 8px rgba(0,0,0,0.08);
+            --shadow: 0 4px 12px rgba(0,0,0,0.1);
+            --shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
+            --shadow-purple: 0 8px 25px rgba(123,97,255,0.3);
+            /* Status */
+            --clr-success: #10b981;
+            --clr-success-bg: rgba(16,185,129,0.1);
+            --clr-error: #ef4444;
+            --clr-error-bg: rgba(239,68,68,0.1);
+            --clr-warning: #f59e0b;
+            --clr-warning-bg: rgba(245,158,11,0.1);
+        }
         * { 
             margin: 0; padding: 0; box-sizing: border-box;
         }
@@ -43,19 +75,16 @@
         .messages-container {
             flex: 1;
             overflow-y: auto;
-            padding: 30px;
+            padding: 24px 28px;
             display: flex;
             flex-direction: column;
-            gap: 24px;
+            gap: 20px;
         }
-        
-        .messages-container::-webkit-scrollbar { width: 8px; }
-        .messages-container::-webkit-scrollbar-track {
-            background: rgba(255, 255, 255, 0.3);
-            border-radius: 10px;
-        }
+
+        .messages-container::-webkit-scrollbar { width: 5px; }
+        .messages-container::-webkit-scrollbar-track { background: transparent; }
         .messages-container::-webkit-scrollbar-thumb {
-            background: rgba(123, 97, 255, 0.3);
+            background: rgba(123, 97, 255, 0.15);
             border-radius: 10px;
         }
         
@@ -63,7 +92,7 @@
         .message-group {
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 6px;
             animation: messageSlide 0.3s ease-out;
         }
         
@@ -111,11 +140,11 @@
         }
         
         .message-content {
-            max-width: 70%;
-            padding: 16px 20px;
-            border-radius: 20px;
-            font-size: 15px;
-            line-height: 1.6;
+            max-width: 72%;
+            padding: 14px 18px;
+            border-radius: var(--radius-lg);
+            font-size: 14.5px;
+            line-height: 1.65;
             word-wrap: break-word;
         }
         
@@ -126,141 +155,133 @@
         }
         
         .message-group.assistant .message-content {
-            background: rgba(255, 255, 255, 0.9);
+            background: var(--clr-glass-bg);
             backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.4);
-            color: #333;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+            border: 1px solid var(--clr-glass-border);
+            color: var(--clr-text);
+            box-shadow: var(--shadow-sm);
             border-bottom-left-radius: 4px;
         }
         
         /* Subgraph Execution Cards */
         .subgraph-card {
-            margin: 16px 0 16px 32px;
-            background: rgba(123, 97, 255, 0.05);
+            margin: 8px 0 8px 32px;
+            background: var(--clr-glass-bg-2);
             backdrop-filter: blur(20px);
-            border: 1px solid rgba(123, 97, 255, 0.2);
-            border-radius: 16px;
-            padding: 20px;
-            animation: subgraphSlide 0.4s ease-out;
+            border: 1px solid var(--clr-glass-border);
+            border-left: 3px solid rgba(123,97,255,0.35);
+            border-radius: var(--radius);
+            padding: 14px 16px;
+            animation: subgraphSlide 0.35s ease-out;
         }
-        
+
         @keyframes subgraphSlide {
-            from { opacity: 0; transform: translateY(10px) scale(0.95); }
-            to { opacity: 1; transform: translateY(0) scale(1); }
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
         }
-        
+
         .subgraph-header {
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 16px;
+            margin-bottom: 10px;
         }
-        
+
         .subgraph-title {
             display: flex;
             align-items: center;
-            gap: 10px;
-            font-size: 15px;
+            gap: 8px;
+            font-size: 13px;
             font-weight: 600;
-            color: #333;
+            color: var(--clr-text);
         }
-        
+
         .subgraph-icon {
-            font-size: 24px;
+            font-size: 16px;
             animation: subgraphPulse 2s ease-in-out infinite;
         }
-        
+
         @keyframes subgraphPulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.15); }
+            0%, 100% { transform: scale(1); opacity: 0.7; }
+            50% { transform: scale(1.15); opacity: 1; }
         }
-        
+
         .subgraph-status {
-            font-size: 11px;
-            padding: 4px 12px;
-            border-radius: 6px;
-            font-weight: 600;
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 20px;
+            font-weight: 700;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.4px;
         }
-        
-        .subgraph-status.running {
-            background: rgba(251, 146, 60, 0.15);
-            color: #ea580c;
-        }
-        
-        .subgraph-status.complete {
-            background: rgba(34, 197, 94, 0.15);
-            color: #059669;
-        }
-        
+
+        .subgraph-status.running  { background: rgba(245,158,11,0.12); color: #92400e; }
+        .subgraph-status.complete { background: rgba(16,185,129,0.12);  color: #065f46; }
+
         .subgraph-body {
-            font-size: 13px;
-            color: #666;
-            margin-bottom: 16px;
+            font-size: 12px;
+            color: var(--clr-text-2);
+            margin-bottom: 8px;
             line-height: 1.5;
         }
-        
+
         .subgraph-steps {
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 6px;
         }
-        
+
         .subgraph-step {
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 10px 14px;
-            background: rgba(255, 255, 255, 0.6);
-            border-radius: 10px;
-            font-size: 13px;
-            transition: all 0.3s ease;
+            gap: 10px;
+            padding: 7px 10px;
+            background: var(--clr-glass-bg);
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            transition: all 0.2s ease;
         }
-        
-        .subgraph-step-icon {
-            font-size: 18px;
-            flex-shrink: 0;
-        }
-        
+
+        .subgraph-step-icon { font-size: 13px; flex-shrink: 0; }
+
         .subgraph-step.running {
-            color: #ea580c;
-            border-left: 3px solid #ea580c;
+            color: #92400e;
+            border-left: 2px solid #f59e0b;
             animation: stepPulse 1.5s ease-in-out infinite;
         }
-        
+
         .subgraph-step.complete {
-            color: #059669;
-            border-left: 3px solid #059669;
+            color: #065f46;
+            border-left: 2px solid #10b981;
         }
-        
+
         @keyframes stepPulse {
             0%, 100% { opacity: 1; }
-            50% { opacity: 0.7; }
+            50% { opacity: 0.65; }
         }
-        
+
         .subgraph-result {
-            margin-top: 16px;
-            padding: 16px;
-            background: rgba(34, 197, 94, 0.05);
-            border: 1px solid rgba(34, 197, 94, 0.2);
-            border-radius: 12px;
+            margin-top: 10px;
+            padding: 10px 12px;
+            background: rgba(16,185,129,0.06);
+            border: 1px solid rgba(16,185,129,0.15);
+            border-radius: var(--radius-sm);
         }
-        
+
         .subgraph-result-title {
-            font-size: 13px;
-            font-weight: 600;
+            font-size: 10px;
+            font-weight: 700;
             color: #059669;
-            margin-bottom: 10px;
+            margin-bottom: 4px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
-        
+
         .subgraph-result-content {
-            font-size: 14px;
-            color: #333;
-            line-height: 1.6;
+            font-size: 12px;
+            color: var(--clr-text);
+            line-height: 1.5;
         }
         
         /* Message Actions */
@@ -359,13 +380,14 @@
         .streaming-cursor {
             display: inline-block;
             width: 2px;
-            height: 1em;
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            margin-left: 4px;
-            animation: cursorBlink 1s infinite;
+            height: 0.9em;
+            background: var(--clr-primary);
+            margin-left: 2px;
+            animation: cursorBlink 1s ease-in-out infinite;
             vertical-align: text-bottom;
+            border-radius: 1px;
         }
-        
+
         @keyframes cursorBlink {
             0%, 50% { opacity: 1; }
             51%, 100% { opacity: 0; }
@@ -407,14 +429,37 @@
             overflow-y: auto;
         }
         
+        .openclaw-toggle-btn {
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 50%;
+            background: transparent;
+            color: var(--clr-text-3);
+            font-size: 16px;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .openclaw-toggle-btn:hover { background: rgba(123,97,255,0.08); color: var(--clr-primary); }
+
+        .openclaw-toggle-btn.active {
+            color: var(--clr-primary);
+            background: rgba(123,97,255,0.12);
+            box-shadow: 0 0 0 2px rgba(123,97,255,0.2);
+        }
+
         .send-btn {
             width: 48px;
             height: 48px;
             border: none;
             border-radius: 50%;
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background: var(--clr-gradient);
             color: white;
-            font-size: 20px;
             cursor: pointer;
             transition: all 0.3s ease;
             display: flex;
@@ -422,7 +467,9 @@
             justify-content: center;
             flex-shrink: 0;
         }
-        
+
+        .send-btn svg { pointer-events: none; }
+
         .send-btn:hover:not(:disabled) {
             transform: scale(1.05);
             box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4);
@@ -453,50 +500,131 @@
             display: flex;
         }
 
-        .tool-trace-panel {
-            margin: 0 0 8px 32px;
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-        }
+        /* Tool Trace Panel — AG-UI demo quality */
+        .tool-trace-panel { margin: 0 0 8px 32px; display: flex; flex-direction: column; gap: 6px; }
+
+        /* Suppress native <details> marker */
+        .tool-call-card > summary { list-style: none; }
+        .tool-call-card > summary::-webkit-details-marker { display: none; }
 
         .tool-call-card {
-            background: rgba(123, 97, 255, 0.06);
-            border: 1px solid rgba(123, 97, 255, 0.2);
-            border-radius: 10px;
-            padding: 8px 12px;
+            background: var(--clr-glass-bg-2);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(123,97,255,0.12);
+            border-left: 3px solid rgba(123,97,255,0.4);
+            border-radius: var(--radius-sm);
             font-size: 12px;
+            overflow: hidden;
+            transition: border-color 0.2s;
         }
 
-        .tool-call-card summary {
+        .tool-call-card.tool-run-log { border-left-color: rgba(99,102,241,0.4); }
+
+        .tool-call-summary {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 12px;
             cursor: pointer;
-            font-weight: 600;
-            color: #444;
+            user-select: none;
         }
 
-        .tool-call-card pre {
-            margin: 8px 0 0;
+        .tool-call-icon { font-size: 13px; opacity: 0.6; flex-shrink: 0; }
+
+        .tool-call-name {
+            flex: 1;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 11.5px;
+            color: #5b21b6;
+            font-weight: 600;
+        }
+
+        .tool-call-status {
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 20px;
+            letter-spacing: 0.4px;
+            text-transform: uppercase;
+            flex-shrink: 0;
+        }
+
+        .tool-call-status.running  { background: rgba(245,158,11,0.12); color: #92400e; }
+        .tool-call-status.complete { background: rgba(16,185,129,0.12);  color: #065f46; }
+        .tool-call-status.error    { background: rgba(239,68,68,0.12);   color: #991b1b; }
+
+        .tool-call-chevron {
+            font-size: 14px;
+            color: var(--clr-text-3);
+            transition: transform 0.2s ease;
+            flex-shrink: 0;
+        }
+
+        details[open] .tool-call-chevron { transform: rotate(90deg); }
+
+        .tool-call-body { padding: 0 12px 10px; display: flex; flex-direction: column; gap: 6px; }
+
+        .tool-call-args, .tool-call-result {
+            font-size: 11px;
             white-space: pre-wrap;
             word-break: break-word;
-            font-size: 11px;
             max-height: 160px;
             overflow: auto;
+            background: rgba(0,0,0,0.025);
+            border-radius: 6px;
+            padding: 6px 10px;
+            border: 1px solid rgba(0,0,0,0.05);
+            color: var(--clr-text-2);
         }
 
+        .tool-call-args:empty, .tool-call-result:empty { display: none; }
+
+        /* Reasoning panel — AG-UI quality */
         .reasoning-panel {
             margin: 0 0 8px 32px;
-            padding: 8px 12px;
-            background: rgba(155, 89, 182, 0.08);
-            border: 1px solid rgba(155, 89, 182, 0.25);
-            border-radius: 10px;
+            background: var(--clr-glass-bg-2);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(155,89,182,0.12);
+            border-left: 3px solid rgba(155,89,182,0.35);
+            border-radius: var(--radius-sm);
             font-size: 12px;
-            color: #6b4d7a;
+            overflow: hidden;
         }
 
-        .reasoning-panel summary {
+        .reasoning-panel > summary {
+            list-style: none;
+            padding: 9px 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
             cursor: pointer;
+            color: var(--clr-text-2);
             font-weight: 600;
         }
+
+        .reasoning-panel > summary::-webkit-details-marker { display: none; }
+        .reasoning-panel > summary::before { content: '💭'; font-size: 13px; }
+
+        /* Animated thinking dots while streaming */
+        .reasoning-panel.reasoning-thinking > summary::after {
+            content: '';
+            display: inline-block;
+            width: 24px;
+            height: 8px;
+            background:
+                radial-gradient(circle, #9333ea 30%, transparent 30%) 0 50%/6px 6px no-repeat,
+                radial-gradient(circle, #9333ea 30%, transparent 30%) 9px 50%/6px 6px no-repeat,
+                radial-gradient(circle, #9333ea 30%, transparent 30%) 18px 50%/6px 6px no-repeat;
+            animation: thinkDots 1.2s ease-in-out infinite;
+            vertical-align: middle;
+            margin-left: 4px;
+        }
+
+        @keyframes thinkDots {
+            0%,80%,100% { opacity:0.2; } 40% { opacity:1; }
+        }
+
+        .reasoning-body { padding: 0 12px 10px; color: var(--clr-text-2); line-height: 1.5; }
 
         .message-content pre {
             position: relative;
@@ -521,7 +649,7 @@
         
         /* Sessions Panel */
         .sessions-panel {
-            background: rgba(255, 255, 255, 0.95);
+            background: var(--clr-glass-bg);
             backdrop-filter: blur(20px);
             border-left: 1px solid rgba(0, 0, 0, 0.1);
             display: flex;
@@ -544,9 +672,11 @@
         }
         
         .sessions-title {
-            font-size: 16px;
+            font-size: 12px;
             font-weight: 600;
-            color: #333;
+            color: var(--clr-text-2);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         
         .collapse-btn {
@@ -573,11 +703,11 @@
             width: calc(100% - 40px);
             margin: 0 20px 20px 20px;
             padding: 12px;
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background: var(--clr-gradient);
             color: white;
             border: none;
-            border-radius: 12px;
-            font-size: 14px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
             font-weight: 600;
             cursor: pointer;
             transition: all 0.3s ease;
@@ -594,27 +724,27 @@
             padding: 0 20px 20px 20px;
         }
         
-        .sessions-list::-webkit-scrollbar { width: 6px; }
+        .sessions-list::-webkit-scrollbar { width: 5px; }
         .sessions-list::-webkit-scrollbar-track { background: transparent; }
         .sessions-list::-webkit-scrollbar-thumb {
-            background: rgba(123, 97, 255, 0.3);
+            background: rgba(123, 97, 255, 0.2);
             border-radius: 10px;
         }
         
         .session-item {
-            padding: 14px;
+            padding: 12px 14px;
             background: rgba(255, 255, 255, 0.6);
             border: 1px solid rgba(0, 0, 0, 0.08);
-            border-radius: 12px;
-            margin-bottom: 10px;
+            border-radius: var(--radius-sm);
+            margin-bottom: 8px;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: all 0.2s ease;
         }
-        
+
         .session-item:hover {
             background: rgba(123, 97, 255, 0.08);
             border-color: rgba(123, 97, 255, 0.2);
-            transform: translateX(4px);
+            transform: translateX(2px);
         }
         
         .session-item.active {
@@ -646,47 +776,115 @@
             color: #666;
         }
         
-        /* Quick Actions */
-        .quick-actions {
-            padding: 20px;
-            border-top: 1px solid rgba(0, 0, 0, 0.1);
+        /* Context Panel (replaces Quick Actions) */
+        .context-panel {
+            padding: 16px 20px 20px;
+            border-top: 1px solid rgba(0,0,0,0.08);
+            flex-shrink: 0;
         }
-        
-        .quick-actions-title {
-            font-size: 12px;
+
+        .context-panel-title {
+            font-size: 11px;
             font-weight: 600;
-            color: #666;
-            margin-bottom: 12px;
+            color: var(--clr-text-3);
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.6px;
+            margin-bottom: 10px;
         }
-        
-        .action-chips {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-        
-        .action-chip {
-            padding: 10px 14px;
-            background: rgba(0, 0, 0, 0.03);
-            border: 1px solid rgba(0, 0, 0, 0.08);
-            border-radius: 10px;
-            font-size: 13px;
-            color: #666;
-            cursor: pointer;
-            transition: all 0.3s ease;
+
+        .context-tile {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: var(--radius-sm);
+            background: var(--clr-glass-bg-2);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--clr-glass-border);
+            margin-bottom: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
         }
-        
-        .action-chip:hover {
-            background: rgba(123, 97, 255, 0.1);
-            border-color: #7B61FF;
-            color: #7B61FF;
-            transform: translateX(4px);
+
+        .context-tile:hover {
+            background: rgba(255,255,255,0.95);
+            box-shadow: var(--shadow-sm);
+            transform: translateX(2px);
         }
+
+        .context-tile-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .context-tile-dot.events   { background: #7B61FF; }
+        .context-tile-dot.tasks    { background: #10b981; }
+        .context-tile-dot.running  { background: #f59e0b; animation: dotPulse 1.5s ease-in-out infinite; }
+        .context-tile-dot.complete { background: #10b981; }
+
+        @keyframes dotPulse { 0%,100% { opacity:0.4; } 50% { opacity:1; } }
+
+        .context-tile-label { font-size: 13px; font-weight: 500; color: var(--clr-text); flex: 1; }
+        .context-tile-meta  { font-size: 12px; color: var(--clr-text-2); }
+
+        .context-tile-skeleton {
+            height: 38px;
+            background: rgba(0,0,0,0.04);
+            border-radius: var(--radius-sm);
+            margin-bottom: 6px;
+            animation: shimmer 1.5s ease infinite;
+        }
+
+        @keyframes shimmer { 0%,100% { opacity:0.5; } 50% { opacity:0.9; } }
+
+        /* Agent Activity Panel — shown during tool-calling streams */
+        .agent-panel {
+            padding: 16px 20px 20px;
+            border-top: 1px solid rgba(0,0,0,0.08);
+            flex-shrink: 0;
+            opacity: 0;
+            max-height: 0;
+            overflow: hidden;
+            pointer-events: none;
+            transition: opacity 0.3s ease, max-height 0.35s ease;
+        }
+        .agent-panel.visible {
+            opacity: 1;
+            max-height: 320px;
+            pointer-events: auto;
+        }
+        .agent-panel-title {
+            font-size: 11px; font-weight: 600; color: var(--clr-text-3);
+            text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 10px;
+        }
+        .agent-phase-badge {
+            display: flex; align-items: center; gap: 8px;
+            padding: 10px 12px; border-radius: var(--radius-sm);
+            background: rgba(123,97,255,0.08); border: 1px solid rgba(123,97,255,0.2);
+            margin-bottom: 8px;
+        }
+        .agent-phase-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--clr-primary); flex-shrink: 0;
+        }
+        .agent-panel.visible .agent-phase-dot {
+            animation: agentPulse 1s ease-in-out infinite;
+        }
+        @keyframes agentPulse {
+            0%,100% { opacity: 0.3; transform: scale(0.8); }
+            50%      { opacity: 1;   transform: scale(1.2); }
+        }
+        .agent-phase-name { font-size: 13px; font-weight: 600; color: var(--clr-primary); }
+        .agent-step-row {
+            display: flex; align-items: center; gap: 8px;
+            padding: 7px 10px; border-radius: var(--radius-sm);
+            font-size: 12px; margin-bottom: 4px; transition: all 0.2s;
+        }
+        .agent-step-row.running  { background: rgba(245,158,11,0.08); border-left: 2px solid #f59e0b; color: #92400e; }
+        .agent-step-row.complete { background: rgba(16,185,129,0.08); border-left: 2px solid #10b981; color: #065f46; }
+        .agent-step-name { flex: 1; font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; }
         
         /* Expand Button (when collapsed) */
         .expand-btn {
@@ -720,60 +918,93 @@
         
         /* Welcome Section */
         .welcome-section {
-            padding: 40px 20px;
+            padding: 60px 24px 40px;
             text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
         }
-        
-        .welcome-title {
-            font-size: 32px;
+
+        .welcome-greeting {
+            font-size: 26px;
             font-weight: 300;
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            letter-spacing: -0.3px;
+            background: var(--clr-gradient);
             -webkit-background-clip: text;
             background-clip: text;
             -webkit-text-fill-color: transparent;
-            margin-bottom: 12px;
-        }
-        
-        .welcome-subtitle {
-            font-size: 16px;
-            color: #666;
-            margin-bottom: 30px;
-        }
-        
-        .suggestion-chips {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 12px;
-            max-width: 600px;
-            margin: 0 auto;
-        }
-        
-        .suggestion-chip {
-            padding: 16px;
-            background: rgba(255, 255, 255, 0.8);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(123, 97, 255, 0.2);
-            border-radius: 16px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        
-        .suggestion-chip:hover {
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
-        }
-        
-        .suggestion-icon {
-            font-size: 32px;
             margin-bottom: 8px;
         }
-        
-        .suggestion-label {
-            font-size: 14px;
-            font-weight: 500;
+
+        .welcome-context {
+            font-size: 13px;
+            color: var(--clr-text-2);
+            margin-bottom: 28px;
+            min-height: 18px;
         }
+
+        /* Keep old title/subtitle rules as silent fallbacks */
+        .welcome-title {
+            font-size: 26px;
+            font-weight: 300;
+            background: var(--clr-gradient);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+
+        .welcome-subtitle {
+            font-size: 13px;
+            color: var(--clr-text-2);
+            margin-bottom: 28px;
+        }
+
+        .suggestion-chips {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            width: 100%;
+            max-width: 480px;
+        }
+
+        .suggestion-chip {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 18px;
+            background: var(--clr-glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--clr-glass-border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-sm);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-align: left;
+        }
+
+        .suggestion-chip:hover {
+            background: rgba(255,255,255,0.98);
+            border-color: rgba(123,97,255,0.25);
+            box-shadow: var(--shadow);
+            transform: translateY(-1px);
+        }
+
+        .suggestion-chip-label {
+            font-size: 14px;
+            color: var(--clr-text);
+            font-weight: 500;
+            flex: 1;
+        }
+
+        .suggestion-chip-arrow {
+            font-size: 14px;
+            color: var(--clr-text-3);
+            margin-left: 8px;
+        }
+
+        .suggestion-icon { display: none; }
+        .suggestion-label { font-size: 14px; font-weight: 500; }
         
         .mobile-sessions-toggle {
             display: none; position: fixed; bottom: 16px; left: 16px; z-index: 200;
@@ -1233,12 +1464,20 @@
         .qr-label { margin-top: 12px; font-size: 13px; color: #666; text-align: center; }
         
         .info-card {
-            background: rgba(255,255,255,0.9); border: 1px solid rgba(123,97,255,0.15);
-            border-radius: 14px; padding: 16px; display: flex; align-items: flex-start; gap: 12px;
+            background: var(--clr-glass-bg);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--clr-glass-border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-sm);
+            padding: 14px 16px;
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
         }
-        .info-card-icon { font-size: 28px; }
-        .info-card-title { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
-        .info-card-desc { font-size: 13px; color: #666; }
+        .info-card-icon { font-size: 28px; flex-shrink: 0; }
+        .info-card-body { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+        .info-card-title { font-weight: 600; font-size: 14px; color: var(--clr-text); }
+        .info-card-desc { font-size: 13px; color: var(--clr-text-2); margin-top: 4px; }
         .info-card-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
         .info-card-actions .card-action-btn {
             padding: 6px 14px; border-radius: 8px; border: 1px solid rgba(123,97,255,0.3);
@@ -1270,13 +1509,16 @@
         .step-label { font-size: 11px; color: #666; text-align: center; }
         
         .status-component {
-            display: flex; align-items: center; gap: 8px; padding: 10px 14px;
-            border-radius: 10px; font-size: 14px;
+            display: flex; align-items: flex-start; gap: 8px; padding: 10px 14px;
+            border-left: 3px solid;
+            border-radius: var(--radius-sm); font-size: 14px;
         }
-        .status-component.success { background: rgba(16,185,129,0.1); color: #059669; }
-        .status-component.error { background: rgba(239,68,68,0.1); color: #dc2626; }
-        .status-component.warning { background: rgba(251,191,36,0.1); color: #d97706; }
-        .status-component.info { background: rgba(123,97,255,0.1); color: #7B61FF; }
+        .status-component.success { background: rgba(16,185,129,0.08); border-left-color: var(--clr-success); color: #059669; }
+        .status-component.error   { background: rgba(239,68,68,0.08); border-left-color: var(--clr-error); color: #dc2626; }
+        .status-component.warning { background: rgba(251,191,36,0.08); border-left-color: var(--clr-warning); color: #d97706; }
+        .status-component.info    { background: rgba(123,97,255,0.08); border-left-color: var(--clr-primary); color: #7B61FF; }
+        .status-component .status-icon { font-size: 16px; flex-shrink: 0; }
+        .status-component .status-text { font-size: 13px; line-height: 1.4; }
         
         .form-component {
             background: rgba(255,255,255,0.95); border-radius: 14px; padding: 16px;
@@ -1295,15 +1537,175 @@
             border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; margin-top: 4px;
         }
         .form-submit:hover { background: #6b51ef; }
-        
-        .link-preview {
-            display: flex; gap: 12px; background: rgba(255,255,255,0.9);
-            border: 1px solid #e1e5e9; border-radius: 12px; padding: 12px; text-decoration: none; color: inherit;
+
+        /* ── Calendar Event Form ─────────────────────────────────────────────── */
+        .cef-wrap {
+            background: var(--clr-glass-bg, rgba(18,18,26,0.72));
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--clr-glass-border, rgba(255,255,255,0.08));
+            border-radius: 16px;
+            overflow: hidden;
+            width: 100%; max-width: 420px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.25);
         }
-        .link-preview-img { width: 80px; height: 60px; border-radius: 8px; object-fit: cover; }
-        .link-preview-title { font-weight: 600; font-size: 14px; }
-        .link-preview-desc { font-size: 12px; color: #666; margin-top: 2px; }
-        .link-preview-url { font-size: 11px; color: #999; margin-top: 4px; }
+        .cef-header {
+            display: flex; align-items: center; gap: 10px;
+            padding: 14px 16px 10px;
+            border-bottom: 1px solid var(--clr-glass-border, rgba(255,255,255,0.08));
+        }
+        .cef-header-icon {
+            width: 32px; height: 32px; border-radius: 8px;
+            background: linear-gradient(135deg, #7B61FF, #a78bfa);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 16px; flex-shrink: 0;
+        }
+        .cef-header-text { flex: 1; }
+        .cef-header-title {
+            font-size: 14px; font-weight: 600;
+            color: var(--clr-text, #f0f0f5);
+        }
+        .cef-header-subtitle {
+            font-size: 11px; color: var(--clr-text-2, rgba(255,255,255,0.45));
+            margin-top: 1px;
+        }
+        .cef-body { padding: 14px 16px 16px; }
+        .cef-row {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;
+        }
+        .cef-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+        .cef-field:last-child { margin-bottom: 0; }
+        .cef-field label {
+            font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase;
+            color: var(--clr-text-2, rgba(255,255,255,0.45));
+        }
+        .cef-field label .cef-optional { font-weight: 400; text-transform: none; letter-spacing: 0; opacity: 0.7; }
+        .cef-input {
+            width: 100%; padding: 8px 10px;
+            background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px; font-size: 13px; color: var(--clr-text, #f0f0f5);
+            outline: none; transition: border-color 0.15s, box-shadow 0.15s;
+            color-scheme: dark;
+        }
+        .cef-input:focus {
+            border-color: rgba(123,97,255,0.7);
+            box-shadow: 0 0 0 3px rgba(123,97,255,0.15);
+        }
+        .cef-input option { background: #1e1e2e; color: #f0f0f5; }
+        .cef-category-row {
+            display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px;
+        }
+        .cef-cat-chip {
+            padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 500;
+            cursor: pointer; border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.05); color: var(--clr-text-2, rgba(255,255,255,0.55));
+            transition: all 0.15s;
+        }
+        .cef-cat-chip.active {
+            background: rgba(123,97,255,0.25); border-color: rgba(123,97,255,0.5);
+            color: #c4b5fd;
+        }
+        .cef-actions {
+            display: flex; gap: 8px; margin-top: 14px; padding-top: 12px;
+            border-top: 1px solid rgba(255,255,255,0.07);
+        }
+        .cef-btn {
+            flex: 1; padding: 9px 16px; border-radius: 9px; font-size: 13px; font-weight: 500;
+            cursor: pointer; border: none; transition: all 0.15s;
+        }
+        .cef-btn-cancel {
+            background: rgba(255,255,255,0.07); color: var(--clr-text-2, rgba(255,255,255,0.6));
+        }
+        .cef-btn-cancel:hover { background: rgba(255,255,255,0.12); }
+        .cef-btn-create {
+            background: linear-gradient(135deg, #7B61FF, #a78bfa);
+            color: white; flex: 2;
+        }
+        .cef-btn-create:hover { filter: brightness(1.1); }
+        .cef-btn-create:disabled { opacity: 0.6; cursor: not-allowed; filter: none; }
+        .cef-error {
+            font-size: 12px; color: #f87171; margin-top: 8px; padding: 6px 10px;
+            background: rgba(248,113,113,0.1); border-radius: 6px;
+        }
+        .cef-success {
+            display: flex; align-items: center; gap: 12px; padding: 16px;
+        }
+        .cef-success-icon {
+            width: 36px; height: 36px; border-radius: 50%;
+            background: linear-gradient(135deg, #10b981, #34d399);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px; flex-shrink: 0;
+        }
+        .cef-success-body { flex: 1; }
+        .cef-success-title { font-size: 14px; font-weight: 600; color: var(--clr-text, #f0f0f5); }
+        .cef-success-meta { font-size: 12px; color: var(--clr-text-2, rgba(255,255,255,0.5)); margin-top: 2px; }
+
+        /* Per-form accent colours on the header icon */
+        .cef-icon-note     { background: linear-gradient(135deg, #3b82f6, #60a5fa); }
+        .cef-icon-journal  { background: linear-gradient(135deg, #8b5cf6, #c084fc); }
+        .cef-icon-list     { background: linear-gradient(135deg, #10b981, #34d399); }
+        .cef-icon-reminder { background: linear-gradient(135deg, #f59e0b, #fbbf24); }
+        .cef-icon-timer    { background: linear-gradient(135deg, #ef4444, #f97316); }
+
+        /* Textarea shared style */
+        .cef-textarea {
+            width: 100%; padding: 8px 10px; min-height: 88px; resize: vertical;
+            background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px; font-size: 13px; color: var(--clr-text, #f0f0f5);
+            outline: none; transition: border-color 0.15s; font-family: inherit;
+            color-scheme: dark;
+        }
+        .cef-textarea:focus { border-color: rgba(123,97,255,0.7); box-shadow: 0 0 0 3px rgba(123,97,255,0.15); }
+
+        /* Mood picker */
+        .cef-mood-row { display: flex; gap: 6px; flex-wrap: wrap; }
+        .cef-mood-btn {
+            padding: 5px 10px; border-radius: 20px; font-size: 17px; cursor: pointer;
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+            transition: all 0.15s;
+        }
+        .cef-mood-btn.active { background: rgba(139,92,246,0.25); border-color: rgba(139,92,246,0.5); }
+
+        /* Priority chips */
+        .cef-priority-row { display: flex; gap: 6px; }
+        .cef-priority-chip {
+            padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 600;
+            cursor: pointer; border: 1px solid transparent; transition: all 0.15s; letter-spacing: 0.04em;
+        }
+        .cef-priority-chip[data-p="low"]    { background: rgba(16,185,129,0.12); color: #6ee7b7; border-color: rgba(16,185,129,0.25); }
+        .cef-priority-chip[data-p="normal"] { background: rgba(59,130,246,0.12); color: #93c5fd; border-color: rgba(59,130,246,0.25); }
+        .cef-priority-chip[data-p="high"]   { background: rgba(239,68,68,0.12);  color: #fca5a5; border-color: rgba(239,68,68,0.25); }
+        .cef-priority-chip.active { filter: brightness(1.6); border-color: currentColor; }
+
+        /* Timer tile */
+        .cef-timer-display {
+            text-align: center; padding: 20px 0 8px;
+        }
+        .cef-timer-digits {
+            font-size: 48px; font-weight: 700; letter-spacing: -0.02em;
+            color: var(--clr-text, #f0f0f5); font-variant-numeric: tabular-nums;
+            font-family: ui-monospace, monospace;
+        }
+        .cef-timer-label-text { font-size: 12px; color: var(--clr-text-2, rgba(255,255,255,0.45)); margin-top: 4px; }
+        .cef-timer-bar-wrap { height: 4px; background: rgba(255,255,255,0.08); border-radius: 4px; margin: 12px 0 0; overflow: hidden; }
+        .cef-timer-bar { height: 100%; background: linear-gradient(90deg, #ef4444, #f97316); border-radius: 4px; transition: width 0.9s linear; width: 100%; }
+        .cef-timer-done { text-align: center; padding: 24px 16px; }
+        .cef-timer-done-icon { font-size: 36px; }
+        .cef-timer-done-text { font-size: 15px; font-weight: 600; color: var(--clr-text, #f0f0f5); margin-top: 8px; }
+
+        .link-preview {
+            display: flex; gap: 12px;
+            background: var(--clr-glass-bg); backdrop-filter: blur(20px);
+            border: 1px solid var(--clr-glass-border);
+            border-radius: var(--radius); box-shadow: var(--shadow-sm);
+            padding: 12px; text-decoration: none; color: inherit; overflow: hidden;
+            transition: all 0.2s ease;
+        }
+        .link-preview:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
+        .link-preview-body { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+        .link-preview-img { width: 80px; height: 60px; border-radius: 8px; object-fit: cover; flex-shrink: 0; }
+        .link-preview-title { font-weight: 600; font-size: 14px; color: var(--clr-text); }
+        .link-preview-desc { font-size: 12px; color: var(--clr-text-2); margin-top: 2px; }
+        .link-preview-url { font-size: 11px; color: var(--clr-text-3); margin-top: 4px; }
         
         .image-component { text-align: center; }
         .image-caption { font-size: 12px; color: #666; margin-top: 8px; }
@@ -1321,6 +1723,226 @@
         .chat-toast.info { background: #7B61FF; }
         
         .ui-component-fallback { color: #999; font-style: italic; font-size: 13px; }
+
+        /* ── Rich AG-UI Components ─────────────────────────────────────────────── */
+
+        /* Price Table */
+        .price-table-component { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--clr-border); }
+        .price-table-component table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+        .price-table-component th { background: rgba(var(--clr-primary-rgb),0.07); color: var(--clr-primary); font-weight: 600; padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--clr-border); }
+        .price-table-component td { padding: 9px 14px; border-bottom: 1px solid var(--clr-border); color: var(--clr-text); vertical-align: middle; }
+        .price-table-component tr:last-child td { border-bottom: none; }
+        .price-table-component tr:hover td { background: rgba(var(--clr-primary-rgb),0.03); }
+        .pt-badge { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; margin-left: 6px; }
+        .pt-badge.best { background: rgba(var(--clr-primary-rgb),0.12); color: var(--clr-primary); }
+        .pt-badge.sale { background: var(--clr-success-bg); color: var(--clr-success); }
+        .pt-price { font-weight: 700; font-size: 15px; color: var(--clr-primary); }
+        .pt-action { background: rgba(var(--clr-primary-rgb),0.1); color: var(--clr-primary); border: none; border-radius: 8px; padding: 5px 12px; font-size: 12px; cursor: pointer; font-weight: 600; transition: background 0.15s; }
+        .pt-action:hover { background: rgba(var(--clr-primary-rgb),0.2); }
+
+        /* Map */
+        .map-component { border-radius: var(--radius); overflow: hidden; border: 1px solid var(--clr-border); }
+        .map-component .map-title { font-weight: 600; font-size: 13px; padding: 8px 12px; background: var(--clr-surface-2); color: var(--clr-text-2); border-bottom: 1px solid var(--clr-border); }
+        .map-component .leaflet-map { height: 280px; }
+
+        /* Chart */
+        .chart-component {
+            background: var(--clr-glass-bg); backdrop-filter: blur(20px);
+            border: 1px solid var(--clr-glass-border);
+            border-radius: var(--radius); box-shadow: var(--shadow-sm); padding: 16px;
+        }
+        .chart-component .chart-title {
+            font-weight: 300; font-size: 16px; margin-bottom: 12px;
+            background: var(--clr-gradient); -webkit-background-clip: text;
+            background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .chart-component canvas { max-height: 280px; }
+
+        /* Action Menu */
+        .action-menu-component { display: flex; flex-direction: column; gap: 8px; }
+        .action-menu-component .am-prompt { font-size: 13px; color: var(--clr-text-2); margin-bottom: 4px; }
+        .action-menu-component .am-options { display: flex; flex-wrap: wrap; gap: 10px; }
+        .am-option {
+            display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+            background: var(--clr-glass-bg-2); backdrop-filter: blur(10px);
+            border: 1px solid var(--clr-glass-border);
+            border-radius: var(--radius-sm); cursor: pointer; transition: all 0.2s ease;
+            flex: 1; min-width: 130px; max-width: 200px;
+        }
+        .am-option:hover {
+            background: rgba(255,255,255,0.95);
+            border-color: rgba(123,97,255,0.25);
+            transform: translateX(2px);
+            box-shadow: var(--shadow-sm);
+        }
+        .am-option .am-icon { font-size: 22px; flex-shrink: 0; }
+        .am-option .am-label { font-weight: 600; font-size: 13.5px; color: var(--clr-text); }
+
+        /* Data Grid */
+        .data-grid-component { border-radius: var(--radius); border: 1px solid var(--clr-border); overflow: hidden; }
+        .data-grid-component .dg-toolbar { padding: 8px 12px; background: var(--clr-surface-2); border-bottom: 1px solid var(--clr-border); display: flex; gap: 8px; align-items: center; }
+        .dg-search { flex: 1; padding: 5px 10px; border: 1px solid var(--clr-border); border-radius: 8px; font-size: 13px; outline: none; }
+        .dg-search:focus { border-color: var(--clr-primary); }
+        .data-grid-component table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .data-grid-component th {
+            background: rgba(255,255,255,0.6); backdrop-filter: blur(10px);
+            font-size: 10.5px; font-weight: 700;
+            text-transform: uppercase; letter-spacing: 0.5px;
+            color: var(--clr-text-2); padding: 10px 12px;
+            text-align: left; cursor: pointer; user-select: none;
+            border-bottom: 1px solid var(--clr-border);
+        }
+        .data-grid-component th:hover { background: rgba(255,255,255,0.8); color: var(--clr-primary); }
+        .data-grid-component td { padding: 8px 12px; border-top: 1px solid var(--clr-border); color: var(--clr-text); }
+        .data-grid-component tr:nth-child(even) td { background: rgba(123,97,255,0.015); }
+        .data-grid-component tr:hover td { background: rgba(var(--clr-primary-rgb),0.03); }
+
+        /* OpenClaw Manager */
+        .openclaw-manager { border-radius: var(--radius); border: 1px solid var(--clr-border); overflow: hidden; }
+        .ocm-header { padding: 12px 16px; background: linear-gradient(135deg,rgba(var(--clr-primary-rgb),0.08),rgba(var(--clr-primary-rgb),0.04)); border-bottom: 1px solid var(--clr-border); display: flex; align-items: center; gap: 10px; }
+        .ocm-header-icon { font-size: 22px; }
+        .ocm-header-title { font-weight: 700; font-size: 15px; color: var(--clr-text); }
+        .ocm-header-sub { font-size: 12px; color: var(--clr-text-2); margin-top: 1px; }
+        .ocm-plugin-list { max-height: 360px; overflow-y: auto; }
+        .ocm-plugin { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--clr-border); }
+        .ocm-plugin:last-child { border-bottom: none; }
+        .ocm-plugin-icon { font-size: 22px; }
+        .ocm-plugin-info { flex: 1; }
+        .ocm-plugin-name { font-weight: 600; font-size: 14px; color: var(--clr-text); }
+        .ocm-plugin-desc { font-size: 12px; color: var(--clr-text-2); margin-top: 2px; }
+        .ocm-plugin-actions { display: flex; gap: 6px; }
+        .ocm-btn { border: none; border-radius: 8px; padding: 5px 14px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s; }
+        .ocm-btn.install { background: var(--clr-primary); color: #fff; }
+        .ocm-btn.install:hover { filter: brightness(1.1); }
+        .ocm-btn.remove { background: var(--clr-error-bg); color: var(--clr-error); }
+        .ocm-btn.remove:hover { background: rgba(239,68,68,0.2); }
+        .ocm-badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 20px; margin-left: 6px; text-transform: uppercase; }
+        .ocm-badge.installed { background: var(--clr-success-bg); color: var(--clr-success); }
+        .ocm-badge.available { background: rgba(var(--clr-primary-rgb),0.1); color: var(--clr-primary); }
+
+        /* Skills Manager */
+        .skills-manager { border-radius: var(--radius); border: 1px solid var(--clr-border); overflow: hidden; }
+        .ocsm-header { padding: 12px 16px; background: linear-gradient(135deg,rgba(var(--clr-primary-rgb),0.08),rgba(var(--clr-primary-rgb),0.04)); border-bottom: 1px solid var(--clr-border); display: flex; align-items: center; gap: 10px; }
+        .ocsm-header-icon { font-size: 22px; }
+        .ocsm-header-title { font-weight: 700; font-size: 15px; color: var(--clr-text); }
+        .ocsm-header-sub { font-size: 12px; color: var(--clr-text-2); margin-top: 1px; }
+        .ocsm-search-row { padding: 8px 12px; border-bottom: 1px solid var(--clr-border); }
+        .ocsm-search { width: 100%; padding: 6px 10px; border: 1px solid var(--clr-border); border-radius: 8px; font-size: 13px; outline: none; box-sizing: border-box; }
+        .ocsm-search:focus { border-color: var(--clr-primary); }
+        .ocsm-skill-list { max-height: 420px; overflow-y: auto; }
+        .ocsm-skill { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--clr-border); transition: background 0.1s; }
+        .ocsm-skill:last-child { border-bottom: none; }
+        .ocsm-skill.highlighted { background: rgba(var(--clr-primary-rgb),0.06); }
+        .ocsm-skill-icon { font-size: 22px; flex-shrink: 0; }
+        .ocsm-skill-info { flex: 1; min-width: 0; }
+        .ocsm-skill-name { font-weight: 600; font-size: 14px; color: var(--clr-text); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+        .ocsm-skill-desc { font-size: 12px; color: var(--clr-text-2); margin-top: 2px; }
+        .ocsm-skill-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+        .ocsm-btn { border: none; border-radius: 8px; padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+        .ocsm-btn.preview { background: rgba(var(--clr-primary-rgb),0.1); color: var(--clr-primary); }
+        .ocsm-btn.preview:hover { background: rgba(var(--clr-primary-rgb),0.18); }
+        .ocsm-btn.install { background: var(--clr-primary); color: #fff; }
+        .ocsm-btn.install:hover:not(:disabled) { filter: brightness(1.1); }
+        .ocsm-btn.install:disabled { opacity: 0.5; cursor: default; }
+        .ocsm-btn.update { background: var(--clr-success-bg); color: var(--clr-success); }
+        .ocsm-btn.update:hover { background: rgba(16,185,129,0.2); }
+        .ocsm-btn.remove { background: var(--clr-error-bg); color: var(--clr-error); }
+        .ocsm-btn.remove:hover { background: rgba(239,68,68,0.2); }
+        .ocsm-badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 20px; text-transform: uppercase; white-space: nowrap; }
+        .ocsm-badge.installed { background: var(--clr-success-bg); color: var(--clr-success); }
+        .ocsm-badge.available { background: rgba(var(--clr-primary-rgb),0.1); color: var(--clr-primary); }
+        .ocsm-badge.missing { background: var(--clr-warning-bg); color: var(--clr-warning); }
+        .ocsm-source { display: inline-block; font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 20px; text-transform: uppercase; white-space: nowrap; }
+        .ocsm-source.workspace { background: rgba(59,130,246,0.12); color: #3b82f6; }
+        .ocsm-source.bundled { background: var(--clr-success-bg); color: var(--clr-success); }
+        .ocsm-source.clawhub { background: var(--clr-warning-bg); color: var(--clr-warning); }
+        .ocsm-review-note { font-size: 11px; color: var(--clr-text-2); font-style: italic; }
+        /* Skills preview modal */
+        .ocsm-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 9000; display: flex; align-items: center; justify-content: center; padding: 16px; }
+        .ocsm-modal { background: var(--clr-surface); border-radius: 12px; width: 100%; max-width: 680px; max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
+        .ocsm-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--clr-border); flex-shrink: 0; }
+        .ocsm-modal-title { font-weight: 700; font-size: 15px; color: var(--clr-text); }
+        .ocsm-modal-close { background: none; border: none; font-size: 18px; cursor: pointer; color: var(--clr-text-2); padding: 2px 6px; border-radius: 6px; }
+        .ocsm-modal-close:hover { background: var(--clr-surface-2); }
+        .ocsm-modal-body { flex: 1; overflow-y: auto; padding: 16px 18px; }
+        .ocsm-modal-footer { padding: 12px 18px; border-top: 1px solid var(--clr-border); display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-shrink: 0; }
+        .ocsm-confirm-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--clr-text-2); cursor: pointer; flex: 1; }
+        .ocsm-modal-loading { color: var(--clr-text-2); font-size: 14px; text-align: center; padding: 24px; }
+        .ocsm-modal-error { color: var(--clr-error); font-size: 13px; padding: 12px; background: var(--clr-error-bg); border-radius: 8px; }
+        .ocsm-security-banner { padding: 8px 14px; border-radius: 8px; font-weight: 700; font-size: 13px; margin-bottom: 12px; }
+        .ocsm-security-banner.success { background: var(--clr-success-bg); color: var(--clr-success); }
+        .ocsm-security-banner.warning { background: var(--clr-warning-bg); color: var(--clr-warning); }
+        .ocsm-security-banner.error { background: var(--clr-error-bg); color: var(--clr-error); }
+        .ocsm-source-row { font-size: 12px; color: var(--clr-text-2); margin-bottom: 10px; }
+        .ocsm-finding { display: flex; align-items: flex-start; gap: 8px; padding: 6px 10px; border-radius: 6px; margin-bottom: 6px; font-size: 12px; }
+        .ocsm-finding.block { background: var(--clr-error-bg); color: var(--clr-error); }
+        .ocsm-finding.warn { background: var(--clr-warning-bg); color: var(--clr-warning); }
+        .ocsm-finding-badge { font-weight: 700; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: currentColor; flex-shrink: 0; }
+        .ocsm-finding-badge { background: none; border: 1px solid currentColor; }
+        .ocsm-finding-matches { font-style: italic; opacity: 0.8; }
+        .ocsm-skill-md { font-family: 'Courier New', monospace; font-size: 12px; background: var(--clr-surface-2); padding: 14px; border-radius: 8px; white-space: pre-wrap; overflow-x: auto; max-height: 40vh; color: var(--clr-text); line-height: 1.5; border: 1px solid var(--clr-border); }
+
+        /* Agent Trace */
+        .agent-trace-component { border-radius: var(--radius); border: 1px solid var(--clr-border); overflow: hidden; font-size: 13px; }
+        .at-header { padding: 8px 12px; background: var(--clr-surface-2); border-bottom: 1px solid var(--clr-border); cursor: pointer; display: flex; align-items: center; gap: 8px; color: var(--clr-text-2); font-weight: 600; }
+        .at-header:hover { background: #eef; }
+        .at-steps { padding: 8px 0; }
+        .at-step { display: flex; gap: 10px; padding: 6px 14px; }
+        .at-step-icon { font-size: 15px; flex-shrink: 0; margin-top: 1px; }
+        .at-step-body { flex: 1; }
+        .at-step-name { font-weight: 600; color: var(--clr-text); }
+        .at-step-detail { color: var(--clr-text-2); font-size: 12px; margin-top: 2px; }
+
+        /* Plugin Installer */
+        .plugin-installer { border-radius: var(--radius); border: 2px solid rgba(var(--clr-primary-rgb),0.2); background: linear-gradient(135deg,rgba(var(--clr-primary-rgb),0.04),var(--clr-surface)); padding: 20px; }
+        .pi-header { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 16px; }
+        .pi-icon { font-size: 32px; }
+        .pi-title { font-weight: 700; font-size: 16px; color: var(--clr-text); }
+        .pi-reason { font-size: 13px; color: var(--clr-text-2); margin-top: 4px; }
+        .pi-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
+        .pi-install-btn { background: var(--clr-primary); color: #fff; border: none; border-radius: 10px; padding: 10px 24px; font-size: 14px; font-weight: 700; cursor: pointer; transition: all 0.15s; }
+        .pi-install-btn:hover { filter: brightness(1.1); transform: translateY(-1px); }
+        .pi-install-btn:disabled { opacity: 0.6; cursor: default; transform: none; }
+        .pi-qr { border: 1px solid var(--clr-border); border-radius: 10px; padding: 8px; background: #fff; }
+        .pi-steps { margin-top: 14px; }
+        .pi-step { display: flex; gap: 10px; align-items: center; padding: 6px 0; font-size: 13px; color: var(--clr-text-2); }
+        .pi-step .step-num { width: 22px; height: 22px; border-radius: 50%; background: rgba(var(--clr-primary-rgb),0.12); color: var(--clr-primary); font-weight: 700; font-size: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+
+        /* Telegram Setup Wizard */
+        .telegram-setup { border-radius: var(--radius); overflow: hidden; border: 1.5px solid rgba(0,136,204,0.3); background: linear-gradient(135deg,rgba(0,136,204,0.05),var(--clr-surface)); }
+        .tgs-header { background: linear-gradient(135deg,#0088cc,#229ed9); color: #fff; padding: 16px 20px; display: flex; align-items: center; gap: 14px; }
+        .tgs-header-icon { font-size: 32px; }
+        .tgs-header-text h3 { font-size: 16px; font-weight: 700; margin: 0 0 2px; }
+        .tgs-header-text p { font-size: 12px; opacity: 0.85; margin: 0; }
+        .tgs-body { padding: 20px; }
+        .tgs-steps { display: flex; flex-direction: column; gap: 14px; margin-bottom: 20px; }
+        .tgs-step { display: flex; gap: 14px; align-items: flex-start; }
+        .tgs-step-num { width: 28px; height: 28px; border-radius: 50%; background: rgba(0,136,204,0.12); color: #0088cc; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+        .tgs-step-num.done { background: var(--clr-success-bg); color: var(--clr-success); }
+        .tgs-step-content { flex: 1; }
+        .tgs-step-title { font-weight: 600; font-size: 14px; color: var(--clr-text); margin-bottom: 3px; }
+        .tgs-step-desc { font-size: 13px; color: var(--clr-text-2); line-height: 1.5; }
+        .tgs-step-desc a { color: #0088cc; text-decoration: none; font-weight: 600; }
+        .tgs-step-desc a:hover { text-decoration: underline; }
+        .tgs-qr-row { display: flex; align-items: center; gap: 16px; margin: 10px 0; }
+        .tgs-qr-box { border: 1px solid var(--clr-border); border-radius: 10px; padding: 8px; background: #fff; flex-shrink: 0; }
+        .tgs-token-row { display: flex; gap: 8px; margin-top: 12px; }
+        .tgs-token-input { flex: 1; padding: 10px 14px; border: 1.5px solid var(--clr-border); border-radius: 10px; font-size: 14px; font-family: monospace; outline: none; transition: border-color 0.15s; }
+        .tgs-token-input:focus { border-color: #0088cc; }
+        .tgs-token-input.error { border-color: var(--clr-error); }
+        .tgs-connect-btn { background: #0088cc; color: #fff; border: none; border-radius: 10px; padding: 10px 20px; font-size: 14px; font-weight: 700; cursor: pointer; white-space: nowrap; transition: all 0.15s; }
+        .tgs-connect-btn:hover { background: #006fa3; }
+        .tgs-connect-btn:disabled { opacity: 0.6; cursor: default; }
+        .tgs-status { margin-top: 12px; padding: 10px 14px; border-radius: 10px; font-size: 13px; font-weight: 600; display: none; }
+        .tgs-status.success { background: var(--clr-success-bg); color: var(--clr-success); display: block; }
+        .tgs-status.error { background: var(--clr-error-bg); color: var(--clr-error); display: block; }
+
+        /* Background task notification */
+        .task-notification { border-radius: var(--radius); border: 1.5px solid rgba(var(--clr-primary-rgb),0.25); background: linear-gradient(135deg,rgba(var(--clr-primary-rgb),0.06),var(--clr-surface)); padding: 14px 16px; margin-bottom: 8px; }
+        .tn-result { font-size: 14px; color: var(--clr-text); line-height: 1.6; margin-top: 8px; }
+        .tn-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+        .tn-title { font-weight: 700; font-size: 14px; color: var(--clr-primary); }
+        .tn-task { font-size: 12px; color: var(--clr-text-2); margin-top: 2px; }
 
     </style>
 <!-- PWA Meta Tags -->
@@ -1358,6 +1980,10 @@
         }
     </script>
     <script src="https://cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js"></script>
+    <!-- Rich component libraries -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
     <!-- Navigation -->
@@ -1465,24 +2091,16 @@
             <div class="messages-container" id="messagesContainer">
                 <!-- Welcome Section -->
                 <div class="welcome-section" id="welcomeSection">
-                    <h1 class="welcome-title">Chat with Zoe</h1>
-                    <p class="welcome-subtitle">Intelligent AI Assistant</p>
+                    <div class="welcome-greeting" id="welcomeGreeting">Good morning</div>
+                    <div class="welcome-context" id="welcomeContext"></div>
                     <div class="suggestion-chips" id="dynamicSuggestions">
                         <div class="suggestion-chip" onclick="tryPrompt('Help me plan my day')">
-                            <div class="suggestion-icon">🌅</div>
-                            <div class="suggestion-label">Plan My Day</div>
+                            <span class="suggestion-chip-label">Help me plan my day</span>
+                            <span class="suggestion-chip-arrow">→</span>
                         </div>
                         <div class="suggestion-chip" onclick="tryPrompt('What should I focus on today?')">
-                            <div class="suggestion-icon">🎯</div>
-                            <div class="suggestion-label">Daily Focus</div>
-                        </div>
-                        <div class="suggestion-chip" onclick="tryPrompt('Review my tasks and priorities')">
-                            <div class="suggestion-icon">📋</div>
-                            <div class="suggestion-label">Task Review</div>
-                        </div>
-                        <div class="suggestion-chip" onclick="tryPrompt('Give me smart insights about my routine')">
-                            <div class="suggestion-icon">💡</div>
-                            <div class="suggestion-label">Smart Insights</div>
+                            <span class="suggestion-chip-label">What should I focus on today?</span>
+                            <span class="suggestion-chip-arrow">→</span>
                         </div>
                     </div>
                 </div>
@@ -1490,31 +2108,38 @@
             
             <!-- Input Area -->
             <div class="input-area">
+                <!-- Hidden checkbox preserved for JS compatibility (sendMessage reads .checked) -->
+                <input type="checkbox" id="forceOpenClawToggle" style="display:none">
                 <div class="input-wrapper">
-                    <textarea 
-                        class="input-field" 
-                        id="chatInput" 
+                    <button class="openclaw-toggle-btn" id="openclawToggleBtn"
+                            title="Run with OpenClaw (full tools)"
+                            onclick="toggleOpenClawMode()">⚡</button>
+                    <textarea
+                        class="input-field"
+                        id="chatInput"
                         placeholder="Ask me anything..."
                         rows="1"
                         onkeydown="handleKeyDown(event)"
                         oninput="adjustTextareaHeight(this)"
                     ></textarea>
                     <button type="button" class="stop-stream-btn" id="stopStreamBtn" title="Stop">■</button>
-                    <button class="send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
-                </div>
-                <div style="display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;color:#94a3b8;">
-                    <input type="checkbox" id="forceOpenClawToggle" />
-                    <label for="forceOpenClawToggle">Run with OpenClaw (full tools)</label>
-                    <button type="button" class="action-btn" onclick="tryPrompt('/capabilities')" style="margin-left:8px;">Capabilities</button>
-                </div>
+                    <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2.5"
+                             stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="22" y1="2" x2="11" y2="13"/>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                        </svg>
+                    </button>
                 </div>
             </div>
+        </div><!-- /chat-area -->
 
         <button class="mobile-sessions-toggle" onclick="document.querySelector('.sessions-panel').classList.toggle('mobile-open')" title="Chat History">☰</button>
         <!-- Sessions Panel -->
         <div class="sessions-panel">
             <div class="sessions-header">
-                <div class="sessions-title">💬 Sessions</div>
+                <div class="sessions-title">Sessions</div>
                 <button class="collapse-btn" onclick="toggleSessions()" title="Collapse">→</button>
         </div>
 
@@ -1531,18 +2156,23 @@
         </div>
     </div>
 
-            <!-- Quick Actions (OpenClaw full tools) -->
-            <div class="quick-actions">
-                <div class="quick-actions-title">Quick Actions</div>
-                <div class="action-chips">
-                    <div class="action-chip" onclick="tryPromptWithOpenClaw('What is on my calendar today and what should I prioritize?')">📅 Today</div>
-                    <div class="action-chip" onclick="tryPromptWithOpenClaw('Show my shopping list and suggest what to add for the week')">🛒 Lists</div>
-                    <div class="action-chip" onclick="tryPromptWithOpenClaw('What is the weather like at my saved location?')">🌤️ Weather</div>
-                    <div class="action-chip" onclick="tryPromptWithOpenClaw('Search the web for recent news about AI assistants and summarize key points')">🔎 Research</div>
-                    <div class="action-chip" onclick="tryPromptWithOpenClaw('Help me connect or configure WhatsApp integration step by step')">💬 WhatsApp</div>
-                    <div class="action-chip" onclick="tryPromptWithOpenClaw('What are my pending reminders and overdue tasks?')">⏰ Reminders</div>
-                    <div class="action-chip" onclick="tryPrompt('/capabilities')">🧰 Tools</div>
+            <!-- Context Panel — live today summary -->
+            <div class="context-panel" id="contextPanel">
+                <div class="context-panel-title">Today</div>
+                <div class="context-tiles" id="contextTiles">
+                    <div class="context-tile-skeleton"></div>
+                    <div class="context-tile-skeleton"></div>
                 </div>
+            </div>
+
+            <!-- Active Agent panel — visible during tool-calling streams -->
+            <div class="agent-panel" id="agentPanel">
+                <div class="agent-panel-title">Active</div>
+                <div class="agent-phase-badge">
+                    <span class="agent-phase-dot"></span>
+                    <span class="agent-phase-name" id="agentPhaseName">OpenClaw</span>
+                </div>
+                <div class="agent-steps-list" id="agentStepsList"></div>
             </div>
         </div>
     </div>
@@ -1553,7 +2183,7 @@
         <script src="js/chat-sessions.js?v=2.1"></script>
     <script>
         // Cache buster - force browser to reload this script
-        console.log('🔄 Chat.html v11 — canonical AG-UI SSE + stop / regenerate / tool trace');
+        console.log('🔄 Chat.html v12 — AG-UI rich components: maps, charts, price tables, action menus, plugin manager, background tasks');
     </script>
     <script>
         function renderMarkdown(text) {
@@ -1601,8 +2231,17 @@
                 card.className = 'tool-call-card';
                 card.dataset.toolCallId = toolCallId;
                 card.open = true;
-                card.innerHTML = '<summary class="tool-call-summary"><span class="tool-call-name"></span></summary>' +
-                    '<div class="tool-call-body"><div class="tool-call-args"></div><div class="tool-call-result"></div></div>';
+                card.innerHTML =
+                    '<summary class="tool-call-summary">' +
+                        '<span class="tool-call-icon">⚙</span>' +
+                        '<span class="tool-call-name"></span>' +
+                        '<span class="tool-call-status running">running</span>' +
+                        '<span class="tool-call-chevron">›</span>' +
+                    '</summary>' +
+                    '<div class="tool-call-body">' +
+                        '<div class="tool-call-args"></div>' +
+                        '<div class="tool-call-result"></div>' +
+                    '</div>';
                 ctx.toolTraceEl.appendChild(card);
             }
             const nameEl = card.querySelector('.tool-call-name');
@@ -1664,9 +2303,18 @@
                 const panel = ctx.toolTraceEl;
                 if (panel) {
                     panel.style.display = 'flex';
-                    const log = document.createElement('div');
+                    const log = document.createElement('details');
                     log.className = 'tool-call-card';
-                    log.innerHTML = `<div class="tool-call-body"><div class="tool-call-result">[${(v.level || 'info').toUpperCase()}] ${escapeHtml(String(v.message || ''))}</div></div>`;
+                    log.open = false;
+                    const lvl = (v.level || 'info').toUpperCase();
+                    const msg = String(v.message || '');
+                    log.innerHTML =
+                        '<summary class="tool-call-summary">' +
+                            '<span class="tool-call-icon">📋</span>' +
+                            '<span class="tool-call-name">' + escapeHtml(msg.slice(0, 90)) + '</span>' +
+                            '<span class="tool-call-status complete">' + escapeHtml(lvl) + '</span>' +
+                            '<span class="tool-call-chevron">›</span>' +
+                        '</summary>';
                     panel.appendChild(log);
                     scrollToBottom();
                 }
@@ -1697,31 +2345,92 @@
                     if (snap.phase === 'openclaw' && ctx.toolTraceEl) {
                         ctx.toolTraceEl.style.display = 'flex';
                     }
+                    // Only show agent panel for tool-calling (openclaw) runs
+                    if (snap.phase === 'openclaw') {
+                        showAgentPanel(snap.model || 'OpenClaw');
+                    }
                 }
                 return;
             }
             if (t === 'STEP_STARTED') {
-                const step = data.stepName || data.step_name || 'Skill';
-                const badge = document.createElement('div');
-                badge.className = 'skill-badge';
-                badge.style.cssText = 'font-size:0.75em;color:#64b5f6;margin-bottom:4px;opacity:0.85;';
-                badge.textContent = '🎯 ' + step;
-                group.insertBefore(badge, ctx.toolTraceEl || contentEl);
+                const stepName = data.stepName || data.step_name || 'Agent';
+                // Seal any previous open subgraph card before creating new one
+                if (ctx.activeSubgraphCard) {
+                    const prevStatus = ctx.activeSubgraphCard.querySelector('.subgraph-status');
+                    if (prevStatus && prevStatus.classList.contains('running')) {
+                        prevStatus.textContent = 'done';
+                        prevStatus.className = 'subgraph-status complete';
+                    }
+                    const prevIcon = ctx.activeSubgraphCard.querySelector('.subgraph-icon');
+                    if (prevIcon) prevIcon.style.animation = 'none';
+                }
+                const card = document.createElement('div');
+                card.className = 'subgraph-card';
+                card.innerHTML =
+                    '<div class="subgraph-header">' +
+                        '<div class="subgraph-title">' +
+                            '<span class="subgraph-icon">🤖</span>' +
+                            '<span>' + escapeHtml(stepName) + '</span>' +
+                        '</div>' +
+                        '<span class="subgraph-status running">running</span>' +
+                    '</div>' +
+                    '<div class="subgraph-steps" data-sg-steps></div>';
+                // Insert BEFORE toolTraceEl so card appears above the tool trace panel
+                group.insertBefore(card, ctx.toolTraceEl);
+                ctx.activeSubgraphCard = card;
+                showAgentPanel(stepName);
                 return;
             }
             if (t === 'TOOL_CALL_START') {
+                // Frontend tools (show_map, show_chart etc.) render a component — no tool card
+                if ((data.toolCallName || '').startsWith('frontend.')) {
+                    ctx.frontendTool = { name: data.toolCallName, id: data.toolCallId || data.tool_call_id, argsRaw: '' };
+                    if (thinkingIndicator && thinkingIndicator.parentNode) {
+                        const tx = thinkingIndicator.querySelector('span:last-child');
+                        if (tx) tx.textContent = '🎨 Preparing ' + (data.toolCallName.replace('frontend.','').replace(/_/g,' ')) + '…';
+                    }
+                    return;
+                }
+                const _toolLabels = {
+                    web_search: '🔍 Searching the web', browse: '🌐 Reading page',
+                    bash: '⚡ Running command', ha_control: '🏠 Controlling device',
+                    mempalace_search: '🧠 Checking memory', mempalace_add: '💾 Saving memory',
+                    escalate_to_openclaw: '🤖 Escalating to OpenClaw',
+                    show_map: '🗺️ Preparing map', show_chart: '📊 Drawing chart',
+                    action_menu: '📋 Preparing options', list_openclaw_plugins: '🔌 Listing plugins',
+                };
+                const _toolName = data.toolCallName || data.tool_call_name || 'tool';
+                const _toolLabel = _toolLabels[_toolName] || ('🔧 ' + _toolName);
                 if (thinkingIndicator && thinkingIndicator.parentNode) {
                     thinkingIndicator.className = 'activity-indicator executing';
                     const ic = thinkingIndicator.querySelector('span:first-child');
                     const tx = thinkingIndicator.querySelector('span:last-child');
                     if (ic) ic.textContent = '🔧';
-                    if (tx) tx.textContent = 'Executing: ' + (data.toolCallName || data.tool_call_name || 'tool') + '...';
+                    if (tx) tx.textContent = _toolLabel + '…';
                 }
-                ensureToolCallCard(ctx, data.toolCallId || data.tool_call_id, data.toolCallName || data.tool_call_name);
+                const _tcId = data.toolCallId || data.tool_call_id;
+                ensureToolCallCard(ctx, _tcId, _toolName);
+                // Add step row to active subgraph card
+                if (ctx.activeSubgraphCard) {
+                    const stepsEl = ctx.activeSubgraphCard.querySelector('[data-sg-steps]');
+                    if (stepsEl && !stepsEl.querySelector('[data-sg-step="' + _tcId + '"]')) {
+                        const row = document.createElement('div');
+                        row.className = 'subgraph-step running';
+                        row.dataset.sgStep = _tcId;
+                        row.innerHTML = '<span class="subgraph-step-icon">⚙</span><span>' + escapeHtml(_toolName) + '</span>';
+                        stepsEl.appendChild(row);
+                    }
+                }
+                updateAgentStep(_tcId, _toolName, 'running');
                 scrollToBottom();
                 return;
             }
             if (t === 'TOOL_CALL_ARGS') {
+                // Accumulate args for frontend tools
+                if (ctx.frontendTool && ctx.frontendTool.id === (data.toolCallId || data.tool_call_id)) {
+                    ctx.frontendTool.argsRaw += data.delta || '';
+                    return;
+                }
                 const id = data.toolCallId || data.tool_call_id;
                 const card = ensureToolCallCard(ctx, id, null);
                 const box = card && card.querySelector('.tool-call-args');
@@ -1729,13 +2438,36 @@
                 return;
             }
             if (t === 'TOOL_CALL_END') {
+                if (ctx.frontendTool && ctx.frontendTool.id === (data.toolCallId || data.tool_call_id)) {
+                    try {
+                        const comp = JSON.parse(ctx.frontendTool.argsRaw);
+                        renderChatComponent(comp, contentEl, group);
+                    } catch(e) { console.warn('frontend tool parse error:', e, ctx.frontendTool.argsRaw); }
+                    ctx.frontendTool = null;
+                }
                 return;
             }
             if (t === 'TOOL_CALL_RESULT') {
-                const id = data.toolCallId || data.tool_call_id;
-                const card = ensureToolCallCard(ctx, id, null);
+                const _resId = data.toolCallId || data.tool_call_id;
+                const card = ensureToolCallCard(ctx, _resId, null);
                 const box = card && card.querySelector('.tool-call-result');
                 if (box) box.textContent = data.content != null ? String(data.content) : '';
+                // Update status pill to 'done'
+                if (card) {
+                    const pill = card.querySelector('.tool-call-status');
+                    if (pill) { pill.textContent = 'done'; pill.className = 'tool-call-status complete'; }
+                }
+                // Mark subgraph step complete
+                if (ctx.activeSubgraphCard) {
+                    const sgRow = ctx.activeSubgraphCard.querySelector('[data-sg-step="' + _resId + '"]');
+                    if (sgRow) {
+                        sgRow.className = 'subgraph-step complete';
+                        const icon = sgRow.querySelector('.subgraph-step-icon');
+                        if (icon) icon.textContent = '✓';
+                    }
+                }
+                const _resName = data.toolCallName || data.tool_call_name || _resId || '';
+                updateAgentStep(_resId, _resName, 'complete');
                 if (thinkingIndicator && thinkingIndicator.parentNode) {
                     thinkingIndicator.className = 'activity-indicator thinking';
                     const ic = thinkingIndicator.querySelector('span:first-child');
@@ -1769,18 +2501,49 @@
                 const delta = data.delta || '';
                 if (ctx.reasoningPanel) {
                     ctx.reasoningPanel.style.display = 'block';
+                    ctx.reasoningPanel.classList.add('reasoning-thinking');
                     if (ctx.reasoningBody) ctx.reasoningBody.textContent += delta;
                 }
                 return;
             }
             if (t === 'REASONING_START' || t === 'REASONING_MESSAGE_START') {
-                if (ctx.reasoningPanel) ctx.reasoningPanel.style.display = 'block';
+                if (ctx.reasoningPanel) {
+                    ctx.reasoningPanel.style.display = 'block';
+                    ctx.reasoningPanel.classList.add('reasoning-thinking');
+                }
                 return;
             }
             if (t === 'RUN_FINISHED') {
                 ctx.finalized = true;
                 contentEl.innerHTML = renderMarkdown(stream.text);
                 enhanceCodeBlocks(contentEl);
+                if (ctx.reasoningPanel) ctx.reasoningPanel.classList.remove('reasoning-thinking');
+
+                // Remove thinking indicator if never cleared by text chunks
+                if (thinkingIndicator && thinkingIndicator.parentNode) {
+                    thinkingIndicator.remove();
+                }
+
+                // Seal the active subgraph card
+                if (ctx.activeSubgraphCard) {
+                    const statusEl = ctx.activeSubgraphCard.querySelector('.subgraph-status');
+                    if (statusEl) { statusEl.textContent = 'done'; statusEl.className = 'subgraph-status complete'; }
+                    const sgIcon = ctx.activeSubgraphCard.querySelector('.subgraph-icon');
+                    if (sgIcon) sgIcon.style.animation = 'none';
+                    const stepsEl = ctx.activeSubgraphCard.querySelector('[data-sg-steps]');
+                    const toolCount = stepsEl ? stepsEl.querySelectorAll('.subgraph-step').length : 0;
+                    if (toolCount > 0) {
+                        const result = document.createElement('div');
+                        result.className = 'subgraph-result';
+                        result.innerHTML =
+                            '<div class="subgraph-result-title">Complete</div>' +
+                            '<div class="subgraph-result-content">' + toolCount + ' tool' + (toolCount > 1 ? 's' : '') + ' executed</div>';
+                        ctx.activeSubgraphCard.appendChild(result);
+                    }
+                    ctx.activeSubgraphCard = null;
+                }
+                hideAgentPanel();
+
                 isStreaming = false;
                 document.getElementById('sendBtn').disabled = false;
                 const stopBtn = document.getElementById('stopStreamBtn');
@@ -1805,7 +2568,9 @@
                 return;
             }
             if (t === 'CUSTOM' && data.name === 'zoe.ui_component') {
-                renderChatComponent(data.value || {}, contentEl, group);
+                // Append to group (below the bubble), NOT contentEl — RUN_FINISHED
+                // replaces contentEl.innerHTML which would wipe anything inside it.
+                renderChatComponent(data.value || {}, null, group);
                 return;
             }
             if (t === 'CUSTOM' && data.name === 'zoe.ui_command') {
@@ -1939,17 +2704,57 @@
                     try { streamAbortController?.abort(); } catch (e) {}
                 });
             }
-            
+
             // Load sessions from backend (but don't auto-load messages)
             loadSessions();
-            
-            // Don't create session on page load - only when user sends first message
-            // Session will be created automatically by saveMessageToSession()
-            // createOrGetCurrentSession();
-            
-            // Dynamic suggestions disabled - causing mixed content errors
-            // Using static suggestions instead
-            // generateDynamicSuggestions();
+
+            // Set time-aware greeting and context
+            setWelcomeGreeting();
+
+            // Load live context panel (Today: events, tasks, background tasks)
+            setTimeout(loadContextPanel, 800);
+
+            // Check for completed background tasks and inject proactive messages
+            setTimeout(checkPendingTasks, 1500);
+
+            // Listen for background task completions → update context panel
+            document.addEventListener('zoe:background-task', (e) => {
+                const tilesEl = document.getElementById('contextTiles');
+                if (!tilesEl) return;
+                const existing = tilesEl.querySelector('[data-task-tile]');
+                const tile = existing || document.createElement('div');
+                tile.className = 'context-tile';
+                tile.dataset.taskTile = '1';
+                tile.innerHTML = `
+                    <span class="context-tile-dot complete"></span>
+                    <span class="context-tile-label">${escapeHtml(e.detail.task || 'Task complete')}</span>
+                    <span class="context-tile-meta">Done</span>`;
+                tile.onclick = () => document.getElementById('messagesContainer')?.scrollTo({ top: 999999, behavior: 'smooth' });
+                if (!existing) tilesEl.prepend(tile);
+            });
+        }
+
+        async function checkPendingTasks() {
+            try {
+                const res = await apiRequest('/api/chat/tasks/pending');
+                if (!res || !res.tasks || res.tasks.length === 0) return;
+                const messagesContainer = document.getElementById('messagesContainer');
+                for (const task of res.tasks) {
+                    const group = document.createElement('div');
+                    group.className = 'message-group assistant';
+                    group.innerHTML = `<div class="message-bubble assistant" style="margin-bottom:6px">
+                        Hey${task.user_name ? ' ' + escapeHtml(task.user_name) : ''}! I finished working on that task you gave me.
+                    </div>`;
+                    const compContainer = document.createElement('div');
+                    renderChatComponent({
+                        component: 'background_task_result',
+                        props: { task: task.task, result: task.result }
+                    }, compContainer, group);
+                    group.appendChild(compContainer);
+                    messagesContainer.appendChild(group);
+                }
+                scrollToBottom();
+            } catch(e) { /* Non-fatal — tasks endpoint may not exist yet */ }
         }
 
         function updateNavTime() {
@@ -2071,14 +2876,16 @@
                 
                 document.getElementById('messagesContainer').innerHTML = `
                     <div class="welcome-section" id="welcomeSection">
-                        <h1 class="welcome-title">New Chat</h1>
-                        <p class="welcome-subtitle">Start a fresh conversation</p>
+                        <div class="welcome-greeting" id="welcomeGreeting">Good morning</div>
+                        <div class="welcome-context" id="welcomeContext"></div>
+                        <div class="suggestion-chips" id="dynamicSuggestions"></div>
                     </div>
                 `;
-                
+                setWelcomeGreeting();
+
                 // Reload sessions list
             await loadSessions();
-            
+
             // Generate intelligent suggestions
             await generateDynamicSuggestions();
         } catch (error) {
@@ -2211,9 +3018,64 @@
         }
 
         /** Quick Actions: enable full OpenClaw tool path for one send (like terminal). */
+        // Agent Activity Panel functions
+        function showAgentPanel(phaseName) {
+            const panel = document.getElementById('agentPanel');
+            const nameEl = document.getElementById('agentPhaseName');
+            if (!panel) return;
+            if (nameEl) nameEl.textContent = phaseName || 'OpenClaw';
+            panel.classList.add('visible');
+        }
+
+        function updateAgentStep(id, name, status) {
+            const list = document.getElementById('agentStepsList');
+            if (!list) return;
+            const safeId = String(id || '');
+            let row = list.querySelector(`[data-agent-step]`);
+            // Find existing row by data attribute value
+            const allRows = list.querySelectorAll('[data-agent-step]');
+            row = null;
+            for (const r of allRows) {
+                if (r.dataset.agentStep === safeId) { row = r; break; }
+            }
+            if (!row) {
+                row = document.createElement('div');
+                row.className = 'agent-step-row';
+                row.dataset.agentStep = safeId;
+                row.innerHTML = '<span class="agent-step-name"></span>';
+                list.appendChild(row);
+            }
+            const nameSpan = row.querySelector('.agent-step-name');
+            if (nameSpan) nameSpan.textContent = name || safeId;
+            row.className = 'agent-step-row ' + (status || 'running');
+        }
+
+        function hideAgentPanel() {
+            const panel = document.getElementById('agentPanel');
+            if (!panel) return;
+            panel.classList.remove('visible');
+            setTimeout(() => {
+                const list = document.getElementById('agentStepsList');
+                if (list) list.innerHTML = '';
+            }, 380);
+        }
+
+        function toggleOpenClawMode() {
+            const checkbox = document.getElementById('forceOpenClawToggle');
+            const btn      = document.getElementById('openclawToggleBtn');
+            if (!checkbox || !btn) return;
+            checkbox.checked = !checkbox.checked;
+            btn.classList.toggle('active', checkbox.checked);
+            btn.title = checkbox.checked
+                ? 'OpenClaw active — click to disable'
+                : 'Run with OpenClaw (full tools)';
+        }
+
         function tryPromptWithOpenClaw(text) {
-            const cb = document.getElementById('forceOpenClawToggle');
-            if (cb) cb.checked = true;
+            const cb  = document.getElementById('forceOpenClawToggle');
+            const btn = document.getElementById('openclawToggleBtn');
+            if (cb)  cb.checked = true;
+            if (btn) btn.classList.add('active');
             tryPrompt(text);
         }
 
@@ -2544,11 +3406,62 @@
                 case 'form':
                     renderForm(container, data.props || {});
                     break;
+                case 'calendar_event_form':
+                    renderCalendarEventForm(container, data.props || {});
+                    break;
+                case 'note_create_form':
+                    renderNoteCreateForm(container, data.props || {});
+                    break;
+                case 'journal_create_form':
+                    renderJournalCreateForm(container, data.props || {});
+                    break;
+                case 'list_add_form':
+                    renderListAddForm(container, data.props || {});
+                    break;
+                case 'reminder_create_form':
+                    renderReminderCreateForm(container, data.props || {});
+                    break;
+                case 'timer_create_form':
+                    renderTimerCreateForm(container, data.props || {});
+                    break;
                 case 'link_preview':
                     renderLinkPreview(container, data.props || {});
                     break;
                 case 'image':
                     renderImage(container, data.props || {});
+                    break;
+                case 'price_table':
+                    renderPriceTable(container, data.props || {});
+                    break;
+                case 'map_embed':
+                    renderMapEmbed(container, data.props || {});
+                    break;
+                case 'chart':
+                    renderChart(container, data.props || {});
+                    break;
+                case 'action_menu':
+                    renderActionMenu(container, data.props || {});
+                    break;
+                case 'data_grid':
+                    renderDataGrid(container, data.props || {});
+                    break;
+                case 'openclaw_manager':
+                    renderOpenClawManager(container, data.props || {});
+                    break;
+                case 'skills_manager':
+                    renderSkillsManager(container, data.props || {});
+                    break;
+                case 'agent_trace':
+                    renderAgentTrace(container, data.props || {});
+                    break;
+                case 'plugin_installer':
+                    renderPluginInstaller(container, data.props || {});
+                    break;
+                case 'background_task_result':
+                    renderBackgroundTaskResult(container, data.props || {});
+                    break;
+                case 'telegram_setup':
+                    renderTelegramSetup(container, data.props || {});
                     break;
                 default:
                     container.innerHTML = `<div class="ui-component-fallback">[Unknown component: ${escapeHtml(data.component)}]</div>`;
@@ -2660,6 +3573,524 @@
             `;
         }
         
+        // ── Calendar Event Form ────────────────────────────────────────────────
+        function renderCalendarEventForm(container, props) {
+            const cats = ['general', 'work', 'personal', 'social', 'health', 'sport', 'family'];
+            const catChips = cats.map(c => `
+                <span class="cef-cat-chip${props.category === c ? ' active' : ''}"
+                      onclick="selectCefCategory(this,'${c}')">${c}</span>
+            `).join('');
+            const formId = 'cef-' + Date.now();
+            container.innerHTML = `
+                <div class="cef-wrap" id="${formId}">
+                    <div class="cef-header">
+                        <div class="cef-header-icon">📅</div>
+                        <div class="cef-header-text">
+                            <div class="cef-header-title">New Calendar Event</div>
+                            <div class="cef-header-subtitle">Review details and confirm</div>
+                        </div>
+                    </div>
+                    <div class="cef-body">
+                        <form onsubmit="submitCalendarEventForm(event,'${formId}')">
+                            <input type="hidden" name="category" class="cef-category-hidden" value="${escapeHtml(props.category || 'general')}">
+
+                            <div class="cef-field">
+                                <label>Event Title</label>
+                                <input class="cef-input" type="text" name="title"
+                                       value="${escapeHtml(props.title || '')}" required
+                                       placeholder="e.g. Dentist appointment">
+                            </div>
+
+                            <div class="cef-row">
+                                <div class="cef-field">
+                                    <label>Date</label>
+                                    <input class="cef-input" type="date" name="start_date"
+                                           value="${escapeHtml(props.date || '')}" required>
+                                </div>
+                                <div class="cef-field">
+                                    <label>Start Time <span class="cef-optional">optional</span></label>
+                                    <input class="cef-input" type="time" name="start_time"
+                                           value="${escapeHtml(props.time || '')}">
+                                </div>
+                            </div>
+
+                            <div class="cef-row">
+                                <div class="cef-field">
+                                    <label>End Time <span class="cef-optional">optional</span></label>
+                                    <input class="cef-input" type="time" name="end_time">
+                                </div>
+                                <div class="cef-field">
+                                    <label>Location <span class="cef-optional">optional</span></label>
+                                    <input class="cef-input" type="text" name="location" placeholder="Add location">
+                                </div>
+                            </div>
+
+                            <div class="cef-field">
+                                <label>Category</label>
+                                <div class="cef-category-row">${catChips}</div>
+                            </div>
+
+                            <div class="cef-actions">
+                                <button type="button" class="cef-btn cef-btn-cancel"
+                                        onclick="cancelCalendarEventForm('${formId}')">Cancel</button>
+                                <button type="submit" class="cef-btn cef-btn-create">Create Event</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            `;
+        }
+
+        function selectCefCategory(chip, value) {
+            const form = chip.closest('form');
+            form.querySelectorAll('.cef-cat-chip').forEach(c => c.classList.remove('active'));
+            chip.classList.add('active');
+            form.querySelector('.cef-category-hidden').value = value;
+        }
+
+        async function submitCalendarEventForm(event, formId) {
+            event.preventDefault();
+            const wrap = document.getElementById(formId);
+            const form = wrap?.querySelector('form');
+            if (!form) return;
+
+            const btn = form.querySelector('.cef-btn-create');
+            btn.disabled = true;
+            btn.textContent = 'Creating…';
+
+            const raw = Object.fromEntries(new FormData(form).entries());
+            // Strip empty optional fields so the API doesn't get blank strings
+            const payload = {};
+            Object.entries(raw).forEach(([k, v]) => { if (v.trim()) payload[k] = v.trim(); });
+
+            try {
+                const result = await apiRequest('/api/calendar/events', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+
+                // Format a readable date/time line
+                const dateStr = payload.start_date
+                    ? new Date(payload.start_date + 'T00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+                    : '';
+                const timeStr = payload.start_time
+                    ? ` · ${payload.start_time}`
+                    : '';
+
+                wrap.innerHTML = `
+                    <div class="cef-wrap">
+                        <div class="cef-success">
+                            <div class="cef-success-icon">✓</div>
+                            <div class="cef-success-body">
+                                <div class="cef-success-title">${escapeHtml(payload.title || 'Event')}</div>
+                                <div class="cef-success-meta">${escapeHtml(dateStr + timeStr)}${payload.location ? ' · ' + escapeHtml(payload.location) : ''}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            } catch (err) {
+                btn.disabled = false;
+                btn.textContent = 'Create Event';
+                let errEl = form.querySelector('.cef-error');
+                if (!errEl) { errEl = document.createElement('div'); errEl.className = 'cef-error'; form.appendChild(errEl); }
+                errEl.textContent = 'Could not create event — please try again.';
+            }
+        }
+
+        function cancelCalendarEventForm(formId) {
+            const wrap = document.getElementById(formId);
+            if (wrap) wrap.innerHTML = `
+                <div class="cef-wrap">
+                    <div class="cef-success" style="opacity:0.5;">
+                        <div class="cef-success-icon" style="background:rgba(255,255,255,0.1);">✕</div>
+                        <div class="cef-success-body">
+                            <div class="cef-success-title" style="color:var(--clr-text-2)">Event creation cancelled</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // ── Note Create Form ──────────────────────────────────────────────────
+        function renderNoteCreateForm(container, props) {
+            const id = 'cef-' + Date.now();
+            container.innerHTML = `
+                <div class="cef-wrap" id="${id}">
+                    <div class="cef-header">
+                        <div class="cef-header-icon cef-icon-note">📝</div>
+                        <div class="cef-header-text">
+                            <div class="cef-header-title">New Note</div>
+                            <div class="cef-header-subtitle">Quick capture</div>
+                        </div>
+                    </div>
+                    <div class="cef-body">
+                        <form onsubmit="submitNoteForm(event,'${id}')">
+                            <input type="hidden" name="category" class="cef-category-hidden" value="general">
+                            <div class="cef-field">
+                                <label>Title <span class="cef-optional">optional</span></label>
+                                <input class="cef-input" type="text" name="title"
+                                       value="${escapeHtml(props.title || '')}" placeholder="e.g. Meeting ideas">
+                            </div>
+                            <div class="cef-field">
+                                <label>Content</label>
+                                <textarea class="cef-textarea" name="content" required
+                                          placeholder="Write your note…">${escapeHtml(props.content || '')}</textarea>
+                            </div>
+                            <div class="cef-field">
+                                <label>Category</label>
+                                <div class="cef-category-row">
+                                    ${['general','work','idea','personal','urgent'].map(c =>
+                                        `<span class="cef-cat-chip${c==='general'?' active':''}" onclick="selectCefCategory(this,'${c}')">${c}</span>`
+                                    ).join('')}
+                                </div>
+                            </div>
+                            <div class="cef-actions">
+                                <button type="button" class="cef-btn cef-btn-cancel" onclick="cancelCalendarEventForm('${id}')">Cancel</button>
+                                <button type="submit" class="cef-btn cef-btn-create" style="background:linear-gradient(135deg,#3b82f6,#60a5fa)">Save Note</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>`;
+        }
+
+        async function submitNoteForm(event, id) {
+            event.preventDefault();
+            const wrap = document.getElementById(id);
+            const form = wrap?.querySelector('form');
+            const btn = form?.querySelector('.cef-btn-create');
+            btn.disabled = true; btn.textContent = 'Saving…';
+            const payload = Object.fromEntries(
+                [...new FormData(form).entries()].filter(([,v]) => v.trim())
+            );
+            try {
+                await apiRequest('/api/notes', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+                wrap.innerHTML = `<div class="cef-wrap"><div class="cef-success">
+                    <div class="cef-success-icon" style="background:linear-gradient(135deg,#3b82f6,#60a5fa)">✓</div>
+                    <div class="cef-success-body">
+                        <div class="cef-success-title">${escapeHtml(payload.title || 'Note saved')}</div>
+                        <div class="cef-success-meta">${payload.category || 'general'}</div>
+                    </div></div></div>`;
+            } catch(e) {
+                btn.disabled = false; btn.textContent = 'Save Note';
+                _cefShowError(form, 'Could not save note — please try again.');
+            }
+        }
+
+        // ── Journal Create Form ───────────────────────────────────────────────
+        function renderJournalCreateForm(container, props) {
+            const id = 'cef-' + Date.now();
+            const moods = [['😊','happy'],['😌','calm'],['🤔','thoughtful'],['😔','down'],['😤','frustrated'],['🎉','excited']];
+            const moodBtns = moods.map(([e,v]) =>
+                `<button type="button" class="cef-mood-btn" data-mood="${v}" onclick="selectCefMood(this,'${id}')">${e}</button>`
+            ).join('');
+            container.innerHTML = `
+                <div class="cef-wrap" id="${id}">
+                    <div class="cef-header">
+                        <div class="cef-header-icon cef-icon-journal">📖</div>
+                        <div class="cef-header-text">
+                            <div class="cef-header-title">Journal Entry</div>
+                            <div class="cef-header-subtitle">${new Date().toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'})}</div>
+                        </div>
+                    </div>
+                    <div class="cef-body">
+                        <form onsubmit="submitJournalForm(event,'${id}')">
+                            <input type="hidden" name="mood" class="cef-mood-hidden" value="">
+                            <input type="hidden" name="date" value="${escapeHtml(props.date||'')}">
+                            <div class="cef-field">
+                                <label>How are you feeling?</label>
+                                <div class="cef-mood-row">${moodBtns}</div>
+                            </div>
+                            <div class="cef-field">
+                                <label>Title <span class="cef-optional">optional</span></label>
+                                <input class="cef-input" type="text" name="title" placeholder="Give this entry a title…">
+                            </div>
+                            <div class="cef-field">
+                                <label>Entry</label>
+                                <textarea class="cef-textarea" name="content" required style="min-height:110px"
+                                          placeholder="What's on your mind today?">${escapeHtml(props.content||'')}</textarea>
+                            </div>
+                            <div class="cef-actions">
+                                <button type="button" class="cef-btn cef-btn-cancel" onclick="cancelCalendarEventForm('${id}')">Cancel</button>
+                                <button type="submit" class="cef-btn cef-btn-create" style="background:linear-gradient(135deg,#8b5cf6,#c084fc)">Save Entry</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>`;
+        }
+
+        function selectCefMood(btn, formId) {
+            const wrap = document.getElementById(formId);
+            wrap.querySelectorAll('.cef-mood-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            wrap.querySelector('.cef-mood-hidden').value = btn.dataset.mood;
+        }
+
+        async function submitJournalForm(event, id) {
+            event.preventDefault();
+            const wrap = document.getElementById(id);
+            const form = wrap?.querySelector('form');
+            const btn = form?.querySelector('.cef-btn-create');
+            btn.disabled = true; btn.textContent = 'Saving…';
+            const payload = Object.fromEntries(
+                [...new FormData(form).entries()].filter(([,v]) => v.trim())
+            );
+            try {
+                await apiRequest('/api/journal/entries', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+                wrap.innerHTML = `<div class="cef-wrap"><div class="cef-success">
+                    <div class="cef-success-icon" style="background:linear-gradient(135deg,#8b5cf6,#c084fc)">✓</div>
+                    <div class="cef-success-body">
+                        <div class="cef-success-title">${escapeHtml(payload.title || 'Entry saved')}</div>
+                        <div class="cef-success-meta">${payload.mood ? payload.mood + ' · ' : ''}${new Date().toLocaleDateString()}</div>
+                    </div></div></div>`;
+            } catch(e) {
+                btn.disabled = false; btn.textContent = 'Save Entry';
+                _cefShowError(form, 'Could not save entry — please try again.');
+            }
+        }
+
+        // ── List Add Form ─────────────────────────────────────────────────────
+        function renderListAddForm(container, props) {
+            const id = 'cef-' + Date.now();
+            const types = ['shopping','personal','work','tasks'];
+            const typeChips = types.map(t =>
+                `<span class="cef-cat-chip${t===props.list_type?' active':''}" onclick="selectCefCategory(this,'${t}')">${t}</span>`
+            ).join('');
+            container.innerHTML = `
+                <div class="cef-wrap" id="${id}">
+                    <div class="cef-header">
+                        <div class="cef-header-icon cef-icon-list">✅</div>
+                        <div class="cef-header-text">
+                            <div class="cef-header-title">Add to List</div>
+                            <div class="cef-header-subtitle">Item details</div>
+                        </div>
+                    </div>
+                    <div class="cef-body">
+                        <form onsubmit="submitListAddForm(event,'${id}')">
+                            <input type="hidden" name="list_type" class="cef-category-hidden" value="${escapeHtml(props.list_type||'shopping')}">
+                            <div class="cef-field">
+                                <label>Item</label>
+                                <input class="cef-input" type="text" name="item_text"
+                                       value="${escapeHtml(props.item||'')}" required placeholder="e.g. Milk, 2L">
+                            </div>
+                            <div class="cef-row">
+                                <div class="cef-field">
+                                    <label>Quantity <span class="cef-optional">optional</span></label>
+                                    <input class="cef-input" type="text" name="quantity" placeholder="e.g. 2">
+                                </div>
+                                <div class="cef-field">
+                                    <label>Notes <span class="cef-optional">optional</span></label>
+                                    <input class="cef-input" type="text" name="notes" placeholder="e.g. organic">
+                                </div>
+                            </div>
+                            <div class="cef-field">
+                                <label>List</label>
+                                <div class="cef-category-row">${typeChips}</div>
+                            </div>
+                            <div class="cef-actions">
+                                <button type="button" class="cef-btn cef-btn-cancel" onclick="cancelCalendarEventForm('${id}')">Cancel</button>
+                                <button type="submit" class="cef-btn cef-btn-create" style="background:linear-gradient(135deg,#10b981,#34d399)">Add Item</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>`;
+        }
+
+        async function submitListAddForm(event, id) {
+            event.preventDefault();
+            const wrap = document.getElementById(id);
+            const form = wrap?.querySelector('form');
+            const btn = form?.querySelector('.cef-btn-create');
+            btn.disabled = true; btn.textContent = 'Adding…';
+            const raw = Object.fromEntries(new FormData(form).entries());
+            const listType = raw.list_type || 'shopping';
+            const itemText = (raw.item_text || '').trim();
+            if (!itemText) { btn.disabled=false; btn.textContent='Add Item'; return; }
+            try {
+                // Step 1: find or create a list of this type
+                const listsResp = await apiRequest(`/api/lists/${listType}`);
+                let listId;
+                if (listsResp?.lists?.length) {
+                    listId = listsResp.lists[0].id;
+                } else {
+                    const created = await apiRequest(`/api/lists/${listType}`, {
+                        method: 'POST', headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify({ name: listType.charAt(0).toUpperCase()+listType.slice(1), list_type: listType })
+                    });
+                    listId = created?.id || created?.list?.id;
+                }
+                // Step 2: add the item
+                const itemPayload = { text: itemText };
+                if (raw.quantity?.trim()) itemPayload.quantity = raw.quantity.trim();
+                if (raw.notes?.trim())    itemPayload.category = raw.notes.trim();
+                await apiRequest(`/api/lists/${listType}/${listId}/items`, {
+                    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(itemPayload)
+                });
+                wrap.innerHTML = `<div class="cef-wrap"><div class="cef-success">
+                    <div class="cef-success-icon" style="background:linear-gradient(135deg,#10b981,#34d399)">✓</div>
+                    <div class="cef-success-body">
+                        <div class="cef-success-title">${escapeHtml(itemText)}</div>
+                        <div class="cef-success-meta">Added to ${escapeHtml(listType)} list</div>
+                    </div></div></div>`;
+            } catch(e) {
+                btn.disabled=false; btn.textContent='Add Item';
+                _cefShowError(form, 'Could not add item — please try again.');
+            }
+        }
+
+        // ── Reminder Create Form ──────────────────────────────────────────────
+        function renderReminderCreateForm(container, props) {
+            const id = 'cef-' + Date.now();
+            container.innerHTML = `
+                <div class="cef-wrap" id="${id}">
+                    <div class="cef-header">
+                        <div class="cef-header-icon cef-icon-reminder">🔔</div>
+                        <div class="cef-header-text">
+                            <div class="cef-header-title">New Reminder</div>
+                            <div class="cef-header-subtitle">Set it and forget it</div>
+                        </div>
+                    </div>
+                    <div class="cef-body">
+                        <form onsubmit="submitReminderForm(event,'${id}')">
+                            <input type="hidden" name="priority" class="cef-priority-hidden" value="normal">
+                            <div class="cef-field">
+                                <label>Reminder</label>
+                                <input class="cef-input" type="text" name="title"
+                                       value="${escapeHtml(props.title||'')}" required placeholder="e.g. Call the dentist">
+                            </div>
+                            <div class="cef-row">
+                                <div class="cef-field">
+                                    <label>Date</label>
+                                    <input class="cef-input" type="date" name="due_date" value="${escapeHtml(props.date||'')}" required>
+                                </div>
+                                <div class="cef-field">
+                                    <label>Time <span class="cef-optional">optional</span></label>
+                                    <input class="cef-input" type="time" name="due_time" value="${escapeHtml(props.time||'')}">
+                                </div>
+                            </div>
+                            <div class="cef-field">
+                                <label>Priority</label>
+                                <div class="cef-priority-row">
+                                    <span class="cef-priority-chip" data-p="low"    onclick="selectCefPriority(this,'${id}')">Low</span>
+                                    <span class="cef-priority-chip active" data-p="normal" onclick="selectCefPriority(this,'${id}')">Normal</span>
+                                    <span class="cef-priority-chip" data-p="high"   onclick="selectCefPriority(this,'${id}')">High</span>
+                                </div>
+                            </div>
+                            <div class="cef-actions">
+                                <button type="button" class="cef-btn cef-btn-cancel" onclick="cancelCalendarEventForm('${id}')">Cancel</button>
+                                <button type="submit" class="cef-btn cef-btn-create" style="background:linear-gradient(135deg,#f59e0b,#fbbf24);color:#1a1a2e">Set Reminder</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>`;
+        }
+
+        function selectCefPriority(chip, id) {
+            const wrap = document.getElementById(id);
+            wrap.querySelectorAll('.cef-priority-chip').forEach(c => c.classList.remove('active'));
+            chip.classList.add('active');
+            wrap.querySelector('.cef-priority-hidden').value = chip.dataset.p;
+        }
+
+        async function submitReminderForm(event, id) {
+            event.preventDefault();
+            const wrap = document.getElementById(id);
+            const form = wrap?.querySelector('form');
+            const btn = form?.querySelector('.cef-btn-create');
+            btn.disabled = true; btn.textContent = 'Setting…';
+            const payload = Object.fromEntries(
+                [...new FormData(form).entries()].filter(([,v]) => v.trim())
+            );
+            try {
+                await apiRequest('/api/reminders', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+                const dateStr = payload.due_date
+                    ? new Date(payload.due_date+'T00:00').toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'})
+                    : '';
+                wrap.innerHTML = `<div class="cef-wrap"><div class="cef-success">
+                    <div class="cef-success-icon" style="background:linear-gradient(135deg,#f59e0b,#fbbf24)">✓</div>
+                    <div class="cef-success-body">
+                        <div class="cef-success-title">${escapeHtml(payload.title||'Reminder set')}</div>
+                        <div class="cef-success-meta">${escapeHtml(dateStr+(payload.due_time?' · '+payload.due_time:''))}</div>
+                    </div></div></div>`;
+            } catch(e) {
+                btn.disabled=false; btn.textContent='Set Reminder';
+                _cefShowError(form, 'Could not set reminder — please try again.');
+            }
+        }
+
+        // ── Timer Create Form (pure JS countdown, no API) ─────────────────────
+        function renderTimerCreateForm(container, props) {
+            const id = 'cef-' + Date.now();
+            const mins = parseInt(props.minutes) || 5;
+            const label = props.label || 'Timer';
+            container.innerHTML = `
+                <div class="cef-wrap" id="${id}" data-mins="${mins}" data-label="${escapeHtml(label)}">
+                    <div class="cef-header">
+                        <div class="cef-header-icon cef-icon-timer">⏱</div>
+                        <div class="cef-header-text">
+                            <div class="cef-header-title">${escapeHtml(label)}</div>
+                            <div class="cef-header-subtitle">${mins} minute${mins!==1?'s':''}</div>
+                        </div>
+                    </div>
+                    <div class="cef-body">
+                        <div class="cef-timer-display">
+                            <div class="cef-timer-digits" id="${id}-digits">${String(mins).padStart(2,'0')}:00</div>
+                            <div class="cef-timer-label-text">${escapeHtml(label)}</div>
+                            <div class="cef-timer-bar-wrap"><div class="cef-timer-bar" id="${id}-bar" style="width:100%"></div></div>
+                        </div>
+                        <div class="cef-actions" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.07)">
+                            <button type="button" class="cef-btn cef-btn-cancel" id="${id}-cancel"
+                                    onclick="cancelCalendarEventForm('${id}')">Cancel</button>
+                            <button type="button" class="cef-btn cef-btn-create" id="${id}-start"
+                                    style="background:linear-gradient(135deg,#ef4444,#f97316)"
+                                    onclick="startCefTimer('${id}')">Start Timer</button>
+                        </div>
+                    </div>
+                </div>`;
+        }
+
+        function startCefTimer(id) {
+            const wrap = document.getElementById(id);
+            const totalSecs = parseInt(wrap.dataset.mins || 5) * 60;
+            const digits    = document.getElementById(id+'-digits');
+            const bar       = document.getElementById(id+'-bar');
+            const startBtn  = document.getElementById(id+'-start');
+            const cancelBtn = document.getElementById(id+'-cancel');
+            if (!digits || !bar) return;
+            startBtn.style.display = 'none';
+            cancelBtn.textContent = 'Cancel Timer';
+            let remaining = totalSecs;
+            function _fmt(s) {
+                const m = Math.floor(s/60), sec = s%60;
+                return String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0');
+            }
+            digits.textContent = _fmt(remaining);
+            bar.style.width = '100%';
+            const tick = setInterval(() => {
+                remaining--;
+                if (remaining <= 0) {
+                    clearInterval(tick);
+                    wrap.innerHTML = `<div class="cef-wrap"><div class="cef-timer-done">
+                        <div class="cef-timer-done-icon">🎉</div>
+                        <div class="cef-timer-done-text">${escapeHtml(wrap.dataset.label||'Timer')} — time's up!</div>
+                    </div></div>`;
+                    return;
+                }
+                digits.textContent = _fmt(remaining);
+                bar.style.width = ((remaining/totalSecs)*100).toFixed(1)+'%';
+            }, 1000);
+            // Store interval id so cancel can clear it
+            wrap._timerInterval = tick;
+            cancelBtn.onclick = () => { clearInterval(tick); cancelCalendarEventForm(id); };
+        }
+
+        // Shared error helper for all CEF forms
+        function _cefShowError(form, msg) {
+            let el = form?.querySelector('.cef-error');
+            if (!el) { el = document.createElement('div'); el.className = 'cef-error'; form.appendChild(el); }
+            el.textContent = msg;
+        }
+
         function renderLinkPreview(container, props) {
             container.innerHTML = `
                 <a href="${escapeHtml(props.url || '#')}" target="_blank" class="link-preview" rel="noopener">
@@ -2681,8 +4112,630 @@
                 </div>
             `;
         }
-        
-        // ===== DASHBOARD COMMANDS =====
+
+        function renderPriceTable(container, props) {
+            container.className += ' price-table-component';
+            const rows = (props.rows || []).map(r => {
+                const badges = [
+                    r.best ? '<span class="pt-badge best">Best</span>' : '',
+                    r.sale ? '<span class="pt-badge sale">Sale</span>' : '',
+                ].join('');
+                const action = r.url
+                    ? `<a href="${escapeHtml(r.url)}" target="_blank" class="pt-action" rel="noopener">View</a>`
+                    : (r.action ? `<button class="pt-action" onclick="sendMessage(${JSON.stringify(r.action)})">${escapeHtml(r.action_label||'Select')}</button>` : '');
+                return `<tr>
+                    <td>${escapeHtml(r.store||r.name||'')}</td>
+                    <td>${escapeHtml(r.product||r.desc||'')}</td>
+                    <td><span class="pt-price">${escapeHtml(r.price||'')}</span>${badges}</td>
+                    ${action ? `<td>${action}</td>` : ''}
+                </tr>`;
+            }).join('');
+            const hasAction = (props.rows||[]).some(r => r.url || r.action);
+            container.innerHTML = `
+                ${props.title ? `<div style="font-weight:700;font-size:14px;padding:10px 14px 6px;color:var(--clr-text)">${escapeHtml(props.title)}</div>` : ''}
+                <table>
+                    <thead><tr>
+                        <th>Store</th><th>Product</th><th>Price</th>
+                        ${hasAction ? '<th></th>' : ''}
+                    </tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            `;
+        }
+
+        function renderMapEmbed(container, props) {
+            container.className += ' map-component';
+            const mapId = 'map-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+            container.innerHTML = `
+                ${props.title ? `<div class="map-title">📍 ${escapeHtml(props.title)}</div>` : ''}
+                <div id="${mapId}" class="leaflet-map"></div>
+            `;
+            // Initialize Leaflet after DOM insertion
+            setTimeout(() => {
+                if (typeof L === 'undefined') return;
+                const mapEl = document.getElementById(mapId);
+                if (!mapEl) return;
+                const markers = props.markers || [];
+                const center = props.center ? [props.center.lat, props.center.lng] : null;
+                const defaultCenter = center || [markers[0]?.lat||0, markers[0]?.lng||0] || [-28.77, 114.61];
+                const zoom = props.zoom || 13;
+                const map = L.map(mapId, { scrollWheelZoom: false }).setView(defaultCenter, zoom);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap contributors', maxZoom: 19
+                }).addTo(map);
+                markers.forEach(m => {
+                    if (m.lat != null && m.lng != null) {
+                        L.marker([m.lat, m.lng]).addTo(map)
+                         .bindPopup(escapeHtml(m.label || m.name || ''));
+                    }
+                });
+                if (markers.length > 1) {
+                    const bounds = L.latLngBounds(markers.filter(m=>m.lat!=null).map(m=>[m.lat,m.lng]));
+                    map.fitBounds(bounds, { padding: [20, 20] });
+                }
+            }, 50);
+        }
+
+        function renderChart(container, props) {
+            container.className += ' chart-component';
+            const canvasId = 'chart-' + Date.now();
+            container.innerHTML = `
+                ${props.title ? `<div class="chart-title">${escapeHtml(props.title)}</div>` : ''}
+                <canvas id="${canvasId}"></canvas>
+            `;
+            setTimeout(() => {
+                if (typeof Chart === 'undefined') return;
+                const canvas = document.getElementById(canvasId);
+                if (!canvas) return;
+                const palette = ['#7B61FF','#10b981','#f59e0b','#ef4444','#3b82f6','#8b5cf6','#ec4899'];
+                const datasets = (props.datasets || []).map((ds, i) => ({
+                    label: ds.label || '',
+                    data: ds.data || [],
+                    backgroundColor: ds.backgroundColor || palette[i % palette.length] + '88',
+                    borderColor: ds.borderColor || palette[i % palette.length],
+                    borderWidth: 2, tension: 0.3,
+                }));
+                new Chart(canvas, {
+                    type: props.chart_type || props.type || 'bar',
+                    data: { labels: props.labels || [], datasets },
+                    options: {
+                        responsive: true, maintainAspectRatio: true,
+                        plugins: { legend: { display: datasets.length > 1 } },
+                    },
+                });
+            }, 50);
+        }
+
+        function renderActionMenu(container, props) {
+            container.className += ' action-menu-component';
+            const options = (props.options || []).map(o => {
+                const msg = JSON.stringify(o.message || o.label || '');
+                return `<div class="am-option" onclick="sendMessage(${msg})">
+                    <span class="am-icon">${o.icon || '▶️'}</span>
+                    <span class="am-label">${escapeHtml(o.label || '')}</span>
+                </div>`;
+            }).join('');
+            container.innerHTML = `
+                ${props.prompt ? `<div class="am-prompt">${escapeHtml(props.prompt)}</div>` : ''}
+                <div class="am-options">${options}</div>
+            `;
+        }
+
+        function renderDataGrid(container, props) {
+            container.className += ' data-grid-component';
+            const cols = props.columns || (props.rows && props.rows[0] ? Object.keys(props.rows[0]) : []);
+            let rows = props.rows || [];
+            const gridId = 'dg-' + Date.now();
+            const renderRows = (data) => data.map(r =>
+                `<tr>${cols.map(c => `<td>${escapeHtml(String(r[c] ?? ''))}</td>`).join('')}</tr>`
+            ).join('');
+            container.innerHTML = `
+                <div class="dg-toolbar">
+                    <input class="dg-search" placeholder="🔍 Search…" oninput="filterDataGrid('${gridId}', this.value)">
+                    <span style="font-size:12px;color:var(--clr-text-2)">${rows.length} rows</span>
+                </div>
+                <table id="${gridId}">
+                    <thead><tr>${cols.map(c=>`<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
+                    <tbody>${renderRows(rows)}</tbody>
+                </table>
+            `;
+            container._gridData = { rows, cols };
+        }
+
+        function filterDataGrid(gridId, query) {
+            const table = document.getElementById(gridId);
+            if (!table) return;
+            const q = query.toLowerCase();
+            table.querySelectorAll('tbody tr').forEach(row => {
+                row.style.display = row.textContent.toLowerCase().includes(q) ? '' : 'none';
+            });
+        }
+
+        function renderOpenClawManager(container, props) {
+            container.className += ' openclaw-manager';
+            const plugins = props.plugins || [];
+            const pluginHtml = plugins.map(p => {
+                const isInstalled = p.installed !== false;
+                const badge = `<span class="ocm-badge ${isInstalled?'installed':'available'}">${isInstalled?'Installed':'Available'}</span>`;
+                const btn = isInstalled
+                    ? `<button class="ocm-btn remove" onclick="ocmRemove('${escapeHtml(p.name)}',this)">Remove</button>`
+                    : `<button class="ocm-btn install" onclick="ocmInstall('${escapeHtml(p.name)}',this)">Install</button>`;
+                return `<div class="ocm-plugin">
+                    <span class="ocm-plugin-icon">${p.icon || '🔌'}</span>
+                    <div class="ocm-plugin-info">
+                        <div class="ocm-plugin-name">${escapeHtml(p.name)}${badge}</div>
+                        ${p.description ? `<div class="ocm-plugin-desc">${escapeHtml(p.description)}</div>` : ''}
+                    </div>
+                    <div class="ocm-plugin-actions">${btn}</div>
+                </div>`;
+            }).join('');
+            container.innerHTML = `
+                <div class="ocm-header">
+                    <span class="ocm-header-icon">🤖</span>
+                    <div>
+                        <div class="ocm-header-title">OpenClaw Plugins</div>
+                        <div class="ocm-header-sub">${plugins.filter(p=>p.installed!==false).length} installed · ${plugins.length} available</div>
+                    </div>
+                </div>
+                <div class="ocm-plugin-list">${pluginHtml || '<div style="padding:16px;color:var(--clr-text-2);font-size:13px">No plugins found.</div>'}</div>
+            `;
+        }
+
+        async function ocmInstall(name, btn) {
+            btn.disabled = true; btn.textContent = 'Installing…';
+            try {
+                await apiRequest(`/api/openclaw/plugins/${encodeURIComponent(name)}/install`, { method: 'POST' });
+                btn.className = 'ocm-btn remove'; btn.textContent = 'Remove';
+                btn.disabled = false;
+                btn.onclick = () => ocmRemove(name, btn);
+                const badge = btn.closest('.ocm-plugin')?.querySelector('.ocm-badge');
+                if (badge) { badge.className = 'ocm-badge installed'; badge.textContent = 'Installed'; }
+                showNotification(`Plugin "${name}" installed!`, 'success');
+            } catch(e) { btn.disabled = false; btn.textContent = 'Install'; showNotification('Install failed: ' + e.message, 'error'); }
+        }
+
+        async function ocmRemove(name, btn) {
+            btn.disabled = true; btn.textContent = 'Removing…';
+            try {
+                await apiRequest(`/api/openclaw/plugins/${encodeURIComponent(name)}`, { method: 'DELETE' });
+                btn.className = 'ocm-btn install'; btn.textContent = 'Install';
+                btn.disabled = false;
+                btn.onclick = () => ocmInstall(name, btn);
+                const badge = btn.closest('.ocm-plugin')?.querySelector('.ocm-badge');
+                if (badge) { badge.className = 'ocm-badge available'; badge.textContent = 'Available'; }
+                showNotification(`Plugin "${name}" removed.`, 'info');
+            } catch(e) { btn.disabled = false; btn.textContent = 'Remove'; showNotification('Remove failed: ' + e.message, 'error'); }
+        }
+
+        // ── Skills Manager ────────────────────────────────────────────────────
+
+        function escapeAttr(text) {
+            return String(text).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        }
+
+        function renderSkillsManager(container, props) {
+            container.classList.add('skills-manager');
+            const skills = props.skills || [];
+            const highlight = (props.highlight || '').toLowerCase();
+
+            function sourceBadge(source) {
+                if (source === 'workspace') return '<span class="ocsm-source workspace">Workspace</span>';
+                if (source === 'openclaw-bundled') return '<span class="ocsm-source bundled">Bundled</span>';
+                return '<span class="ocsm-source clawhub">ClawHub</span>';
+            }
+
+            const skillHtml = skills.map(s => {
+                const isInstalled = s.installed === true;
+                const isAllowed = s.allowed !== false;
+                const hasMissing = s.missing && Object.values(s.missing).some(v => Array.isArray(v) ? v.length > 0 : !!v);
+                const isHighlighted = highlight && s.name.toLowerCase().includes(highlight);
+
+                const statusBadge = isInstalled
+                    ? '<span class="ocsm-badge installed">Installed</span>'
+                    : hasMissing
+                        ? '<span class="ocsm-badge missing">Missing deps</span>'
+                        : '<span class="ocsm-badge available">Available</span>';
+
+                let actions = '';
+                if (isInstalled) {
+                    actions = `
+                        <button class="ocsm-btn update" onclick="ocsmUpdate(this)">Update</button>
+                        <button class="ocsm-btn remove" onclick="ocsmRemove(this)">Remove</button>`;
+                } else if (!isAllowed) {
+                    actions = `<span class="ocsm-review-note" title="Add to _SKILLS_ALLOWLIST in openclaw_manager.py after reviewing">Review required</span>`;
+                } else if (hasMissing) {
+                    const missingVals = Object.entries(s.missing)
+                        .filter(([k,v]) => Array.isArray(v) ? v.length > 0 : !!v)
+                        .map(([k,v]) => Array.isArray(v) ? v.join(', ') : String(v)).join(', ');
+                    actions = `<span class="ocsm-review-note" title="${escapeAttr(missingVals)}">Missing: ${escapeHtml(missingVals || 'unknown')}</span>`;
+                } else {
+                    actions = `<button class="ocsm-btn preview" onclick="ocsmPreview(this)">Preview &amp; Install</button>`;
+                }
+
+                return `<div class="ocsm-skill${isHighlighted ? ' highlighted' : ''}" data-name="${escapeAttr(s.name)}" data-source="${escapeAttr(s.source)}">
+                    <span class="ocsm-skill-icon">${escapeHtml(s.icon || '🔧')}</span>
+                    <div class="ocsm-skill-info">
+                        <div class="ocsm-skill-name">${escapeHtml(s.name)}${statusBadge}${sourceBadge(s.source)}</div>
+                        ${s.description ? `<div class="ocsm-skill-desc">${escapeHtml(s.description)}</div>` : ''}
+                    </div>
+                    <div class="ocsm-skill-actions">${actions}</div>
+                </div>`;
+            }).join('');
+
+            const installed = skills.filter(s => s.installed).length;
+            container.innerHTML = `
+                <div class="ocsm-header">
+                    <span class="ocsm-header-icon">⚡</span>
+                    <div>
+                        <div class="ocsm-header-title">OpenClaw Skills</div>
+                        <div class="ocsm-header-sub">${installed} installed · ${skills.length} available</div>
+                    </div>
+                </div>
+                <div class="ocsm-search-row">
+                    <input type="text" class="ocsm-search" placeholder="Search skills…"
+                        oninput="ocsmFilterSkills(this)">
+                </div>
+                <div class="ocsm-skill-list">${skillHtml || '<div style="padding:16px;color:var(--clr-text-2);font-size:13px">No skills found.</div>'}</div>
+            `;
+
+            // Auto-scroll highlighted skill into view
+            if (highlight) {
+                const highlighted = container.querySelector('.ocsm-skill.highlighted');
+                if (highlighted) setTimeout(() => highlighted.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 200);
+            }
+        }
+
+        function ocsmFilterSkills(input) {
+            const q = input.value.toLowerCase();
+            const list = input.closest('.skills-manager')?.querySelector('.ocsm-skill-list');
+            if (!list) return;
+            list.querySelectorAll('.ocsm-skill').forEach(el => {
+                const name = el.querySelector('.ocsm-skill-name')?.textContent?.toLowerCase() || '';
+                const desc = el.querySelector('.ocsm-skill-desc')?.textContent?.toLowerCase() || '';
+                el.style.display = (!q || name.includes(q) || desc.includes(q)) ? '' : 'none';
+            });
+        }
+
+        async function ocsmPreview(btn) {
+            const skillEl = btn.closest('.ocsm-skill');
+            const name = skillEl?.dataset.name || '';
+            const cardSource = skillEl?.dataset.source || 'clawhub';
+            if (!name) return;
+
+            // Build modal overlay
+            const overlay = document.createElement('div');
+            overlay.className = 'ocsm-modal-overlay';
+            overlay.innerHTML = `
+                <div class="ocsm-modal">
+                    <div class="ocsm-modal-header">
+                        <span class="ocsm-modal-title">Skill Preview: ${escapeHtml(name)}</span>
+                        <button class="ocsm-modal-close" onclick="this.closest('.ocsm-modal-overlay').remove()">✕</button>
+                    </div>
+                    <div class="ocsm-modal-body">
+                        <div class="ocsm-modal-loading">Loading SKILL.md…</div>
+                    </div>
+                    <div class="ocsm-modal-footer">
+                        <label class="ocsm-confirm-label">
+                            <input type="checkbox" onchange="ocsmCheckConfirm(this)">
+                            I've reviewed this skill and want to install it
+                        </label>
+                        <button class="ocsm-btn install" disabled
+                            data-name="${escapeAttr(name)}" data-source="${escapeAttr(cardSource)}"
+                            onclick="ocsmInstall(this)">Install</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+            overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+            const body = overlay.querySelector('.ocsm-modal-body');
+            try {
+                const data = await apiRequest(`/api/openclaw/skills/${encodeURIComponent(name)}/preview`);
+                if (!data.content) {
+                    body.innerHTML = `<div class="ocsm-modal-error">${escapeHtml(data.error || 'SKILL.md not found')}</div>`;
+                    return;
+                }
+
+                // Update install button with API-confirmed source
+                const installBtn = overlay.querySelector('.ocsm-btn.install');
+                if (installBtn && data.source) installBtn.dataset.source = data.source;
+
+                const sec = data.security || {};
+                const verdict = sec.verdict || 'CLEAN';
+                const verdictClass = verdict === 'BLOCK' ? 'error' : verdict === 'WARN' ? 'warning' : 'success';
+                const verdictLabel = { BLOCK: '🔴 BLOCKED', WARN: '🟡 Review warnings', CLEAN: '🟢 Clean' }[verdict] || verdict;
+
+                const findingsHtml = (sec.findings || []).map(f => `
+                    <div class="ocsm-finding ${f.level.toLowerCase()}">
+                        <span class="ocsm-finding-badge">${f.level}</span>
+                        <span>${escapeHtml(f.description)}</span>
+                        ${f.matches?.length ? `<span class="ocsm-finding-matches">${f.matches.map(escapeHtml).join(', ')}</span>` : ''}
+                    </div>`).join('');
+
+                body.innerHTML = `
+                    <div class="ocsm-security-banner ${verdictClass}">${verdictLabel}
+                        ${sec.findings?.length ? `— ${sec.findings.length} finding${sec.findings.length>1?'s':''}` : ''}
+                    </div>
+                    ${findingsHtml}
+                    <div class="ocsm-source-row">Source: <strong>${escapeHtml(data.source)}</strong></div>
+                    <pre class="ocsm-skill-md">${escapeHtml(data.content)}</pre>
+                `;
+
+                // BLOCK verdict: disable install entirely
+                if (verdict === 'BLOCK') {
+                    const confirmLabel = overlay.querySelector('label.ocsm-confirm-label');
+                    if (installBtn) { installBtn.disabled = true; installBtn.title = 'Blocked by security scan'; }
+                    if (confirmLabel) confirmLabel.style.display = 'none';
+                }
+            } catch(e) {
+                body.innerHTML = `<div class="ocsm-modal-error">Failed to load preview: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        function ocsmCheckConfirm(checkbox) {
+            const btn = checkbox.closest('.ocsm-modal-footer')?.querySelector('.ocsm-btn.install');
+            if (btn) btn.disabled = !checkbox.checked;
+        }
+
+        async function ocsmInstall(btn) {
+            const name = btn.dataset.name || '';
+            const source = btn.dataset.source || 'clawhub';
+            btn.disabled = true; btn.textContent = 'Installing…';
+            try {
+                await apiRequest(
+                    `/api/openclaw/skills/${encodeURIComponent(name)}/install?source=${encodeURIComponent(source)}`,
+                    { method: 'POST' }
+                );
+                showNotification(`Skill "${name}" installed!`, 'success');
+                btn.closest('.ocsm-modal-overlay')?.remove();
+                // Refresh the skills card
+                const card = document.querySelector('.skills-manager');
+                if (card) {
+                    try {
+                        const data = await apiRequest('/api/openclaw/skills');
+                        renderSkillsManager(card, data);
+                    } catch(_) {}
+                }
+            } catch(e) {
+                btn.disabled = false; btn.textContent = 'Install';
+                showNotification('Install failed: ' + e.message, 'error');
+            }
+        }
+
+        async function ocsmUpdate(btn) {
+            const name = btn.closest('.ocsm-skill')?.dataset.name || '';
+            btn.disabled = true; btn.textContent = 'Updating…';
+            try {
+                await apiRequest(`/api/openclaw/skills/${encodeURIComponent(name)}/update`, { method: 'POST' });
+                showNotification(`Skill "${name}" updated!`, 'success');
+                btn.disabled = false; btn.textContent = 'Update';
+                // Refresh the skills card
+                const card = document.querySelector('.skills-manager');
+                if (card) {
+                    try {
+                        const data = await apiRequest('/api/openclaw/skills');
+                        renderSkillsManager(card, data);
+                    } catch(_) {}
+                }
+            } catch(e) {
+                btn.disabled = false; btn.textContent = 'Update';
+                showNotification('Update failed: ' + e.message, 'error');
+            }
+        }
+
+        async function ocsmRemove(btn) {
+            const name = btn.closest('.ocsm-skill')?.dataset.name || '';
+            if (!confirm(`Remove skill "${name}"?`)) return;
+            btn.disabled = true; btn.textContent = 'Removing…';
+            try {
+                await apiRequest(`/api/openclaw/skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
+                showNotification(`Skill "${name}" removed.`, 'info');
+                // Refresh the skills card
+                const card = document.querySelector('.skills-manager');
+                if (card) {
+                    try {
+                        const data = await apiRequest('/api/openclaw/skills');
+                        renderSkillsManager(card, data);
+                    } catch(_) {}
+                }
+            } catch(e) {
+                btn.disabled = false; btn.textContent = 'Remove';
+                showNotification('Remove failed: ' + e.message, 'error');
+            }
+        }
+
+        function renderAgentTrace(container, props) {
+            container.className += ' agent-trace-component';
+            const steps = (props.steps || []).map(s => `
+                <div class="at-step">
+                    <span class="at-step-icon">${s.icon || '→'}</span>
+                    <div class="at-step-body">
+                        <div class="at-step-name">${escapeHtml(s.name || s.tool || '')}</div>
+                        ${s.detail ? `<div class="at-step-detail">${escapeHtml(s.detail)}</div>` : ''}
+                    </div>
+                </div>`).join('');
+            container.innerHTML = `
+                <div class="at-header" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display==='none'?'block':'none'">
+                    🔍 Zoe's steps (${(props.steps||[]).length})  <span style="margin-left:auto;font-size:12px">▾</span>
+                </div>
+                <div class="at-steps" style="display:none">${steps}</div>
+            `;
+        }
+
+        function renderPluginInstaller(container, props) {
+            container.className += ' plugin-installer';
+            const installId = 'pi-' + Date.now();
+            const qrId = 'pi-qr-' + Date.now();
+            const steps = (props.steps || ['Copy the bot token', 'Add token to OpenClaw config', 'Restart OpenClaw gateway']).map((s, i) =>
+                `<div class="pi-step"><span class="step-num">${i+1}</span>${escapeHtml(s)}</div>`
+            ).join('');
+            container.innerHTML = `
+                <div class="pi-header">
+                    <span class="pi-icon">${props.icon || '🔌'}</span>
+                    <div>
+                        <div class="pi-title">${escapeHtml(props.title || props.name || 'Install Plugin')}</div>
+                        ${props.reason ? `<div class="pi-reason">${escapeHtml(props.reason)}</div>` : ''}
+                    </div>
+                </div>
+                ${props.description ? `<p style="font-size:13px;color:var(--clr-text-2);margin-bottom:10px">${escapeHtml(props.description)}</p>` : ''}
+                <div class="pi-actions">
+                    <button id="${installId}" class="pi-install-btn" onclick="piInstall('${escapeHtml(props.name||'')}','${installId}')">Install ${escapeHtml(props.name||'')}</button>
+                    ${props.docs_url ? `<div class="pi-qr"><canvas id="${qrId}"></canvas></div>` : ''}
+                </div>
+                ${steps ? `<div class="pi-steps">${steps}</div>` : ''}
+            `;
+            if (props.docs_url && typeof QRCode !== 'undefined') {
+                setTimeout(() => {
+                    const qrCanvas = document.getElementById(qrId);
+                    if (qrCanvas) QRCode.toCanvas(qrCanvas, props.docs_url, { width: 80, margin: 1 });
+                }, 50);
+            }
+        }
+
+        async function piInstall(name, btnId) {
+            if (!name) return;
+            const btn = document.getElementById(btnId);
+            if (btn) { btn.disabled = true; btn.textContent = 'Installing…'; }
+            try {
+                await apiRequest(`/api/openclaw/plugins/${encodeURIComponent(name)}/install`, { method: 'POST' });
+                if (btn) { btn.textContent = '✓ Installed'; btn.style.background = 'var(--clr-success)'; }
+                showNotification(`"${name}" installed successfully!`, 'success');
+            } catch(e) {
+                if (btn) { btn.disabled = false; btn.textContent = 'Retry'; }
+                showNotification('Install failed: ' + (e.message||String(e)), 'error');
+            }
+        }
+
+        function renderBackgroundTaskResult(container, props) {
+            container.className += ' task-notification';
+            container.innerHTML = `
+                <div class="tn-header">
+                    <span style="font-size:22px">✅</span>
+                    <div>
+                        <div class="tn-title">Task Complete</div>
+                        <div class="tn-task">${escapeHtml(props.task || '')}</div>
+                    </div>
+                </div>
+                <div class="tn-result">${renderMarkdown(props.result || '')}</div>
+            `;
+            // Notify context panel
+            document.dispatchEvent(new CustomEvent('zoe:background-task', {
+                detail: { task: props.task || 'Task complete', status: 'complete' }
+            }));
+        }
+
+        function renderTelegramSetup(container, props) {
+            container.className += ' telegram-setup';
+            const tokenInputId = 'tgs-token-' + Date.now();
+            const statusId = 'tgs-status-' + Date.now();
+            const btnId = 'tgs-btn-' + Date.now();
+            const qrId = 'tgs-qr-' + Date.now();
+
+            container.innerHTML = `
+                <div class="tgs-header">
+                    <span class="tgs-header-icon">✈️</span>
+                    <div class="tgs-header-text">
+                        <h3>Connect Telegram</h3>
+                        <p>Get Zoe's responses and task updates on Telegram</p>
+                    </div>
+                </div>
+                <div class="tgs-body">
+                    <div class="tgs-steps">
+                        <div class="tgs-step">
+                            <span class="tgs-step-num">1</span>
+                            <div class="tgs-step-content">
+                                <div class="tgs-step-title">Create your bot</div>
+                                <div class="tgs-step-desc">
+                                    Open Telegram and message <a href="https://t.me/BotFather" target="_blank" rel="noopener">@BotFather</a>.
+                                    Send <code style="background:rgba(0,136,204,0.1);padding:1px 6px;border-radius:4px;font-family:monospace">/newbot</code>
+                                    and follow the prompts to create a new bot. You'll receive a token like <code style="background:rgba(0,136,204,0.1);padding:1px 6px;border-radius:4px;font-family:monospace">123456:ABC-DEF...</code>
+                                </div>
+                                <div class="tgs-qr-row">
+                                    <div class="tgs-qr-box"><canvas id="${qrId}" width="80" height="80"></canvas></div>
+                                    <div style="font-size:12px;color:var(--clr-text-2)">Scan to open<br>@BotFather on your phone</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tgs-step">
+                            <span class="tgs-step-num">2</span>
+                            <div class="tgs-step-content">
+                                <div class="tgs-step-title">Paste your bot token below</div>
+                                <div class="tgs-step-desc">Copy the token BotFather gave you and paste it here.</div>
+                                <div class="tgs-token-row">
+                                    <input id="${tokenInputId}" class="tgs-token-input" type="text" 
+                                           placeholder="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ"
+                                           autocomplete="off" spellcheck="false">
+                                    <button id="${btnId}" class="tgs-connect-btn" 
+                                            onclick="connectTelegram('${tokenInputId}','${btnId}','${statusId}')">
+                                        Connect
+                                    </button>
+                                </div>
+                                <div id="${statusId}" class="tgs-status"></div>
+                            </div>
+                        </div>
+                        <div class="tgs-step">
+                            <span class="tgs-step-num">3</span>
+                            <div class="tgs-step-content">
+                                <div class="tgs-step-title">Start a chat with your bot</div>
+                                <div class="tgs-step-desc">
+                                    After connecting, open your new bot on Telegram and send it a message. 
+                                    Zoe will reply and confirm the link is working.
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Render QR code for BotFather
+            setTimeout(() => {
+                if (typeof QRCode !== 'undefined') {
+                    const qrCanvas = document.getElementById(qrId);
+                    if (qrCanvas) QRCode.toCanvas(qrCanvas, 'https://t.me/BotFather', { width: 80, margin: 1 });
+                }
+            }, 50);
+        }
+
+        async function connectTelegram(inputId, btnId, statusId) {
+            const input = document.getElementById(inputId);
+            const btn = document.getElementById(btnId);
+            const status = document.getElementById(statusId);
+            if (!input || !btn || !status) return;
+
+            const token = input.value.trim();
+            if (!token || !token.includes(':')) {
+                input.classList.add('error');
+                status.className = 'tgs-status error';
+                status.textContent = 'Please paste a valid bot token (format: 123456:ABC...)';
+                return;
+            }
+            input.classList.remove('error');
+            btn.disabled = true;
+            btn.textContent = 'Connecting…';
+            status.className = 'tgs-status';
+            status.style.display = 'none';
+
+            try {
+                const res = await apiRequest('/api/openclaw/telegram/setup', {
+                    method: 'POST',
+                    body: JSON.stringify({ bot_token: token }),
+                });
+                status.className = 'tgs-status success';
+                status.textContent = '✅ ' + (res.message || 'Telegram connected! Send your bot a message to verify.');
+                btn.textContent = 'Connected ✓';
+                btn.style.background = 'var(--clr-success)';
+                input.disabled = true;
+                // Mark step 2 badge as done
+                const stepNums = input.closest('.telegram-setup')?.querySelectorAll('.tgs-step-num');
+                if (stepNums && stepNums[1]) stepNums[1].className = 'tgs-step-num done';
+                if (stepNums && stepNums[1]) stepNums[1].textContent = '✓';
+            } catch (e) {
+                status.className = 'tgs-status error';
+                status.textContent = '❌ ' + (e.message || 'Connection failed. Check the token and try again.');
+                btn.disabled = false;
+                btn.textContent = 'Retry';
+            }
+        }
         
         async function executeDashboardCommand(data) {
             let cmd = data.command;
@@ -3168,6 +5221,78 @@
             return `${String(endHours).padStart(2, '0')}:${String(endMins).padStart(2, '0')}`;
         }
 
+        /**
+         * Fetch pending task items from the personal_todos list.
+         * Returns an array of item objects (empty if no list exists yet).
+         * Uses the correct 2-step API: list the lists, then fetch items from the first one.
+         * NOTE: no trailing slash on /api/calendar/events — FastAPI redirects /events/ → /events
+         *       which resolves to http://localhost:8000/... and triggers mixed-content blocking.
+         */
+        async function _fetchTodoItems() {
+            try {
+                const listsResp = await apiRequest('/api/lists/personal_todos');
+                if (!listsResp?.lists?.length) return [];
+                const listId = listsResp.lists[0].id;
+                const itemsResp = await apiRequest(`/api/lists/personal_todos/${listId}/items`);
+                return itemsResp?.items || [];
+            } catch (_) { return []; }
+        }
+
+        // Set time-aware greeting and fetch context counts
+        async function setWelcomeGreeting() {
+            const greetingEl = document.getElementById('welcomeGreeting');
+            const contextEl  = document.getElementById('welcomeContext');
+            if (!greetingEl) return;
+            const h = new Date().getHours();
+            greetingEl.textContent = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId  = session?.user_info?.user_id || session?.user_id;
+                if (!userId) return;
+                const today = new Date().toISOString().split('T')[0];
+                // No trailing slash — avoids FastAPI 307 redirect to http://localhost which blocks as mixed content
+                const [cal, items] = await Promise.allSettled([
+                    apiRequest(`/api/calendar/events?start_date=${today}&end_date=${today}`).catch(() => ({ events: [] })),
+                    _fetchTodoItems()
+                ]);
+                const eventCount   = cal.status === 'fulfilled' ? (cal.value?.events?.length || 0) : 0;
+                const pendingCount = Array.isArray(items.value) ? items.value.filter(t => !t.completed).length : 0;
+                const parts = [];
+                if (eventCount)   parts.push(`${eventCount} event${eventCount > 1 ? 's' : ''} today`);
+                if (pendingCount) parts.push(`${pendingCount} task${pendingCount > 1 ? 's' : ''} pending`);
+                if (contextEl && parts.length) contextEl.textContent = parts.join(' · ');
+            } catch (_) {}
+        }
+
+        // Load live context panel (Today: events, tasks)
+        async function loadContextPanel() {
+            const tilesEl = document.getElementById('contextTiles');
+            if (!tilesEl) return;
+            try {
+                const session = window.zoeAuth?.getCurrentSession();
+                const userId  = session?.user_info?.user_id || session?.user_id;
+                if (!userId) { tilesEl.innerHTML = ''; return; }
+                const today = new Date().toISOString().split('T')[0];
+                // No trailing slash on calendar — see _fetchTodoItems() comment above
+                const [cal, items] = await Promise.allSettled([
+                    apiRequest(`/api/calendar/events?start_date=${today}&end_date=${today}`).catch(() => ({ events: [] })),
+                    _fetchTodoItems()
+                ]);
+                const eventCount = cal.status === 'fulfilled' ? (cal.value?.events?.length || 0) : 0;
+                const pending    = Array.isArray(items.value) ? items.value.filter(t => !t.completed).length : 0;
+                const tiles = [
+                    { dot: 'events', label: eventCount ? `${eventCount} event${eventCount > 1 ? 's' : ''} today` : 'No events today',   meta: 'Calendar', prompt: 'What is on my calendar today?' },
+                    { dot: 'tasks',  label: pending    ? `${pending} task${pending > 1 ? 's' : ''} pending`       : 'All tasks done',     meta: 'Tasks',    prompt: 'Show my pending tasks and help me prioritise' }
+                ];
+                tilesEl.innerHTML = tiles.map(t => `
+                    <div class="context-tile" onclick="tryPromptWithOpenClaw(${JSON.stringify(t.prompt)})">
+                        <span class="context-tile-dot ${escapeHtml(t.dot)}"></span>
+                        <span class="context-tile-label">${escapeHtml(t.label)}</span>
+                        <span class="context-tile-meta">${escapeHtml(t.meta)}</span>
+                    </div>`).join('');
+            } catch (_) { tilesEl.innerHTML = ''; }
+        }
+
         // Intelligent Proactive Assistant
         async function generateDynamicSuggestions() {
             const suggestionsContainer = document.getElementById('dynamicSuggestions');
@@ -3181,11 +5306,14 @@
                 const startDate = new Date().toISOString().split('T')[0];
                 const endDate = new Date(Date.now() + 7*24*60*60*1000).toISOString().split('T')[0];
                 
-                const [calendarData, tasksData, memoriesData] = await Promise.allSettled([
-                    apiRequest(`/api/calendar/events/?user_id=${userId}&start_date=${startDate}&end_date=${endDate}`).catch(e => ({events: []})),
-                    apiRequest(`/api/lists/?user_id=${userId}&list_name=personal_todos`).catch(e => ({items: []})),
+                // No trailing slash on calendar (avoids 307 → http://localhost mixed content)
+                const [calendarData, todoItems, memoriesData] = await Promise.allSettled([
+                    apiRequest(`/api/calendar/events?start_date=${startDate}&end_date=${endDate}`).catch(e => ({events: []})),
+                    _fetchTodoItems(),
                     apiRequest(`/api/people?user_id=${userId}`).catch(e => ({people: []}))
                 ]);
+                // Wrap items array in a shape the analysis code below expects
+                const tasksData = { status: todoItems.status, value: { items: todoItems.value || [] } };
                 
                 const suggestions = [];
                 
@@ -3257,28 +5385,27 @@
                     return priorityOrder[a.priority] - priorityOrder[b.priority];
                 });
                 
-                suggestionsContainer.innerHTML = suggestions.slice(0, 4).map((suggestion, idx) => `
+                suggestionsContainer.innerHTML = suggestions.slice(0, 2).map((suggestion, idx) => `
                     <div class="suggestion-chip" data-prompt-idx="${idx}">
-                        <div class="suggestion-icon">${suggestion.icon}</div>
-                        <div class="suggestion-label">${suggestion.label}</div>
+                        <span class="suggestion-chip-label">${escapeHtml(suggestion.label)}</span>
+                        <span class="suggestion-chip-arrow">→</span>
                     </div>
                 `).join('');
-                suggestions.slice(0, 4).forEach((suggestion, idx) => {
+                suggestions.slice(0, 2).forEach((suggestion, idx) => {
                     const chip = suggestionsContainer.querySelector(`[data-prompt-idx="${idx}"]`);
                     if (chip) chip.addEventListener('click', () => tryPrompt(suggestion.prompt));
                 });
                 
             } catch (error) {
                 console.error('Error generating dynamic suggestions:', error);
-                // Fallback to default suggestions
                 suggestionsContainer.innerHTML = `
                     <div class="suggestion-chip" onclick="tryPrompt('Help me plan my day')">
-                        <div class="suggestion-icon">🌅</div>
-                        <div class="suggestion-label">Plan My Day</div>
+                        <span class="suggestion-chip-label">Help me plan my day</span>
+                        <span class="suggestion-chip-arrow">→</span>
                     </div>
                     <div class="suggestion-chip" onclick="tryPrompt('What should I focus on today?')">
-                        <div class="suggestion-icon">🎯</div>
-                        <div class="suggestion-label">Daily Focus</div>
+                        <span class="suggestion-chip-label">What should I focus on today?</span>
+                        <span class="suggestion-chip-arrow">→</span>
                     </div>
                 `;
             }

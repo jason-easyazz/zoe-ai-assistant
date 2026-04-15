@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Orbit Host</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/modules/orbit/static/css/orbit.css?v=2">
+  <link rel="stylesheet" href="/modules/orbit/static/css/host.css?v=3">
+</head>
+<body class="host-body">
+
+  <!-- ── Setup screen ─────────────────────────────────────────────────────── -->
+  <div id="screen-setup" class="host-screen active">
+    <div class="setup-wrap">
+
+      <div class="setup-hero">
+        <div class="logo">Orbit</div>
+        <div class="tagline">Who's in your orbit tonight?</div>
+      </div>
+
+      <div class="setup-card">
+
+        <div class="setup-row">
+          <label class="label" for="input-venue">Venue</label>
+          <input type="text" id="input-venue" placeholder="The Anchor, The Crown..." maxlength="60" autocomplete="off">
+        </div>
+
+        <div class="setup-row">
+          <label class="label" for="input-event">Event name <span class="optional">(optional)</span></label>
+          <input type="text" id="input-event" placeholder="Flirt Party, Quiz Night..." maxlength="60" autocomplete="off">
+        </div>
+
+        <div class="setup-row">
+          <span class="label">Duration</span>
+          <div class="chip-row" id="duration-chips">
+            <button class="setup-chip" data-value="60">1 hr</button>
+            <button class="setup-chip selected" data-value="120">2 hrs</button>
+            <button class="setup-chip" data-value="180">3 hrs</button>
+            <button class="setup-chip" data-value="240">4 hrs</button>
+            <button class="setup-chip" data-value="0">Open</button>
+          </div>
+        </div>
+
+        <div class="setup-row" id="last-orders-row">
+          <span class="label">Last Orders warning</span>
+          <div class="chip-row" id="last-orders-chips">
+            <button class="setup-chip" data-value="15">15 min before</button>
+            <button class="setup-chip selected" data-value="30">30 min before</button>
+            <button class="setup-chip" data-value="45">45 min before</button>
+            <button class="setup-chip" data-value="0">Manual only</button>
+          </div>
+        </div>
+
+        <div class="setup-row">
+          <span class="label">Zones <span class="optional">(rename to match your venue)</span></span>
+          <div class="zone-setup-grid">
+            <div class="zone-setup-item">
+              <span class="zone-setup-emoji">🍺</span>
+              <input type="text" data-zone="bar" placeholder="Bar" value="Bar" maxlength="24">
+            </div>
+            <div class="zone-setup-item">
+              <span class="zone-setup-emoji">🌿</span>
+              <input type="text" data-zone="beer-garden" placeholder="Beer Garden" value="Beer Garden" maxlength="24">
+            </div>
+            <div class="zone-setup-item">
+              <span class="zone-setup-emoji">🎱</span>
+              <input type="text" data-zone="pool-area" placeholder="Pool Area" value="Pool Area" maxlength="24">
+            </div>
+            <div class="zone-setup-item">
+              <span class="zone-setup-emoji">🌙</span>
+              <input type="text" data-zone="outside" placeholder="Outside" value="Outside" maxlength="24">
+            </div>
+          </div>
+        </div>
+
+        <button class="btn btn-primary setup-cta" id="btn-start-session">
+          Start Orbit ✦
+        </button>
+
+        <div id="setup-error" class="setup-error" style="display:none"></div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Live dashboard ───────────────────────────────────────────────────── -->
+  <div id="screen-dashboard" class="host-screen">
+
+    <!-- Header bar -->
+    <div class="dash-header">
+      <div class="dash-header-left">
+        <div class="logo logo-sm">Orbit</div>
+        <div class="dash-event-name" id="dash-event-name"></div>
+      </div>
+      <div class="dash-header-center">
+        <div class="countdown-display" id="countdown-display">
+          <span class="countdown-label" id="countdown-label">Ends in</span>
+          <span class="countdown-value" id="countdown-value">—</span>
+        </div>
+      </div>
+      <div class="dash-header-right">
+        <div class="dash-clock" id="dash-clock"></div>
+        <div class="live-badge"><span class="dot-live"></span>LIVE</div>
+      </div>
+    </div>
+
+    <!-- Solar canvas fills the rest -->
+    <div class="solar-wrap">
+
+      <canvas id="solar-canvas"></canvas>
+
+      <!-- Top-left: QR float -->
+      <div class="qr-float-card" id="qr-section">
+        <div class="qr-float-label">Scan to join</div>
+        <div id="host-qr" class="qr-float-canvas"></div>
+        <!-- Big join code — the QD-style shortcut -->
+        <div class="join-code-badge" style="display:flex;flex-direction:column;align-items:center;margin:6px 0 2px;">
+          <span style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.1em;opacity:0.6;margin-bottom:2px;">Or type code</span>
+          <span id="join-code-display" style="font-family:'Space Grotesk',sans-serif;font-size:2rem;font-weight:800;letter-spacing:0.25em;color:#fff;text-shadow:0 0 18px rgba(180,120,255,0.9);">····</span>
+        </div>
+        <div class="qr-float-url" id="join-url-display"></div>
+        <button class="qr-copy-btn" id="btn-copy-url">Copy</button>
+      </div>
+
+      <!-- Top-right: stat cluster -->
+      <div class="stat-cluster">
+        <div class="stat-bubble" data-type="checkins">
+          <span class="stat-bubble-num" id="stat-total">0</span>
+          <span class="stat-bubble-lbl">in orbit</span>
+        </div>
+        <div class="stat-bubble" data-type="meets">
+          <span class="stat-bubble-num" id="stat-meets">0</span>
+          <span class="stat-bubble-lbl">meets</span>
+        </div>
+        <div class="stat-bubble" data-type="connections">
+          <span class="stat-bubble-num" id="stat-connections">0</span>
+          <span class="stat-bubble-lbl">connections</span>
+        </div>
+        <div class="stat-bubble" data-type="reports">
+          <span class="stat-bubble-num" id="stat-reports">0</span>
+          <span class="stat-bubble-lbl">reports</span>
+        </div>
+      </div>
+
+      <!-- Bottom: activity ticker -->
+      <div class="feed-ticker" id="feed-ticker"></div>
+
+      <!-- Bottom bar: controls -->
+      <div class="solar-controls">
+        <button class="solar-ctrl-btn" id="btn-last-orders">🔔 Last Orders</button>
+        <button class="solar-ctrl-btn solar-ctrl-challenge" id="btn-challenge">🎯 Scan Challenge</button>
+        <button class="solar-ctrl-btn solar-ctrl-sd" id="btn-speed-dating">⏱ Speed Dating</button>
+        <button class="solar-ctrl-btn solar-ctrl-edit" id="btn-show-zones">⚙ Zones</button>
+        <button class="solar-ctrl-btn solar-ctrl-danger" id="btn-end-session">✕ End</button>
+      </div>
+
+      <!-- Challenge modal -->
+      <div id="challenge-modal" class="host-modal" style="display:none">
+        <div class="host-modal-inner">
+          <h3>🎯 Scan Challenge</h3>
+          <p class="hint">Guests scan each other and answer a question about that person. Points for correct answers!</p>
+          <div class="mt-16">
+            <span class="label">Duration</span>
+            <div class="chip-row" id="challenge-duration-chips">
+              <button class="setup-chip" data-value="60">1 min</button>
+              <button class="setup-chip selected" data-value="90">90 sec</button>
+              <button class="setup-chip" data-value="120">2 min</button>
+              <button class="setup-chip" data-value="180">3 min</button>
+            </div>
+          </div>
+          <div class="mt-12">
+            <span class="label">Prize <span class="optional">(optional)</span></span>
+            <input type="text" id="challenge-prize" placeholder="Free drink, gift card..." maxlength="60" autocomplete="off">
+          </div>
+          <div style="display:flex;gap:10px;margin-top:18px;">
+            <button class="btn btn-secondary btn-sm" id="btn-cancel-challenge">Cancel</button>
+            <button class="btn btn-primary btn-sm" id="btn-start-challenge" style="flex:2">Start Challenge →</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Speed dating modal -->
+      <div id="sd-modal" class="host-modal" style="display:none">
+        <div class="host-modal-inner">
+          <h3>⏱ Speed Dating</h3>
+          <p class="hint">When two people scan each other, a shared countdown starts on both phones.</p>
+          <div class="mt-16">
+            <span class="label">Round duration</span>
+            <div class="chip-row" id="sd-duration-chips">
+              <button class="setup-chip" data-value="180">3 min</button>
+              <button class="setup-chip selected" data-value="240">4 min</button>
+              <button class="setup-chip" data-value="300">5 min</button>
+              <button class="setup-chip" data-value="360">6 min</button>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:18px;">
+            <button class="btn btn-secondary btn-sm" id="btn-cancel-sd">Cancel</button>
+            <button class="btn btn-primary btn-sm" id="btn-start-sd" style="flex:2">Activate →</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Challenge leaderboard overlay (live during challenge) -->
+      <div id="challenge-overlay" class="challenge-overlay" style="display:none">
+        <div class="challenge-overlay-header">
+          <span>🎯 SCAN CHALLENGE</span>
+          <span class="challenge-timer" id="challenge-countdown"></span>
+        </div>
+        <div class="challenge-leaderboard" id="challenge-leaderboard"></div>
+      </div>
+
+      <!-- Winner celebration -->
+      <div id="winner-overlay" class="winner-overlay" style="display:none">
+        <div class="winner-inner">
+          <div class="winner-emoji">🏆</div>
+          <div class="winner-label">CHALLENGE WINNER</div>
+          <div class="winner-name" id="winner-name"></div>
+          <div class="winner-prize" id="winner-prize"></div>
+          <div class="winner-pts" id="winner-pts"></div>
+          <button class="btn btn-primary mt-24" id="btn-dismiss-winner">Continue →</button>
+        </div>
+      </div>
+
+      <!-- Zone editor overlay -->
+      <div id="zone-editor" class="zone-editor-overlay" style="display:none">
+        <div class="zone-editor-inner">
+          <h3>Zone names</h3>
+          <p class="hint">Rename to match your venue. Guests see these names.</p>
+          <div id="zone-edit-rows" class="mt-16"></div>
+          <div style="display:flex; gap:10px; margin-top:16px;">
+            <button class="btn btn-secondary btn-sm" id="btn-cancel-zones">Cancel</button>
+            <button class="btn btn-primary btn-sm" id="btn-save-zones" style="flex:2">Save ✓</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Safety reports panel -->
+      <div id="reports-panel" class="reports-panel" style="display:none">
+        <div class="reports-panel-header">
+          ⚠ Safety Reports
+          <span id="reports-badge" class="reports-count"></span>
+          <button class="reports-close" id="btn-close-reports">✕</button>
+        </div>
+        <div id="reports-list" style="overflow-y:auto; flex:1;"></div>
+      </div>
+
+      <!-- Last orders overlay -->
+      <div id="last-orders-overlay" class="last-orders-overlay" style="display:none">
+        <div class="last-orders-content">
+          <div class="last-orders-icon">🔔</div>
+          <div class="last-orders-title">Last Orders</div>
+          <div class="last-orders-sub">Guests are being prompted to exchange contact details</div>
+        </div>
+      </div>
+
+    </div><!-- /solar-wrap -->
+
+  </div>
+
+  <div id="toast-container"></div>
+
+  <script src="/modules/orbit/static/js/qrcode.min.js"></script>
+  <script src="/modules/orbit/static/js/solar-system.js?v=4"></script>
+  <script src="/modules/orbit/static/js/host.js?v=5"></script>
+</body>
+</html>

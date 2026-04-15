@@ -100,6 +100,8 @@ aider_env/
 !scripts/maintenance/*.sh
 !scripts/permanent/*.sh
 !scripts/setup/*.sh
+!scripts/setup/jetson/*.sh
+!scripts/train/*.sh
 !RESTART_SERVICES.sh
 !start-zoe.sh
 !stop-zoe.sh

@@ -93,7 +93,28 @@ services:
     env_file:
     - .env
 
-  # ── Wyoming Voice Services (HA Assist) ────────────────────────────────────
+  # ── Wyoming Voice Services (HA Assist integration only) ───────────────────
+  #
+  # ARCHITECTURE NOTE (2026-04):
+  # Zoe now runs TWO parallel voice stacks:
+  #
+  # 1. NATIVE STACK (primary, active for Zoe touch panel):
+  #    - Wake word:   openWakeWord ONNX model on Pi daemon (zoe_voice_daemon.py)
+  #    - STT:         whisper.cpp CLI on Jetson (/api/voice/transcribe)
+  #    - TTS:         Kokoro ONNX → Edge TTS → espeak-ng waterfall (/api/voice/synthesize)
+  #    - Barge-in:    Silero VAD on Pi during TTS playback
+  #    - Speaker ID:  resemblyzer 256-dim embeddings on Pi
+  #    This stack is NOT in Docker — the Pi daemon runs as a systemd service.
+  #
+  # 2. WYOMING STACK (these services below — for HA Voice Assist only):
+  #    - wyoming-piper:       TTS for HA Assist satellite mode (port 10200)
+  #    - wyoming-whisper:     STT for HA Assist satellite mode (port 10300)
+  #    - wyoming-openwakeword: Wake word for HA Assist satellite mode (port 10400)
+  #    If you DO NOT use Home Assistant Voice Assist (voice pipeline in HA settings),
+  #    you can safely stop these services to reclaim ~2GB RAM and ~30% CPU:
+  #      docker compose stop wyoming-piper wyoming-whisper wyoming-openwakeword
+  #    To permanently disable, comment out the service definitions below.
+  #
   wyoming-piper:
     image: rhasspy/wyoming-piper:latest
     container_name: wyoming-piper

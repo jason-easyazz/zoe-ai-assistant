@@ -205,7 +205,13 @@ async function apiRequest(endpoint, options = {}) {
         });
         
         if (!response.ok) {
-            throw new Error(`API request failed: ${response.status} - ${response.statusText}`);
+            // Try to surface the FastAPI `detail` field from the JSON body
+            let detail = `${response.status} ${response.statusText}`;
+            try {
+                const errBody = await response.clone().json();
+                if (errBody && errBody.detail) detail = errBody.detail;
+            } catch (_) {}
+            throw new Error(detail);
         }
         
         return await response.json();

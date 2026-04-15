@@ -243,6 +243,22 @@ TOOLS = [
             },
         },
     },
+    # --- Self-awareness tools (on-demand, zero per-message cost) ---
+    {
+        "name": "zoe_get_time",
+        "description": "Get the current date and time in the configured timezone.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "zoe_get_status",
+        "description": "Get Zoe's current system status: active agents, uptime, memory store info.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "zoe_list_skills",
+        "description": "List the Zoe skills and capabilities currently available.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
     # --- Journal tools ---
     {
         "name": "journal_create_entry",
@@ -619,6 +635,45 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "ambient_search",
+        "description": (
+            "Search ambient memory transcripts captured by the always-on microphone. "
+            "Use to answer questions like 'What did I talk to Brad about?' or "
+            "'What was mentioned in the kitchen yesterday?'. "
+            "Searches full-text across all stored ambient transcripts."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Full-text search query (e.g. 'Brad meeting', 'grocery list')",
+                },
+                "room": {
+                    "type": "string",
+                    "description": "Filter by room/location (e.g. 'kitchen', 'living room')",
+                },
+                "speaker_id": {
+                    "type": "string",
+                    "description": "Filter by identified speaker user_id",
+                },
+                "date_from": {
+                    "type": "string",
+                    "description": "Filter transcripts after this date (ISO 8601, e.g. '2026-04-01')",
+                },
+                "date_to": {
+                    "type": "string",
+                    "description": "Filter transcripts before this date (ISO 8601)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max number of results to return (default 10, max 50)",
+                },
+            },
+            "required": ["query"],
+        },
+    },
 ]
 
 
@@ -987,10 +1042,17 @@ async def _execute_tool(db, name: str, args: dict):
         ]
         return {"widgets": widgets}
 
-    # === WEATHER TOOLS ===
+    # === WEATHER TOOLS (Open-Meteo — free, no API key) ===
     elif name == "weather_current":
+        # WMO weather code → human-readable description
+        _WMO = {0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+                45: "Fog", 48: "Icy fog", 51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle",
+                61: "Slight rain", 63: "Rain", 65: "Heavy rain", 71: "Slight snow", 73: "Snow",
+                75: "Heavy snow", 80: "Rain showers", 81: "Rain showers", 82: "Violent showers",
+                85: "Snow showers", 86: "Heavy snow showers", 95: "Thunderstorm",
+                96: "Thunderstorm with hail", 99: "Thunderstorm with heavy hail"}
         city = args.get("city")
-        lat, lon = None, None
+        lat = lon = None
         if not city:
             cursor = await db.execute(
                 "SELECT latitude, longitude, city FROM weather_preferences WHERE user_id=?",
@@ -1000,33 +1062,41 @@ async def _execute_tool(db, name: str, args: dict):
             if row:
                 d = dict(row)
                 lat, lon, city = d.get("latitude"), d.get("longitude"), d.get("city")
-        if not OPENWEATHERMAP_API_KEY:
-            return {"error": "No weather API key configured"}
-        params = {"appid": OPENWEATHERMAP_API_KEY, "units": "metric"}
-        if lat and lon:
-            params["lat"] = lat
-            params["lon"] = lon
-        elif city:
-            params["q"] = city
-        else:
-            return {"error": "No location configured. Set weather preferences first."}
+        # Fallback to environment variables (set in .env)
+        if not lat:
+            lat = float(os.environ.get("ZOE_LOCATION_LAT", "-31.9505"))
+            lon = float(os.environ.get("ZOE_LOCATION_LON", "115.8605"))
+            city = city or os.environ.get("ZOE_LOCATION_CITY", "Perth")
+        tz = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
+        params = {
+            "latitude": lat, "longitude": lon, "timezone": tz,
+            "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m",
+        }
         async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get("https://api.openweathermap.org/data/2.5/weather", params=params)
+            r = await client.get("https://api.open-meteo.com/v1/forecast", params=params)
             r.raise_for_status()
             data = r.json()
+        cur = data.get("current", {})
+        wmo = cur.get("weather_code", 0)
         return {
-            "temp": data.get("main", {}).get("temp"),
-            "feels_like": data.get("main", {}).get("feels_like"),
-            "humidity": data.get("main", {}).get("humidity"),
-            "description": data.get("weather", [{}])[0].get("description") if data.get("weather") else None,
-            "city": data.get("name"),
-            "country": data.get("sys", {}).get("country"),
+            "temp": cur.get("temperature_2m"),
+            "feels_like": cur.get("apparent_temperature"),
+            "humidity": cur.get("relative_humidity_2m"),
+            "wind_speed": cur.get("wind_speed_10m"),
+            "description": _WMO.get(wmo, f"WMO code {wmo}"),
+            "city": city,
+            "source": "open-meteo",
         }
 
     elif name == "weather_forecast":
+        _WMO = {0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+                45: "Fog", 48: "Icy fog", 51: "Light drizzle", 53: "Drizzle", 55: "Heavy drizzle",
+                61: "Slight rain", 63: "Rain", 65: "Heavy rain", 71: "Slight snow", 73: "Snow",
+                75: "Heavy snow", 80: "Rain showers", 81: "Rain showers", 82: "Violent showers",
+                85: "Snow showers", 86: "Heavy snow showers", 95: "Thunderstorm"}
         city = args.get("city")
-        days = args.get("days", 5)
-        lat, lon = None, None
+        days = min(int(args.get("days", 5)), 7)
+        lat = lon = None
         if not city:
             cursor = await db.execute(
                 "SELECT latitude, longitude, city FROM weather_preferences WHERE user_id=?",
@@ -1036,31 +1106,102 @@ async def _execute_tool(db, name: str, args: dict):
             if row:
                 d = dict(row)
                 lat, lon, city = d.get("latitude"), d.get("longitude"), d.get("city")
-        if not OPENWEATHERMAP_API_KEY:
-            return {"error": "No weather API key configured"}
-        params = {"appid": OPENWEATHERMAP_API_KEY, "units": "metric"}
-        if lat and lon:
-            params["lat"] = lat
-            params["lon"] = lon
-        elif city:
-            params["q"] = city
-        else:
-            return {"error": "No location configured. Set weather preferences first."}
+        if not lat:
+            lat = float(os.environ.get("ZOE_LOCATION_LAT", "-31.9505"))
+            lon = float(os.environ.get("ZOE_LOCATION_LON", "115.8605"))
+            city = city or os.environ.get("ZOE_LOCATION_CITY", "Perth")
+        tz = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
+        params = {
+            "latitude": lat, "longitude": lon, "timezone": tz,
+            "daily": "temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum",
+            "forecast_days": days,
+        }
         async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get("https://api.openweathermap.org/data/2.5/forecast", params=params)
+            r = await client.get("https://api.open-meteo.com/v1/forecast", params=params)
             r.raise_for_status()
             data = r.json()
-        items = data.get("list", [])[:days]
+        daily = data.get("daily", {})
+        dates = daily.get("time", [])
+        max_temps = daily.get("temperature_2m_max", [])
+        min_temps = daily.get("temperature_2m_min", [])
+        codes = daily.get("weather_code", [])
+        precip = daily.get("precipitation_sum", [])
         return {
             "forecast": [
                 {
-                    "datetime": item.get("dt_txt"),
-                    "temp": item.get("main", {}).get("temp"),
-                    "description": item.get("weather", [{}])[0].get("description") if item.get("weather") else None,
+                    "date": dates[i] if i < len(dates) else None,
+                    "temp_max": max_temps[i] if i < len(max_temps) else None,
+                    "temp_min": min_temps[i] if i < len(min_temps) else None,
+                    "description": _WMO.get(codes[i] if i < len(codes) else 0, "Unknown"),
+                    "precipitation_mm": precip[i] if i < len(precip) else None,
                 }
-                for item in items
+                for i in range(len(dates))
             ],
-            "city": data.get("city", {}).get("name"),
+            "city": city,
+            "source": "open-meteo",
+        }
+
+    # === SELF-AWARENESS TOOLS ===
+    elif name == "zoe_get_time":
+        import datetime
+        tz_name = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
+        try:
+            import zoneinfo
+            tz = zoneinfo.ZoneInfo(tz_name)
+            now = datetime.datetime.now(tz)
+        except Exception:
+            now = datetime.datetime.now()
+        return {
+            "datetime": now.isoformat(),
+            "formatted": now.strftime("%A, %d %B %Y — %I:%M %p"),
+            "timezone": tz_name,
+        }
+
+    elif name == "zoe_get_status":
+        import datetime
+        import platform
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+            cpu = psutil.cpu_percent(interval=0.1)
+            mem_info = {"used_gb": round(mem.used / 1e9, 2), "total_gb": round(mem.total / 1e9, 2), "percent": mem.percent}
+        except ImportError:
+            mem_info = {}
+            cpu = None
+        agents = []
+        pi_mode = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
+        jetson_mode = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
+        if jetson_mode:
+            agents.append("Jetson Agent (Gemma 4 GPU)")
+        elif pi_mode:
+            agents.append("Pi Agent (Gemma 4 CPU)")
+        else:
+            agents.append("Bonsai Agent")
+        agents.append("OpenClaw (on-demand)")
+        return {
+            "active_agents": agents,
+            "platform": platform.machine(),
+            "python": platform.python_version(),
+            "cpu_percent": cpu,
+            "memory": mem_info,
+            "mempalace_dir": os.environ.get("MEMPALACE_DATA_DIR", os.path.expanduser("~/.mempalace")),
+            "datetime": datetime.datetime.now().isoformat(),
+        }
+
+    elif name == "zoe_list_skills":
+        skills_dir = os.path.expanduser("~/.openclaw/skills")
+        skills = []
+        try:
+            if os.path.isdir(skills_dir):
+                for entry in os.scandir(skills_dir):
+                    if entry.is_dir():
+                        skills.append(entry.name)
+        except Exception:
+            pass
+        return {
+            "skills": sorted(skills),
+            "count": len(skills),
+            "skills_dir": skills_dir,
         }
 
     # === JOURNAL TOOLS ===
@@ -1623,6 +1764,61 @@ async def _execute_tool(db, name: str, args: dict):
                     return {"players": results}
         except Exception as exc:
             return {"error": f"HA bridge error: {exc}"}
+
+    elif name == "ambient_search":
+        query = str(args.get("query", "")).strip()
+        if not query:
+            return {"error": "query is required"}
+        room = args.get("room")
+        speaker_id = args.get("speaker_id")
+        date_from = args.get("date_from")
+        date_to = args.get("date_to")
+        limit = min(int(args.get("limit", 10)), 50)
+
+        # Build WHERE clause for base table filters.
+        conditions = []
+        params: list = [query]  # FTS match param first
+        if room:
+            conditions.append("m.room = ?")
+            params.append(room)
+        if speaker_id:
+            conditions.append("m.speaker_id = ?")
+            params.append(speaker_id)
+        if date_from:
+            conditions.append("m.timestamp >= ?")
+            params.append(date_from)
+        if date_to:
+            conditions.append("m.timestamp <= ?")
+            params.append(date_to)
+        params.append(limit)
+
+        where = ("AND " + " AND ".join(conditions)) if conditions else ""
+        sql = f"""
+            SELECT m.id, m.timestamp, m.panel_id, m.room, m.speaker_id, m.transcript
+            FROM ambient_memory_fts f
+            JOIN ambient_memory m ON m.id = f.rowid
+            WHERE ambient_memory_fts MATCH ?
+            {where}
+            ORDER BY rank
+            LIMIT ?
+        """
+        try:
+            async with db.execute(sql, params) as cur:
+                rows = await cur.fetchall()
+            results = [
+                {
+                    "id": r[0],
+                    "timestamp": r[1],
+                    "panel_id": r[2],
+                    "room": r[3],
+                    "speaker_id": r[4],
+                    "transcript": r[5],
+                }
+                for r in rows
+            ]
+            return {"results": results, "count": len(results), "query": query}
+        except Exception as exc:
+            return {"error": f"ambient_search failed: {exc}"}
 
     else:
         return {"error": f"Unknown tool: {name}"}

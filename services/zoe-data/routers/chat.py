@@ -1,13 +1,16 @@
 """
-Chat proxy router: bridges the Zoe UI (REST+SSE) to OpenClaw (CLI agent).
+Chat proxy router: bridges the Zoe UI (REST+SSE) to the active agent backend.
 
-Hybrid architecture:
-- Intent-matched messages (lists, calendar, reminders, contacts, notes) are
-  handled directly via mcporter-safe for <1s deterministic responses.
-- ALL other messages go through OpenClaw for full LLM processing with memory,
-  personality (SOUL.md), session history, and tool access.
-- After intent execution, a background chat.inject notifies OpenClaw so the
-  session transcript stays synchronized (memory continuity).
+Tiered architecture (Jetson + Pi):
+- Tier 0: Intent router — regex-matched commands (lists, calendar, HA control)
+  handled directly in <5ms without any LLM.
+- Tier 1: Pi/Jetson Agent — Gemma 4 E2B with MemPalace memory, HA control,
+  bash tools, and escalate_to_openclaw. True SSE streaming, first token fast.
+  Active when JETSON_AGENT_MODE=true OR HERMES_FAST_PATH=false.
+  Pi: CPU, 7 TPS, port 11435.  Jetson: GPU, 40+ TPS, port 11434.
+- Tier 2: OpenClaw — multi-step agentic tasks, browser, sub-agents, cloud.
+  Activated via escalation from Tier 1, or force_openclaw flag.
+  Still available as direct path when _USE_PI_AGENT=False (legacy Bonsai path).
 """
 import asyncio
 import json
@@ -23,6 +26,7 @@ from intent_router import detect_intent, execute_intent, openclaw_user_message
 # Intent → touch panel navigation map (page + optional form to open).
 _INTENT_PANEL_NAV = {
     "calendar_create":   ("/touch/calendar.html", "new_event"),
+    "calendar_show":     ("/touch/calendar.html", None),
     "note_create":       ("/touch/notes.html",    "new_note"),
     "journal_create":    ("/touch/journal.html",  "new_journal"),
     "weather":           ("/touch/weather.html",  None),
@@ -32,8 +36,62 @@ _INTENT_PANEL_NAV = {
     "reminder_create":   (None,                   None),  # handled as toast
 }
 
+def _intent_card_data(intent) -> dict:
+    """Build show_card data payload from intent slots for Google Home-style card."""
+    slots = intent.slots or {}
+    name = intent.name
+    if name == "calendar_create":
+        return {
+            "type": "calendar",
+            "data": {
+                "action": "Event added",
+                "title": slots.get("title") or slots.get("event") or "",
+                "date": slots.get("date") or "",
+                "time": slots.get("time") or "",
+            },
+        }
+    if name == "calendar_show":
+        return {
+            "type": "calendar",
+            "data": {
+                "action": "Showing calendar",
+                "qualifier": slots.get("qualifier") or "today",
+            },
+        }
+    if name == "list_add":
+        return {
+            "type": "list",
+            "data": {
+                "list_name": slots.get("list_name") or "List",
+                "item": slots.get("item") or slots.get("text") or "",
+            },
+        }
+    if name == "timer_create":
+        return {
+            "type": "timer",
+            "data": {
+                "minutes": slots.get("minutes") or slots.get("duration") or "",
+                "label": slots.get("label") or "",
+            },
+        }
+    if name == "weather":
+        return {
+            "type": "weather",
+            "data": {"summary": "Fetching weather…"},
+        }
+    # Generic answer card for all other navigation intents
+    return {
+        "type": "answer",
+        "data": {"text": ""},
+    }
+
+
 async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
-    """Instantly broadcast panel_navigate + panel_open_form when intent is detected."""
+    """Instantly broadcast panel_navigate + panel_open_form + show_card when intent is detected.
+
+    panel_id is embedded in the action payload so the executor can filter events
+    belonging to a different panel (multi-panel homes, web chat open alongside).
+    """
     nav = _INTENT_PANEL_NAV.get(intent.name)
     if not nav:
         return
@@ -41,28 +99,52 @@ async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
     try:
         from push import broadcaster
         if page:
+            nav_payload: dict = {"url": page, "label": f"Opening {page.split('/')[-1]}"}
+            if panel_id:
+                nav_payload["panel_id"] = panel_id
             await broadcaster.broadcast("all", "ui_action", {
                 "action": {
                     "id": f"intent_nav_{intent.name}",
                     "action_type": "panel_navigate",
-                    "payload": {"url": page, "label": f"Opening {page.split('/')[-1]}"},
+                    "payload": nav_payload,
                 }
             })
         if form:
             await asyncio.sleep(0.4)  # Brief delay so page loads before form opens.
+            form_payload: dict = {"form": form, "prefill": intent.slots}
+            if panel_id:
+                form_payload["panel_id"] = panel_id
             await broadcaster.broadcast("all", "ui_action", {
                 "action": {
                     "id": f"intent_form_{intent.name}",
                     "action_type": "panel_open_form",
-                    "payload": {"form": form, "prefill": intent.slots},
+                    "payload": form_payload,
                 }
             })
+        # Emit a show_card action so the dashboard overlay shows intent-specific info.
+        card = _intent_card_data(intent)
+        card_payload: dict = {"type": card["type"], "data": card["data"]}
+        if panel_id:
+            card_payload["panel_id"] = panel_id
+        await broadcaster.broadcast("all", "ui_action", {
+            "action": {
+                "id": f"intent_card_{intent.name}",
+                "action_type": "show_card",
+                "payload": card_payload,
+            }
+        })
     except Exception as exc:
         logger.debug("_broadcast_intent_nav failed (non-fatal): %s", exc)
-from openclaw_ws import openclaw_cli, chat_inject, discover_openclaw_capabilities
+from openclaw_ws import openclaw_cli, chat_inject, discover_openclaw_capabilities, _zoe_context_prefix
+from zoe_acp_client import openclaw_acp_stream as _acp_stream
+from pi_agent import (
+    run_pi_agent, run_pi_agent_streaming,
+    _mempalace_load_user_facts, _mempalace_add, _fire_memory_capture,
+)
 from auth import get_current_user
 from database import get_db
 from ui_orchestrator import enqueue_ui_action
+from zoe_ui_components import auto_extract_components
 from risk_policy import classify_request, is_whatsapp_connect_request
 from chat_session_title import derive_session_title, title_is_weak
 from ag_ui_stream import AgRunRecorder, iter_openclaw_text_chunks, iter_text_message_chunks, new_run_ids
@@ -75,6 +157,7 @@ from ag_ui.core import (
     StateSnapshotEvent,
     StepFinishedEvent,
     StepStartedEvent,
+    TextMessageChunkEvent,
     TextMessageEndEvent,
     TextMessageStartEvent,
     ToolCallArgsEvent,
@@ -86,8 +169,100 @@ from ag_ui.encoder import EventEncoder
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+# Intents that show a generative UI form in the chat instead of silently executing.
+# The form is pre-filled from extracted slots; the user confirms before the API call is made.
+_FORM_INTENTS: frozenset[str] = frozenset({
+    "calendar_create",
+    "note_create",
+    "journal_create",
+    "list_add",
+    "reminder_create",
+    "timer_create",
+})
+
+
+def _build_calendar_form_props(slots: dict) -> dict:
+    import datetime
+    from intent_router import _parse_date, _parse_time
+    date_raw = slots.get("date", "")
+    time_raw = slots.get("time", "")
+    parsed_date = (_parse_date(date_raw) if date_raw else None) or datetime.date.today().isoformat()
+    return {
+        "title":    slots.get("title", ""),
+        "date":     parsed_date,
+        "time":     _parse_time(time_raw) or "" if time_raw else "",
+        "category": slots.get("category", "general"),
+    }
+
+
+def _build_note_form_props(slots: dict) -> dict:
+    return {
+        "title":   slots.get("title", ""),
+        "content": slots.get("content", ""),
+    }
+
+
+def _build_journal_form_props(slots: dict) -> dict:
+    import datetime
+    return {
+        "content": slots.get("content", ""),
+        "date":    datetime.date.today().isoformat(),
+    }
+
+
+def _build_list_add_form_props(slots: dict) -> dict:
+    return {
+        "item":      slots.get("item", ""),
+        "list_type": slots.get("list_type", "shopping"),
+    }
+
+
+def _build_reminder_form_props(slots: dict) -> dict:
+    import datetime
+    from intent_router import _parse_date
+    date_raw = slots.get("date", "")
+    parsed_date = (_parse_date(date_raw) if date_raw else None) or datetime.date.today().isoformat()
+    return {
+        "title": slots.get("title", ""),
+        "date":  parsed_date,
+        "time":  slots.get("time", ""),   # already HH:MM from intent_router._parse_time
+    }
+
+
+def _build_timer_form_props(slots: dict) -> dict:
+    return {
+        "minutes": int(slots.get("minutes", 5)),
+        "label":   slots.get("label", "Timer"),
+    }
+
+
+_FORM_COMPONENT_MAP: dict[str, tuple[str, callable]] = {
+    "calendar_create": ("calendar_event_form", _build_calendar_form_props),
+    "note_create":     ("note_create_form",    _build_note_form_props),
+    "journal_create":  ("journal_create_form", _build_journal_form_props),
+    "list_add":        ("list_add_form",       _build_list_add_form_props),
+    "reminder_create": ("reminder_create_form", _build_reminder_form_props),
+    "timer_create":    ("timer_create_form",   _build_timer_form_props),
+}
+
+_FORM_BLURB: dict[str, str] = {
+    "calendar_create": "Here's your event — fill in the details and create it when you're ready.",
+    "note_create":     "Here's your note — add your content and save it.",
+    "journal_create":  "Here's your journal entry — write your thoughts and save.",
+    "list_add":        "Here's your list item — confirm the details and add it.",
+    "reminder_create": "Here's your reminder — check the details and set it.",
+    "timer_create":    "",   # timer tile speaks for itself
+}
 _MEMORY_AUTO_INGEST = os.environ.get("MEMORY_AUTO_INGEST", "false").lower() == "true"
-_GUARDED_AUTO = os.environ.get("OPENCLAW_GUARDED_AUTO", "true").lower() == "true"
+# Approval guard: disabled in Pi/Jetson Agent mode — Pi Agent handles safety natively
+_PI_AGENT_MODE    = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
+_JETSON_AGENT_MODE = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
+_USE_PI_AGENT = _PI_AGENT_MODE or _JETSON_AGENT_MODE
+_GUARDED_AUTO = (
+    os.environ.get("OPENCLAW_GUARDED_AUTO", "true").lower() == "true"
+    and not _USE_PI_AGENT
+)
 _ALL_TOOLS_ENABLED = os.environ.get("OPENCLAW_ALL_TOOLS_ENABLED", "true").lower() == "true"
 _WHATSAPP_FLOW_ENABLED = os.environ.get("WHATSAPP_FLOW_ENABLED", "true").lower() == "true"
 
@@ -102,7 +277,7 @@ _ESCALATION_MARKERS = {"ESCALATE_TO_OPENCLAW", "[ESCALATE]", "[CLOUD_REQUEST:"}
 
 # System prompt for Bonsai in the web chat context (no tool execution — conversational only).
 # Bonsai handles conversation and signals ESCALATE_TO_OPENCLAW for complex tasks.
-_BONSAI_CHAT_SYSTEM_PROMPT = """You are Zoe, a warm, capable home assistant. Be concise and helpful.
+_BONSAI_CHAT_SYSTEM_PROMPT_STATIC = """You are Zoe, a warm, capable home assistant. Be concise and helpful.
 
 You handle CONVERSATIONAL responses only in this channel — calendar/list/reminder tool calls are handled automatically by the system before reaching you.
 
@@ -116,6 +291,22 @@ For any of these, respond with EXACTLY "ESCALATE_TO_OPENCLAW" (nothing else):
 For everything else — questions, advice, explanations, opinions, general chat — respond directly and concisely.
 
 User preferences (timezone, language, units) are stored in memory. Adapt your tone to what you know about the user."""
+
+# Legacy alias for backward compatibility
+_BONSAI_CHAT_SYSTEM_PROMPT = _BONSAI_CHAT_SYSTEM_PROMPT_STATIC
+
+
+def _bonsai_system(username: str = "", memory_block: str = "") -> str:
+    """Build the Bonsai system prompt stamped with live datetime, username, and known facts."""
+    import datetime
+    now = datetime.datetime.now()
+    dt_line = now.strftime("%A, %d %B %Y — %I:%M %p")
+    user_line = f"The logged-in user is {username}." if username else ""
+    header = f"[{dt_line}]\n{user_line}".strip()
+    parts = [f"{header}\n\n{_BONSAI_CHAT_SYSTEM_PROMPT_STATIC}"]
+    if memory_block:
+        parts.append(memory_block)
+    return "\n\n".join(parts)
 
 # Per-session concurrency guard: only one OpenClaw turn runs per session at a time.
 # If a second request arrives for the same session while one is running, it waits
@@ -148,28 +339,49 @@ async def _persist_ag_ui_run(session_id: str, run_id: str, events: list) -> None
 
 def _extract_memory_candidates(user_message: str, assistant_response: str):
     """
-    Small, conservative extraction pass for future review queue.
-    Produces low-confidence proposals unless the signal is explicit.
+    Extract memory-worthy signals from a chat turn.
+
+    Catches preferences, personal facts, relationships, habits, and goals.
+    All extracted items go through the auto-ingest/review gate in the caller.
     """
     candidates = []
+    # Only extract from declarative user statements, not questions.
+    # Questions typically end with ? or start with question words.
+    user_stripped = user_message.strip()
+    if user_stripped.endswith("?") or re.match(r"^(what|who|where|when|why|how|do |does |did |is |are |can |could |would |have |has )", user_stripped.lower()):
+        return candidates
     text = f"{user_message}\n{assistant_response}".lower()
+
+    # Each tuple: (memory_type, regex pattern, title)
     patterns = [
-        ("preference", r"\bi (like|love|prefer)\b"),
-        ("dislike", r"\bi (don't like|dislike|hate)\b"),
-        ("profile", r"\bmy birthday is\b"),
-        ("relationship", r"\bmy (mom|dad|wife|husband|partner|friend)\b"),
+        ("preference",   r"\bi (like|love|prefer|enjoy|adore)\b",                          "Preference"),
+        ("dislike",      r"\bi (don't like|dislike|hate|can't stand|avoid)\b",             "Dislike"),
+        ("profile",      r"\bmy (birthday|name|age|job|work|profession)\b",                "Personal fact"),
+        ("profile",      r"\bi (am|'m) (a |an )?(developer|doctor|teacher|nurse|student|engineer|designer|chef|manager|writer|artist)", "Profession"),
+        ("profile",      r"\bmy (timezone|location|city|town|suburb|address)\b",           "Location"),
+        ("profile",      r"\bi('m| am) (from|based in|living in)\b",                       "Location"),
+        ("relationship", r"\bmy (mom|dad|mother|father|wife|husband|partner|son|daughter|brother|sister|friend|boss)\b", "Relationship"),
+        ("habit",        r"\bi (usually|always|never|often|every day|every morning|every night)\b", "Habit"),
+        ("habit",        r"\bi (wake up|go to bed|eat|exercise|work|commute)\b",            "Routine"),
+        ("goal",         r"\bi (want to|would like to|need to|hope to|plan to|am trying to)\b", "Goal"),
+        ("preference",   r"\bmy (favourite|favorite|go-to|preferred)\b",                   "Favourite"),
+        ("preference",   r"\bi (eat|drink|cook|watch|read|listen to|play)\b",              "Activity preference"),
     ]
-    for memory_type, pattern in patterns:
+    seen_types: set[str] = set()
+    for memory_type, pattern, title in patterns:
+        key = f"{memory_type}:{pattern}"
+        if key in seen_types:
+            continue
         if re.search(pattern, text):
-            confidence = 0.92 if memory_type == "preference" and _MEMORY_AUTO_INGEST else 0.64
+            seen_types.add(key)
             candidates.append(
                 {
                     "memory_type": memory_type,
-                    "title": f"Learned {memory_type}",
+                    "title": title,
                     "content": user_message.strip()[:500],
                     "entity_type": "self",
                     "entity_id": None,
-                    "confidence": confidence,
+                    "confidence": 0.88,
                     "source_type": "chat",
                     "source_excerpt": user_message.strip()[:280],
                     "visibility": "personal",
@@ -210,10 +422,42 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
                         status,
                     ),
                 )
+                # Mirror to MemPalace so it becomes the single source of truth
+                asyncio.ensure_future(
+                    _mempalace_add(item["content"], user_id=user_id, tags=["regex_capture"])
+                )
             await db.commit()
             break
     except Exception as e:
         logger.warning("Memory candidate persistence failed: %s", e)
+
+
+async def _load_user_memories(user_id: str, limit: int = 15) -> str:
+    """Load approved memory facts for user and return as a system-prompt block.
+
+    Fast: single indexed DB query, no ML inference.  Called on every Pi / Bonsai /
+    OpenClaw turn so Zoe always knows what she has learned about the user.
+    """
+    try:
+        async for db in get_db():
+            rows = await db.execute(
+                "SELECT content, title FROM memory_items "
+                "WHERE user_id = ? AND status = 'approved' "
+                "ORDER BY updated_at DESC LIMIT ?",
+                (user_id, limit),
+            )
+            rows = await rows.fetchall()
+            break
+        if not rows:
+            return ""
+        lines = ["## What I know about you:"]
+        for content, title in rows:
+            prefix = f"[{title}] " if title else ""
+            lines.append(f"- {prefix}{(content or '')[:200]}")
+        return "\n".join(lines)
+    except Exception as exc:
+        logger.debug("_load_user_memories failed (non-fatal): %s", exc)
+        return ""
 
 
 async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
@@ -229,6 +473,28 @@ async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
         )
         await db.commit()
         break
+
+
+async def _save_chat_message(session_id: str, role: str, content: str) -> None:
+    """Persist a single chat turn to chat_messages.
+
+    Mirrors the OpenClaw gateway pattern: the caller sends only the new message;
+    the server owns the transcript. Pi Agent reads this table for conversation
+    history on the next turn, enabling proper follow-on context.
+    """
+    if not content or not content.strip():
+        return
+    try:
+        async for db in get_db():
+            await db.execute(
+                "INSERT OR IGNORE INTO chat_messages (id, session_id, role, content) "
+                "VALUES (?, ?, ?, ?)",
+                (uuid.uuid4().hex, session_id, role, content.strip()),
+            )
+            await db.commit()
+            break
+    except Exception as _sme:
+        logger.debug("_save_chat_message failed (non-fatal): %s", _sme)
 
 
 INTENT_LABELS = {
@@ -261,6 +527,7 @@ async def run_openclaw_agent(
     *,
     user_role: str | None = None,
     username: str | None = None,
+    memories: str | None = None,
 ) -> str:
     """Route through OpenClaw for full memory, personality, and tool access."""
     return await openclaw_cli(
@@ -269,6 +536,7 @@ async def run_openclaw_agent(
         user_id,
         user_role=user_role,
         username=username,
+        memories=memories,
     )
 
 
@@ -290,6 +558,8 @@ async def run_bonsai_agent(
     message: str,
     session_id: str,
     user_id: str = "family-admin",
+    username: str = "",
+    max_tokens_override: int = 0,
 ) -> tuple[str, bool]:
     """
     Call Bonsai-8B for a fast conversational response.
@@ -305,13 +575,37 @@ async def run_bonsai_agent(
         logger.info("Bonsai busy — routing directly to OpenClaw for session %s", session_id)
         return "", True
 
+    # Load last 6 turns so Bonsai can follow up on prior context
+    prior_history: list[dict] = []
+    try:
+        async for db in get_db():
+            rows = await db.execute(
+                "SELECT role, content FROM chat_messages "
+                "WHERE session_id = ? ORDER BY created_at DESC LIMIT 6",
+                (session_id,),
+            )
+            history_rows = await rows.fetchall()
+            prior_history = [{"role": r[0], "content": r[1]} for r in reversed(history_rows)]
+            break
+    except Exception as _he:
+        logger.debug("bonsai history load failed (non-fatal): %s", _he)
+
+    # Load user facts from MemPalace (fast metadata filter, no ONNX)
+    try:
+        mp_memory = await asyncio.wait_for(_mempalace_load_user_facts(user_id), timeout=3.0)
+    except (asyncio.TimeoutError, Exception) as _me:
+        logger.debug("bonsai: mempalace load failed (non-fatal): %s", _me)
+        mp_memory = ""
+    bonsai_system = _bonsai_system(username=username or user_id, memory_block=mp_memory)
+
     payload = {
         "model": "bonsai-8b",
         "messages": [
-            {"role": "system", "content": _BONSAI_CHAT_SYSTEM_PROMPT},
+            {"role": "system", "content": bonsai_system},
+            *prior_history,
             {"role": "user", "content": message},
         ],
-        "max_tokens": 512,
+        "max_tokens": max_tokens_override if max_tokens_override > 0 else 512,
         "temperature": 0.5,
         "stream": False,
     }
@@ -545,6 +839,15 @@ async def _stream_openclaw_assistant_ag(
             yield recorder.emit(enc, CustomEvent(name="zoe.ui_component", value=action))
         elif "command" in action:
             yield recorder.emit(enc, CustomEvent(name="zoe.ui_command", value=action))
+    # Auto-extract rich components from plain text (price tables, maps, menus)
+    # only when no explicit :::zoe-ui::: blocks were present
+    if not actions:
+        try:
+            extracted = await auto_extract_components(clean_text)
+            for comp in extracted:
+                yield recorder.emit(enc, CustomEvent(name="zoe.ui_component", value=comp))
+        except Exception as _aex:
+            logger.debug("auto_extract_components failed (non-fatal): %s", _aex)
 
 
 async def chat_stream_generator(
@@ -558,6 +861,8 @@ async def chat_stream_generator(
     user_role = user.get("role")
     username = user.get("username")
     await _ensure_user_and_chat_session(session_id, user_id)
+    # Persist user turn immediately — enables history for Pi Agent on the NEXT request
+    await _save_chat_message(session_id, "user", message)
     enc = EventEncoder()
     recorder = AgRunRecorder()
     run_id, assistant_message_id = new_run_ids()
@@ -700,8 +1005,8 @@ async def chat_stream_generator(
         intent = detect_intent(message_for_processing) if use_intent_fast_path else None
         if intent:
             logger.info("Intent matched: %s slots=%s", intent.name, getattr(intent, "slots", None))
-            # Immediately navigate the touch panel before executing the intent.
-            asyncio.ensure_future(_broadcast_intent_nav(intent))
+            # Panel navigation is intentionally NOT fired from the web chat path.
+            # _broadcast_intent_nav is preserved for voice and touch-panel request paths.
 
             label = INTENT_LABELS.get(intent.name, intent.name)
             tool_call_id = uuid.uuid4().hex[:12]
@@ -725,6 +1030,35 @@ async def chat_stream_generator(
                 )
             )
             yield emit(ToolCallEndEvent(type=EventType.TOOL_CALL_END, tool_call_id=tool_call_id))
+
+            # ── Form-based intents: show a generative UI tile instead of silently executing ──
+            if intent.name in _FORM_INTENTS:
+                _comp_name, _prop_builder = _FORM_COMPONENT_MAP[intent.name]
+                _form_props = _prop_builder(slots)
+                yield emit(
+                    ToolCallResultEvent(
+                        type=EventType.TOOL_CALL_RESULT,
+                        message_id=assistant_message_id,
+                        tool_call_id=tool_call_id,
+                        content=json.dumps({"status": "form_shown", "component": _comp_name}),
+                        role="tool",
+                    )
+                )
+                yield emit(StepFinishedEvent(type=EventType.STEP_FINISHED, step_name=label))
+                yield emit(
+                    CustomEvent(
+                        name="zoe.ui_component",
+                        value={"component": _comp_name, "props": _form_props},
+                    )
+                )
+                _blurb = _FORM_BLURB.get(intent.name, "")
+                if _blurb:
+                    yield emit(TextMessageStartEvent(type=EventType.TEXT_MESSAGE_START, message_id=assistant_message_id, role="assistant"))
+                    async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, _blurb):
+                        yield line
+                    yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
+                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", _blurb))
+                return  # skip the standard execute_intent path
 
             result = await execute_intent(intent, user_id)
 
@@ -757,6 +1091,7 @@ async def chat_stream_generator(
                 )
                 asyncio.ensure_future(chat_inject_background(message_for_processing, result, intent.name, user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, result))
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", result))
             else:
                 logger.warning("Intent %s execution failed, falling back to LLM", intent.name)
                 yield emit(
@@ -769,39 +1104,60 @@ async def chat_stream_generator(
                     )
                 )
                 yield emit(StepFinishedEvent(type=EventType.STEP_FINISHED, step_name=label))
-                yield emit(
-                    StateSnapshotEvent(
-                        type=EventType.STATE_SNAPSHOT,
-                        snapshot={
-                            "status": "generating",
-                            "phase": "openclaw",
-                            "model": "Zoe (LLM fallback)",
-                            "detail": "Handing off to OpenClaw…",
-                        },
+                if _USE_PI_AGENT:
+                    yield emit(
+                        StateSnapshotEvent(
+                            type=EventType.STATE_SNAPSHOT,
+                            snapshot={
+                                "status": "generating",
+                                "phase": "pi_agent",
+                                "model": "Zoe (Pi Agent fallback)",
+                                "detail": "Thinking…",
+                            },
+                        )
                     )
-                )
-                oc_message = openclaw_user_message(intent, message_for_processing)
-                yield emit(
-                    CustomEvent(
-                        name="zoe.run_log",
-                        value={
-                            "level": "info",
-                            "message": "Starting OpenClaw agent (browser and tools can take 30s to several minutes).",
-                        },
+                    task = asyncio.create_task(
+                        run_pi_agent(message_for_processing, session_id, user_id)
                     )
-                )
-                task = asyncio.create_task(
-                    run_openclaw_agent(
-                        oc_message,
-                        session_id,
-                        user_id,
-                        user_role=user_role,
-                        username=username,
+                    async for hb in _iter_openclaw_heartbeats(emit, task, phase_label="Pi Agent"):
+                        yield hb
+                    response_text = await task
+                else:
+                    yield emit(
+                        StateSnapshotEvent(
+                            type=EventType.STATE_SNAPSHOT,
+                            snapshot={
+                                "status": "generating",
+                                "phase": "openclaw",
+                                "model": "Zoe (LLM fallback)",
+                                "detail": "Handing off to OpenClaw…",
+                            },
+                        )
                     )
-                )
-                async for hb in _iter_openclaw_heartbeats(emit, task):
-                    yield hb
-                response_text = await task
+                    oc_message = openclaw_user_message(intent, message_for_processing)
+                    yield emit(
+                        CustomEvent(
+                            name="zoe.run_log",
+                            value={
+                                "level": "info",
+                                "message": "Starting OpenClaw agent (browser and tools can take 30s to several minutes).",
+                            },
+                        )
+                    )
+                    _oc_intent_fallback_mem = await _mempalace_load_user_facts(user_id)
+                    task = asyncio.create_task(
+                        run_openclaw_agent(
+                            oc_message,
+                            session_id,
+                            user_id,
+                            user_role=user_role,
+                            username=username,
+                            memories=_oc_intent_fallback_mem or None,
+                        )
+                    )
+                    async for hb in _iter_openclaw_heartbeats(emit, task):
+                        yield hb
+                    response_text = await task
                 _, actions = _extract_ui_actions(response_text)
                 if actions:
                     asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
@@ -811,78 +1167,268 @@ async def chat_stream_generator(
                 ):
                     yield line
         else:
-            # ── Tier 2: Bonsai-8B fast path (conversational, no tools needed) ──
-            # Bonsai responds in <3s. If it signals ESCALATE_TO_OPENCLAW,
-            # we fall through to OpenClaw (Tier 3). force_openclaw bypasses this.
-            bonsai_response = ""
-            used_bonsai = False
-            if _BONSAI_FAST_PATH and not force_openclaw:
+            if _USE_PI_AGENT:
+                # ── Pi/Jetson Agent: Gemma 4 E2B with MemPalace + tools — true SSE streaming ──
+                tier_label = "Jetson" if _JETSON_AGENT_MODE else "Pi"
                 yield emit(
                     StateSnapshotEvent(
                         type=EventType.STATE_SNAPSHOT,
                         snapshot={
                             "status": "generating",
-                            "phase": "bonsai",
-                            "model": "Zoe",
+                            "phase": "pi_agent",
+                            "model": f"Zoe ({tier_label} Agent)",
                             "detail": "Thinking…",
                         },
                     )
                 )
-                bonsai_response, needs_escalation = await run_bonsai_agent(
-                    message_for_processing, session_id, user_id
-                )
-                if not needs_escalation and bonsai_response:
-                    used_bonsai = True
-
-            if used_bonsai:
-                asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, bonsai_response))
-                async for line in _stream_openclaw_assistant_ag(
-                    enc, recorder, assistant_message_id, bonsai_response
-                ):
-                    yield line
-            else:
-                # ── Tier 3: OpenClaw + Gemma4 (complex tasks, escalations) ──
-                yield emit(
-                    StateSnapshotEvent(
-                        type=EventType.STATE_SNAPSHOT,
-                        snapshot={
-                            "status": "generating",
-                            "phase": "openclaw",
-                            "model": "Zoe",
-                            "detail": "Starting OpenClaw agent…",
-                        },
-                    )
-                )
-                oc_message = openclaw_user_message(intent, message_for_processing)
                 yield emit(
                     CustomEvent(
                         name="zoe.run_log",
-                        value={
-                            "level": "info",
-                            "message": "Starting OpenClaw agent (browser and tools can take 30s to several minutes).",
-                        },
+                        value={"level": "info", "message": f"{tier_label} Agent streaming…"},
                     )
                 )
-                task = asyncio.create_task(
-                    run_openclaw_agent(
-                        oc_message,
-                        session_id,
-                        user_id,
-                        user_role=user_role,
-                        username=username,
-                    )
+                yield recorder.emit(
+                    enc,
+                    TextMessageStartEvent(
+                        type=EventType.TEXT_MESSAGE_START,
+                        message_id=assistant_message_id,
+                        role="assistant",
+                    ),
                 )
-                async for hb in _iter_openclaw_heartbeats(emit, task):
-                    yield hb
-                response_text = await task
-                _, actions = _extract_ui_actions(response_text)
-                if actions:
-                    asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
-                asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
-                async for line in _stream_openclaw_assistant_ag(
-                    enc, recorder, assistant_message_id, response_text
+                full_response = ""
+                escalate_signal: str | None = None
+                # Load recent conversation history so Pi Agent has context for follow-ups ("yes", etc.)
+                prior_history: list[dict] = []
+                try:
+                    async for db in get_db():
+                        rows = await db.execute(
+                            "SELECT role, content FROM chat_messages "
+                            "WHERE session_id = ? ORDER BY created_at DESC LIMIT 12",
+                            (session_id,),
+                        )
+                        rows = await rows.fetchall()
+                        prior_history = [{"role": r[0], "content": r[1]} for r in reversed(rows)]
+                        break
+                except Exception as _he:
+                    logger.debug("history load failed (non-fatal): %s", _he)
+                # Pi Agent loads MemPalace facts internally. We also load a copy here
+                # so that if Pi escalates to OpenClaw, the context prefix isn't blank.
+                pi_db_memory = await _mempalace_load_user_facts(user_id)
+                # Apply openclaw_user_message expansion so Pi Agent has the same rich context
+                # as the OpenClaw path (includes HA device state bootstrap text when intent matched).
+                expanded_msg = openclaw_user_message(intent, message_for_processing) if intent else message_for_processing
+                async for chunk in run_pi_agent_streaming(
+                    expanded_msg,
+                    session_id,
+                    user_id,
+                    history=prior_history or None,
+                    db_memory_context=pi_db_memory or None,
                 ):
-                    yield line
+                    if chunk.startswith("__ESCALATE__:") or chunk.startswith("__ESCALATE_BG__:"):
+                        escalate_signal = chunk
+                        break
+                    if chunk.startswith("__UI__:"):
+                        # Pi Agent visual tool — emit via the same zoe.ui_component CUSTOM
+                        # event used by every other component path in chat.py. The frontend
+                        # handler for this event mounts to messageGroup (not contentEl) so
+                        # components survive RUN_FINISHED. The test also detects this event.
+                        try:
+                            comp = json.loads(chunk[7:])
+                            yield emit(CustomEvent(name="zoe.ui_component", value=comp))
+                        except Exception as _uie:
+                            logger.debug("__UI__ parse error (non-fatal): %s", _uie)
+                        continue
+                    full_response += chunk
+                    yield recorder.emit(
+                        enc,
+                        TextMessageChunkEvent(
+                            type=EventType.TEXT_MESSAGE_CHUNK,
+                            message_id=assistant_message_id,
+                            role="assistant",
+                            delta=chunk,
+                        ),
+                    )
+                yield recorder.emit(
+                    enc,
+                    TextMessageEndEvent(
+                        type=EventType.TEXT_MESSAGE_END,
+                        message_id=assistant_message_id,
+                    ),
+                )
+
+                if escalate_signal:
+                    is_background = escalate_signal.startswith("__ESCALATE_BG__:")
+                    _, escalate_body = escalate_signal.split(":", 1)
+                    reason, _, oc_task = escalate_body.partition("|")
+                    oc_task_text = oc_task or message_for_processing
+
+                    if is_background:
+                        # Queue as a background task and ack immediately
+                        logger.info("chat: Pi Agent background escalation — reason=%s", reason.strip())
+                        try:
+                            from background_runner import enqueue_background_task
+                            task_id = await enqueue_background_task(
+                                task=oc_task_text, user_id=user_id, session_id=session_id
+                            )
+                            ack_text = f"On it! I'll work on that in the background and let you know when it's done. (Task #{task_id})"
+                        except Exception as _bge:
+                            logger.warning("background task enqueue failed: %s", _bge)
+                            ack_text = "I'll get started on that. I'll let you know when I'm done!"
+                        yield emit(TextMessageStartEvent(
+                            type=EventType.TEXT_MESSAGE_START,
+                            message_id=str(uuid.uuid4()),
+                            role="assistant",
+                        ))
+                        yield emit(TextMessageChunkEvent(
+                            type=EventType.TEXT_MESSAGE_CHUNK,
+                            message_id=assistant_message_id,
+                            role="assistant",
+                            delta=ack_text,
+                        ))
+                        yield emit(TextMessageEndEvent(
+                            type=EventType.TEXT_MESSAGE_END,
+                            message_id=assistant_message_id,
+                        ))
+                        response_text = ack_text
+                    else:
+                        # Pi Agent requested escalation to OpenClaw — stream via ACP channel
+                        logger.info("chat: Pi Agent escalating to OpenClaw (ACP) — reason=%s", reason.strip())
+                        yield emit(
+                            StateSnapshotEvent(
+                                type=EventType.STATE_SNAPSHOT,
+                                snapshot={
+                                    "status": "generating",
+                                    "phase": "openclaw",
+                                    "model": "Zoe (OpenClaw)",
+                                    "detail": f"Escalated: {reason.strip()}",
+                                },
+                            )
+                        )
+                        # Start a new streaming message block for the OpenClaw response
+                        oc_msg_id = str(uuid.uuid4())
+                        yield emit(TextMessageStartEvent(
+                            type=EventType.TEXT_MESSAGE_START,
+                            message_id=oc_msg_id,
+                            role="assistant",
+                        ))
+                        gateway_session_key = f"agent:main:zoe_{user_id}_{session_id}"
+                        # Prepend user context + approved memory facts so OpenClaw has the same
+                        # context it would get via openclaw_cli (avoids a memory-blind escalation).
+                        oc_prefixed = _zoe_context_prefix(
+                            user_id,
+                            user_role=user_role,
+                            username=username,
+                            memories=pi_db_memory or None,
+                        ) + oc_task_text
+                        oc_full = ""
+                        async for oc_chunk in _acp_stream(oc_prefixed, gateway_session_key):
+                            oc_full += oc_chunk
+                            yield recorder.emit(
+                                enc,
+                                TextMessageChunkEvent(
+                                    type=EventType.TEXT_MESSAGE_CHUNK,
+                                    message_id=oc_msg_id,
+                                    role="assistant",
+                                    delta=oc_chunk,
+                                ),
+                            )
+                        yield emit(TextMessageEndEvent(
+                            type=EventType.TEXT_MESSAGE_END,
+                            message_id=oc_msg_id,
+                        ))
+                        response_text = oc_full
+                        _, actions = _extract_ui_actions(response_text)
+                        if actions:
+                            asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
+                        else:
+                            # Auto-extract rich components from plain text
+                            try:
+                                extracted = await auto_extract_components(response_text)
+                                for _comp in extracted:
+                                    yield emit(CustomEvent(name="zoe.ui_component", value=_comp))
+                            except Exception as _aex:
+                                logger.debug("auto_extract_components (escalation) failed: %s", _aex)
+                else:
+                    response_text = full_response
+                asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
+                # Persist assistant reply so Pi Agent has context on the next turn
+                if response_text:
+                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
+
+            else:
+                # ── Jetson: Tier 2 Bonsai-8B fast path ──
+                bonsai_response = ""
+                used_bonsai = False
+                if _BONSAI_FAST_PATH and not force_openclaw:
+                    yield emit(
+                        StateSnapshotEvent(
+                            type=EventType.STATE_SNAPSHOT,
+                            snapshot={
+                                "status": "generating",
+                                "phase": "bonsai",
+                                "model": "Zoe",
+                                "detail": "Thinking…",
+                            },
+                        )
+                    )
+                    bonsai_response, needs_escalation = await run_bonsai_agent(
+                        message_for_processing, session_id, user_id, username=username or ""
+                    )
+                    if not needs_escalation and bonsai_response:
+                        used_bonsai = True
+
+                if used_bonsai:
+                    asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, bonsai_response))
+                    _fire_memory_capture(message_for_processing, bonsai_response, user_id=user_id)
+                    async for line in _stream_openclaw_assistant_ag(
+                        enc, recorder, assistant_message_id, bonsai_response
+                    ):
+                        yield line
+                else:
+                    # ── Jetson: Tier 3 OpenClaw ──
+                    yield emit(
+                        StateSnapshotEvent(
+                            type=EventType.STATE_SNAPSHOT,
+                            snapshot={
+                                "status": "generating",
+                                "phase": "openclaw",
+                                "model": "Zoe",
+                                "detail": "Starting OpenClaw agent…",
+                            },
+                        )
+                    )
+                    oc_message = openclaw_user_message(intent, message_for_processing)
+                    yield emit(
+                        CustomEvent(
+                            name="zoe.run_log",
+                            value={
+                                "level": "info",
+                                "message": "Starting OpenClaw agent (browser and tools can take 30s to several minutes).",
+                            },
+                        )
+                    )
+                    oc_db_memory = await _mempalace_load_user_facts(user_id)
+                    task = asyncio.create_task(
+                        run_openclaw_agent(
+                            oc_message,
+                            session_id,
+                            user_id,
+                            user_role=user_role,
+                            username=username,
+                            memories=oc_db_memory or None,
+                        )
+                    )
+                    async for hb in _iter_openclaw_heartbeats(emit, task):
+                        yield hb
+                    response_text = await task
+                    _, actions = _extract_ui_actions(response_text)
+                    if actions:
+                        asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
+                    asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
+                    async for line in _stream_openclaw_assistant_ag(
+                        enc, recorder, assistant_message_id, response_text
+                    ):
+                        yield line
 
         yield emit(
             RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id)
@@ -909,6 +1455,9 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
     session_id = body.get("session_id", f"web_{uuid.uuid4().hex[:8]}")
     user_id = user["user_id"]
     force_openclaw = bool(body.get("force_openclaw", False))
+    req_panel_id: str | None = body.get("panel_id") or None
+    is_voice_mode = request.headers.get("X-Voice-Mode", "").lower() in ("true", "1", "yes")
+    voice_max_tokens = int(body.get("max_tokens", 0)) if is_voice_mode else 0
 
     if not message:
         return {"error": "No message provided"}
@@ -991,7 +1540,19 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             use_intent_fast_path = False
 
         intent = detect_intent(message_for_processing) if use_intent_fast_path else None
+        # Apply voice mode suffix AFTER intent detection so regex anchors ($) still match.
+        if is_voice_mode and message_for_processing:
+            try:
+                from routers.voice_tts import _VOICE_SYSTEM_PROMPT_SUFFIX  # type: ignore
+                message_for_processing = message_for_processing + "\n" + _VOICE_SYSTEM_PROMPT_SUFFIX
+            except ImportError:
+                pass
         if intent:
+            # Fire intent navigation to the touch panel immediately (non-blocking).
+            # This is the fix for _broadcast_intent_nav being dead code — it is now called
+            # on every non-streaming request that has a panel_id (i.e. voice commands).
+            if req_panel_id and intent.name in _INTENT_PANEL_NAV:
+                asyncio.ensure_future(_broadcast_intent_nav(intent, panel_id=req_panel_id))
             result = await execute_intent(intent, user_id)
             if result:
                 asyncio.ensure_future(
@@ -1005,21 +1566,48 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                 "credential/session validation, qr/session setup, webhook test, remediation."
             )
 
-        # Try Bonsai fast path first for conversational messages
-        if _BONSAI_FAST_PATH and not force_openclaw:
-            bonsai_text, needs_escalation = await run_bonsai_agent(message_for_processing, session_id, user_id)
-            if not needs_escalation and bonsai_text:
-                asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, bonsai_text))
-                return {"response": bonsai_text, "session_id": session_id}
+        # Pi Agent loads MemPalace facts directly; non-streaming path passes None
+        ns_db_memory = await _mempalace_load_user_facts(user_id)
+        if _USE_PI_AGENT:
+            expanded_msg = openclaw_user_message(intent, message_for_processing) if intent else message_for_processing
+            response_text = await run_pi_agent(
+                expanded_msg, session_id, user_id, db_memory_context=None,
+                max_tokens_override=voice_max_tokens,
+            )
+            # If Pi Agent signals escalation, route to OpenClaw
+            if response_text.startswith("__ESCALATE__:"):
+                _, escalate_body = response_text.split(":", 1)
+                _, _, oc_task = escalate_body.partition("|")
+                response_text = await run_openclaw_agent(
+                    oc_task or message_for_processing,
+                    session_id,
+                    user_id,
+                    user_role=user.get("role"),
+                    username=user.get("username"),
+                    memories=ns_db_memory or None,
+                )
+        else:
+            # Try Bonsai fast path first for conversational messages
+            if _BONSAI_FAST_PATH and not force_openclaw:
+                bonsai_text, needs_escalation = await run_bonsai_agent(
+                    message_for_processing, session_id, user_id,
+                    username=user.get("username") or "",
+                    max_tokens_override=voice_max_tokens,
+                )
+                if not needs_escalation and bonsai_text:
+                    asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, bonsai_text))
+                    _fire_memory_capture(message_for_processing, bonsai_text, user_id=user_id)
+                    return {"response": bonsai_text, "session_id": session_id}
 
-        oc_message = openclaw_user_message(intent, message_for_processing)
-        response_text = await run_openclaw_agent(
-            oc_message,
-            session_id,
-            user_id,
-            user_role=user.get("role"),
-            username=user.get("username"),
-        )
+            oc_message = openclaw_user_message(intent, message_for_processing)
+            response_text = await run_openclaw_agent(
+                oc_message,
+                session_id,
+                user_id,
+                user_role=user.get("role"),
+                username=user.get("username"),
+                memories=ns_db_memory or None,
+            )
         clean_text, actions = _extract_ui_actions(response_text)
         resp = {"response": clean_text, "session_id": session_id}
         ui_commands = [a for a in actions if "command" in a]
@@ -1288,3 +1876,41 @@ async def submit_feedback(interaction_id: str, request: Request, feedback_type: 
         "feedback_type": feedback_type,
         "message": messages.get(feedback_type, "Feedback saved."),
     }
+
+
+# ── Background task endpoints ─────────────────────────────────────────────────
+
+@router.post("/task")
+async def create_background_task(request: Request, user: dict = Depends(get_current_user)):
+    """Queue a long-running task for background execution.
+
+    Body: {"message": "find the cheapest hotel in Perth under $150"}
+    Returns: {"task_id": 42, "ack": "On it! I'll let you know when done."}
+    """
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    task_text = body.get("message", "").strip()
+    if not task_text:
+        return {"error": "message is required"}
+    from background_runner import enqueue_background_task
+    user_id = user["user_id"]
+    task_id = await enqueue_background_task(task=task_text, user_id=user_id)
+    return {
+        "task_id": task_id,
+        "ack": "On it! I'll work on that in the background and let you know when it's done.",
+    }
+
+
+@router.get("/tasks/pending")
+async def get_pending_tasks(user: dict = Depends(get_current_user)):
+    """Return completed background tasks not yet shown to the user."""
+    from background_runner import get_pending_tasks as _get
+    user_id = user["user_id"]
+    # Inject display name from user dict for personalised "Hey Jason!" message
+    user_name = user.get("username") or user.get("display_name") or ""
+    tasks = await _get(user_id)
+    return {"tasks": tasks, "user_name": user_name}
+

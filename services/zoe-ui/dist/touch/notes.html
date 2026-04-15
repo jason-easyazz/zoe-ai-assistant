@@ -2,420 +2,336 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <!-- TOUCH: kiosk bypass -->
+    <script>
+    (function(){
+        if(localStorage.getItem('zoe_kiosk')==='1') return;
+        var p=new URLSearchParams(location.search);
+        if(p.get('kiosk')==='1') localStorage.setItem('zoe_kiosk','1');
+    })();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#fafbfc">
     <title>Zoe – Notes</title>
-    <link rel="stylesheet" href="/touch/css/touch-base.css">
+    <script>
+    (function(){var s=localStorage.getItem('zoe_theme')||'auto';var dark=s==='dark'||(s==='auto'&&(new Date().getHours()<7||new Date().getHours()>=19));if(dark){document.documentElement.classList.add('dark-mode');document.querySelector('meta[name=theme-color]').content='#060610';}})();
+    </script>
+        <!-- TOUCH: premium widget CSS system (same as desktop) -->
+    <link rel="stylesheet" href="/css/widgets-premium.css">
+    <link rel="stylesheet" href="/css/widgets-fluid.css">
+    <!-- TOUCH: adapter (tap targets, hide desktop chrome, dark mode) -->
+    <link rel="stylesheet" href="/touch/css/touch-adapter.css">
+    <link rel="stylesheet" href="/touch/css/touch-premium.css">
+    <script src="/js/auth.js"></script>
     <style>
-        :root {
-            --purple: #7B61FF;
-            --teal: #5AE0E0;
-            --bg: #0f0f1a;
-            --surface: rgba(255,255,255,0.05);
-            --surface-hover: rgba(255,255,255,0.09);
-            --border: rgba(255,255,255,0.1);
-            --border-bright: rgba(123,97,255,0.45);
-            --text: #fff;
-            --text-2: rgba(255,255,255,0.7);
-            --text-3: rgba(255,255,255,0.42);
-            --radius: 16px;
-            --glass: rgba(255,255,255,0.055);
-            --glass-border: rgba(255,255,255,0.11);
+        body { overflow-y: auto; cursor: auto; }
+
+        .notes-page {
+            padding-top: var(--nav-height);
+            min-height: 100dvh;
+            padding-bottom: calc(var(--nav-height) + var(--space-2xl));
         }
 
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-        html, body {
-            width: 100%; height: 100%;
-            background: var(--bg);
-            color: var(--text);
-            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
-            -webkit-font-smoothing: antialiased;
-            overflow: hidden;
-            touch-action: manipulation;
-        }
-
-        /* ── Ambient orbs ── */
-        .bg-orb {
-            position: fixed; border-radius: 50%; filter: blur(90px);
-            pointer-events: none; z-index: 0;
-        }
-        .bg-orb-1 { width: 350px; height: 350px; background: rgba(123,97,255,0.13); top: -80px; left: -60px; }
-        .bg-orb-2 { width: 280px; height: 280px; background: rgba(90,224,224,0.10); bottom: 40px; right: -40px; }
-
-        /* ── Layout ── */
-        .page-shell {
-            display: grid;
-            grid-template-rows: auto auto 1fr auto;
-            height: 100vh;
-            position: relative;
-            z-index: 1;
-        }
-
-        /* ── Header ── */
-        .header {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 14px 20px;
-            background: rgba(15,15,26,0.85);
-            backdrop-filter: blur(24px);
-            border-bottom: 1px solid var(--border);
-        }
-
-        .back-btn {
-            width: 44px; height: 44px;
-            border-radius: 50%;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            color: var(--text-2);
-            font-size: 18px;
-            display: flex; align-items: center; justify-content: center;
-            cursor: pointer; touch-action: manipulation;
-            text-decoration: none;
-            transition: background 0.2s, transform 0.15s;
-            flex-shrink: 0;
-        }
-        .back-btn:active { transform: scale(0.92); }
-
-        .header-title {
-            font-size: 20px; font-weight: 600;
-            background: linear-gradient(135deg, #7B61FF, #5AE0E0);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-            flex: 1;
-        }
-
-        .fab-btn {
-            width: 48px; height: 48px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, var(--purple), var(--teal));
-            border: none;
-            color: #fff;
-            font-size: 26px;
-            font-weight: 300;
-            display: flex; align-items: center; justify-content: center;
-            cursor: pointer; touch-action: manipulation;
-            box-shadow: 0 4px 18px rgba(123,97,255,0.45);
-            transition: transform 0.15s, box-shadow 0.2s;
-        }
-        .fab-btn:active { transform: scale(0.9); box-shadow: 0 2px 10px rgba(123,97,255,0.3); }
-
-        /* ── Search bar ── */
         .search-bar {
-            padding: 10px 20px;
-            background: rgba(15,15,26,0.75);
-            border-bottom: 1px solid var(--border);
+            padding: var(--space-sm) var(--space-lg);
+            border-bottom: 1px solid var(--glass-border);
+            background: var(--nav-bg);
+            backdrop-filter: blur(var(--blur));
+            -webkit-backdrop-filter: blur(var(--blur));
         }
 
         .search-input-wrap {
-            display: flex; align-items: center; gap: 10px;
-            background: var(--glass);
-            border: 1px solid var(--glass-border);
-            border-radius: 12px;
-            padding: 0 14px;
-            height: 44px;
+            display: flex; align-items: center; gap: var(--space-sm);
+            background: var(--input-bg);
+            border: 1px solid var(--input-border);
+            border-radius: var(--radius-md);
+            padding: 0 var(--space-md);
+            min-height: var(--touch-target);
         }
-        .search-icon { font-size: 15px; color: var(--text-3); flex-shrink: 0; }
+        .search-icon { font-size: var(--text-sm); color: var(--text-muted); flex-shrink: 0; }
         #searchInput {
             flex: 1; background: none; border: none; outline: none;
-            color: var(--text); font-size: 15px; font-family: inherit;
+            color: var(--text-primary); font-size: var(--text-sm); font-family: var(--font-family);
             -webkit-user-select: text; user-select: text;
         }
-        #searchInput::placeholder { color: var(--text-3); }
+        #searchInput::placeholder { color: var(--text-muted); }
 
-        /* ── Notes grid ── */
         .notes-scroll {
-            overflow-y: auto;
-            -webkit-overflow-scrolling: touch;
-            padding: 16px 20px;
+            padding: var(--space-md) var(--space-lg);
         }
-        .notes-scroll::-webkit-scrollbar { width: 4px; }
-        .notes-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
 
         .notes-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 12px;
+            gap: var(--space-md);
             align-items: start;
         }
 
         .note-card {
-            background: var(--glass);
+            background: var(--glass-bg);
             border: 1px solid var(--glass-border);
-            border-radius: var(--radius);
-            padding: 14px 14px 14px 18px;
+            border-radius: var(--radius-card);
+            padding: var(--space-md) var(--space-md) var(--space-md) calc(var(--space-md) + 4px);
             cursor: pointer;
             touch-action: manipulation;
-            transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
+            transition: background var(--ease-base), transform var(--ease-fast), box-shadow var(--ease-base);
             position: relative;
             overflow: hidden;
-            backdrop-filter: blur(12px);
+            backdrop-filter: blur(var(--blur));
+            -webkit-backdrop-filter: blur(var(--blur));
+            box-shadow: var(--shadow-small);
         }
         .note-card::before {
             content: '';
             position: absolute;
             left: 0; top: 0; bottom: 0;
             width: 4px;
-            border-radius: 4px 0 0 4px;
-            background: var(--card-color, var(--purple));
+            border-radius: var(--radius-xs) 0 0 var(--radius-xs);
+            background: var(--card-color, var(--primary-purple));
         }
         .note-card:active {
-            background: var(--surface-hover);
+            background: var(--glass-bg-hover);
             transform: scale(0.98);
         }
 
         .note-card-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text);
-            margin-bottom: 6px;
-            line-height: 1.3;
+            font-size: var(--text-sm);
+            font-weight: var(--weight-semibold);
+            color: var(--text-primary);
+            margin-bottom: var(--space-xs);
+            line-height: var(--leading-tight);
         }
         .note-card-preview {
-            font-size: 13px;
-            color: var(--text-2);
-            line-height: 1.45;
+            font-size: var(--text-sm);
+            color: var(--text-secondary);
+            line-height: var(--leading-relaxed);
             overflow: hidden;
             display: -webkit-box;
             -webkit-line-clamp: 3;
             -webkit-box-orient: vertical;
-            margin-bottom: 10px;
+            margin-bottom: var(--space-sm);
         }
         .note-card-footer {
-            display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+            display: flex; align-items: center; gap: var(--space-xs); flex-wrap: wrap;
         }
         .note-date-chip {
-            font-size: 11px;
-            color: var(--text-3);
-            background: rgba(255,255,255,0.06);
-            border-radius: 8px;
-            padding: 2px 8px;
+            font-size: var(--text-xs);
+            color: var(--text-muted);
+            background: var(--glass-bg-light);
+            border-radius: var(--radius-sm);
+            padding: 2px var(--space-sm);
         }
         .note-tag-chip {
-            font-size: 11px;
-            border-radius: 8px;
-            padding: 2px 8px;
-            background: rgba(123,97,255,0.15);
-            color: rgba(123,97,255,0.9);
-            border: 1px solid rgba(123,97,255,0.2);
+            font-size: var(--text-xs);
+            border-radius: var(--radius-sm);
+            padding: 2px var(--space-sm);
+            background: color-mix(in srgb, var(--primary-purple) 14%, transparent);
+            color: var(--primary-purple);
+            border: 1px solid color-mix(in srgb, var(--primary-purple) 22%, transparent);
         }
 
-        /* ── Empty state ── */
         .empty-state {
             grid-column: 1 / -1;
             display: flex; flex-direction: column; align-items: center;
-            justify-content: center; gap: 14px;
-            padding: 48px 20px;
-            color: var(--text-3);
+            justify-content: center; gap: var(--space-md);
+            padding: var(--space-2xl) var(--space-lg);
+            color: var(--text-muted);
             text-align: center;
         }
-        .empty-icon { font-size: 52px; }
-        .empty-title { font-size: 17px; font-weight: 500; color: var(--text-2); }
-        .empty-body { font-size: 14px; line-height: 1.5; max-width: 260px; }
+        .empty-icon { font-size: var(--text-5xl); }
+        .empty-title { font-size: var(--text-lg); font-weight: var(--weight-medium); color: var(--text-secondary); }
+        .empty-body { font-size: var(--text-sm); line-height: var(--leading-relaxed); max-width: 260px; }
 
-        /* ── Editor overlay ── */
         .editor-overlay {
             position: fixed; inset: 0;
-            background: rgba(10,10,20,0.96);
-            backdrop-filter: blur(30px);
-            z-index: 200;
+            background: rgba(0, 0, 0, 0.48);
+            backdrop-filter: blur(var(--blur-heavy));
+            -webkit-backdrop-filter: blur(var(--blur-heavy));
+            z-index: 1900;
             display: flex; flex-direction: column;
             transform: translateY(100%);
-            transition: transform 0.35s cubic-bezier(0.4,0,0.2,1);
+            transition: transform 0.35s var(--ease-smooth);
+        }
+        .dark-mode .editor-overlay {
+            background: rgba(0, 0, 0, 0.62);
         }
         .editor-overlay.open { transform: translateY(0); }
 
         .editor-header {
-            display: flex; align-items: center; gap: 12px;
-            padding: 16px 20px;
-            border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; gap: var(--space-md);
+            padding: var(--space-md) var(--space-lg);
+            border-bottom: 1px solid var(--glass-border);
             flex-shrink: 0;
+            background: var(--nav-bg);
+            backdrop-filter: blur(var(--blur));
+            -webkit-backdrop-filter: blur(var(--blur));
         }
 
         .editor-close {
-            width: 44px; height: 44px;
-            border-radius: 50%;
-            background: var(--surface);
-            border: 1px solid var(--border);
-            color: var(--text-2);
-            font-size: 20px;
+            width: var(--touch-target); height: var(--touch-target);
+            border-radius: var(--radius-round);
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            color: var(--text-secondary);
+            font-size: var(--text-xl);
             display: flex; align-items: center; justify-content: center;
             cursor: pointer; touch-action: manipulation;
-            transition: background 0.2s;
+            transition: background var(--ease-base);
         }
-        .editor-close:active { background: var(--surface-hover); }
+        .editor-close:active { background: var(--glass-bg-hover); }
 
         .editor-header-title {
-            font-size: 16px; font-weight: 500; color: var(--text-2); flex: 1;
+            font-size: var(--text-base); font-weight: var(--weight-medium); color: var(--text-secondary); flex: 1;
         }
 
-        .editor-actions {
-            display: flex; gap: 10px;
-        }
+        .editor-actions { display: flex; gap: var(--space-sm); }
 
         .editor-delete-btn {
-            height: 44px; padding: 0 16px;
-            border-radius: 22px;
-            background: rgba(255,80,80,0.12);
-            border: 1px solid rgba(255,80,80,0.25);
+            min-height: var(--touch-target); padding: 0 var(--space-md);
+            border-radius: var(--radius-round);
+            background: color-mix(in srgb, #ff6b6b 12%, var(--glass-bg));
+            border: 1px solid color-mix(in srgb, #ff6b6b 28%, var(--glass-border));
             color: #ff6b6b;
-            font-size: 14px; font-weight: 500;
+            font-size: var(--text-sm); font-weight: var(--weight-medium);
             cursor: pointer; touch-action: manipulation;
-            transition: background 0.2s;
-            display: flex; align-items: center; gap: 6px;
+            transition: background var(--ease-base);
+            display: flex; align-items: center; gap: var(--space-xs);
+            font-family: var(--font-family);
         }
-        .editor-delete-btn:active { background: rgba(255,80,80,0.22); }
+        .editor-delete-btn:active { background: color-mix(in srgb, #ff6b6b 22%, var(--glass-bg)); }
 
         .editor-save-btn {
-            height: 44px; padding: 0 22px;
-            border-radius: 22px;
-            background: linear-gradient(135deg, var(--purple), var(--teal));
+            min-height: var(--touch-target); padding: 0 var(--space-lg);
+            border-radius: var(--radius-round);
+            background: var(--primary-gradient);
             border: none;
-            color: #fff;
-            font-size: 14px; font-weight: 600;
+            color: var(--text-on-brand);
+            font-size: var(--text-sm); font-weight: var(--weight-semibold);
             cursor: pointer; touch-action: manipulation;
-            box-shadow: 0 3px 14px rgba(123,97,255,0.4);
-            transition: opacity 0.2s, transform 0.15s;
+            box-shadow: var(--shadow-purple);
+            transition: opacity var(--ease-base), transform var(--ease-fast);
+            font-family: var(--font-family);
         }
         .editor-save-btn:active { transform: scale(0.95); }
 
         .editor-body {
-            flex: 1; overflow-y: auto; padding: 20px;
-            display: flex; flex-direction: column; gap: 14px;
+            flex: 1; overflow-y: auto; padding: var(--space-lg);
+            display: flex; flex-direction: column; gap: var(--space-md);
             -webkit-overflow-scrolling: touch;
+            background: var(--glass-bg);
+        }
+        .dark-mode .editor-body {
+            background: color-mix(in srgb, var(--glass-bg) 92%, transparent);
         }
 
         #noteTitleInput {
             width: 100%; background: none; border: none; outline: none;
-            color: var(--text); font-size: 22px; font-weight: 600;
-            font-family: inherit; line-height: 1.3;
+            color: var(--text-primary); font-size: var(--text-2xl); font-weight: var(--weight-semibold);
+            font-family: var(--font-family); line-height: var(--leading-tight);
             -webkit-user-select: text; user-select: text;
         }
-        #noteTitleInput::placeholder { color: var(--text-3); }
+        #noteTitleInput::placeholder { color: var(--text-muted); }
 
-        .editor-divider {
-            height: 1px; background: var(--border);
-        }
+        .editor-divider { height: 1px; background: var(--glass-border); }
 
         #noteEditor {
             flex: 1; width: 100%;
             background: none; border: none; outline: none;
-            color: var(--text-2); font-size: 16px; font-family: inherit;
-            font-weight: 300; line-height: 1.7;
+            color: var(--text-secondary); font-size: var(--text-base); font-family: var(--font-family);
+            font-weight: var(--weight-light); line-height: var(--leading-relaxed);
             resize: none;
             min-height: 200px;
             -webkit-user-select: text; user-select: text;
         }
-        #noteEditor::placeholder { color: var(--text-3); }
+        #noteEditor::placeholder { color: var(--text-muted); }
 
-        /* Tag & color row */
         .tag-color-row {
-            display: flex; align-items: center; gap: 10px;
+            display: flex; align-items: center; gap: var(--space-sm);
             flex-wrap: wrap;
         }
 
         #tagInput {
             flex: 1; min-width: 120px;
-            background: var(--glass);
-            border: 1px solid var(--glass-border);
-            border-radius: 10px;
-            padding: 8px 12px;
-            color: var(--text);
-            font-size: 14px; font-family: inherit;
+            background: var(--input-bg);
+            border: 1px solid var(--input-border);
+            border-radius: var(--radius-md);
+            padding: var(--space-sm) var(--space-md);
+            color: var(--text-primary);
+            font-size: var(--text-sm); font-family: var(--font-family);
             outline: none;
-            height: 40px;
+            min-height: 40px;
             -webkit-user-select: text; user-select: text;
         }
-        #tagInput::placeholder { color: var(--text-3); }
+        #tagInput::placeholder { color: var(--text-muted); }
 
-        .color-picker-row {
-            display: flex; gap: 8px;
+        .tag-add-btn {
+            min-height: 40px; padding: 0 var(--space-md);
+            border-radius: var(--radius-md);
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            color: var(--text-secondary);
+            font-size: var(--text-sm);
+            cursor: pointer; touch-action: manipulation;
+            font-family: var(--font-family);
         }
+
+        .color-picker-row { display: flex; gap: var(--space-sm); }
         .color-swatch {
             width: 28px; height: 28px;
-            border-radius: 50%;
+            border-radius: var(--radius-round);
             border: 2px solid transparent;
             cursor: pointer;
             touch-action: manipulation;
-            transition: transform 0.15s;
+            transition: transform var(--ease-fast);
         }
         .color-swatch:active { transform: scale(0.88); }
-        .color-swatch.selected { border-color: rgba(255,255,255,0.7); }
+        .color-swatch.selected { border-color: var(--text-secondary); }
 
-        .tags-chips {
-            display: flex; gap: 6px; flex-wrap: wrap;
-        }
+        .tags-chips { display: flex; gap: var(--space-xs); flex-wrap: wrap; }
         .tag-chip-item {
-            font-size: 12px; border-radius: 10px; padding: 4px 10px;
-            background: rgba(123,97,255,0.15);
-            color: rgba(123,97,255,0.95);
-            border: 1px solid rgba(123,97,255,0.2);
-            display: flex; align-items: center; gap: 4px;
+            font-size: var(--text-xs); border-radius: var(--radius-md); padding: var(--space-xs) var(--space-sm);
+            background: color-mix(in srgb, var(--primary-purple) 14%, transparent);
+            color: var(--primary-purple);
+            border: 1px solid color-mix(in srgb, var(--primary-purple) 22%, transparent);
+            display: flex; align-items: center; gap: var(--space-xs);
             cursor: pointer; touch-action: manipulation;
         }
-        .tag-chip-remove { font-size: 14px; line-height: 1; opacity: 0.7; }
+        .tag-chip-remove { font-size: var(--text-sm); line-height: 1; opacity: 0.7; }
 
-        /* ── Bottom nav ── */
-        .bottom-nav {
-            display: flex;
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-            scrollbar-width: none;
-            background: rgba(15,15,26,0.96);
-            border-top: 1px solid var(--border);
-            padding: 0 8px;
-            flex-shrink: 0;
+        .field-label {
+            font-size: var(--text-xs);
+            font-weight: var(--weight-semibold);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: var(--space-sm);
         }
-        .bottom-nav::-webkit-scrollbar { display: none; }
 
-        .nav-item {
-            flex-shrink: 0;
-            display: flex; flex-direction: column;
-            align-items: center; justify-content: center;
-            gap: 3px;
-            padding: 8px 14px;
-            min-width: 64px; min-height: 56px;
-            color: var(--text-3);
-            text-decoration: none;
-            font-size: 10px; font-weight: 500; letter-spacing: 0.3px;
-            touch-action: manipulation;
-            transition: color 0.2s;
-            border-bottom: 2px solid transparent;
-        }
-        .nav-item .nav-icon { font-size: 18px; line-height: 1; }
-        .nav-item:active { opacity: 0.7; }
-        .nav-item.active { color: var(--purple); border-bottom-color: var(--purple); }
-
-        /* Toast */
         .toast {
             position: fixed;
-            bottom: 72px; left: 50%; transform: translateX(-50%) translateY(14px);
-            background: rgba(90,224,224,0.13);
-            border: 1px solid rgba(90,224,224,0.3);
-            color: var(--teal);
-            border-radius: 20px; padding: 10px 22px;
-            font-size: 14px; font-weight: 500;
-            opacity: 0; transition: opacity 0.3s, transform 0.3s;
-            pointer-events: none; z-index: 300; white-space: nowrap;
+            bottom: calc(var(--nav-height) + var(--space-xl));
+            left: 50%;
+            transform: translateX(-50%) translateY(14px);
+            background: color-mix(in srgb, var(--primary-teal) 14%, var(--glass-bg));
+            border: 1px solid color-mix(in srgb, var(--primary-teal) 35%, var(--glass-border));
+            color: var(--primary-teal);
+            border-radius: var(--radius-round);
+            padding: var(--space-sm) var(--space-lg);
+            font-size: var(--text-sm); font-weight: var(--weight-medium);
+            opacity: 0; transition: opacity var(--ease-base), transform var(--ease-base);
+            pointer-events: none; z-index: 1950; white-space: nowrap;
         }
         .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+        .fab-notes {
+            bottom: calc(var(--nav-height) + var(--space-md));
+        }
     </style>
 </head>
 <body>
-<div class="bg-orb bg-orb-1"></div>
-<div class="bg-orb bg-orb-2"></div>
 
-<div class="page-shell">
-
-    <!-- Header -->
-    <header class="header">
-        <a class="back-btn" href="/touch/dashboard.html" aria-label="Back">‹</a>
-        <span class="header-title">Notes</span>
-        <button class="fab-btn" onclick="openEditor(null)" aria-label="New note">+</button>
-    </header>
-
-    <!-- Search -->
+<div class="notes-page">
     <div class="search-bar">
         <div class="search-input-wrap">
             <span class="search-icon">🔍</span>
@@ -423,7 +339,6 @@
         </div>
     </div>
 
-    <!-- Notes grid -->
     <div class="notes-scroll">
         <div class="notes-grid" id="notesGrid">
             <div class="empty-state">
@@ -433,34 +348,19 @@
             </div>
         </div>
     </div>
-
-    <!-- Bottom nav -->
-    <nav class="bottom-nav" aria-label="Main navigation">
-        <a class="nav-item" href="/touch/dashboard.html"><span class="nav-icon">🏠</span>Dashboard</a>
-        <a class="nav-item" href="/touch/calendar.html"><span class="nav-icon">📅</span>Calendar</a>
-        <a class="nav-item" href="/touch/lists.html"><span class="nav-icon">✅</span>Lists</a>
-        <a class="nav-item active" href="/touch/notes.html"><span class="nav-icon">📝</span>Notes</a>
-        <a class="nav-item" href="/touch/journal.html"><span class="nav-icon">📔</span>Journal</a>
-        <a class="nav-item" href="/touch/music.html"><span class="nav-icon">🎵</span>Music</a>
-        <a class="nav-item" href="/touch/smart-home.html"><span class="nav-icon">💡</span>Smart Home</a>
-        <a class="nav-item" href="/touch/people.html"><span class="nav-icon">👥</span>People</a>
-        <a class="nav-item" href="/touch/memories.html"><span class="nav-icon">🌟</span>Memories</a>
-        <a class="nav-item" href="/touch/cooking.html"><span class="nav-icon">🍳</span>Cooking</a>
-        <a class="nav-item" href="/touch/weather.html"><span class="nav-icon">🌤</span>Weather</a>
-        <a class="nav-item" href="/touch/settings.html"><span class="nav-icon">⚙️</span>Settings</a>
-    </nav>
 </div>
 
-<!-- Editor overlay -->
+<button type="button" class="fab fab-notes" onclick="openEditor(null)" aria-label="New note">+</button>
+
 <div class="editor-overlay" id="editorOverlay" role="dialog" aria-modal="true" aria-label="Note editor">
     <div class="editor-header">
-        <button class="editor-close" onclick="closeEditor()" aria-label="Close">×</button>
+        <button type="button" class="editor-close" onclick="closeEditor()" aria-label="Close">×</button>
         <span class="editor-header-title" id="editorHeaderTitle">New Note</span>
         <div class="editor-actions">
-            <button class="editor-delete-btn" id="deleteBtn" onclick="deleteNote()" style="display:none">
+            <button type="button" class="editor-delete-btn" id="deleteBtn" onclick="deleteNote()" style="display:none">
                 🗑 Delete
             </button>
-            <button class="editor-save-btn" onclick="saveNote()">Save</button>
+            <button type="button" class="editor-save-btn" onclick="saveNote()">Save</button>
         </div>
     </div>
 
@@ -470,19 +370,17 @@
         <textarea id="noteEditor" placeholder="Start writing…" autocorrect="on" spellcheck="true"></textarea>
         <div class="editor-divider"></div>
 
-        <!-- Tags -->
         <div>
-            <div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-3);margin-bottom:8px;">Tags</div>
+            <div class="field-label">Tags</div>
             <div class="tag-color-row">
                 <input type="text" id="tagInput" placeholder="Add tag, press Enter…">
-                <button onclick="addTagFromInput()" style="height:40px;padding:0 14px;border-radius:10px;background:var(--glass);border:1px solid var(--glass-border);color:var(--text-2);font-size:13px;cursor:pointer;touch-action:manipulation;">Add</button>
+                <button type="button" class="tag-add-btn" onclick="addTagFromInput()">Add</button>
             </div>
-            <div class="tags-chips" id="tagsChips" style="margin-top:8px;"></div>
+            <div class="tags-chips" id="tagsChips" style="margin-top:var(--space-sm);"></div>
         </div>
 
-        <!-- Color -->
         <div>
-            <div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--text-3);margin-bottom:8px;">Color</div>
+            <div class="field-label">Color</div>
             <div class="color-picker-row" id="colorPicker">
                 <div class="color-swatch selected" data-color="#7B61FF" style="background:#7B61FF" onclick="selectColor(this)"></div>
                 <div class="color-swatch" data-color="#5AE0E0" style="background:#5AE0E0" onclick="selectColor(this)"></div>
@@ -495,13 +393,13 @@
     </div>
 </div>
 
-<!-- Toast -->
 <div class="toast" id="toast"></div>
 
-<script src="/js/auth.js"></script>
 <script src="/js/websocket-sync.js"></script>
 <script src="/js/touch-ui-executor.js"></script>
 <script src="/js/orb-loader.js"></script>
+<script src="/touch/js/gestures.js"></script>
+<script src="/touch/js/touch-menu.js"></script>
 <script>
 const NOTE_COLORS = ['#7B61FF','#5AE0E0','#FF6B9D','#FFB347','#6BCB77','#FF6B6B'];
 
@@ -535,7 +433,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     await loadNotes();
-    document.querySelector('.nav-item.active')?.scrollIntoView({ inline: 'center', behavior: 'auto', block: 'nearest' });
 });
 
 /* ── Load notes ── */
@@ -732,9 +629,8 @@ window.ZOE_OPEN_FORM = function(formType, prefill) {
         setTimeout(() => document.getElementById('noteEditor').focus(), 360);
     }
 };
+
+TouchMenu.init({ page: 'notes' });
 </script>
-<script src="/touch/js/gestures.js"></script>
-<script src="/touch/js/touch-menu.js"></script>
-<script>TouchMenu.init({ page: 'notes' });</script>
 </body>
 </html>

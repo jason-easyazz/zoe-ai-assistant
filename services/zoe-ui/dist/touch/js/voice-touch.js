@@ -1,8 +1,22 @@
 "use strict";
 
-// Minimal voice integration hooks (no external deps). Uses Web Speech API if available.
+// DISABLED: Web Speech API voice path replaced by native Pi daemon (zoe_voice_daemon.py).
+// The Pi daemon POSTs to /api/voice/command directly; browser SpeechRecognition is not used.
+// This file is kept for reference but exports a no-op stub so existing callers don't throw.
 
 const VoiceTouch = (() => {
+  // No-op stub — all voice is handled by the hardware daemon on the Pi.
+  return {
+    start: () => {},
+    stop: () => {},
+    isSupported: () => false,
+    isListening: () => false,
+  };
+})();
+
+// ── ORIGINAL IMPLEMENTATION (disabled) ──────────────────────────────────────
+/* eslint-disable */
+const _VoiceTouch_DISABLED = (() => {
   let recognition = null;
   let listening = false;
 
@@ -42,7 +56,9 @@ const VoiceTouch = (() => {
   }
 
   return { isSupported, start, stop };
-})();
+// (original implementation body ends here)
+})(); // _VoiceTouch_DISABLED
+/* eslint-enable */
 
 window.VoiceTouch = VoiceTouch;
 

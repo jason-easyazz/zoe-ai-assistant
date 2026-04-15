@@ -1,0 +1,10 @@
+[Unit]
+Description=Zoe Weekly Self-Review — OpenClaw Conversation Failure Analysis
+After=network.target zoe-data.service llama-server.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/zoe/bin/weekly-self-review.sh
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=3600
