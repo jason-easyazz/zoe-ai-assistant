@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Zoe Kiosk
+Exec=/bin/bash -c 'sleep 5 && /opt/TouchKio/start-kiosk.sh'
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=false

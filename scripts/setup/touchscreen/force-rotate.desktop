@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Force Rotation
+Exec=/home/pi/force-rotate.sh
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true

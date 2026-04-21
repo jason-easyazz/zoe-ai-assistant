@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Display Rotation
+Comment=Rotate display to landscape and calibrate touch
+Exec=/usr/local/bin/display-rotation.sh
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
