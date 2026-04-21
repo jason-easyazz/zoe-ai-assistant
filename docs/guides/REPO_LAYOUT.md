@@ -22,6 +22,10 @@ Retired service code has been moved out of `services/` into:
 
 - `docs/archive/retired-services/`
 
+Legacy root-level operational artifacts have been moved into:
+
+- `docs/archive/root-legacy-2026-04-21/`
+
 This keeps active paths clean while preserving legacy reference code in git history and in-repo archive paths.
 
 ## Rule of Thumb
