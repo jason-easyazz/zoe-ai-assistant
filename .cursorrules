@@ -283,8 +283,45 @@ NEVER bypass hooks with --no-verify.
 4. Validate restoration: python3 tools/audit/validate_critical_files.py
 5. Test thoroughly before continuing
 
+## 🧭 ZOE DESIGN PRINCIPLES - CHARTER
+
+**Full charter**: `docs/governance/ZOE_DESIGN_PRINCIPLES.md` (read before large design changes).
+
+The charter is normative. These rules are the enforceable subset; violating them closes doors we do not want closed.
+
+### Product rules (runtime)
+- **One Zoe instance, many users.** Every turn pivots on "who is speaking now" (speaker auth primary; touch/device pairing fallback).
+- **Memory has scope from day one.** All writes carry one of: `personal` (private to one user), `shared` (household/business), `ambient` (environment). No unscoped writes.
+- **Credentials are keyed per user and per scope.** No personal-data credentials in global env vars.
+- **No `home` / `family` / `household` concepts in the kernel.** They belong in skills and scopes — not in router, memory schema, auth, or tool signatures.
+- **Tools register through an allow-list mechanism**, even if currently permissive.
+- **Experts / skills are filesystem files** (SKILL.md-style), discovered by the router. Adding an expert is a file drop, not a code edit.
+- **Surface-agnostic core.** No Jetson-specific APIs in non-hardware code paths; core must run on non-Jetson hardware without surgery.
+- **Every world-changing action goes through a proposal path**, even if auto-approved at low stakes.
+- **Open questions are held open.** See charter §7; do not answer them silently in code.
+
+### Harness engineering (when editing orchestration)
+Applies to `services/zoe-data/routers/chat.py`, `intent_router.py`, `openclaw_ws.py`, `mcp_server.py`, or any agent harness.
+- **Prefer harness improvements before model upgrades.** Routing, prompts, memory boundaries, and tool contracts usually dominate.
+- **Minimize structure by default.** Do not add modules (verifiers, re-planners, judges) without measurement; remove modules that do not earn their keep.
+- **Natural-language harness over brittle Python** for fast-moving control flow. No hardcoded NLU if/else in production chat.
+- **Ablate, do not stack.** Harness changes are experiments — module-by-module with rollback.
+- See charter §9 for detail and references.
+
+## 🧪 AI-ASSISTED DEVELOPMENT (KARPATHY-ALIGNED)
+
+These apply to humans and AI assistants editing this repo. Detail and source in charter §10.
+
+- **Think before coding.** State assumptions; surface ambiguity; ask instead of guessing; push back when a simpler path exists.
+- **Simplicity first.** Minimum change for the stated request. No speculative abstractions or drive-by features.
+- **Surgical changes.** Touch only what the task requires. Match existing style. Mention unrelated dead code; do not delete it unless asked. Every changed line should trace to the request.
+- **Goal-driven execution.** Prefer explicit success criteria and verification (tests, validators, manual checks) over vague "make it work".
+
+Bias toward caution on non-trivial work; use judgment on one-liners.
+
 ## 📖 REFERENCE DOCUMENTATION
 
+- docs/governance/ZOE_DESIGN_PRINCIPLES.md - **DESIGN CHARTER** (vision + enforceable rules, this file mirrors the subset)
 - docs/governance/CLEANUP_SAFETY.md - Complete safety procedures
 - docs/governance/CRITICAL_FILES.md - Critical files list
 - docs/governance/MANIFEST_SYSTEM.md - How manifest system works
