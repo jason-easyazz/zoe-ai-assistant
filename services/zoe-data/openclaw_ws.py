@@ -30,6 +30,18 @@ GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
 OPENCLAW_AGENT_TIMEOUT_S = float(os.environ.get("OPENCLAW_AGENT_TIMEOUT_S", "900"))
 
 
+_ZOE_SELF_COMPACT = (
+    "Zoe can build for herself via OpenClaw skills: "
+    "zoe-widget-builder (new dashboard widgets), "
+    "zoe-page-builder (new desktop+touch pages), "
+    "zoe-capability-extender (search ClawHub or compose a new skill). "
+    "All three are admin-gated and always plan-then-confirm into a /_preview/ "
+    "staging area before touching real files. "
+    "Before saying \"I can't do X\", call the zoe_self_capabilities MCP tool to "
+    "check live state. See ZOE_SELF.md in this workspace for full architecture."
+)
+
+
 def _zoe_context_prefix(
     user_id: str,
     *,
@@ -41,12 +53,14 @@ def _zoe_context_prefix(
 
     Includes datetime so OpenClaw always knows when it is running.
     Includes MemPalace facts so OpenClaw has long-term user context from the start.
+    Includes a compact ZOE_SELF summary so OpenClaw never forgets it can build.
     """
     import datetime
     role = user_role if user_role is not None else "unknown"
     name = (username or "").strip()
     now_str = datetime.datetime.now().strftime("%A, %d %B %Y — %I:%M %p")
     prefix = f"[CONTEXT: user_id={user_id}, role={role}, name={name}, datetime={now_str}]\n"
+    prefix += f"[ZOE_SELF: {_ZOE_SELF_COMPACT}]\n"
     if memories:
         prefix += f"{memories}\n"
     return prefix
@@ -64,9 +78,10 @@ async def openclaw_cli(
 ) -> str:
     """Send message through OpenClaw agent via ACP (browser, tools, memory, personality).
 
-    Each user_id maps to its own gateway session so memU scopes memories per
-    family member.  The ACP bridge connects to the running openclaw-gateway,
-    giving access to the browser tool and other gateway-managed resources.
+    Each user_id maps to its own gateway session so MemPalace (via the MCP
+    memory_* tools) scopes memories per family member. The ACP bridge
+    connects to the running openclaw-gateway, giving access to the browser
+    tool and other gateway-managed resources.
     """
     gateway_session_key = f"agent:main:zoe_{user_id}_{session_id}"
     if not skip_context_prefix:

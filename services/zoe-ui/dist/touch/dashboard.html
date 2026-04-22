@@ -466,6 +466,34 @@
             transform: scale(0.95);
         }
 
+        /* Widget gear (settings) button — premium pill, shown in edit mode */
+        .widget-gear-btn {
+            position: absolute;
+            top: 8px;
+            right: 48px;
+            width: 32px; height: 32px;
+            background: linear-gradient(135deg, rgba(123,97,255,0.95), rgba(90,224,224,0.95));
+            border: none; border-radius: 8px;
+            color: #fff; font-size: 18px; font-weight: 700;
+            cursor: pointer; z-index: 100;
+            display: none;
+            align-items: center; justify-content: center;
+            box-shadow: 0 2px 8px rgba(123,97,255,0.35);
+            transition: transform .15s, box-shadow .15s;
+        }
+        body.edit-mode .widget-gear-btn { display: flex; }
+        .widget-gear-btn:hover {
+            transform: scale(1.08);
+            box-shadow: 0 4px 14px rgba(123,97,255,0.5);
+        }
+        .widget-gear-btn:active { transform: scale(0.95); }
+        @media (max-width: 768px) {
+            .widget-gear-btn {
+                width: 44px; height: 44px; font-size: 22px;
+                top: 4px; right: 56px;
+            }
+        }
+
         /* Old drag handle and resize buttons - DISABLED
          * Now using native Gridstack resize handles
          */
@@ -1733,7 +1761,7 @@
     <!-- Service Worker Registration -->
     <script src="/js/sw-registration.js" defer></script>
 </head>
-<body>
+<body class="touch-dashboard">
     <!-- Pull-to-Refresh Indicator -->
     <div id="pullToRefreshIndicator" style="position: fixed; top: 0; left: 50%; transform: translateX(-50%) translateY(-100px); width: 50px; height: 50px; background: rgba(123, 97, 255, 0.9); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; z-index: 10000; opacity: 0; transition: opacity 0.3s, transform 0.3s; backdrop-filter: blur(10px); box-shadow: 0 4px 16px rgba(123, 97, 255, 0.3);">
         ⬇️
@@ -2247,6 +2275,8 @@
     
     <!-- Clean Dashboard Implementation (Native Gridstack) -->
     <script src="/js/dashboard.js"></script>
+    <!-- Per-widget settings sheet (gear icon in edit mode) -->
+    <script src="/js/widget-settings-sheet.js"></script>
     
     <!-- Register all widgets AFTER dashboard.js has set up its listener -->
     <script>
@@ -2927,20 +2957,43 @@
     <script src="/js/touch-ui-executor.js"></script>
     <!-- TOUCH: floating orb chat overlay -->
     <script src="/js/orb-loader.js"></script>
-    <!-- TOUCH: lock gridstack to static (no drag) on kiosk -->
+    <!-- TOUCH: lock gridstack to static + fit cell height to viewport on kiosk -->
     <script>
     (function(){
-        // Wait for Gridstack to initialise, then lock it
+        function fitCellHeight() {
+            var navH = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--ta-nav-h')) || 64;
+            var availH = window.innerHeight - navH - 8;
+            var MARGIN = 10;
+            var items = document.querySelectorAll('#widgetGrid .grid-stack-item');
+            var maxRow = 0;
+            items.forEach(function(el) {
+                // GridStack v7+ uses gs-y/gs-h (not data-gs-y/data-gs-h)
+                var node = el.gridstackNode;
+                var y = node ? (node.y || 0) : parseInt(el.getAttribute('gs-y') || el.getAttribute('data-gs-y') || 0);
+                var h = node ? (node.h || 1) : parseInt(el.getAttribute('gs-h') || el.getAttribute('data-gs-h') || 1);
+                maxRow = Math.max(maxRow, y + h);
+            });
+            if (maxRow < 1) maxRow = 7;
+            var cellH = Math.floor((availH - (maxRow - 1) * MARGIN) / maxRow);
+            // Use existing grid instance — avoid re-initialising
+            var gridEl = document.getElementById('widgetGrid');
+            var gs = (gridEl && gridEl.gridstack) || (window.touchDash && window.touchDash.grid);
+            if (gs && gs.cellHeight) gs.cellHeight(Math.max(cellH, 40), true);
+        }
+
         function lockGrids(){
             if(typeof GridStack !== 'undefined'){
                 document.querySelectorAll('.grid-stack').forEach(function(el){
-                    var g = GridStack.init({}, el);
-                    if(g && g.setStatic) g.setStatic(true);
+                    // Use existing instance if available, otherwise init
+                    var gs = el.gridstack || GridStack.init({}, el);
+                    if(gs && gs.setStatic) gs.setStatic(true);
                 });
             }
+            fitCellHeight();
         }
-        window.addEventListener('load', function(){ setTimeout(lockGrids, 1000); });
-        window.addEventListener('widgets-registered', lockGrids);
+        window.addEventListener('load', function(){ setTimeout(lockGrids, 1200); });
+        window.addEventListener('widgets-registered', function(){ setTimeout(lockGrids, 400); });
+        window.addEventListener('resize', fitCellHeight);
     })();
     </script>
 </body>

@@ -9,7 +9,8 @@ class ZoeWebSocketSync {
         this.userId = userId;
         this.ws = null;
         this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 5;
+        const configuredMax = Number(window.ZOE_WS_MAX_RECONNECT_ATTEMPTS || 0);
+        this.maxReconnectAttempts = Number.isFinite(configuredMax) ? configuredMax : 0; // 0 => unlimited
         this.callbacks = {};
         this.reconnectTimeout = null;
         this.pingInterval = null;
@@ -120,10 +121,12 @@ class ZoeWebSocketSync {
             clearTimeout(this.reconnectTimeout);
         }
         
-        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+        const canRetry = this.maxReconnectAttempts <= 0 || this.reconnectAttempts < this.maxReconnectAttempts;
+        if (canRetry) {
             this.reconnectAttempts++;
             const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
-            console.log(`🔄 Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+            const maxLabel = this.maxReconnectAttempts <= 0 ? '∞' : this.maxReconnectAttempts;
+            console.log(`🔄 Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${maxLabel})...`);
             
             this.reconnectTimeout = setTimeout(() => {
                 this.connect();
@@ -313,9 +316,14 @@ window.ZoeWebSockets = {
             } catch(e) { this.reconnect(); }
         };
 
+        const unwrapPayload = (msg) => ((msg && typeof msg === 'object' && msg.data && typeof msg.data === 'object')
+            ? msg.data
+            : (msg || {}));
+
         // ── Instant panel action delivery ──────────────────────────────────
         this.push.on('ui_action', (data) => {
-            const action = data.action || data;
+            const payload = unwrapPayload(data);
+            const action = payload.action || payload;
             if (!action || !action.action_type) return;
             // Delegate to touch-ui-executor if available, otherwise ignore
             if (window._zoeExecuteAction && typeof window._zoeExecuteAction === 'function') {
@@ -326,21 +334,45 @@ window.ZoeWebSockets = {
         // ── Voice state machine ────────────────────────────────────────────
         this.push.on('voice:listening_started', () => {
             if (window._zoeSetOrbMode) window._zoeSetOrbMode('listening');
+            if (window._zoeResetAutoHomeTimer) window._zoeResetAutoHomeTimer('voice:listening_started');
         });
         this.push.on('voice:thinking', () => {
             if (window._zoeSetOrbMode) window._zoeSetOrbMode('thinking');
+            if (window._zoeResetAutoHomeTimer) window._zoeResetAutoHomeTimer('voice:thinking');
         });
         this.push.on('voice:done', () => {
             if (window._zoeSetOrbMode) window._zoeSetOrbMode('ambient');
+            if (window._zoeResetAutoHomeTimer) window._zoeResetAutoHomeTimer('voice:done');
         });
         this.push.on('voice:responding', () => {
             if (window._zoeSetOrbMode) window._zoeSetOrbMode('responding');
+            if (window._zoeResetAutoHomeTimer) window._zoeResetAutoHomeTimer('voice:responding');
         });
 
         // ── PIN challenge ──────────────────────────────────────────────────
         this.push.on('panel_pin_request', (data) => {
-            if (window._zoeShowPinPad && typeof window._zoeShowPinPad === 'function') {
-                window._zoeShowPinPad(data);
+            const payload = unwrapPayload(data);
+            let currentPanelId = '';
+            try {
+                const params = new URLSearchParams(window.location.search || '');
+                currentPanelId = (params.get('panel_id') || localStorage.getItem('zoe_touch_panel_id') || '').trim();
+            } catch (_) {}
+            if (payload.panel_id && currentPanelId && payload.panel_id !== currentPanelId) {
+                return;
+            }
+            // Prefer modern panel_request_auth flow (touch login page) over
+            // the legacy in-page PIN pad UI.
+            if (window._zoeExecuteAction && typeof window._zoeExecuteAction === 'function') {
+                const challengeId = String(payload.challenge_id || '').trim() || String(Date.now());
+                window._zoeExecuteAction({
+                    id: `push_pin_${challengeId}`,
+                    action_type: 'panel_request_auth',
+                    payload: {
+                        challenge_id: payload.challenge_id,
+                        action_context: payload.action_context || payload.reason || 'Enter PIN',
+                        panel_id: payload.panel_id,
+                    },
+                });
             }
         });
 

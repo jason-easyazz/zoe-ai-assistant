@@ -260,7 +260,29 @@
         /* Settings Layout */
         .settings-layout {
             max-width: 800px; margin: 0 auto;
+            display: flex; flex-direction: column;
         }
+        /* Logical grouping order: Account → Appearance → Time → Notifications → Weather → Calendar → Music → Productivity → AI → Integrations → Data → System */
+        .settings-layout .settings-header { order: 0; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'profile'"]) { order: 10; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'security'"]) { order: 11; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'user-management'"]) { order: 12; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'general'"]) { order: 20; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'display'"]) { order: 22; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'time-location'"]) { order: 23; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'notifications'"]) { order: 30; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'weather'"]) { order: 31; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'calendar'"]) { order: 32; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'music'"]) { order: 33; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'productivity'"]) { order: 34; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'intelligence'"]) { order: 40; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'ai-training'"]) { order: 41; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'openclaw-brain'"]) { order: 42; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'api'"]) { order: 50; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'data'"]) { order: 60; }
+        .settings-layout .settings-section:has(.section-header[onclick*="'system'"]) { order: 61; }
+        /* Hidden advanced sections (trust gate, skills, learnings, scheduler, self-creation, channels) stay near the bottom */
+        .settings-layout .settings-section:has(.section-header[onclick*="Content"]) { order: 90; }
         .settings-header {
             text-align: center; margin-bottom: 30px;
         }
@@ -619,248 +641,6 @@
         }
     </style>
     <script src="/js/auth.js"></script>
-        <!-- Zoe Orb Styles -->
-        <style>
-        .zoe-orb {
-            position: fixed; bottom: 24px; right: 24px; width: 70px; height: 70px;
-            border-radius: 50%; cursor: pointer; transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-            z-index: 1200; display: flex; align-items: center; justify-content: center;
-            overflow: hidden;
-            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
-            background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 50%, #A855F7 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
-        }
-        .zoe-orb::before {
-            content: ""; position: absolute; top: 50%; left: 50%; width: 20px; height: 20px;
-            background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
-            border-radius: 50%; transform: translate(-50%, -50%);
-            animation: orb-inner-glow 2s ease-in-out infinite alternate;
-        }
-        .zoe-orb:hover {
-            transform: scale(1.12);
-            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.5), 0 0 50px rgba(123, 97, 255, 0.3);
-            animation-duration: 8s, 3s;
-        }
-        .zoe-orb:active { transform: scale(0.95); }
-        .zoe-orb.connecting {
-            background: linear-gradient(135deg, #7B61FF 0%, #6366F1 50%, #8B5CF6 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
-        }
-        .zoe-orb.connected {
-            background: linear-gradient(135deg, #7B61FF 0%, #10B981 50%, #34D399 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(16, 185, 129, 0.2);
-        }
-        .zoe-orb.thinking {
-            background: linear-gradient(135deg, #7B61FF 0%, #F59E0B 50%, #FBBF24 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(245, 158, 11, 0.2);
-            animation: orb-thinking-gentle 3s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
-        }
-        .zoe-orb.proactive {
-            background: linear-gradient(135deg, #7B61FF 0%, #EC4899 50%, #F472B6 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(236, 72, 153, 0.2);
-            animation: orb-proactive-gentle 4s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
-        }
-        .zoe-orb.error {
-            background: linear-gradient(135deg, #7B61FF 0%, #EF4444 50%, #F87171 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(239, 68, 68, 0.2);
-            animation: orb-error-shake 0.5s ease-in-out infinite, orb-liquid-swirl 3s ease-in-out infinite;
-        }
-        .zoe-orb.chatting {
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 50%, #06B6D4 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.6), 0 0 60px rgba(123, 97, 255, 0.4);
-            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
-        }
-        .zoe-orb.badge::after {
-            content: ""; position: absolute; top: 8px; right: 8px; width: 12px; height: 12px;
-            background: #F59E0B; border-radius: 50%; border: 2px solid white;
-            box-shadow: 0 0 12px rgba(245, 158, 11, 0.8);
-            animation: badge-pulse 2s ease-in-out infinite;
-        }
-        @keyframes orb-liquid-swirl {
-            0%, 100% { background-position: 0% 50%; border-radius: 50% 45% 55% 50%; }
-            25% { background-position: 100% 50%; border-radius: 55% 50% 45% 55%; }
-            50% { background-position: 100% 100%; border-radius: 45% 55% 50% 45%; }
-            75% { background-position: 0% 100%; border-radius: 50% 45% 55% 50%; }
-        }
-        @keyframes orb-breathe {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-        }
-        @keyframes orb-inner-glow {
-            0% { opacity: 0.3; transform: translate(-50%, -50%) scale(1); }
-            100% { opacity: 0.6; transform: translate(-50%, -50%) scale(1.1); }
-        }
-        @keyframes orb-thinking-gentle {
-            0%, 100% { transform: rotate(0deg); }
-            25% { transform: rotate(5deg); }
-            75% { transform: rotate(-5deg); }
-        }
-        @keyframes orb-proactive-gentle {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.08); }
-        }
-        @keyframes orb-error-shake {
-            0%, 100% { transform: translateX(0); }
-            25% { transform: translateX(-2px); }
-            75% { transform: translateX(2px); }
-        }
-        @keyframes badge-pulse {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.7; transform: scale(1.2); }
-        }
-        
-
-        /* Navigation Bar - Standardized */
-        .nav-bar {
-            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
-            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
-            align-items: center; height: 60px;
-        }
-        .nav-left { display: flex; align-items: center; gap: 15px; }
-        .mini-orb { 
-            width: 32px; height: 32px; border-radius: 50%; 
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
-            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
-        }
-        .mini-orb:hover { transform: scale(1.1); }
-        .nav-menu { display: flex; gap: 20px; }
-        .nav-item { 
-            color: #666; text-decoration: none; font-size: 13px; font-weight: 400;
-            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
-            min-height: 44px; display: flex; align-items: center;
-        }
-        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
-        .nav-right { display: flex; align-items: center; gap: 10px; }
-        
-        .more-nav-btn { 
-            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
-            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
-            min-height: 44px; display: flex; align-items: center; cursor: pointer;
-            background: none; border: none;
-        }
-        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
-        
-        .notifications-btn { 
-            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
-            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
-            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
-            font-size: 16px; font-weight: bold;
-        }
-        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
-        .notifications-btn.has-notifications { animation: notificationPulse 2s ease-in-out infinite; }
-        .notifications-btn.has-notifications::after {
-            content: ''; position: absolute; top: 6px; right: 6px;
-            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
-            border: 2px solid white;
-        }
-        
-        @keyframes notificationPulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.1); }
-        }
-        
-        .api-indicator { 
-            font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 8px; 
-            display: flex; align-items: center; gap: 6px; 
-        }
-        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
-        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
-        .api-indicator.connecting { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
-        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-        .api-indicator.online::before { background: #22c55e; }
-        .api-indicator.offline::before { background: #ef4444; }
-        .api-indicator.connecting::before { background: #ea580c; }
-        
-        /* Time/Date Display */
-        .time-date-display {
-            display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
-            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
-        }
-        .current-time { font-size: 16px; font-weight: 500; color: #333; line-height: 1.2; }
-        .current-date { font-size: 11px; color: #666; line-height: 1.2; }
-
-        /* More Overlay */
-        .more-overlay {
-            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
-            display: none; align-items: center; justify-content: center; z-index: 3000;
-            opacity: 0; transition: all 0.3s ease;
-        }
-        .more-overlay.active { display: flex; opacity: 1; }
-        .more-content {
-            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
-            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
-            padding: 40px; max-width: 500px; width: 90%; position: relative;
-            transform: scale(0.8); transition: transform 0.3s ease;
-        }
-        .more-overlay.active .more-content { transform: scale(1); }
-        .more-header { text-align: center; margin-bottom: 30px; }
-        .more-title {
-            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-        }
-        .more-close {
-            position: absolute; top: 15px; right: 15px; 
-            background: rgba(255, 255, 255, 0.6); border: none;
-            border-radius: 50%; width: 36px; height: 36px;
-            font-size: 18px; cursor: pointer; color: #666;
-        }
-        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
-        .more-item {
-            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
-            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
-            transition: all 0.3s ease; min-height: 120px; display: flex;
-            flex-direction: column; align-items: center; justify-content: center;
-        }
-        .more-item:hover {
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            color: white; transform: translateY(-4px);
-        }
-        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
-        .more-item-label { font-size: 15px; font-weight: 500; }
-
-        /* Notifications Panel */
-        .notifications-panel {
-            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
-            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
-            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
-            transition: right 0.3s ease; overflow-y: auto;
-        }
-        .notifications-panel.open { right: 0; }
-        .notifications-header {
-            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-            display: flex; justify-content: space-between; align-items: center; 
-        }
-        .notifications-title { font-size: 18px; font-weight: 600; color: #333; margin: 0; }
-        .notifications-close {
-            width: 32px; height: 32px; border-radius: 50%; border: none;
-            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
-            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
-        }
-        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
-        .notifications-content { padding: 20px; display: flex; flex-direction: column; gap: 15px; }
-        .notification-item {
-            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
-            padding: 15px; transition: all 0.3s ease; cursor: pointer;
-        }
-        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
-        .notification-item.unread { border-left: 4px solid #7B61FF; }
-        .notification-title { font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px; }
-        .notification-meta { font-size: 12px; color: #666; display: flex; gap: 10px; }
-        .notification-time { color: #7B61FF; font-weight: 500; }
-        .no-notifications { text-align: center; color: #666; font-size: 14px; padding: 40px 20px; }
-
-    </style>
 <!-- PWA Meta Tags -->
     <meta name="application-name" content="Zoe AI">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1006,8 +786,8 @@
             <!-- User Profile Section -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('profile')">
-                    <div class="section-title">Profile</div>
-                    <div class="section-subtitle">Manage your personal information and account settings</div>
+                    <div class="section-title">👤 Profile</div>
+                    <div class="section-subtitle">Your personal information and account</div>
                 </div>
                 <div class="section-content" id="profile">
                     <div class="setting-item">
@@ -1046,8 +826,8 @@
             <!-- Security Section -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('security')">
-                    <div class="section-title">Security</div>
-                    <div class="section-subtitle">Manage your passwords, PIN codes, and security settings</div>
+                    <div class="section-title">🔒 Security</div>
+                    <div class="section-subtitle">Passwords, PIN, sessions, and two-factor authentication</div>
                 </div>
                 <div class="section-content" id="security">
                     <div class="setting-item">
@@ -1098,7 +878,7 @@
             <!-- User Management Section (Admin Only) -->
             <div class="settings-section" id="userManagementSection" style="display: none;">
                 <div class="section-header" onclick="toggleSection('user-management')">
-                    <div class="section-title">User Management</div>
+                    <div class="section-title">👥 User Management</div>
                     <div class="section-subtitle">Create and manage system users</div>
                 </div>
                 <div class="section-content" id="user-management">
@@ -1147,49 +927,219 @@
                 </div>
             </div>
 
+            <!-- This Panel (Admin Only) — binds this physical touch panel to specific users. -->
+            <div class="settings-section" id="panelIdentitySection" style="display: none;">
+                <div class="section-header" onclick="toggleSection('panel-identity')">
+                    <div class="section-title">📱 This Panel</div>
+                    <div class="section-subtitle">Pick who can log in on this touch panel and who is the default user</div>
+                </div>
+                <div class="section-content" id="panel-identity">
+                    <div id="panelIdentityStatus" style="padding: 10px 12px; border-radius: 8px; background: rgba(123, 97, 255, 0.05); font-size: 13px; margin-bottom: 12px;">
+                        Loading panel info…
+                    </div>
+
+                    <div class="setting-item" style="flex-direction: column; align-items: stretch; gap: 6px;">
+                        <div class="setting-info">
+                            <div class="setting-name">Panel name</div>
+                            <div class="setting-description">Shown on the login screen ("Who's using the <em>Kitchen Panel</em>?")</div>
+                        </div>
+                        <input type="text" id="panelNameInput" class="form-input" placeholder="e.g. Kitchen Panel">
+                    </div>
+
+                    <div class="setting-item" style="flex-direction: column; align-items: stretch; gap: 6px;">
+                        <div class="setting-info">
+                            <div class="setting-name">Room / location</div>
+                            <div class="setting-description">Optional — used for presence routing</div>
+                        </div>
+                        <input type="text" id="panelLocationInput" class="form-input" placeholder="e.g. Kitchen, Living Room">
+                    </div>
+
+                    <div class="setting-item" style="flex-direction: column; align-items: stretch; gap: 6px;">
+                        <div class="setting-info">
+                            <div class="setting-name">Default user</div>
+                            <div class="setting-description">If set, the panel skips the picker and goes straight to PIN entry for this user</div>
+                        </div>
+                        <select id="panelDefaultUser" class="form-select">
+                            <option value="">No default — show picker</option>
+                        </select>
+                    </div>
+
+                    <div class="setting-item" style="flex-direction: column; align-items: stretch; gap: 6px;">
+                        <div class="setting-info">
+                            <div class="setting-name">Allowed users</div>
+                            <div class="setting-description">Only these users appear in the picker. Leave all unticked to show everyone.</div>
+                        </div>
+                        <div id="panelAllowedUsers" style="display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 2px;">
+                            <em style="color:#888; font-size:12px;">Loading users…</em>
+                        </div>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Allow guest login</div>
+                            <div class="setting-description">Show the Guest tile on this panel's login screen</div>
+                        </div>
+                        <div class="setting-control">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="panelAllowGuest" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px;">
+                        <button class="btn primary" onclick="savePanelIdentity()">💾 Save panel settings</button>
+                        <button class="btn" onclick="loadPanelIdentity()">↻ Reload</button>
+                        <button class="btn" onclick="clearPanelIdentity()" style="margin-left:auto;">Clear panel identity</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- General Settings -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('general')">
-                    <div class="section-title">General Settings</div>
-                    <div class="section-subtitle">Basic configuration options</div>
+                    <div class="section-title">🎨 Appearance</div>
+                    <div class="section-subtitle">Theme and display preferences</div>
                 </div>
                 <div class="section-content" id="general">
                     <div class="setting-item">
                         <div class="setting-info">
                             <div class="setting-name">Theme</div>
-                            <div class="setting-description">Choose your preferred theme</div>
+                            <div class="setting-description">Choose light, dark, or follow the time of day</div>
                         </div>
                         <div class="setting-control">
-                            <select class="form-select" id="themeSelect">
+                            <select class="form-select" id="themeSelect" onchange="updateTheme(this.value)">
+                                <option value="auto">Auto (time-based)</option>
                                 <option value="light">Light</option>
                                 <option value="dark">Dark</option>
-                                <option value="auto">Auto</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="setting-item">
-                        <div class="setting-info">
-                            <div class="setting-name">Language</div>
-                            <div class="setting-description">Select your preferred language</div>
-                        </div>
-                        <div class="setting-control">
-                            <select class="form-select" id="languageSelect">
-                                <option value="en">English</option>
-                                <option value="es">Spanish</option>
-                                <option value="fr">French</option>
-                                <option value="de">German</option>
                             </select>
                         </div>
                     </div>
                     <div class="setting-item">
                         <div class="setting-info">
                             <div class="setting-name">Notifications</div>
-                            <div class="setting-description">Enable push notifications</div>
+                            <div class="setting-description">Open the Notifications section below to configure which categories alert you and when.</div>
                         </div>
                         <div class="setting-control">
-                            <div class="toggle-switch" id="notificationsToggle" onclick="toggleSetting('notifications')">
-                                <div class="toggle-slider"></div>
-                            </div>
+                            <button class="btn" onclick="toggleSection('notifications')">Open</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Display / Screen dim -->
+            <div class="settings-section" id="displaySection">
+                <div class="section-header" onclick="toggleSection('display')">
+                    <div class="section-title">💡 Display</div>
+                    <div class="section-subtitle">Brightness, night mode, idle dim &amp; screen-off</div>
+                </div>
+                <div class="section-content" id="display">
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Enable panel dimming</div>
+                            <div class="setting-description">Lets the Pi panel agent control brightness automatically</div>
+                        </div>
+                        <div class="setting-control">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="dispEnabled">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="setting-item" style="flex-direction: column; align-items: stretch; gap: 8px;">
+                        <div class="setting-info">
+                            <div class="setting-name">Day brightness</div>
+                            <div class="setting-description">Brightness used when the screen is awake during the day — <span id="dispDayBrightLabel">100%</span></div>
+                        </div>
+                        <input type="range" min="10" max="100" step="5" id="dispDayBrightness" style="width:100%">
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Night dim schedule</div>
+                            <div class="setting-description">Dim the screen between these hours</div>
+                        </div>
+                        <div class="setting-control">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="dispNightEnabled">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="setting-item" style="gap:10px;">
+                        <div class="setting-info">
+                            <div class="setting-name">Night hours</div>
+                            <div class="setting-description">24h format — start and end of the quiet window</div>
+                        </div>
+                        <div class="setting-control" style="display:flex; gap:8px;">
+                            <input type="time" class="form-input" id="dispNightStart" style="width:110px">
+                            <input type="time" class="form-input" id="dispNightEnd" style="width:110px">
+                        </div>
+                    </div>
+                    <div class="setting-item" style="flex-direction: column; align-items: stretch; gap: 8px;">
+                        <div class="setting-info">
+                            <div class="setting-name">Night brightness</div>
+                            <div class="setting-description">Target brightness at night — <span id="dispNightBrightLabel">15%</span></div>
+                        </div>
+                        <input type="range" min="0" max="60" step="5" id="dispNightBrightness" style="width:100%">
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Dim when idle</div>
+                            <div class="setting-description">Lower brightness after no touch for a while</div>
+                        </div>
+                        <div class="setting-control">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="dispIdleEnabled">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="setting-item" style="flex-direction: column; align-items: stretch; gap: 8px;">
+                        <div class="setting-info">
+                            <div class="setting-name">Idle timeout</div>
+                            <div class="setting-description">Seconds of inactivity before dimming — <span id="dispIdleSecondsLabel">120s</span></div>
+                        </div>
+                        <input type="range" min="30" max="900" step="30" id="dispIdleSeconds" style="width:100%">
+                    </div>
+                    <div class="setting-item" style="flex-direction: column; align-items: stretch; gap: 8px;">
+                        <div class="setting-info">
+                            <div class="setting-name">Idle brightness</div>
+                            <div class="setting-description">Brightness while idle — <span id="dispIdleBrightLabel">30%</span></div>
+                        </div>
+                        <input type="range" min="0" max="80" step="5" id="dispIdleBrightness" style="width:100%">
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Turn screen off when idle</div>
+                            <div class="setting-description">Fully off after a longer idle period</div>
+                        </div>
+                        <div class="setting-control">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="dispOffEnabled">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="setting-item" style="flex-direction: column; align-items: stretch; gap: 8px;">
+                        <div class="setting-info">
+                            <div class="setting-name">Screen-off timeout</div>
+                            <div class="setting-description">Seconds of inactivity before the screen turns off — <span id="dispOffSecondsLabel">900s</span></div>
+                        </div>
+                        <input type="range" min="120" max="3600" step="60" id="dispOffSeconds" style="width:100%">
+                    </div>
+
+                    <div class="setting-item" style="justify-content: space-between;">
+                        <div class="setting-info">
+                            <div class="setting-name">Save &amp; Test</div>
+                            <div class="setting-description" id="dispStatus">Not saved yet</div>
+                        </div>
+                        <div class="setting-control" style="display:flex; gap:8px;">
+                            <button class="btn" onclick="testDisplayNow()">Test now</button>
+                            <button class="btn btn-primary" onclick="saveDisplayPreferences()">Save</button>
                         </div>
                     </div>
                 </div>
@@ -1198,20 +1148,10 @@
             <!-- API Settings -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('api')">
-                    <div class="section-title">API Configuration</div>
-                    <div class="section-subtitle">Manage external service connections</div>
+                    <div class="section-title">🔗 Integrations</div>
+                    <div class="section-subtitle">Connect external services like Home Assistant</div>
                 </div>
                 <div class="section-content" id="api">
-                    <div class="setting-item">
-                        <div class="setting-info">
-                            <div class="setting-name">OpenAI API Key</div>
-                            <div class="setting-description">Required for AI chat functionality</div>
-                        </div>
-                        <div class="setting-control">
-                            <input type="password" class="form-input" id="openaiKey" placeholder="Enter API key">
-                            <button class="btn" onclick="saveApiKey('openai')">Save</button>
-                        </div>
-                    </div>
                     <div class="setting-item">
                         <div class="setting-info">
                             <div class="setting-name">Home Assistant URL</div>
@@ -1239,8 +1179,8 @@
             <!-- Music Settings -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('music')">
-                    <div class="section-title">🎵 Music Settings</div>
-                    <div class="section-subtitle">Configure music providers, playback preferences, and output devices</div>
+                    <div class="section-title">🎵 Music</div>
+                    <div class="section-subtitle">Providers, output devices, and playback preferences</div>
                 </div>
                 <div class="section-content" id="music">
                     <!-- Provider Connections -->
@@ -1372,8 +1312,8 @@
             <!-- Calendar Settings -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('calendar')">
-                    <div class="section-title">Calendar Settings</div>
-                    <div class="section-subtitle">Configure your calendar preferences and sync</div>
+                    <div class="section-title">📅 Calendar</div>
+                    <div class="section-subtitle">Views, work hours, and external sync</div>
                 </div>
                 <div class="section-content" id="calendar">
                     <div class="setting-item">
@@ -1545,11 +1485,10 @@
             <!-- Notification Settings -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('notifications')">
-                    <div class="section-title">🔔 Notification Settings</div>
-                    <div class="section-subtitle">Configure push notifications and reminders</div>
-                    <div class="section-arrow">▼</div>
+                    <div class="section-title">🔔 Notifications</div>
+                    <div class="section-subtitle">Push notifications, reminders, and quiet hours</div>
                 </div>
-                <div class="section-content" id="notifications-content" style="display: none;">
+                <div class="section-content" id="notifications" style="display: none;">
                     <div class="settings-grid">
                         <!-- Notification Status -->
                         <div class="setting-card">
@@ -1775,8 +1714,8 @@
             <!-- Productivity Settings -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('productivity')">
-                    <div class="section-title">Productivity Settings</div>
-                    <div class="section-subtitle">Focus timer, break reminders, and productivity tracking</div>
+                    <div class="section-title">⚡ Productivity</div>
+                    <div class="section-subtitle">Focus timer, break reminders, and insights</div>
                 </div>
                 <div class="section-content" id="productivity">
                     <div class="setting-item">
@@ -1916,8 +1855,8 @@
             <!-- Time and Language Settings -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('time-location')">
-                    <div class="section-title">Time and language</div>
-                    <div class="section-subtitle">Configure time and location preferences</div>
+                    <div class="section-title">🕒 Time & Language</div>
+                    <div class="section-subtitle">Clock format, time zone, and language</div>
                 </div>
                 <div class="section-content" id="time-location">
                     <!-- Current Time Display -->
@@ -1996,18 +1935,6 @@
                             </div>
                         </div>
 
-                        <!-- Location Search -->
-                        <div class="setting-item" id="locationItem">
-                            <div class="setting-info">
-                                <div class="setting-name">Location</div>
-                                <div class="setting-description" id="currentLocationDesc">Tap to set your location</div>
-                            </div>
-                            <div class="setting-control">
-                                <button class="btn btn-outline" onclick="openSmartLocationSearch()">
-                                    <span id="locationButtonText">Set Location</span>
-                                </button>
-                            </div>
-                        </div>
                     </div>
 
                     <!-- Language Section -->
@@ -2038,8 +1965,8 @@
             <!-- Weather Settings -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('weather')">
-                    <div class="section-title">☀️ Weather Settings</div>
-                    <div class="section-subtitle">Configure location and temperature preferences</div>
+                    <div class="section-title">☀️ Weather</div>
+                    <div class="section-subtitle">Location and temperature units</div>
                 </div>
                 <div class="section-content" id="weather">
                     
@@ -2357,8 +2284,8 @@
             <!-- Data Management -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('data')">
-                    <div class="section-title">Data Management</div>
-                    <div class="section-subtitle">Backup and export your data</div>
+                    <div class="section-title">💾 Data & Privacy</div>
+                    <div class="section-subtitle">Export, import, or clear your data</div>
                 </div>
                 <div class="section-content" id="data">
                     <div class="setting-item">
@@ -2395,8 +2322,8 @@
             <!-- System Information -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('system')">
-                    <div class="section-title">System Information</div>
-                    <div class="section-subtitle">Device and service status</div>
+                    <div class="section-title">ℹ️ System</div>
+                    <div class="section-subtitle">Version, uptime, and service status</div>
                 </div>
                 <div class="section-content" id="system">
                     <div class="setting-item">
@@ -2433,8 +2360,8 @@
             <!-- OpenClaw Brain Panel -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('openclaw-brain')">
-                    <div class="section-title">🧠 OpenClaw Brain</div>
-                    <div class="section-subtitle">View Zoe's AI engine, skills, tools, memories, and scheduled tasks</div>
+                    <div class="section-title">🦾 OpenClaw Brain</div>
+                    <div class="section-subtitle">Skills, tools, memories, and scheduled tasks</div>
                 </div>
                 <div class="section-content" id="openclaw-brain">
                     <div id="openclawBrainContent" style="color:#666;padding:12px;">Loading...</div>
@@ -2444,8 +2371,8 @@
             <!-- AI Training & Learning -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('ai-training')">
-                    <div class="section-title">🎓 AI Training & Learning</div>
-                    <div class="section-subtitle">Manage overnight training and continuous learning</div>
+                    <div class="section-title">🎓 AI Training</div>
+                    <div class="section-subtitle">Overnight training and continuous learning</div>
                 </div>
                 <div class="section-content" id="ai-training">
                     <!-- Feedback Status Warning -->
@@ -2554,7 +2481,7 @@
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('intelligence')">
                     <div class="section-title">🧠 Intelligence & Proactivity</div>
-                    <div class="section-subtitle">Control proactive suggestions and intelligent features</div>
+                    <div class="section-subtitle">Proactive suggestions and learning behaviour</div>
                 </div>
                 <div class="section-content" id="intelligence">
                     <div class="setting-item">
@@ -2731,17 +2658,73 @@
             </div>
 
             <script>
-            /* ---- Admin section visibility (show for admin users) ---- */
+            /* ---- Admin section visibility (show for admin users ONLY) ---- */
             (function(){
-                const adminSections = ['trustGateSection','skillsSection','learningsSection','schedulerSection','selfCreationSection','channelsSection'];
+                const adminSections = ['trustGateSection','skillsSection','learningsSection','schedulerSection','selfCreationSection','channelsSection','panelIdentitySection'];
+
+                function hideAdminSections(){
+                    adminSections.forEach(id => {
+                        const el = document.getElementById(id);
+                        if(el) el.style.display = 'none';
+                    });
+                }
                 function showAdminSections(){
                     adminSections.forEach(id => {
                         const el = document.getElementById(id);
                         if(el) el.style.display = '';
                     });
                 }
-                // Show admin sections after a short delay (session must be loaded)
-                setTimeout(showAdminSections, 500);
+
+                // Default: hidden. Only reveal after confirming the logged-in user has admin role.
+                hideAdminSections();
+
+                function isKioskMode(){
+                    try{
+                        if(localStorage.getItem('zoe_kiosk') === '1') return true;
+                    }catch(_){}
+                    return (window.location.search || '').includes('kiosk=1');
+                }
+
+                async function resolveIsAdmin(){
+                    // The physical touch panel is a trusted family admin device: it runs
+                    // in kiosk mode and has no per-user login. Reveal admin sections there.
+                    if(isKioskMode()) return true;
+                    // On the regular web app, require a real admin session.
+                    try{
+                        if(window.zoeAuth && typeof window.zoeAuth.getCurrentUser === 'function'){
+                            const u = await window.zoeAuth.getCurrentUser();
+                            if(u && u.role) return u.role === 'admin';
+                        }
+                    }catch(_){}
+                    try{
+                        const sess = (window.zoeAuth && window.zoeAuth.getCurrentSession && window.zoeAuth.getCurrentSession()) || null;
+                        const headers = {};
+                        if(sess && sess.session_id) headers['X-Session-ID'] = sess.session_id;
+                        const r = await fetch('/api/auth/profile', { headers, credentials: 'include' });
+                        if(r.ok){
+                            const data = await r.json();
+                            const user = data.user || data;
+                            return user && user.role === 'admin';
+                        }
+                    }catch(_){}
+                    return false;
+                }
+                // Expose resolver so later Settings scripts can reuse it.
+                window.zoeResolveIsAdmin = resolveIsAdmin;
+
+                async function applyAdminGate(){
+                    const isAdmin = await resolveIsAdmin();
+                    if(isAdmin) showAdminSections(); else hideAdminSections();
+                }
+
+                // Run once auth is likely ready, and again shortly after in case the auth
+                // module finishes loading asynchronously.
+                if(document.readyState === 'complete' || document.readyState === 'interactive'){
+                    applyAdminGate();
+                } else {
+                    document.addEventListener('DOMContentLoaded', applyAdminGate);
+                }
+                setTimeout(applyAdminGate, 1500);
 
                 // Lazy-load data when section is expanded
                 const observer = new MutationObserver(mutations => {
@@ -3297,6 +3280,164 @@
             saveSetting(settingId, !isActive);
         }
 
+        // Theme selector — persist + apply immediately
+        function applyTheme(mode) {
+            const root = document.documentElement;
+            const body = document.body;
+            const setDark = (on) => {
+                root.classList.toggle('dark-mode', on);
+                body.classList.toggle('dark-mode', on);
+                root.classList.toggle('dark', on);
+                body.classList.toggle('dark', on);
+                root.setAttribute('data-theme', on ? 'dark' : 'light');
+            };
+            if (mode === 'dark') { setDark(true); }
+            else if (mode === 'light') { setDark(false); }
+            else {
+                const h = new Date().getHours();
+                setDark(h < 6 || h >= 19);
+            }
+        }
+        async function updateTheme(value) {
+            try {
+                localStorage.setItem('zoe_theme', value);
+                applyTheme(value);
+                await apiRequest('/settings', {
+                    method: 'PUT',
+                    body: JSON.stringify({ theme: value })
+                });
+                showNotification('Theme updated', 'success');
+            } catch (e) {
+                console.warn('Theme save failed', e);
+            }
+        }
+        (function initTheme(){
+            const stored = localStorage.getItem('zoe_theme') || 'auto';
+            const sel = document.getElementById('themeSelect');
+            if (sel) sel.value = stored;
+            applyTheme(stored);
+        })();
+
+        // ── Display / screen-dim preferences ────────────────────────────────
+        const DISPLAY_DEVICE_ID = (function(){
+            try {
+                let id = localStorage.getItem('zoe_device_id');
+                if (!id) {
+                    id = 'panel-' + Math.random().toString(36).slice(2, 10);
+                    localStorage.setItem('zoe_device_id', id);
+                }
+                return id;
+            } catch (_) { return 'default'; }
+        })();
+
+        function setDispLabel(id, text) {
+            const el = document.getElementById(id);
+            if (el) el.textContent = text;
+        }
+
+        function applyDisplayPrefsToUI(p) {
+            if (!p) return;
+            const set = (id, val) => { const el = document.getElementById(id); if (el) el[el.type === 'checkbox' ? 'checked' : 'value'] = val; };
+            set('dispEnabled', !!p.enabled);
+            set('dispDayBrightness', p.day_brightness);
+            set('dispNightEnabled', !!p.night_enabled);
+            set('dispNightStart', p.night_start || '22:00');
+            set('dispNightEnd', p.night_end || '06:30');
+            set('dispNightBrightness', p.night_brightness);
+            set('dispIdleEnabled', !!p.idle_enabled);
+            set('dispIdleSeconds', p.idle_seconds);
+            set('dispIdleBrightness', p.idle_brightness);
+            set('dispOffEnabled', !!p.off_enabled);
+            set('dispOffSeconds', p.off_seconds);
+            setDispLabel('dispDayBrightLabel', `${p.day_brightness}%`);
+            setDispLabel('dispNightBrightLabel', `${p.night_brightness}%`);
+            setDispLabel('dispIdleBrightLabel', `${p.idle_brightness}%`);
+            setDispLabel('dispIdleSecondsLabel', `${p.idle_seconds}s`);
+            setDispLabel('dispOffSecondsLabel', `${p.off_seconds}s`);
+        }
+
+        function currentDisplayPrefs() {
+            const num = (id, d) => { const el = document.getElementById(id); const n = el ? parseInt(el.value, 10) : NaN; return isNaN(n) ? d : n; };
+            const chk = (id) => { const el = document.getElementById(id); return !!(el && el.checked); };
+            const str = (id, d) => { const el = document.getElementById(id); return (el && el.value) || d; };
+            return {
+                enabled: chk('dispEnabled'),
+                day_brightness: num('dispDayBrightness', 100),
+                night_enabled: chk('dispNightEnabled'),
+                night_start: str('dispNightStart', '22:00'),
+                night_end: str('dispNightEnd', '06:30'),
+                night_brightness: num('dispNightBrightness', 15),
+                idle_enabled: chk('dispIdleEnabled'),
+                idle_seconds: num('dispIdleSeconds', 120),
+                idle_brightness: num('dispIdleBrightness', 30),
+                off_enabled: chk('dispOffEnabled'),
+                off_seconds: num('dispOffSeconds', 900),
+            };
+        }
+
+        async function loadDisplayPreferences() {
+            try {
+                const r = await fetch(`/api/system/display/preferences?device_id=${encodeURIComponent(DISPLAY_DEVICE_ID)}`, { credentials: 'include' });
+                if (!r.ok) return;
+                const data = await r.json();
+                applyDisplayPrefsToUI(data.preferences || {});
+            } catch (e) {
+                console.warn('display prefs load failed', e);
+            }
+        }
+
+        async function saveDisplayPreferences() {
+            const prefs = currentDisplayPrefs();
+            const statusEl = document.getElementById('dispStatus');
+            if (statusEl) statusEl.textContent = 'Saving…';
+            try {
+                const r = await apiRequest('/system/display/preferences', {
+                    method: 'PUT',
+                    body: JSON.stringify({ device_id: DISPLAY_DEVICE_ID, preferences: prefs }),
+                });
+                if (statusEl) statusEl.textContent = 'Saved · applied on panel';
+                applyDisplayPrefsToUI((r && r.preferences) || prefs);
+                showNotification('Display settings saved', 'success');
+            } catch (e) {
+                console.error('display prefs save failed', e);
+                if (statusEl) statusEl.textContent = 'Save failed';
+                showNotification('Could not save display settings', 'error');
+            }
+        }
+
+        async function testDisplayNow() {
+            const prefs = currentDisplayPrefs();
+            try {
+                await apiRequest('/system/display/brightness', {
+                    method: 'POST',
+                    body: JSON.stringify({ value: prefs.night_brightness }),
+                });
+                showNotification(`Brightness set to ${prefs.night_brightness}%`, 'success');
+                setTimeout(() => {
+                    apiRequest('/system/display/brightness', {
+                        method: 'POST',
+                        body: JSON.stringify({ value: prefs.day_brightness }),
+                    }).catch(() => {});
+                }, 3000);
+            } catch (e) {
+                showNotification('Panel agent unreachable', 'error');
+            }
+        }
+
+        (function bindDisplayControls(){
+            const bind = (id, labelId, suffix) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.addEventListener('input', () => setDispLabel(labelId, `${el.value}${suffix}`));
+            };
+            bind('dispDayBrightness',   'dispDayBrightLabel',   '%');
+            bind('dispNightBrightness', 'dispNightBrightLabel', '%');
+            bind('dispIdleBrightness',  'dispIdleBrightLabel',  '%');
+            bind('dispIdleSeconds',     'dispIdleSecondsLabel', 's');
+            bind('dispOffSeconds',      'dispOffSecondsLabel',  's');
+            loadDisplayPreferences();
+        })();
+
         // Save setting
         async function saveSetting(key, value) {
             try {
@@ -3407,16 +3548,13 @@
                 
                 // Apply settings to UI
                 if (settings.theme) {
-                    document.getElementById('themeSelect').value = settings.theme;
+                    const sel = document.getElementById('themeSelect');
+                    if (sel) sel.value = settings.theme;
+                    applyTheme(settings.theme);
                 }
                 if (settings.language) {
-                    document.getElementById('languageSelect').value = settings.language;
-                }
-                if (settings.notifications !== undefined) {
-                    const toggle = document.getElementById('notificationsToggle');
-                    if (settings.notifications) {
-                        toggle.classList.add('active');
-                    }
+                    const lang = document.getElementById('languageSelect');
+                    if (lang) lang.value = settings.language;
                 }
             } catch (error) {
                 console.error('Failed to load settings:', error);
@@ -4652,45 +4790,81 @@
         }
 
         function managePinCode() {
+            openPinModal();
+        }
+
+        function openPinModal() {
             const pinStatus = document.getElementById('pinStatus').textContent;
-            if (pinStatus === 'Configured') {
-                if (confirm('Do you want to remove your PIN code?')) {
-                    removePinCode();
-                } else {
-                    const newPin = prompt('Enter new PIN (4-8 digits):');
-                    if (newPin && /^\d{4,8}$/.test(newPin)) {
-                        updatePinCode(newPin);
-                    } else if (newPin) {
-                        showUserNotification('PIN must be 4-8 digits', 'error');
-                    }
-                }
-            } else {
-                const newPin = prompt('Enter new PIN (4-8 digits):');
-                if (newPin && /^\d{4,8}$/.test(newPin)) {
-                    updatePinCode(newPin);
-                } else if (newPin) {
-                    showUserNotification('PIN must be 4-8 digits', 'error');
-                }
+            const hasPin = pinStatus === 'Configured';
+            const modal = document.getElementById('pinChangeModal');
+            const title = document.getElementById('pinModalTitle');
+            const removeBtn = document.getElementById('pinModalRemoveBtn');
+            if (!modal) return;
+            title.textContent = hasPin ? 'Change PIN' : 'Set PIN Code';
+            removeBtn.style.display = hasPin ? 'inline-flex' : 'none';
+            document.getElementById('pinModalInput').value = '';
+            document.getElementById('pinModalDots').querySelectorAll('.pdot').forEach(d => d.classList.remove('filled'));
+            document.getElementById('pinModalError').textContent = '';
+            modal.classList.add('open');
+        }
+
+        function closePinModal() {
+            document.getElementById('pinChangeModal')?.classList.remove('open');
+        }
+
+        let _pinModalVal = '';
+        function pinModalKey(k) {
+            if (_pinModalVal.length >= 8) return;
+            _pinModalVal += k;
+            updatePinModalDisplay();
+            if (_pinModalVal.length >= 4) {
+                // Auto-submit after short delay once we have 4+ digits
+                clearTimeout(window._pinAutoSubmit);
+                window._pinAutoSubmit = setTimeout(() => {}, 300);
             }
+        }
+
+        function pinModalBackspace() {
+            _pinModalVal = _pinModalVal.slice(0, -1);
+            updatePinModalDisplay();
+        }
+
+        function updatePinModalDisplay() {
+            const dots = document.getElementById('pinModalDots').querySelectorAll('.pdot');
+            dots.forEach((d, i) => d.classList.toggle('filled', i < _pinModalVal.length));
+            document.getElementById('pinModalInput').value = _pinModalVal;
+        }
+
+        async function confirmPinChange() {
+            if (_pinModalVal.length < 4) {
+                document.getElementById('pinModalError').textContent = 'Enter at least 4 digits';
+                return;
+            }
+            await updatePinCode(_pinModalVal);
+            _pinModalVal = '';
+            updatePinModalDisplay();
         }
 
         async function updatePinCode(newPin) {
             try {
-                const response = await fetch('/api/auth/passcode', {
+                const response = await fetch('/api/auth/passcode/setup', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-Session-ID': window.zoeAuth.getCurrentSession().session_id
+                        'X-Session-ID': window.zoeAuth?.getCurrentSession?.()?.session_id || ''
                     },
-                    body: JSON.stringify({ new_passcode: newPin })
+                    body: JSON.stringify({ passcode: newPin })
                 });
 
                 if (response.ok) {
                     showUserNotification('PIN code updated successfully!', 'success');
+                    closePinModal();
                     loadSecurityInfo();
                 } else {
-                    const error = await response.json();
-                    showUserNotification(error.detail || 'Failed to update PIN', 'error');
+                    const error = await response.json().catch(() => ({}));
+                    const errEl = document.getElementById('pinModalError');
+                    if (errEl) errEl.textContent = error.detail || 'Failed to update PIN';
+                    else showUserNotification(error.detail || 'Failed to update PIN', 'error');
                 }
             } catch (error) {
                 showUserNotification('Connection error', 'error');
@@ -4701,14 +4875,15 @@
             try {
                 const response = await fetch('/api/auth/passcode', {
                     method: 'DELETE',
-                    headers: { 'X-Session-ID': window.zoeAuth.getCurrentSession().session_id }
+                    headers: { 'X-Session-ID': window.zoeAuth?.getCurrentSession?.()?.session_id || '' }
                 });
 
                 if (response.ok) {
                     showUserNotification('PIN code removed successfully!', 'success');
+                    closePinModal();
                     loadSecurityInfo();
                 } else {
-                    const error = await response.json();
+                    const error = await response.json().catch(() => ({}));
                     showUserNotification(error.detail || 'Failed to remove PIN', 'error');
                 }
             } catch (error) {
@@ -4895,18 +5070,179 @@
 
         async function checkAdminAccess() {
             try {
-                const user = await window.zoeAuth.getCurrentUser();
-                console.log('Current user:', user);
-                if (user && user.role === 'admin') {
-                    console.log('Admin access granted - showing user management section');
-                    document.getElementById('userManagementSection').style.display = 'block';
+                let isAdmin = false;
+                if (typeof window.zoeResolveIsAdmin === 'function') {
+                    isAdmin = await window.zoeResolveIsAdmin();
+                } else if (window.zoeAuth && typeof window.zoeAuth.getCurrentUser === 'function') {
+                    const user = await window.zoeAuth.getCurrentUser();
+                    const role = (user && (user.role || (user.user_info && user.user_info.role))) || '';
+                    isAdmin = String(role).toLowerCase() === 'admin';
+                }
+
+                const userMgmtSection = document.getElementById('userManagementSection');
+                const panelSection = document.getElementById('panelIdentitySection');
+                if (userMgmtSection) userMgmtSection.style.display = isAdmin ? 'block' : 'none';
+                if (panelSection) panelSection.style.display = isAdmin ? 'block' : 'none';
+
+                if (isAdmin) {
                     loadUserList();
-                } else {
-                    console.log('Not admin or no user:', user);
+                    initPanelIdentity();
                 }
             } catch (error) {
                 console.error('Error checking admin access:', error);
             }
+        }
+
+        // ------------------------------------------------------------------
+        // Panel identity (admin-only): binds this physical panel to a set of
+        // users and optionally a default user that skips the profile picker.
+        // ------------------------------------------------------------------
+        let panelAllUsers = [];    // all profiles (filter pool)
+        let panelCurrent = null;   // current panel info + bindings
+
+        function getLocalPanelId() {
+            try { return localStorage.getItem('zoe_panel_id') || null; } catch (_) { return null; }
+        }
+        function setLocalPanelId(id) {
+            try {
+                if (id) localStorage.setItem('zoe_panel_id', id);
+                else    localStorage.removeItem('zoe_panel_id');
+            } catch (_) {}
+        }
+
+        async function initPanelIdentity() {
+            // Populate user dropdown + checkboxes from the public profiles endpoint.
+            try {
+                const r = await fetch('/api/auth/profiles');
+                const data = await r.json();
+                panelAllUsers = Array.isArray(data) ? data : (data.profiles || []);
+            } catch (e) {
+                panelAllUsers = [];
+            }
+            await loadPanelIdentity();
+        }
+
+        async function loadPanelIdentity() {
+            const statusEl = document.getElementById('panelIdentityStatus');
+            const nameEl = document.getElementById('panelNameInput');
+            const locEl = document.getElementById('panelLocationInput');
+            const defEl = document.getElementById('panelDefaultUser');
+            const allowedEl = document.getElementById('panelAllowedUsers');
+            const guestEl = document.getElementById('panelAllowGuest');
+
+            // Populate default-user dropdown from the latest user list.
+            if (defEl) {
+                defEl.innerHTML = '<option value="">No default — show picker</option>' +
+                    panelAllUsers.map(u =>
+                        `<option value="${u.user_id}">${u.username} (${u.role || 'user'})</option>`
+                    ).join('');
+            }
+            // Build allowed-users checkbox grid.
+            if (allowedEl) {
+                allowedEl.innerHTML = panelAllUsers.length
+                    ? panelAllUsers.map(u => `
+                        <label style="display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid #ddd; border-radius:999px; background:#fff; font-size:13px;">
+                            <input type="checkbox" value="${u.user_id}" class="panel-allowed-checkbox"> ${u.username}
+                        </label>`).join('')
+                    : '<em style="color:#888; font-size:12px;">No users configured yet.</em>';
+            }
+
+            const pid = getLocalPanelId();
+            if (!pid) {
+                statusEl.innerHTML = 'This panel is not registered yet. Saving will register it with a new ID.';
+                panelCurrent = null;
+                nameEl.value = 'Touch Panel';
+                locEl.value = '';
+                guestEl.checked = true;
+                return;
+            }
+
+            // Load current bindings (admin). Also tolerate 404 (panel row
+            // deleted while localStorage still has its id) — offer re-register.
+            try {
+                const data = await apiRequest(`/panels/${encodeURIComponent(pid)}/bindings`);
+                panelCurrent = data;
+                nameEl.value = data.name || pid;
+                guestEl.checked = data.allow_guest !== false;
+                defEl.value = data.default_user_id || '';
+                const allowedSet = new Set(data.allowed_user_ids || []);
+                document.querySelectorAll('.panel-allowed-checkbox').forEach(cb => {
+                    cb.checked = allowedSet.has(cb.value);
+                });
+                // Fetch the public panel record to show location.
+                try {
+                    const info = await apiRequest(`/panels/${encodeURIComponent(pid)}/public`);
+                    locEl.value = info.location || '';
+                } catch (_) { locEl.value = ''; }
+                statusEl.innerHTML = `Registered as <code>${pid}</code>.`;
+            } catch (e) {
+                statusEl.innerHTML = `Panel ID <code>${pid}</code> not found on the server. Saving will re-register it.`;
+                panelCurrent = null;
+                nameEl.value = 'Touch Panel';
+                locEl.value = '';
+                guestEl.checked = true;
+            }
+        }
+
+        async function savePanelIdentity() {
+            const nameEl = document.getElementById('panelNameInput');
+            const locEl = document.getElementById('panelLocationInput');
+            const defEl = document.getElementById('panelDefaultUser');
+            const guestEl = document.getElementById('panelAllowGuest');
+            const statusEl = document.getElementById('panelIdentityStatus');
+
+            const name = (nameEl.value || '').trim() || 'Touch Panel';
+            const location = (locEl.value || '').trim() || null;
+            const defaultUserId = defEl.value || null;
+            const allowGuest = !!guestEl.checked;
+            const allowedUserIds = Array.from(document.querySelectorAll('.panel-allowed-checkbox'))
+                .filter(cb => cb.checked).map(cb => cb.value);
+
+            let pid = getLocalPanelId();
+            try {
+                if (!pid || !panelCurrent) {
+                    // Register (creates panel + returns panel_id).
+                    const reg = await apiRequest('/panels/register', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            panel_id: pid || undefined,
+                            name, location,
+                            panel_type: 'touch_panel',
+                            allow_guest: allowGuest,
+                        }),
+                    });
+                    pid = reg.panel_id;
+                    setLocalPanelId(pid);
+                } else {
+                    // Update metadata on existing panel.
+                    await apiRequest(`/panels/${encodeURIComponent(pid)}`, {
+                        method: 'PATCH',
+                        body: JSON.stringify({ name, location, allow_guest: allowGuest }),
+                    });
+                }
+                await apiRequest(`/panels/${encodeURIComponent(pid)}/bindings`, {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        default_user_id: defaultUserId,
+                        allowed_user_ids: allowedUserIds,
+                        allow_guest: allowGuest,
+                    }),
+                });
+                statusEl.innerHTML = `Saved. Panel is now <code>${pid}</code>.`;
+                if (typeof showNotification === 'function') showNotification('Panel settings saved', 'success');
+                await loadPanelIdentity();
+            } catch (e) {
+                console.error('savePanelIdentity failed:', e);
+                statusEl.textContent = `Save failed: ${e.message || e}`;
+                if (typeof showNotification === 'function') showNotification('Save failed — see console', 'error');
+            }
+        }
+
+        function clearPanelIdentity() {
+            if (!confirm('Forget this panel identity on this device? The panel will fall back to showing all users.')) return;
+            setLocalPanelId(null);
+            panelCurrent = null;
+            loadPanelIdentity();
         }
 
         function clearNewUserForm() {
@@ -5637,817 +5973,6 @@
             checkAdminAccess();
         });
     </script>
-        
-        <!-- Load Zoe Orb Component -->
-    <script>
-        // Load the JavaScript first
-        const orbScript = document.createElement('script');
-        orbScript.src = '/js/zoe-orb.js';
-        orbScript.onload = function() {
-            // Then load the HTML component
-            fetch('/components/zoe-orb-complete.html')
-                .then(r => r.text())
-                .then(html => {
-                    const div = document.createElement('div');
-                    div.innerHTML = html;
-                    // Remove the script tag from the HTML (we already loaded it)
-                    const scripts = div.querySelectorAll('script');
-                    scripts.forEach(s => s.remove());
-                    // Append all elements
-                    while (div.firstChild) {
-                        document.body.appendChild(div.firstChild);
-                    }
-                    // Initialize
-                    if (typeof initOrbChat === 'function') {
-                        initOrbChat();
-                    }
-                })
-                .catch(err => console.error('Failed to load Zoe orb:', err));
-        };
-        document.head.appendChild(orbScript);
-    
-
-        // Navigation helper functions
-        function openMoreOverlay() {
-            document.getElementById('moreOverlay').classList.add('active');
-        }
-        
-        function closeMoreOverlay() {
-            document.getElementById('moreOverlay').classList.remove('active');
-        }
-        
-        function navigateToPage(page) {
-            window.location.href = page;
-        }
-        
-        function openNotifications() {
-            document.getElementById('notificationsPanel').classList.add('open');
-            loadNotifications();
-            const notificationBtn = document.querySelector('.notifications-btn');
-            if (notificationBtn) notificationBtn.classList.remove('has-notifications');
-        }
-        
-        function closeNotifications() {
-            document.getElementById('notificationsPanel').classList.remove('open');
-        }
-        
-        async function loadNotifications() {
-            try {
-                const response = await apiRequest('/reminders/notifications/pending');
-                const notifications = response.notifications || [];
-                displayNotifications(notifications);
-            } catch (error) {
-                console.error('Failed to load notifications:', error);
-                displayNotifications([]);
-            }
-        }
-        
-        function displayNotifications(notifications) {
-            const notificationsContent = document.getElementById('notificationsContent');
-            const notificationBtn = document.querySelector('.notifications-btn');
-            
-            if (notifications.length > 0 && notificationBtn) {
-                notificationBtn.classList.add('has-notifications');
-            } else if (notificationBtn) {
-                notificationBtn.classList.remove('has-notifications');
-            }
-            
-            if (notifications.length === 0) {
-                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
-                return;
-            }
-            
-            notificationsContent.innerHTML = notifications.map(notification => `
-                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
-                     onclick="handleNotificationClick(${notification.id})">
-                    <div class="notification-title">${notification.message}</div>
-                    <div class="notification-meta">
-                        <span class="notification-time">${formatNotificationTime(notification.notification_time)}</span>
-                    </div>
-                </div>
-            `).join('');
-        }
-        
-        function formatNotificationTime(timeStr) {
-            const date = new Date(timeStr);
-            const now = new Date();
-            const diff = now - date;
-            const minutes = Math.floor(diff / 60000);
-            const hours = Math.floor(minutes / 60);
-            const days = Math.floor(hours / 24);
-            
-            if (minutes < 1) return 'Just now';
-            if (minutes < 60) return `${minutes}m ago`;
-            if (hours < 24) return `${hours}h ago`;
-            return `${days}d ago`;
-        }
-        
-        async function handleNotificationClick(notificationId) {
-            try {
-                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
-                    method: 'POST'
-                });
-                loadNotifications();
-            } catch (error) {
-                console.error('Failed to acknowledge notification:', error);
-            }
-            closeNotifications();
-        }
-        
-        function updateNavTime() {
-            const now = new Date();
-            document.getElementById('navCurrentTime').textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-            document.getElementById('navCurrentDate').textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
-        }
-        
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', function() {
-                updateNavTime();
-                setInterval(updateNavTime, 30000);
-                loadNotifications();
-            });
-        } else {
-            updateNavTime();
-            setInterval(updateNavTime, 30000);
-            loadNotifications();
-        }
-
-        // ===== PUSH NOTIFICATION SETTINGS =====
-
-        /**
-         * Initialize notification settings
-         */
-        async function initNotificationSettings() {
-            try {
-                // Check if push notifications are supported
-                if (!window.zoePushNotifications) {
-                    console.log('⚠️ Push notifications not loaded yet, waiting...');
-                    setTimeout(initNotificationSettings, 500);
-                    return;
-                }
-
-                // Check current status
-                const supported = window.zoePushNotifications.isSupported();
-                const permission = window.zoePushNotifications.getPermissionStatus();
-                const subscribed = await window.zoePushNotifications.isSubscribed();
-
-                updateNotificationStatus(supported, permission, subscribed);
-
-                // Load preferences
-                await loadNotificationPreferences();
-
-                // Load active devices
-                await loadDevices();
-
-            } catch (error) {
-                console.error('Error initializing notification settings:', error);
-            }
-        }
-
-        /**
-         * Update notification status display
-         */
-        function updateNotificationStatus(supported, permission, subscribed) {
-            const statusText = document.getElementById('notification-status-text');
-            const enableBtn = document.getElementById('enable-notifications-btn');
-            const testBtn = document.getElementById('test-notification-btn');
-
-            if (!supported) {
-                statusText.textContent = '❌ Not supported on this browser';
-                statusText.style.color = '#999';
-                return;
-            }
-
-            if (permission === 'denied') {
-                statusText.textContent = '❌ Permission denied - Enable in browser settings';
-                statusText.style.color = '#e74c3c';
-                return;
-            }
-
-            if (permission === 'default') {
-                statusText.textContent = '⚠️ Not enabled';
-                statusText.style.color = '#f39c12';
-                enableBtn.style.display = 'inline-block';
-                return;
-            }
-
-            if (permission === 'granted' && subscribed) {
-                statusText.textContent = '✅ Enabled and active';
-                statusText.style.color = '#27ae60';
-                testBtn.style.display = 'inline-block';
-            } else if (permission === 'granted') {
-                statusText.textContent = '⚠️ Permission granted, subscribing...';
-                statusText.style.color = '#f39c12';
-                // Auto-subscribe
-                window.zoePushNotifications.subscribe()
-                    .then(() => {
-                        statusText.textContent = '✅ Enabled and active';
-                        statusText.style.color = '#27ae60';
-                        testBtn.style.display = 'inline-block';
-                    })
-                    .catch(err => {
-                        console.error('Auto-subscribe failed:', err);
-                    });
-            }
-        }
-
-        /**
-         * Enable notifications
-         */
-        async function enableNotifications() {
-            try {
-                const granted = await window.zoePushNotifications.requestPermission();
-                if (granted) {
-                    await window.zoePushNotifications.subscribe();
-                    const subscribed = await window.zoePushNotifications.isSubscribed();
-                    updateNotificationStatus(true, 'granted', subscribed);
-                    showNotification('Notifications enabled! 🎉', 'success');
-                } else {
-                    showNotification('Permission denied', 'error');
-                }
-            } catch (error) {
-                console.error('Error enabling notifications:', error);
-                showNotification('Failed to enable notifications', 'error');
-            }
-        }
-
-        /**
-         * Send test notification
-         */
-        async function sendTestNotification() {
-            try {
-                const result = await window.zoePushNotifications.sendTest();
-                showNotification('Test notification sent! Check your device 📱', 'success');
-            } catch (error) {
-                console.error('Error sending test:', error);
-                showNotification('Failed to send test notification', 'error');
-            }
-        }
-
-        /**
-         * Load notification preferences from backend
-         */
-        async function loadNotificationPreferences() {
-            try {
-                const response = await fetch('/api/push/preferences');
-                if (!response.ok) {
-                    throw new Error('Failed to load preferences');
-                }
-
-                const prefs = await response.json();
-
-                // Update UI with preferences
-                document.getElementById('calendar-reminders').checked = prefs.calendar_reminders;
-                document.getElementById('calendar-reminder-minutes').value = prefs.calendar_reminder_minutes;
-                document.getElementById('task-due-alerts').checked = prefs.task_due_alerts;
-                document.getElementById('task-due-hours').value = prefs.task_due_hours;
-                document.getElementById('shopping-updates').checked = prefs.shopping_updates;
-                document.getElementById('chat-messages').checked = prefs.chat_messages;
-                document.getElementById('home-assistant-alerts').checked = prefs.home_assistant_alerts;
-                document.getElementById('journal-prompts').checked = prefs.journal_prompts;
-                document.getElementById('journal-prompt-time').value = prefs.journal_prompt_time;
-                document.getElementById('birthday-reminders').checked = prefs.birthday_reminders;
-                document.getElementById('quiet-hours-enabled').checked = prefs.quiet_hours_enabled;
-                document.getElementById('quiet-hours-start').value = prefs.quiet_hours_start;
-                document.getElementById('quiet-hours-end').value = prefs.quiet_hours_end;
-
-                console.log('✅ Loaded notification preferences');
-
-            } catch (error) {
-                console.error('Error loading preferences:', error);
-                // Use defaults if loading fails
-            }
-        }
-
-        /**
-         * Update a notification preference
-         */
-        async function updateNotificationPref(key, value) {
-            try {
-                const preferences = {
-                    [key]: value
-                };
-
-                const response = await fetch('/api/push/preferences', {
-                    method: 'PUT',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(preferences)
-                });
-
-                if (!response.ok) {
-                    throw new Error('Failed to update preference');
-                }
-
-                console.log(`✅ Updated ${key} to ${value}`);
-                showNotification('Preference updated', 'success');
-
-            } catch (error) {
-                console.error('Error updating preference:', error);
-                showNotification('Failed to update preference', 'error');
-            }
-        }
-
-        /**
-         * Load active devices with push subscriptions
-         */
-        async function loadDevices() {
-            try {
-                const response = await fetch('/api/push/subscriptions');
-                if (!response.ok) {
-                    throw new Error('Failed to load devices');
-                }
-
-                const data = await response.json();
-                const devices = data.subscriptions || [];
-
-                // Update count
-                const countText = document.getElementById('devices-count');
-                countText.textContent = `${devices.length} device(s) subscribed`;
-
-                // Show devices list
-                if (devices.length > 0) {
-                    const devicesList = document.getElementById('devices-list');
-                    const devicesContainer = document.getElementById('devices-container');
-
-                    devicesContainer.innerHTML = devices.map(device => `
-                        <div style="padding: 10px; margin: 5px 0; background: rgba(0,0,0,0.02); border-radius: 8px; display: flex; justify-content: space-between; align-items: center;">
-                            <div>
-                                <div style="font-weight: 500; font-size: 14px;">
-                                    ${device.device_type === 'mobile' ? '📱' : device.device_type === 'tablet' ? '📱' : '💻'} 
-                                    ${device.device_type.charAt(0).toUpperCase() + device.device_type.slice(1)}
-                                </div>
-                                <div style="font-size: 12px; color: #666;">
-                                    ${device.endpoint_domain}
-                                </div>
-                            </div>
-                            <div style="font-size: 12px; color: #999;">
-                                ID: ${device.id}
-                            </div>
-                        </div>
-                    `).join('');
-
-                    devicesList.style.display = 'block';
-                } else {
-                    document.getElementById('devices-list').style.display = 'none';
-                }
-
-            } catch (error) {
-                console.error('Error loading devices:', error);
-                document.getElementById('devices-count').textContent = 'Failed to load devices';
-            }
-        }
-
-        /**
-         * Show notification message
-         */
-        function showNotification(message, type = 'info') {
-            const notification = document.createElement('div');
-            notification.style.cssText = `
-                position: fixed;
-                top: 80px;
-                right: 20px;
-                background: ${type === 'error' ? '#e74c3c' : type === 'success' ? '#27ae60' : '#7B61FF'};
-                color: white;
-                padding: 12px 20px;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: 500;
-                z-index: 9999;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-                animation: slideIn 0.3s ease;
-            `;
-            notification.textContent = message;
-            document.body.appendChild(notification);
-
-            setTimeout(() => {
-                notification.style.animation = 'slideOut 0.3s ease';
-                setTimeout(() => notification.remove(), 300);
-            }, 3000);
-        }
-
-        // ========================================
-        // Weather Settings Functions
-        // ========================================
-        
-        // Temperature unit selection
-        function selectTempUnit(unit) {
-            // Update button states
-            document.querySelectorAll('.temp-unit-btn').forEach(btn => {
-                btn.classList.remove('active');
-            });
-            document.querySelector(`[data-unit="${unit}"]`).classList.add('active');
-            
-            // Auto-save
-            saveWeatherSettings();
-        }
-        
-        // Load weather settings
-        async function loadWeatherSettings() {
-            try {
-                const session = window.zoeAuth?.getCurrentSession?.();
-                const userId = session?.user_info?.user_id || session?.user_id;
-                const response = await fetch(`/api/weather/preferences?user_id=${userId}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    
-                    // Update use current location toggle
-                    const useCurrentLocation = data.use_current_location || false;
-                    document.getElementById('use-current-location').checked = useCurrentLocation;
-                    
-                    // Show/hide manual location section
-                    toggleLocationMode(useCurrentLocation);
-                    
-                    // Update location display
-                    if (!useCurrentLocation) {
-                        document.getElementById('current-weather-location').textContent = 
-                            `${data.location.city}, ${data.location.country}`;
-                    } else {
-                        document.getElementById('current-weather-location').textContent = 
-                            'Using device location';
-                    }
-                    
-                    // Update temperature unit buttons
-                    const tempUnit = data.temperature_unit || 'celsius';
-                    document.querySelectorAll('.temp-unit-btn').forEach(btn => {
-                        btn.classList.remove('active');
-                    });
-                    document.querySelector(`[data-unit="${tempUnit}"]`)?.classList.add('active');
-                }
-            } catch (error) {
-                console.error('Failed to load weather settings:', error);
-                document.getElementById('current-weather-location').textContent = 
-                    'San Francisco, US (default)';
-            }
-        }
-        
-        function toggleLocationMode(useCurrent) {
-            const manualSection = document.getElementById('manual-location-section');
-            const statusDiv = document.getElementById('location-permission-status');
-            
-            if (useCurrent) {
-                manualSection.classList.add('disabled');
-                statusDiv.style.display = 'flex';
-                
-                // Check location permission
-                if (navigator.geolocation && navigator.permissions) {
-                    navigator.permissions.query({name: 'geolocation'}).then(result => {
-                        if (result.state === 'granted') {
-                            document.getElementById('location-status-icon').textContent = '✅';
-                            document.getElementById('location-status-text').textContent = 
-                                'Location permission granted';
-                            statusDiv.style.background = 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)';
-                            statusDiv.style.color = '#065f46';
-                        } else if (result.state === 'prompt') {
-                            document.getElementById('location-status-icon').textContent = '⚠️';
-                            document.getElementById('location-status-text').textContent = 
-                                'Please allow location access when prompted';
-                            statusDiv.style.background = 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)';
-                            statusDiv.style.color = '#92400e';
-                        } else {
-                            document.getElementById('location-status-icon').textContent = '❌';
-                            document.getElementById('location-status-text').textContent = 
-                                'Location denied - enable in browser settings';
-                            statusDiv.style.background = 'linear-gradient(135deg, #fecaca 0%, #fca5a5 100%)';
-                            statusDiv.style.color = '#991b1b';
-                        }
-                    }).catch(() => {
-                        document.getElementById('location-status-icon').textContent = 'ℹ️';
-                        document.getElementById('location-status-text').textContent = 
-                            'Location will be used when available';
-                    });
-                } else {
-                    document.getElementById('location-status-icon').textContent = 'ℹ️';
-                    document.getElementById('location-status-text').textContent = 
-                        'Location will be used when available';
-                }
-            } else {
-                manualSection.classList.remove('disabled');
-                statusDiv.style.display = 'none';
-            }
-        }
-        
-        // Add event listeners (needs to be set after DOM load)
-        document.addEventListener('DOMContentLoaded', function() {
-            // Toggle for auto-detect location
-            const toggleElement = document.getElementById('use-current-location');
-            if (toggleElement) {
-                toggleElement.addEventListener('change', (e) => {
-                    toggleLocationMode(e.target.checked);
-                    saveWeatherSettings();
-                });
-            }
-            
-            // Location search with debounce
-            const weatherLocationInput = document.getElementById('weather-location-search');
-            if (weatherLocationInput) {
-                let weatherSearchTimeout;
-                
-                weatherLocationInput.addEventListener('input', (e) => {
-                    clearTimeout(weatherSearchTimeout);
-                    const query = e.target.value.trim();
-                    const resultsContainer = document.getElementById('location-search-results');
-                    
-                    if (query.length < 2) {
-                        resultsContainer.style.display = 'none';
-                        return;
-                    }
-                    
-                    // Show loading state immediately
-                    resultsContainer.innerHTML = `
-                        <div style="padding: 20px; text-align: center; color: #64748b;">
-                            <div style="font-size: 20px; margin-bottom: 8px;">🔍</div>
-                            <div>Searching locations...</div>
-                        </div>
-                    `;
-                    resultsContainer.style.display = 'block';
-                    
-                    // Search after short delay (reduced to 300ms for faster response)
-                    weatherSearchTimeout = setTimeout(() => searchLocation(query), 300);
-                });
-            }
-        });
-
-        async function searchLocation(query) {
-            const resultsContainer = document.getElementById('location-search-results');
-            
-            try {
-                // Add timeout to prevent long waits
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
-                
-                const response = await fetch(
-                    `/api/weather/location/search?query=${encodeURIComponent(query)}&limit=8`,
-                    { signal: controller.signal }
-                );
-                
-                clearTimeout(timeoutId);
-                
-                if (!response.ok) {
-                    throw new Error(`Search failed: ${response.status}`);
-                }
-                
-                const data = await response.json();
-                
-                if (!data.results || data.results.length === 0) {
-                    resultsContainer.innerHTML = `
-                        <div style="padding: 20px; text-align: center; color: #64748b;">
-                            <div style="font-size: 20px; margin-bottom: 8px;">🌍</div>
-                            <div>No locations found for "${query}"</div>
-                            <div style="font-size: 12px; margin-top: 4px; opacity: 0.7;">Try a different search term</div>
-                        </div>
-                    `;
-                } else {
-                    displayLocationResults(data.results);
-                }
-            } catch (error) {
-                console.error('Location search failed:', error);
-                const errorMsg = error.name === 'AbortError' ? 'Search timed out' : 'Search failed';
-                resultsContainer.innerHTML = `
-                    <div style="padding: 20px; text-align: center; color: #dc2626;">
-                        <div style="font-size: 20px; margin-bottom: 8px;">⚠️</div>
-                        <div>${errorMsg}</div>
-                        <div style="font-size: 12px; margin-top: 4px;">Please try again</div>
-                    </div>
-                `;
-            }
-        }
-
-        function displayLocationResults(results) {
-            const container = document.getElementById('location-search-results');
-            
-            if (!results || results.length === 0) {
-                container.style.display = 'none';
-                return;
-            }
-            
-            container.innerHTML = results.map(loc => `
-                <div class="location-result-item" 
-                     onclick="selectLocation(${loc.lat}, ${loc.lon}, '${loc.name.replace(/'/g, "\\'")}', '${loc.country.replace(/'/g, "\\'")}')"
-                     data-city="${loc.name.replace(/'/g, "\\'")}" data-country="${loc.country.replace(/'/g, "\\'")}">
-                    <div class="location-result-name">${loc.name}</div>
-                    <div class="location-result-details">
-                        ${loc.admin1 ? loc.admin1 + ', ' : ''}${loc.country}
-                    </div>
-                </div>
-            `).join('');
-            
-            container.style.display = 'block';
-        }
-
-        function selectLocation(lat, lon, city, country) {
-            // Store selected location temporarily
-            window.selectedWeatherLocation = { lat, lon, city, country };
-            
-            // Update display
-            document.getElementById('current-weather-location').textContent = city;
-            document.getElementById('weather-location-search').value = '';
-            document.getElementById('location-search-results').style.display = 'none';
-            
-            // Auto-save
-            saveWeatherSettings();
-        }
-
-        async function saveWeatherSettings() {
-            try {
-                const session = window.zoeAuth?.getCurrentSession?.();
-                const userId = session?.user_info?.user_id || session?.user_id;
-                
-                // Get temperature unit from active button
-                const activeTempBtn = document.querySelector('.temp-unit-btn.active');
-                const temperatureUnit = activeTempBtn ? activeTempBtn.dataset.unit : 'celsius';
-                
-                const useCurrentLocation = document.getElementById('use-current-location').checked;
-                
-                const payload = {
-                    user_id: userId,
-                    temperature_unit: temperatureUnit,
-                    use_current_location: useCurrentLocation
-                };
-                
-                // Only include saved location if NOT using current location
-                if (!useCurrentLocation && window.selectedWeatherLocation) {
-                    payload.latitude = window.selectedWeatherLocation.lat;
-                    payload.longitude = window.selectedWeatherLocation.lon;
-                    payload.city = window.selectedWeatherLocation.city;
-                    payload.country = window.selectedWeatherLocation.country;
-                    delete window.selectedWeatherLocation;
-                }
-                
-                const response = await fetch('/api/weather/preferences', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                
-                if (response.ok) {
-                    showNotification('Weather settings saved ✓', 'success');
-                    
-                    // Refresh weather widget if it exists
-                    if (window.WidgetRegistry) {
-                        const weatherWidget = window.WidgetRegistry.get('weather');
-                        if (weatherWidget) {
-                            setTimeout(() => weatherWidget.update(), 500);
-                        }
-                    }
-                } else {
-                    showNotification('Failed to save weather settings', 'error');
-                }
-            } catch (error) {
-                console.error('Error saving weather settings:', error);
-                showNotification('Failed to save weather settings', 'error');
-            }
-        }
-
-        // Initialize notification settings when page loads
-        document.addEventListener('DOMContentLoaded', function() {
-            // Wait a bit for push notifications script to load
-            setTimeout(initNotificationSettings, 1000);
-            
-            // Load weather settings
-            loadWeatherSettings();
-        });
-
-        function _ocEsc(s) {
-            if (s == null || s === undefined) return '';
-            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-        }
-
-        async function saveOpenClawUpdatePreference() {
-            const sel = document.getElementById('openclawAutoUpdateSelect');
-            if (!sel) return;
-            const mode = sel.value;
-            try {
-                await apiRequest('/api/system/openclaw/preferences', {
-                    method: 'PUT',
-                    body: JSON.stringify({ prefs: { openclaw_auto_update: mode } }),
-                });
-                showNotification('OpenClaw update preference saved', 'success');
-            } catch (err) {
-                console.error(err);
-                showNotification('Could not save preference', 'error');
-            }
-        }
-
-        async function checkOpenClawUpdatesFromSettings() {
-            const el = document.getElementById('openclawVersionSummary');
-            if (el) el.textContent = 'Checking npm registry…';
-            try {
-                await loadOpenClawBrain(true);
-                showNotification('Version check complete', 'success');
-            } catch (e) {
-                showNotification('Version check failed', 'error');
-            }
-        }
-
-        async function installOpenClawFromSettings() {
-            try {
-                showNotification('Installing OpenClaw (may take a few minutes)…', 'info');
-                await apiRequest('/api/system/openclaw/upgrade', {
-                    method: 'POST',
-                    body: JSON.stringify({ confirm: true }),
-                });
-                showNotification('OpenClaw updated. Gateway restarted.', 'success');
-                await loadOpenClawBrain(true);
-            } catch (e) {
-                console.error(e);
-                showNotification((e && e.message) ? e.message : 'Upgrade failed (admin only)', 'error');
-            }
-        }
-
-        async function loadOpenClawBrain(forceCheckLatest) {
-            const container = document.getElementById('openclawBrainContent');
-            if (!container) return;
-            container.innerHTML = '<div style="text-align:center;padding:20px;color:#999;">Loading OpenClaw status...</div>';
-            try {
-                const q = forceCheckLatest ? '?check_latest=true' : '';
-                const data = await apiRequest('/api/system/openclaw' + q);
-                let prefs = { openclaw_auto_update: 'notify' };
-                try {
-                    const pr = await apiRequest('/api/system/openclaw/preferences');
-                    if (pr && pr.prefs) prefs = pr.prefs;
-                } catch (pe) { console.warn('openclaw prefs', pe); }
-
-                if (!data) {
-                    container.innerHTML = '<p style="color:#ef4444;">Could not connect to OpenClaw</p>';
-                    return;
-                }
-                const skills = data.skills || [];
-                const crons = data.cron_jobs || [];
-                const model = data.model || data.gateway_model || 'Unknown';
-                const gateway = data.gateway_status || 'unknown';
-                const installed = data.installed_version || '—';
-                const latest = data.latest_version != null ? data.latest_version : '—';
-                const upd = data.update_available === true;
-                const mode = prefs.openclaw_auto_update || 'notify';
-
-                let html = '';
-                html += '<div style="margin-bottom:16px;padding:14px;border-radius:12px;background:rgba(123,97,255,0.06);border:1px solid rgba(123,97,255,0.2);">';
-                html += '<div style="font-weight:600;font-size:14px;margin-bottom:10px;color:#7B61FF;">Versions &amp; updates</div>';
-                html += '<div id="openclawVersionSummary" style="font-size:13px;color:#555;margin-bottom:10px;line-height:1.5;">';
-                html += 'Installed: <strong>' + _ocEsc(installed) + '</strong>';
-                if (forceCheckLatest || data.latest_version != null) {
-                    html += ' &nbsp;|&nbsp; Latest on npm: <strong>' + _ocEsc(latest) + '</strong>';
-                    if (upd) html += ' &nbsp;<span style="background:#f59e0b;color:#fff;padding:2px 8px;border-radius:6px;font-size:11px;">Update available</span>';
-                }
-                html += '</div>';
-                html += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;">';
-                html += '<button type="button" onclick="checkOpenClawUpdatesFromSettings()" style="background:#7B61FF;color:#fff;border:none;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;">Check for updates</button>';
-                html += '<button type="button" onclick="installOpenClawFromSettings()" style="background:#10b981;color:#fff;border:none;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;">Install update</button>';
-                html += '<span style="font-size:11px;color:#888;">Install requires admin. Advanced gateway UI: <a href="http://127.0.0.1:18789/" target="_blank" rel="noopener">127.0.0.1:18789</a> (local)</span>';
-                html += '</div>';
-                html += '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">';
-                html += '<label style="font-size:13px;color:#444;">Automatic updates:</label>';
-                html += '<select id="openclawAutoUpdateSelect" onchange="saveOpenClawUpdatePreference()" style="padding:6px 10px;border-radius:8px;border:1px solid #ccc;font-size:13px;">';
-                html += '<option value="off"' + (mode === 'off' ? ' selected' : '') + '>Off (manual check only)</option>';
-                html += '<option value="notify"' + (mode === 'notify' ? ' selected' : '') + '>Notify when an update exists</option>';
-                html += '<option value="auto"' + (mode === 'auto' ? ' selected' : '') + '>Auto-install (requires OPENCLAW_ALLOW_AUTO_UPDATE=true on server)</option>';
-                html += '</select></div></div>';
-
-                html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">';
-                html += '<div style="background:rgba(123,97,255,0.08);padding:14px;border-radius:12px;">';
-                html += '<div style="font-weight:600;font-size:13px;color:#7B61FF;margin-bottom:4px;">Gateway</div>';
-                html += '<div style="font-size:15px;font-weight:500;">' + (gateway === 'connected' ? '🟢 Connected' : '🔴 Offline') + '</div></div>';
-                html += '<div style="background:rgba(16,185,129,0.08);padding:14px;border-radius:12px;">';
-                html += '<div style="font-weight:600;font-size:13px;color:#10b981;margin-bottom:4px;">Model</div>';
-                html += '<div style="font-size:15px;font-weight:500;">' + _ocEsc(model) + '</div></div>';
-                html += '<div style="background:rgba(245,158,11,0.08);padding:14px;border-radius:12px;">';
-                html += '<div style="font-weight:600;font-size:13px;color:#f59e0b;margin-bottom:4px;">Skills</div>';
-                html += '<div style="font-size:15px;font-weight:500;">' + skills.length + ' loaded</div></div>';
-                html += '<div style="background:rgba(236,72,153,0.08);padding:14px;border-radius:12px;">';
-                html += '<div style="font-weight:600;font-size:13px;color:#ec4899;margin-bottom:4px;">Cron Jobs</div>';
-                html += '<div style="font-size:15px;font-weight:500;">' + crons.length + ' scheduled</div></div></div>';
-
-                html += '<div style="margin-bottom:16px;">';
-                html += '<div style="font-weight:600;font-size:14px;margin-bottom:8px;color:#333;">Skills</div>';
-                html += '<div style="display:flex;flex-wrap:wrap;gap:6px;">';
-                skills.forEach(function(s) {
-                    const sid = typeof s === 'object' ? (s.id || '') : String(s);
-                    const desc = typeof s === 'object' ? (s.description || '') : '';
-                    const title = desc ? _ocEsc(desc) : '';
-                    html += '<span title="' + title + '" style="background:rgba(123,97,255,0.1);color:#7B61FF;padding:4px 10px;border-radius:20px;font-size:12px;font-weight:500;">' + _ocEsc(sid) + '</span>';
-                });
-                html += '</div></div><div><div style="font-weight:600;font-size:14px;margin-bottom:8px;color:#333;">Scheduled Tasks</div>';
-                html += '<div style="display:flex;flex-direction:column;gap:8px;">';
-                crons.forEach(function(j) {
-                    const st = j.last_status || j.status || '';
-                    const statusIcon = st === 'ok' ? '🟢' : st === 'error' ? '🔴' : '⚪';
-                    const errText = j.last_error ? '<div style="color:#ef4444;font-size:11px;margin-top:2px;">' + _ocEsc(j.last_error) + '</div>' : '';
-                    html += '<div style="background:rgba(248,250,252,0.8);padding:10px 14px;border-radius:10px;border:1px solid rgba(226,232,240,0.5);">';
-                    html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
-                    html += '<span style="font-weight:500;font-size:13px;">' + statusIcon + ' ' + _ocEsc(j.name || '') + '</span>';
-                    html += '<span style="font-size:11px;color:#999;">' + _ocEsc(j.schedule || '') + '</span>';
-                    html += '</div>' + errText + '</div>';
-                });
-                html += '</div></div>';
-                container.innerHTML = html;
-            } catch (e) {
-                container.innerHTML = '<p style="color:#ef4444;">Error loading OpenClaw data: ' + _ocEsc(e.message) + '</p>';
-            }
-        }
-
-    </script>
     <script src="/js/websocket-sync.js"></script>
 
     <!-- TOUCH: gesture navigation (edge swipe) -->
@@ -6458,6 +5983,56 @@
     <script src="/js/touch-ui-executor.js"></script>
     <!-- TOUCH: floating orb chat overlay -->
     <script src="/js/orb-loader.js"></script>
+    <!-- TOUCH: PIN change modal (replaces window.prompt dialogs) -->
+    <div id="pinChangeModal" style="display:none;position:fixed;inset:0;z-index:9000;align-items:center;justify-content:center;background:rgba(0,0,0,0.55);backdrop-filter:blur(8px);">
+        <div style="background:var(--glass-bg,rgba(255,255,255,0.95));border-radius:24px;padding:32px 28px;max-width:340px;width:90%;box-shadow:0 24px 64px rgba(0,0,0,0.2);text-align:center;">
+            <div id="pinModalTitle" style="font-size:20px;font-weight:700;margin-bottom:6px;color:var(--text-primary,#111);">Set PIN Code</div>
+            <div style="font-size:13px;color:var(--text-muted,#888);margin-bottom:24px;">Enter 4–8 digits</div>
+
+            <!-- PIN dots display -->
+            <div id="pinModalDots" style="display:flex;justify-content:center;gap:12px;margin-bottom:8px;">
+                <span class="pdot" style="width:14px;height:14px;border-radius:50%;background:rgba(123,97,255,0.2);border:2px solid rgba(123,97,255,0.4);display:inline-block;transition:background 0.15s;"></span>
+                <span class="pdot" style="width:14px;height:14px;border-radius:50%;background:rgba(123,97,255,0.2);border:2px solid rgba(123,97,255,0.4);display:inline-block;transition:background 0.15s;"></span>
+                <span class="pdot" style="width:14px;height:14px;border-radius:50%;background:rgba(123,97,255,0.2);border:2px solid rgba(123,97,255,0.4);display:inline-block;transition:background 0.15s;"></span>
+                <span class="pdot" style="width:14px;height:14px;border-radius:50%;background:rgba(123,97,255,0.2);border:2px solid rgba(123,97,255,0.4);display:inline-block;transition:background 0.15s;"></span>
+                <span class="pdot" style="width:14px;height:14px;border-radius:50%;background:rgba(123,97,255,0.2);border:2px solid rgba(123,97,255,0.4);display:inline-block;transition:background 0.15s;"></span>
+                <span class="pdot" style="width:14px;height:14px;border-radius:50%;background:rgba(123,97,255,0.2);border:2px solid rgba(123,97,255,0.4);display:inline-block;transition:background 0.15s;"></span>
+            </div>
+            <input id="pinModalInput" type="hidden">
+            <div id="pinModalError" style="color:#e74c3c;font-size:12px;min-height:16px;margin-bottom:16px;"></div>
+
+            <!-- Numeric keypad -->
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px;">
+                <button onclick="pinModalKey('1')" style="min-height:52px;border-radius:12px;border:none;font-size:22px;font-weight:600;background:rgba(123,97,255,0.08);color:var(--text-primary,#111);cursor:pointer;-webkit-tap-highlight-color:transparent;">1</button>
+                <button onclick="pinModalKey('2')" style="min-height:52px;border-radius:12px;border:none;font-size:22px;font-weight:600;background:rgba(123,97,255,0.08);color:var(--text-primary,#111);cursor:pointer;-webkit-tap-highlight-color:transparent;">2</button>
+                <button onclick="pinModalKey('3')" style="min-height:52px;border-radius:12px;border:none;font-size:22px;font-weight:600;background:rgba(123,97,255,0.08);color:var(--text-primary,#111);cursor:pointer;-webkit-tap-highlight-color:transparent;">3</button>
+                <button onclick="pinModalKey('4')" style="min-height:52px;border-radius:12px;border:none;font-size:22px;font-weight:600;background:rgba(123,97,255,0.08);color:var(--text-primary,#111);cursor:pointer;-webkit-tap-highlight-color:transparent;">4</button>
+                <button onclick="pinModalKey('5')" style="min-height:52px;border-radius:12px;border:none;font-size:22px;font-weight:600;background:rgba(123,97,255,0.08);color:var(--text-primary,#111);cursor:pointer;-webkit-tap-highlight-color:transparent;">5</button>
+                <button onclick="pinModalKey('6')" style="min-height:52px;border-radius:12px;border:none;font-size:22px;font-weight:600;background:rgba(123,97,255,0.08);color:var(--text-primary,#111);cursor:pointer;-webkit-tap-highlight-color:transparent;">6</button>
+                <button onclick="pinModalKey('7')" style="min-height:52px;border-radius:12px;border:none;font-size:22px;font-weight:600;background:rgba(123,97,255,0.08);color:var(--text-primary,#111);cursor:pointer;-webkit-tap-highlight-color:transparent;">7</button>
+                <button onclick="pinModalKey('8')" style="min-height:52px;border-radius:12px;border:none;font-size:22px;font-weight:600;background:rgba(123,97,255,0.08);color:var(--text-primary,#111);cursor:pointer;-webkit-tap-highlight-color:transparent;">8</button>
+                <button onclick="pinModalKey('9')" style="min-height:52px;border-radius:12px;border:none;font-size:22px;font-weight:600;background:rgba(123,97,255,0.08);color:var(--text-primary,#111);cursor:pointer;-webkit-tap-highlight-color:transparent;">9</button>
+                <button id="pinModalRemoveBtn" onclick="removePinCode()" style="min-height:52px;border-radius:12px;border:none;font-size:13px;font-weight:600;background:rgba(231,76,60,0.1);color:#e74c3c;cursor:pointer;-webkit-tap-highlight-color:transparent;">Remove</button>
+                <button onclick="pinModalKey('0')" style="min-height:52px;border-radius:12px;border:none;font-size:22px;font-weight:600;background:rgba(123,97,255,0.08);color:var(--text-primary,#111);cursor:pointer;-webkit-tap-highlight-color:transparent;">0</button>
+                <button onclick="pinModalBackspace()" style="min-height:52px;border-radius:12px;border:none;font-size:22px;font-weight:600;background:rgba(123,97,255,0.08);color:var(--text-primary,#111);cursor:pointer;-webkit-tap-highlight-color:transparent;">⌫</button>
+            </div>
+
+            <!-- Action buttons -->
+            <div style="display:flex;gap:12px;">
+                <button onclick="closePinModal()" style="flex:1;min-height:48px;border-radius:14px;border:1px solid rgba(123,97,255,0.3);background:transparent;color:var(--primary-purple,#7B61FF);font-size:15px;font-weight:600;cursor:pointer;">Cancel</button>
+                <button onclick="confirmPinChange()" style="flex:1;min-height:48px;border-radius:14px;border:none;background:linear-gradient(135deg,#7B61FF,#5AE0E0);color:#fff;font-size:15px;font-weight:600;cursor:pointer;">Save PIN</button>
+            </div>
+        </div>
+    </div>
+    <style>
+    #pinChangeModal { display: none; }
+    #pinChangeModal.open { display: flex; }
+    #pinChangeModal .pdot.filled { background: #7B61FF !important; border-color: #7B61FF !important; }
+    html.dark-mode #pinChangeModal > div { background: rgba(15,15,28,0.98) !important; }
+    </style>
+    <!-- _pinModalVal is declared with `let` earlier in this file; duplicate init removed -->
+
+
     <!-- TOUCH: lock gridstack to static (no drag) on kiosk -->
     <script>
     (function(){

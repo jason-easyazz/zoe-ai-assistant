@@ -6,6 +6,9 @@
 (function() {
     'use strict';
 
+    // Chat page is its own full-screen voice surface — skip the floating orb popup
+    if (window.location.pathname.includes('/touch/chat.html')) return;
+
     if (document.getElementById('zoeOrbContainer')) return;
 
     var orbScript = document.createElement('script');
@@ -17,10 +20,23 @@
                 var div = document.createElement('div');
                 div.id = 'zoeOrbContainer';
                 div.innerHTML = html;
-                var scripts = div.querySelectorAll('script');
-                scripts.forEach(function(s) { s.remove(); });
+                // Remove script tags (JS already loaded separately)
+                div.querySelectorAll('script').forEach(function(s) { s.remove(); });
+                // Move style tags to <head> so they apply reliably
+                div.querySelectorAll('style').forEach(function(s) {
+                    s.remove();
+                    document.head.appendChild(s);
+                });
                 while (div.firstChild) {
                     document.body.appendChild(div.firstChild);
+                }
+                // Explicitly fix orb position in case CSS hasn't applied yet
+                var orbEl = document.getElementById('zoeOrb');
+                if (orbEl) {
+                    orbEl.style.setProperty('position', 'fixed', 'important');
+                    orbEl.style.setProperty('bottom', '24px', 'important');
+                    orbEl.style.setProperty('right', '24px', 'important');
+                    orbEl.style.setProperty('z-index', '1200', 'important');
                 }
                 if (typeof initOrbChat === 'function') {
                     initOrbChat();

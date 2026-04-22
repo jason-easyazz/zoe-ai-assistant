@@ -94,8 +94,10 @@ POST_PLAY_COOLDOWN_S = float(os.environ.get("POST_PLAY_COOLDOWN_S", "1.5"))
 # Extra settle time after playback before arming wake again (room reverb).
 POST_PLAY_TAIL_S = float(os.environ.get("POST_PLAY_TAIL_S", "0.4"))
 # ── Follow-up listening: after TTS, wait for speech without requiring wake word ──
-FOLLOW_UP_LISTEN_S = float(os.environ.get("FOLLOW_UP_LISTEN_S", "3.0"))
-FOLLOW_UP_MAX_TURNS = int(os.environ.get("FOLLOW_UP_MAX_TURNS", "5"))
+FOLLOW_UP_LISTEN_S = float(os.environ.get("FOLLOW_UP_LISTEN_S", "5.0"))
+_FOLLOW_UP_MAX_TURNS_RAW = int(os.environ.get("FOLLOW_UP_MAX_TURNS", "5"))
+# FOLLOW_UP_MAX_TURNS counts turns AFTER the initial response.
+FOLLOW_UP_MAX_TURNS = max(0, _FOLLOW_UP_MAX_TURNS_RAW)
 FOLLOW_UP_VAD_THRESHOLD = float(os.environ.get("FOLLOW_UP_VAD_THRESHOLD", "0.45"))
 # Note: debounce_time on oww.predict() requires a matching `threshold` dict in some openwakeword versions
 # and was crashing the daemon — post-play cooldown + oww.reset() handle repeats instead.
@@ -108,6 +110,10 @@ VOICE_IGNORE_TRANSCRIPTS = frozenset(x.strip().lower() for x in _junk_raw.split(
 
 _headers = {"X-Device-Token": DEVICE_TOKEN, "Content-Type": "application/json"}
 _shutdown = threading.Event()
+# Retry transient backend errors so voice turns are less flaky on brief network
+# hiccups without masking persistent auth/configuration problems.
+VOICE_API_MAX_RETRIES = max(0, int(os.environ.get("VOICE_API_MAX_RETRIES", "2")))
+VOICE_API_RETRY_BACKOFF_S = max(0.0, float(os.environ.get("VOICE_API_RETRY_BACKOFF_S", "0.35")))
 # Monotonic time: ignore wake-word triggers until this (acoustic echo / TTS tail).
 _ignore_wake_until: float = 0.0
 _last_wake_at: float = 0.0
@@ -205,18 +211,64 @@ def _vad_prob(model, chunk_int16: np.ndarray, sample_rate: int = 16000) -> float
         return 0.0
 
 
-def _api_post(path: str, data: dict, timeout: int = 60) -> dict:
+def _api_post(path: str, data: dict, timeout: int = 60, retries: int | None = None) -> dict:
     url = f"{ZOE_URL}{path}"
-    try:
-        r = requests.post(url, json=data, headers=_headers, timeout=timeout, verify=VERIFY_SSL)
-        r.raise_for_status()
-        return r.json()
-    except requests.exceptions.SSLError:
-        log.warning("SSL error — set VERIFY_SSL=false if using self-signed cert")
-        raise
-    except Exception as exc:
-        log.error("API error %s: %s", path, exc)
-        return {"ok": False, "error": str(exc)}
+    max_retries = VOICE_API_MAX_RETRIES if retries is None else max(0, int(retries))
+    last_error = "unknown"
+    for attempt in range(max_retries + 1):
+        try:
+            r = requests.post(url, json=data, headers=_headers, timeout=timeout, verify=VERIFY_SSL)
+            r.raise_for_status()
+            return r.json()
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            last_error = f"HTTP {status}"
+            if status == 401:
+                log.error(
+                    "API auth failure %s (401). Verify DEVICE_TOKEN for panel=%s and token binding in zoe-data panel_auth.",
+                    path,
+                    PANEL_ID,
+                )
+                return {"ok": False, "error": last_error}
+            retryable = status in (408, 429, 500, 502, 503, 504)
+            if retryable and attempt < max_retries:
+                sleep_s = VOICE_API_RETRY_BACKOFF_S * (2 ** attempt)
+                log.warning(
+                    "API transient HTTP %s on %s, retrying in %.2fs (%d/%d)",
+                    status,
+                    path,
+                    sleep_s,
+                    attempt + 1,
+                    max_retries,
+                )
+                time.sleep(sleep_s)
+                continue
+            log.error("API error %s: HTTP %s", path, status)
+            return {"ok": False, "error": last_error}
+        except requests.exceptions.SSLError:
+            log.warning("SSL error — set VERIFY_SSL=false if using self-signed cert")
+            raise
+        except requests.exceptions.RequestException as exc:
+            last_error = str(exc)
+            if attempt < max_retries:
+                sleep_s = VOICE_API_RETRY_BACKOFF_S * (2 ** attempt)
+                log.warning(
+                    "API transport error on %s: %s (retry in %.2fs %d/%d)",
+                    path,
+                    exc,
+                    sleep_s,
+                    attempt + 1,
+                    max_retries,
+                )
+                time.sleep(sleep_s)
+                continue
+            log.error("API error %s: %s", path, exc)
+            return {"ok": False, "error": last_error}
+        except Exception as exc:
+            last_error = str(exc)
+            log.error("API error %s: %s", path, exc)
+            return {"ok": False, "error": last_error}
+    return {"ok": False, "error": last_error}
 
 
 def _bridge_post(path: str, data: dict, timeout: int = 60) -> dict:
@@ -451,15 +503,28 @@ def _notify_wake_background():
         if VOICE_ROUTE_MODE in {"ha_bridge", "hybrid"}:
             _bridge_post("/voice/wake", {"panel_id": PANEL_ID, "source": "satellite_pi"}, timeout=3)
         else:
-            _api_post("/api/voice/wake", {"panel_id": PANEL_ID}, timeout=3)
+            _api_post("/api/voice/wake", {"panel_id": PANEL_ID}, timeout=3, retries=0)
     except Exception as exc:
         log.debug("Background wake notify failed (non-critical): %s", exc)
 
 
+def _wake_panel_agent() -> None:
+    """Fire-and-forget POST to the local panel agent so the screen wakes up."""
+    try:
+        requests.post(
+            "http://127.0.0.1:8765/wake",
+            json={"hold_s": 20},
+            timeout=1.0,
+        )
+    except Exception as exc:
+        log.debug("panel-agent wake failed: %s", exc)
+
+
 def on_wake():
     """Called when wake word is detected."""
-    log.info("Wake word detected! Notifying Jetson...")
+    log.info("Wake word detected! Notifying Jetson and waking screen...")
     play_wake_beep()
+    threading.Thread(target=_wake_panel_agent, daemon=True, name="wake-screen").start()
     threading.Thread(target=_notify_wake_background, daemon=True, name="wake-notify").start()
 
 
@@ -628,26 +693,33 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> str | None:
         return None
 
 
-def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes) -> bool:
+def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = True) -> bool:
     """Process one recorded WAV: combined STT+LLM+TTS via /api/voice/turn.
 
     Returns True if audio was played (eligible for follow-up listening).
     Uses a single HTTP round-trip instead of separate transcribe + command calls.
     """
+    import time as _time
+    _t_pi_start = _time.monotonic()
+
     audio_b64_wav = base64.b64encode(wav).decode()
+    _t_encode = _time.monotonic() - _t_pi_start
 
     identified_user_id: str | None = None
+    _t_vid_start = _time.monotonic()
     try:
         identified_user_id = _identify_speaker_from_wav(wav)
         if identified_user_id:
             log.info("Speaker identified: %s", identified_user_id)
     except Exception:
         pass
+    _t_vid = _time.monotonic() - _t_vid_start
 
     turn_payload: dict = {"audio_base64": audio_b64_wav, "panel_id": PANEL_ID}
     if identified_user_id:
         turn_payload["identified_user_id"] = identified_user_id
 
+    _t_post_start = _time.monotonic()
     ok = False
     if VOICE_ROUTE_MODE == "ha_bridge":
         resp = _bridge_post(
@@ -658,6 +730,18 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes) -> bool:
     else:
         resp = _api_post("/api/voice/turn", turn_payload)
         ok = resp.get("ok", False)
+    _t_server = _time.monotonic() - _t_post_start
+    _t_total = _time.monotonic() - _t_pi_start
+    log.info(
+        "voice/turn Pi-side timing: encode=%.3fs vid=%.3fs server_rtt=%.3fs total=%.3fs",
+        _t_encode, _t_vid, _t_server, _t_total,
+    )
+
+    if not ok and not resp.get("audio_base64"):
+        log.warning("Jetson voice turn failed (%s) — playing local espeak fallback", resp.get("error", "unknown_error"))
+        _recording_active.clear()
+        _espeak_local("Zoe is not available right now. Please check the connection.")
+        return False
 
     transcript = resp.get("text", "")
     if transcript:
@@ -666,13 +750,13 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes) -> bool:
             return False
         log.info("Transcript: %r", transcript)
     elif not resp.get("audio_base64"):
-        log.info("Empty transcript, skipping.")
-        return False
-
-    if not ok and not resp.get("audio_base64"):
-        log.warning("Jetson API unavailable — playing local espeak fallback")
-        _recording_active.clear()
-        _espeak_local("Zoe is not available right now. Please check the connection.")
+        # Avoid silent UX on wake->record with no transcript and no TTS payload.
+        if prompt_on_empty:
+            log.info("Empty transcript with no audio response — prompting retry.")
+            _recording_active.clear()
+            _espeak_local("Sorry, I didn't catch that. Please try again.")
+        else:
+            log.info("Empty follow-up transcript with no audio response — returning to wake mode.")
         return False
 
     audio_b64 = resp.get("audio_base64")
@@ -789,25 +873,30 @@ def voice_command(pa: pyaudio.PyAudio, oww) -> None:
     """Record, transcribe, send command, play response, then follow-up listen."""
     global _ignore_wake_until
     _recording_active.set()
-    turn = 0
+    follow_ups_done = 0
     try:
         wav = record_command(pa)
         if not wav:
             return
 
         played_audio = _do_single_turn(pa, wav)
-        turn += 1
+        if FOLLOW_UP_LISTEN_S > 0 and FOLLOW_UP_MAX_TURNS <= 0:
+            log.info("Follow-up disabled by config (FOLLOW_UP_MAX_TURNS=%d).", _FOLLOW_UP_MAX_TURNS_RAW)
 
-        while played_audio and FOLLOW_UP_LISTEN_S > 0 and turn < FOLLOW_UP_MAX_TURNS:
+        while played_audio and FOLLOW_UP_LISTEN_S > 0 and follow_ups_done < FOLLOW_UP_MAX_TURNS:
+            # Re-arm the UI orb to "listening" right before follow-up capture opens.
+            threading.Thread(target=_notify_wake_background, daemon=True, name="followup-notify").start()
             play_follow_up_beep()
-            log.info("Follow-up listening (turn %d, %.1fs window)...", turn + 1, FOLLOW_UP_LISTEN_S)
+            log.info("Follow-up listening (turn %d/%d, %.1fs window)...", follow_ups_done + 1, FOLLOW_UP_MAX_TURNS, FOLLOW_UP_LISTEN_S)
             _recording_active.set()
             follow_wav = _follow_up_listen(pa)
             if follow_wav is None:
                 log.info("No follow-up speech detected, returning to wake mode.")
                 break
-            played_audio = _do_single_turn(pa, follow_wav)
-            turn += 1
+            # Follow-up misses should fall back silently to wake mode, not speak a
+            # robotic retry prompt after a successful prior answer.
+            played_audio = _do_single_turn(pa, follow_wav, prompt_on_empty=False)
+            follow_ups_done += 1
 
         if POST_PLAY_TAIL_S > 0:
             time.sleep(POST_PLAY_TAIL_S)
@@ -1001,6 +1090,13 @@ def main():
         PANEL_ID,
         wake_phrase,
         WAKEWORD_THRESHOLD,
+    )
+    log.info(
+        "Follow-up config: listen=%.1fs max_turns=%d (raw=%d) vad_threshold=%.2f",
+        FOLLOW_UP_LISTEN_S,
+        FOLLOW_UP_MAX_TURNS,
+        _FOLLOW_UP_MAX_TURNS_RAW,
+        FOLLOW_UP_VAD_THRESHOLD,
     )
     log.info(
         "Wake beep: enabled=%s freq=%dHz dur=%dms vol=%.2f",

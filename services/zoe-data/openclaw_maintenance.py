@@ -137,6 +137,10 @@ async def run_npm_upgrade_openclaw(timeout_s: float = 600.0) -> tuple[bool, str]
 async def maybe_create_update_notification(db, user_id: str, current: str | None, latest: str) -> bool:
     """
     Insert a deduped openclaw_update notification. Returns True if a new row was inserted.
+
+    Also retires any prior openclaw_update rows for this user whose `latest` is older
+    than the incoming one (or equal to the now-installed `current`), so the bell never
+    stacks up one-per-release when upgrades go out.
     """
     cursor = await db.execute(
         """SELECT id, data FROM notifications
@@ -144,13 +148,32 @@ async def maybe_create_update_notification(db, user_id: str, current: str | None
         (user_id,),
     )
     rows = await cursor.fetchall()
+    superseded_ids: list[str] = []
     for row in rows:
         try:
             d = json.loads(row["data"] or "{}")
-            if d.get("kind") == "openclaw_update" and d.get("latest") == latest:
-                return False
         except json.JSONDecodeError:
             continue
+        if d.get("kind") != "openclaw_update":
+            continue
+        row_latest = str(d.get("latest") or "")
+        if row_latest == latest:
+            return False  # already have an active notif for this exact version
+        # Row's target is older than the incoming one (or already installed) → retire.
+        if not row_latest or version_newer(latest, row_latest) or (current and not version_newer(row_latest, current)):
+            superseded_ids.append(str(row["id"]))
+
+    if superseded_ids:
+        placeholders = ",".join("?" * len(superseded_ids))
+        await db.execute(
+            f"UPDATE notifications SET delivered = 1, action_taken = 'superseded' "
+            f"WHERE id IN ({placeholders})",
+            superseded_ids,
+        )
+        try:
+            await broadcaster.broadcast("all", "notifications_changed", {"reason": "superseded"})
+        except Exception:
+            logger.debug("supersede broadcast failed", exc_info=True)
 
     nid = str(uuid.uuid4())
     title = "OpenClaw update available"
@@ -171,6 +194,48 @@ async def maybe_create_update_notification(db, user_id: str, current: str | None
     except Exception:
         logger.debug("notification broadcast failed", exc_info=True)
     return True
+
+
+async def clear_satisfied_update_notifications(db, installed: str | None) -> int:
+    """
+    Mark as delivered any active `openclaw_update` notifications whose target version
+    is now <= the installed version. Returns the count cleared.
+    """
+    if not installed:
+        return 0
+    try:
+        cursor = await db.execute(
+            "SELECT id, data FROM notifications WHERE delivered = 0 AND data IS NOT NULL"
+        )
+        rows = await cursor.fetchall()
+    except Exception:
+        return 0
+
+    cleared: list[str] = []
+    for row in rows:
+        try:
+            d = json.loads(row["data"] or "{}")
+        except json.JSONDecodeError:
+            continue
+        if d.get("kind") != "openclaw_update":
+            continue
+        row_latest = str(d.get("latest") or "")
+        if row_latest and not version_newer(row_latest, installed):
+            cleared.append(str(row["id"]))
+
+    if cleared:
+        placeholders = ",".join("?" * len(cleared))
+        await db.execute(
+            f"UPDATE notifications SET delivered = 1, action_taken = 'auto-cleared' "
+            f"WHERE id IN ({placeholders})",
+            cleared,
+        )
+        await db.commit()
+        try:
+            await broadcaster.broadcast("all", "notifications_changed", {"reason": "auto-cleared"})
+        except Exception:
+            logger.debug("auto-clear broadcast failed", exc_info=True)
+    return len(cleared)
 
 
 async def process_auto_update_users(db, latest: str | None) -> None:

@@ -5,12 +5,14 @@ from fastapi import APIRouter, Depends
 
 from auth import get_current_user
 from database import get_db
+from guest_policy import require_feature_access
 
 router = APIRouter(prefix="/api/user/profile", tags=["user-profile"])
 
 
 @router.get("")
 async def get_user_profile(user: dict = Depends(get_current_user), db=Depends(get_db)):
+    await require_feature_access(db, user, feature="user_profile", action="read")
     user_id = user["user_id"]
     profile = {
         "user_id": user_id,
@@ -35,6 +37,7 @@ async def get_user_profile(user: dict = Depends(get_current_user), db=Depends(ge
 
 @router.post("/analyze")
 async def analyze_profile(user: dict = Depends(get_current_user), db=Depends(get_db)):
+    await require_feature_access(db, user, feature="user_profile", action="analyze")
     user_id = user["user_id"]
     cur = await db.execute(
         """SELECT mood FROM journal_entries
@@ -57,25 +60,29 @@ async def analyze_profile(user: dict = Depends(get_current_user), db=Depends(get
     top_topics = [{"type": k, "count": v} for k, v in cat_counts.most_common(5)]
 
     insights = {"observed_patterns": top_moods + top_topics}
-    cur = await db.execute(
-        """SELECT id FROM memory_items
-           WHERE user_id = ? AND source_type = 'profile-analysis' LIMIT 1""",
-        (user_id,),
-    )
-    existing = await cur.fetchone()
     payload = json.dumps(insights)
-    if existing:
-        await db.execute(
-            """UPDATE memory_items SET content = ?, updated_at = datetime('now')
-               WHERE id = ?""",
-            (payload, existing["id"]),
-        )
-    else:
-        await db.execute(
-            """INSERT INTO memory_items
-               (id, user_id, memory_type, title, content, confidence, source_type, status, visibility)
-               VALUES (lower(hex(randomblob(16))), ?, 'profile', 'Profile Analysis', ?, 0.8, 'profile-analysis', 'approved', 'personal')""",
-            (user_id, payload),
-        )
-    await db.commit()
+    try:
+        from memory_service import MemoryServiceError, get_memory_service
+        try:
+            # entity_id is stable per user so the idempotency key dedupes
+            # repeated analysis runs on the same content into one row.
+            await get_memory_service().ingest(
+                payload,
+                user_id=user_id,
+                source="profile-analysis",
+                memory_type="profile",
+                confidence=0.8,
+                status="approved",
+                tags=["profile", "analysis"],
+                entity_type="profile",
+                entity_id=user_id,
+                user_turn_id=f"profile-analysis-{user_id}",
+            )
+        except MemoryServiceError as exc:
+            import logging as _lg
+            _lg.getLogger(__name__).info(
+                "user_profile: memory ingest skipped: %s", exc
+            )
+    except Exception:
+        pass
     return {"analysis": insights, "status": "ok"}

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import get_current_user
 from database import get_db
+from guest_policy import require_feature_access
 from models import TransactionCreate, TransactionUpdate
 from push import broadcaster
 
@@ -44,6 +45,7 @@ async def create_transaction(
     db=Depends(get_db),
 ):
     """Create a new transaction."""
+    await require_feature_access(db, user, feature="transactions", action="create")
     user_id = user["user_id"]
     transaction_id = str(uuid.uuid4())
     metadata_json = json.dumps(payload.metadata) if payload.metadata else None
@@ -89,6 +91,7 @@ async def list_transactions(
     db=Depends(get_db),
 ):
     """List transactions with optional filters."""
+    await require_feature_access(db, user, feature="transactions", action="read")
     user_id = user["user_id"]
     conditions = [_visibility_filter_sql()]
     params: list = [user_id]
@@ -120,6 +123,7 @@ async def get_weekly_summary(
     db=Depends(get_db),
 ):
     """Get weekly transaction summary."""
+    await require_feature_access(db, user, feature="transactions", action="read")
     user_id = user["user_id"]
     end = date.today()
     start = end - timedelta(days=6)
@@ -170,6 +174,7 @@ async def get_transaction(
     db=Depends(get_db),
 ):
     """Get a single transaction by ID."""
+    await require_feature_access(db, user, feature="transactions", action="read")
     user_id = user["user_id"]
     where = f"{_visibility_filter_sql()} AND id = ?"
     cursor = await db.execute(
@@ -190,6 +195,7 @@ async def update_transaction(
     db=Depends(get_db),
 ):
     """Update an existing transaction."""
+    await require_feature_access(db, user, feature="transactions", action="update")
     user_id = user["user_id"]
     where = f"{_visibility_filter_sql()} AND id = ?"
     cursor = await db.execute(
@@ -237,6 +243,7 @@ async def delete_transaction(
     db=Depends(get_db),
 ):
     """Soft delete a transaction."""
+    await require_feature_access(db, user, feature="transactions", action="delete")
     user_id = user["user_id"]
     where = f"{_visibility_filter_sql()} AND id = ?"
     cursor = await db.execute(
@@ -264,6 +271,7 @@ async def toggle_transaction_status(
     db=Depends(get_db),
 ):
     """Toggle transaction status between pending and completed."""
+    await require_feature_access(db, user, feature="transactions", action="patch_status")
     user_id = user["user_id"]
     where = f"{_visibility_filter_sql()} AND id = ?"
     cursor = await db.execute(

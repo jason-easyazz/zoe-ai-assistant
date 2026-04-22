@@ -1,17 +1,22 @@
 import asyncio
 import base64
+import json
 import logging
 import os
 import re
 import shutil
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote_plus
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from auth import get_current_user
+from database import get_db
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +24,15 @@ router = APIRouter(prefix="/api/voice", tags=["voice"])
 
 # ── Voice session continuity ───────────────────────────────────────────────
 # Persist one session_id per panel so follow-up voice commands have context.
-# Dict: panel_id → {"session_id": str, "last_at": float}
+# Pass 3 B3: also stores bound_user_id (resolved via daemon VID or PIN) with
+# the same 5-min TTL so mid-conversation turns don't re-challenge.
+# Dict: panel_id → {"session_id": str, "last_at": float, "bound_user_id": str|None}
 _VOICE_SESSIONS: dict[str, dict] = {}
 _VOICE_SESSION_TTL_S = 5 * 60  # Reset after 5 min silence
+
+# Pass 3 B4: stash of voice turns awaiting PIN confirmation.
+# Dict: panel_id → {pending_id, transcript, session_id, expire_at}
+_PENDING_VOICE_IDENT: dict[str, dict] = {}
 
 
 def _get_or_create_voice_session(panel_id: str) -> str:
@@ -33,7 +44,12 @@ def _get_or_create_voice_session(panel_id: str) -> str:
         entry["last_at"] = now
         return entry["session_id"]
     session_id = f"voice-panel-{panel_id}-{_uuid.uuid4().hex[:8]}"
-    _VOICE_SESSIONS[panel_id] = {"session_id": session_id, "last_at": now}
+    # Preserve bound identity across idle TTL rollovers so authenticated
+    # panels do not get unnecessary repeat auth challenges.
+    _next = {"session_id": session_id, "last_at": now}
+    if entry and entry.get("bound_user_id"):
+        _next["bound_user_id"] = entry["bound_user_id"]
+    _VOICE_SESSIONS[panel_id] = _next
     return session_id
 
 
@@ -304,6 +320,132 @@ async def _synthesize_local_service(text: str, profile: str, base_url: str) -> O
         return None
 
 
+async def _synthesize_kokoro_sidecar(text: str) -> Optional[bytes]:
+    """Synthesize via Kokoro PyTorch sidecar (GPU, natural af_sky voice).
+
+    Calls the local FastAPI sidecar on port 10201 which keeps the Kokoro
+    model warm in CUDA memory.  Sub-200ms warm latency on Jetson Orin.
+    Set ZOE_KOKORO_SIDECAR_URL to override (default http://127.0.0.1:10201).
+    Falls through silently if the sidecar is unavailable.
+    """
+    sidecar_url = os.environ.get("ZOE_KOKORO_SIDECAR_URL", "http://127.0.0.1:10201").rstrip("/")
+    voice = os.environ.get("ZOE_KOKORO_VOICE", "af_sky").strip() or "af_sky"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            r = await client.post(
+                f"{sidecar_url}/synthesize",
+                json={"text": text, "voice": voice},
+            )
+            if r.status_code >= 400 or not r.content:
+                logger.debug("kokoro-sidecar HTTP %s", r.status_code)
+                return None
+            return r.content
+    except Exception as exc:
+        logger.debug("kokoro-sidecar unavailable: %s", exc)
+        return None
+
+
+async def _synthesize_wyoming_piper(text: str) -> Optional[bytes]:
+    """Synthesize via wyoming-piper TCP socket (rhasspy/wyoming-piper Docker container).
+
+    p50 ~127ms first-audio-byte on Jetson — 8x faster than Kokoro ONNX on CPU.
+    Set ZOE_WYOMING_PIPER_HOST (default 127.0.0.1) and ZOE_WYOMING_PIPER_PORT (default 10200).
+    Wyoming protocol: newline-delimited JSON headers + optional binary payloads.
+    """
+    host = os.environ.get("ZOE_WYOMING_PIPER_HOST", "127.0.0.1").strip()
+    port = int(os.environ.get("ZOE_WYOMING_PIPER_PORT", "10200"))
+    voice_name = os.environ.get("ZOE_WYOMING_PIPER_VOICE", "en_US-lessac-medium").strip()
+
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port), timeout=2.0
+        )
+    except Exception as exc:
+        logger.debug("wyoming-piper connect failed: %s", exc)
+        return None
+
+    try:
+        event = {
+            "type": "synthesize",
+            "data": {"text": text, "voice": {"name": voice_name}},
+            "data_length": 0,
+        }
+        writer.write((json.dumps(event) + "\n").encode())
+        await writer.drain()
+
+        audio_rate = 22050
+        audio_width = 2
+        audio_channels = 1
+        pcm_chunks: list[bytes] = []
+        buf = b""
+
+        while True:
+            try:
+                chunk = await asyncio.wait_for(reader.read(65536), timeout=10.0)
+            except asyncio.TimeoutError:
+                break
+            if not chunk:
+                break
+            buf += chunk
+
+            while b"\n" in buf:
+                idx = buf.index(b"\n")
+                header_bytes, buf = buf[:idx], buf[idx + 1:]
+                try:
+                    hdr = json.loads(header_bytes.decode(errors="replace"))
+                except Exception:
+                    continue
+
+                ev_type = hdr.get("type", "")
+                data_len = hdr.get("data_length", 0)
+                payload_len = hdr.get("payload_length", 0)
+
+                # Consume structured sub-data (audio format info)
+                while len(buf) < data_len:
+                    buf += await asyncio.wait_for(reader.read(65536), timeout=10.0)
+                if data_len > 0:
+                    try:
+                        sub = json.loads(buf[:data_len].decode(errors="replace"))
+                        if ev_type == "audio-start":
+                            audio_rate = sub.get("rate", audio_rate)
+                            audio_width = sub.get("width", audio_width)
+                            audio_channels = sub.get("channels", audio_channels)
+                    except Exception:
+                        pass
+                    buf = buf[data_len:]
+
+                # Consume raw PCM payload
+                while len(buf) < payload_len:
+                    buf += await asyncio.wait_for(reader.read(65536), timeout=10.0)
+                if payload_len > 0:
+                    pcm_chunks.append(buf[:payload_len])
+                    buf = buf[payload_len:]
+
+                if ev_type == "audio-stop":
+                    # Wrap collected PCM in a WAV container
+                    import wave as _wave, io as _io
+
+                    raw_pcm = b"".join(pcm_chunks)
+                    wav_buf = _io.BytesIO()
+                    with _wave.open(wav_buf, "wb") as wf:
+                        wf.setnchannels(audio_channels)
+                        wf.setsampwidth(audio_width)
+                        wf.setframerate(audio_rate)
+                        wf.writeframes(raw_pcm)
+                    return wav_buf.getvalue()
+
+        return None
+    except Exception as exc:
+        logger.warning("wyoming-piper synthesis failed: %s", exc)
+        return None
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+
 async def _synthesize_kokoro(text: str, voice: str = "af_sky") -> Optional[bytes]:
     """Synthesize using Kokoro ONNX (thewh1teagle/kokoro-onnx).
 
@@ -356,6 +498,622 @@ def _split_sentences(text: str) -> list[str]:
     return sentences or [text.strip()]
 
 
+def _extract_complete_sentences(buffer: str) -> tuple[list[str], str]:
+    """Extract finished sentences from a streaming token buffer."""
+    if not buffer:
+        return [], ""
+    complete: list[str] = []
+    last_end = 0
+    for m in re.finditer(r"(.+?[.!?])(?:\s+|$)", buffer, flags=re.DOTALL):
+        sentence = m.group(1).strip()
+        if sentence:
+            complete.append(sentence)
+        last_end = m.end()
+    return complete, buffer[last_end:]
+
+
+async def _broadcast_weather_ui(
+    panel_id: str,
+    summary: str = "Fetching weather...",
+    turn_key: Optional[str] = None,
+) -> None:
+    """Mirror chat weather navigation on voice path with durable delivery."""
+    delivery_key = turn_key or str(time.monotonic_ns())
+    nav_action = {
+        "id": f"voice_weather_nav_{panel_id}_{delivery_key}",
+        "action_type": "panel_navigate",
+        "payload": {
+            "url": "/touch/weather.html",
+            "label": "Opening weather",
+            "panel_id": panel_id,
+        },
+    }
+    card_action = {
+        "id": f"voice_weather_card_{panel_id}_{delivery_key}",
+        "action_type": "show_card",
+        "payload": {
+            "type": "weather",
+            "data": {"summary": summary[:200]},
+            "panel_id": panel_id,
+        },
+    }
+    try:
+        from push import broadcaster
+        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
+        await broadcaster.broadcast("all", "ui_action", {"action": card_action})
+    except Exception as exc:
+        logger.debug("voice weather ui broadcast failed (non-fatal): %s", exc)
+    try:
+        from database import get_db as _get_db
+        from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
+        async for _db in _get_db():
+            _panel_user_id = "family-admin"
+            try:
+                _cur = await _db.execute(
+                    "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+                    (panel_id,),
+                )
+                _row = await _cur.fetchone()
+                if _row and _row["user_id"]:
+                    _panel_user_id = str(_row["user_id"])
+            except Exception:
+                pass
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="panel_navigate",
+                payload=nav_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_weather_nav_{panel_id}_{delivery_key}",
+            )
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="show_card",
+                payload=card_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_weather_card_{panel_id}_{delivery_key}",
+            )
+            break
+    except Exception as exc:
+        logger.debug("voice weather ui enqueue failed (non-fatal): %s", exc)
+
+
+async def _broadcast_calendar_ui(
+    panel_id: str,
+    summary: str = "Opening your calendar...",
+    turn_key: Optional[str] = None,
+) -> None:
+    """Mirror calendar intents on voice path with durable delivery."""
+    delivery_key = turn_key or str(time.monotonic_ns())
+    nav_action = {
+        "id": f"voice_calendar_nav_{panel_id}_{delivery_key}",
+        "action_type": "panel_navigate",
+        "payload": {
+            "url": "/touch/calendar.html",
+            "label": "Opening calendar",
+            "panel_id": panel_id,
+        },
+    }
+    card_action = {
+        "id": f"voice_calendar_card_{panel_id}_{delivery_key}",
+        "action_type": "show_card",
+        "payload": {
+            "type": "calendar",
+            "data": {"summary": summary[:200]},
+            "panel_id": panel_id,
+        },
+    }
+    try:
+        from push import broadcaster
+        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
+        await broadcaster.broadcast("all", "ui_action", {"action": card_action})
+    except Exception as exc:
+        logger.debug("voice calendar ui broadcast failed (non-fatal): %s", exc)
+    try:
+        from database import get_db as _get_db
+        from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
+        async for _db in _get_db():
+            _panel_user_id = "family-admin"
+            try:
+                _cur = await _db.execute(
+                    "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+                    (panel_id,),
+                )
+                _row = await _cur.fetchone()
+                if _row and _row["user_id"]:
+                    _panel_user_id = str(_row["user_id"])
+            except Exception:
+                pass
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="panel_navigate",
+                payload=nav_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_calendar_nav_{panel_id}_{delivery_key}",
+            )
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="show_card",
+                payload=card_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_calendar_card_{panel_id}_{delivery_key}",
+            )
+            break
+    except Exception as exc:
+        logger.debug("voice calendar ui enqueue failed (non-fatal): %s", exc)
+
+
+async def _broadcast_shopping_chat_ui(
+    panel_id: str,
+    list_type: str,
+    item_text: str,
+    summary: str = "Shopping item added.",
+    turn_key: Optional[str] = None,
+) -> None:
+    """Navigate to touch chat and surface live shopping list context."""
+    delivery_key = turn_key or str(time.monotonic_ns())
+    safe_list_type = (list_type or "shopping").strip() or "shopping"
+    safe_item = (item_text or "").strip()
+    query = (
+        f"list_focus=1&list_type={quote_plus(safe_list_type)}"
+        f"&list_item={quote_plus(safe_item)}"
+    )
+    nav_action = {
+        "id": f"voice_shop_chat_nav_{panel_id}_{delivery_key}",
+        "action_type": "panel_navigate",
+        "payload": {
+            "url": f"/touch/chat.html?{query}",
+            "label": "Opening shopping list in chat",
+            "panel_id": panel_id,
+        },
+    }
+    card_action = {
+        "id": f"voice_shop_chat_card_{panel_id}_{delivery_key}",
+        "action_type": "show_card",
+        "payload": {
+            "type": "list",
+            "data": {
+                "summary": summary[:200],
+                "item": safe_item,
+                "list_type": safe_list_type,
+            },
+            "panel_id": panel_id,
+        },
+    }
+    try:
+        from push import broadcaster
+        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
+        await broadcaster.broadcast("all", "ui_action", {"action": card_action})
+    except Exception as exc:
+        logger.debug("voice shopping ui broadcast failed (non-fatal): %s", exc)
+    try:
+        from database import get_db as _get_db
+        from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
+        async for _db in _get_db():
+            _panel_user_id = "family-admin"
+            try:
+                _cur = await _db.execute(
+                    "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+                    (panel_id,),
+                )
+                _row = await _cur.fetchone()
+                if _row and _row["user_id"]:
+                    _panel_user_id = str(_row["user_id"])
+            except Exception:
+                pass
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="panel_navigate",
+                payload=nav_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_shop_chat_nav_{panel_id}_{delivery_key}",
+            )
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="show_card",
+                payload=card_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_shop_chat_card_{panel_id}_{delivery_key}",
+            )
+            break
+    except Exception as exc:
+        logger.debug("voice shopping ui enqueue failed (non-fatal): %s", exc)
+
+
+async def _broadcast_calendar_chat_prefill_ui(
+    panel_id: str,
+    slots: dict,
+    turn_key: Optional[str] = None,
+) -> None:
+    """Navigate to touch chat with calendar form prefill for user confirmation."""
+    delivery_key = turn_key or str(time.monotonic_ns())
+    title = str((slots or {}).get("title", "")).strip()
+    date = str((slots or {}).get("date", "")).strip()
+    time_val = str((slots or {}).get("time", "")).strip()
+    query = (
+        f"calendar_focus=1&title={quote_plus(title)}"
+        f"&date={quote_plus(date)}&time={quote_plus(time_val)}"
+    )
+    nav_action = {
+        "id": f"voice_calendar_chat_nav_{panel_id}_{delivery_key}",
+        "action_type": "panel_navigate",
+        "payload": {
+            "url": f"/touch/chat.html?{query}",
+            "label": "Opening calendar form in chat",
+            "panel_id": panel_id,
+        },
+    }
+    try:
+        from push import broadcaster
+        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
+    except Exception as exc:
+        logger.debug("voice calendar chat prefill broadcast failed (non-fatal): %s", exc)
+    try:
+        from database import get_db as _get_db
+        from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
+        async for _db in _get_db():
+            _panel_user_id = "family-admin"
+            try:
+                _cur = await _db.execute(
+                    "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+                    (panel_id,),
+                )
+                _row = await _cur.fetchone()
+                if _row and _row["user_id"]:
+                    _panel_user_id = str(_row["user_id"])
+            except Exception:
+                pass
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="panel_navigate",
+                payload=nav_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_calendar_chat_nav_{panel_id}_{delivery_key}",
+            )
+            break
+    except Exception as exc:
+        logger.debug("voice calendar chat prefill enqueue failed (non-fatal): %s", exc)
+
+
+async def _broadcast_list_ui(
+    panel_id: str,
+    item_text: str,
+    list_type: str = "shopping",
+    summary: str = "Item added.",
+    turn_key: Optional[str] = None,
+) -> None:
+    delivery_key = turn_key or str(time.monotonic_ns())
+    nav_action = {
+        "id": f"voice_list_nav_{panel_id}_{delivery_key}",
+        "action_type": "panel_navigate",
+        "payload": {
+            "url": "/touch/lists.html",
+            "label": "Opening list",
+            "panel_id": panel_id,
+        },
+    }
+    card_action = {
+        "id": f"voice_list_card_{panel_id}_{delivery_key}",
+        "action_type": "show_card",
+        "payload": {
+            "type": "list",
+            "data": {
+                "summary": summary[:200],
+                "item": item_text,
+                "list_type": list_type,
+            },
+            "panel_id": panel_id,
+        },
+    }
+    try:
+        from push import broadcaster
+        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
+        await broadcaster.broadcast("all", "ui_action", {"action": card_action})
+    except Exception as exc:
+        logger.debug("voice list ui broadcast failed (non-fatal): %s", exc)
+    try:
+        from database import get_db as _get_db
+        from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
+        async for _db in _get_db():
+            _panel_user_id = "family-admin"
+            try:
+                _cur = await _db.execute(
+                    "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+                    (panel_id,),
+                )
+                _row = await _cur.fetchone()
+                if _row and _row["user_id"]:
+                    _panel_user_id = str(_row["user_id"])
+            except Exception:
+                pass
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="panel_navigate",
+                payload=nav_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_list_nav_{panel_id}_{delivery_key}",
+            )
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="show_card",
+                payload=card_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_list_card_{panel_id}_{delivery_key}",
+            )
+            break
+    except Exception as exc:
+        logger.debug("voice list ui enqueue failed (non-fatal): %s", exc)
+
+
+async def _broadcast_reminder_ui(
+    panel_id: str,
+    summary: str,
+    turn_key: Optional[str] = None,
+) -> None:
+    delivery_key = turn_key or str(time.monotonic_ns())
+    nav_action = {
+        "id": f"voice_reminder_nav_{panel_id}_{delivery_key}",
+        "action_type": "panel_navigate",
+        "payload": {
+            "url": "/touch/dashboard.html",
+            "label": "Opening reminders",
+            "panel_id": panel_id,
+        },
+    }
+    card_action = {
+        "id": f"voice_reminder_card_{panel_id}_{delivery_key}",
+        "action_type": "show_card",
+        "payload": {
+            "type": "reminder",
+            "data": {"summary": summary[:200]},
+            "panel_id": panel_id,
+        },
+    }
+    try:
+        from push import broadcaster
+        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
+        await broadcaster.broadcast("all", "ui_action", {"action": card_action})
+    except Exception as exc:
+        logger.debug("voice reminder ui broadcast failed (non-fatal): %s", exc)
+    try:
+        from database import get_db as _get_db
+        from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
+        async for _db in _get_db():
+            _panel_user_id = "family-admin"
+            try:
+                _cur = await _db.execute(
+                    "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+                    (panel_id,),
+                )
+                _row = await _cur.fetchone()
+                if _row and _row["user_id"]:
+                    _panel_user_id = str(_row["user_id"])
+            except Exception:
+                pass
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="panel_navigate",
+                payload=nav_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_reminder_nav_{panel_id}_{delivery_key}",
+            )
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="show_card",
+                payload=card_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_reminder_card_{panel_id}_{delivery_key}",
+            )
+            break
+    except Exception as exc:
+        logger.debug("voice reminder ui enqueue failed (non-fatal): %s", exc)
+
+
+async def _request_auth_ui(panel_id: str, challenge_id: str, reason: str) -> bool:
+    """Request panel auth UI via both websocket broadcast and durable queue."""
+    if not challenge_id:
+        return False
+    auth_action = {
+        "id": f"voice_auth_{panel_id}_{challenge_id}",
+        "action_type": "panel_request_auth",
+        "payload": {
+            "panel_id": panel_id,
+            "challenge_id": challenge_id,
+            "action_context": reason,
+        },
+    }
+    delivered = False
+    try:
+        from push import broadcaster as _bc_auth
+        await _bc_auth.broadcast("all", "ui_action", {"action": auth_action})
+        delivered = True
+    except Exception as exc:
+        logger.debug("voice auth ui broadcast failed (non-fatal): %s", exc)
+    try:
+        from database import get_db as _get_db
+        from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
+        async for _db in _get_db():
+            _panel_user_id = "family-admin"
+            try:
+                _cur = await _db.execute(
+                    "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+                    (panel_id,),
+                )
+                _row = await _cur.fetchone()
+                if _row and _row["user_id"]:
+                    _panel_user_id = str(_row["user_id"])
+            except Exception:
+                pass
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="panel_request_auth",
+                payload=auth_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_auth_{panel_id}_{challenge_id}",
+            )
+            delivered = True
+            break
+    except Exception as exc:
+        logger.warning("voice auth ui enqueue failed: %s", exc)
+    return delivered
+
+
+async def _resolve_panel_default_user(panel_id: str, db) -> Optional[str]:
+    """Best-effort panel user resolution for voice fallback identity."""
+    try:
+        cur = await db.execute(
+            "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+            (panel_id,),
+        )
+        row = await cur.fetchone()
+        if row and row["user_id"]:
+            return str(row["user_id"])
+    except Exception:
+        pass
+    try:
+        cur = await db.execute(
+            "SELECT user_id FROM panel_user_bindings WHERE panel_id = ? AND binding_type = 'default' LIMIT 1",
+            (panel_id,),
+        )
+        row = await cur.fetchone()
+        if row and row["user_id"]:
+            return str(row["user_id"])
+    except Exception:
+        pass
+    return None
+
+
+def _panel_session_trust_window_s() -> int:
+    """Seconds that an active panel session is trusted for voice scope gating."""
+    raw = str(os.environ.get("ZOE_PANEL_SESSION_TRUST_WINDOW_S", "900")).strip()
+    try:
+        value = int(raw)
+    except Exception:
+        return 900
+    return max(0, min(value, 24 * 60 * 60))
+
+
+async def _resolve_recent_panel_session_user(panel_id: str, db) -> Optional[str]:
+    """
+    Resolve panel user only when the panel session heartbeat is fresh enough
+    to be considered actively authenticated.
+    """
+    trust_window_s = _panel_session_trust_window_s()
+    if trust_window_s <= 0:
+        return None
+    try:
+        cur = await db.execute(
+            "SELECT user_id, last_seen_at FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+            (panel_id,),
+        )
+        row = await cur.fetchone()
+        if not row or not row["user_id"] or not row["last_seen_at"]:
+            return None
+
+        raw_last_seen = str(row["last_seen_at"]).strip()
+        parsed: Optional[datetime] = None
+        try:
+            parsed = datetime.fromisoformat(raw_last_seen.replace("Z", "+00:00"))
+        except Exception:
+            try:
+                parsed = datetime.strptime(raw_last_seen, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                logger.debug("voice scope trust: unsupported last_seen_at format: %s", raw_last_seen)
+                return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+
+        age_s = (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
+        if age_s <= trust_window_s:
+            return str(row["user_id"])
+    except Exception:
+        pass
+    return None
+
+
+def _contains_decision_keyword(text: str, keywords: frozenset[str]) -> bool:
+    normalized = re.sub(r"\s+", " ", (text or "").strip().lower())
+    if not normalized:
+        return False
+    for kw in keywords:
+        phrase = re.sub(r"\s+", r"\\s+", re.escape(kw.strip().lower()))
+        if re.search(rf"(?<![a-z0-9]){phrase}(?![a-z0-9])", normalized):
+            return True
+    return False
+
+
+def _should_handoff_calendar(user_text: str, reply_text: str, intent_name: Optional[str] = None) -> bool:
+    if intent_name in {"calendar_show", "daily_briefing", "calendar_create"}:
+        return True
+    u = (user_text or "").lower()
+    r = (reply_text or "").lower()
+    user_hint = any(k in u for k in ("calendar", "schedule", "weekly", "week plan"))
+    reply_hint = any(k in r for k in ("calendar", "schedule", "this week", "upcoming"))
+    return user_hint and reply_hint
+
+
+def _wav_bytes_from_float32_samples(samples, sample_rate: int) -> bytes:
+    """Convert float32 [-1,1] samples to mono WAV bytes."""
+    import io
+    import wave
+    import numpy as np
+
+    clipped = np.clip(samples, -1.0, 1.0)
+    pcm16 = (clipped * 32767.0).astype(np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(int(sample_rate))
+        wf.writeframes(pcm16.tobytes())
+    return buf.getvalue()
+
+
+async def _stream_kokoro_sentence_wavs(sentence: str, voice: str = "af_sky"):
+    """Yield WAV chunks from Kokoro create_stream() for one sentence."""
+    kokoro = await _get_kokoro_instance()
+    if kokoro is None or not hasattr(kokoro, "create_stream"):
+        return
+    voice = os.environ.get("ZOE_KOKORO_VOICE", voice).strip() or voice
+    kokoro_speed = float(os.environ.get("ZOE_KOKORO_SPEED", "1.15"))
+    try:
+        async for samples, sample_rate in kokoro.create_stream(
+            sentence, voice=voice, speed=kokoro_speed, lang="en-us"
+        ):
+            if samples is None:
+                continue
+            try:
+                yield _wav_bytes_from_float32_samples(samples, sample_rate)
+            except Exception:
+                continue
+    except Exception as exc:
+        logger.warning("Kokoro create_stream failed: %s", exc)
+        return
+
+
 @router.post("/synthesize")
 async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth)):
     text = (payload or {}).get("text", "")
@@ -377,7 +1135,7 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
     content_type = "audio/wav"
     provider = "none"
 
-    # ── TTS waterfall: local sidecar → Kokoro ONNX → Edge TTS → espeak-ng ──
+    # ── TTS waterfall: kokoro-sidecar → local sidecar → wyoming-piper → Kokoro ONNX → Edge TTS → espeak-ng ──
     if mode in {"hybrid", "local"}:
         audio_bytes = await _synthesize_local_service(text, profile=profile, base_url=local_tts_url)
         if audio_bytes:
@@ -385,7 +1143,24 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
             if not audio_bytes.startswith(b"RIFF"):
                 content_type = "audio/mpeg"
 
-    # Kokoro ONNX — best offline naturalness, sub-100ms on Jetson CUDA.
+    # Kokoro sidecar — GPU-accelerated natural af_sky voice (~150ms warm on Jetson).
+    if audio_bytes is None and mode != "cloud":
+        audio_bytes = await _synthesize_kokoro_sidecar(text)
+        if audio_bytes:
+            provider = "kokoro-sidecar"
+            content_type = "audio/wav"
+
+    # wyoming-piper — p50 127ms on Jetson, 8x faster than Kokoro ONNX CPU.
+    if audio_bytes is None and mode != "cloud":
+        wyoming_host = os.environ.get("ZOE_WYOMING_PIPER_HOST", "127.0.0.1").strip()
+        wyoming_port = int(os.environ.get("ZOE_WYOMING_PIPER_PORT", "10200"))
+        if wyoming_host and wyoming_port:
+            audio_bytes = await _synthesize_wyoming_piper(text)
+            if audio_bytes:
+                provider = "wyoming-piper"
+                content_type = "audio/wav"
+
+    # Kokoro ONNX — offline fallback (CPU ~1.1s on Jetson, fast if CUDA available).
     if audio_bytes is None and mode != "cloud":
         audio_bytes = await _synthesize_kokoro(text)
         if audio_bytes:
@@ -468,11 +1243,21 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
             provider = "none"
             error_msg: Optional[str] = None
 
-            # Waterfall: local sidecar → Kokoro ONNX → Edge TTS → espeak
+            # Waterfall: kokoro-sidecar → local sidecar → wyoming-piper → Kokoro ONNX → Edge TTS → espeak
             if mode in {"hybrid", "local"} and local_tts_url:
                 audio_bytes = await _synthesize_local_service(sentence, profile=profile, base_url=local_tts_url)
                 if audio_bytes:
                     provider = "local-tts"
+
+            if audio_bytes is None and mode != "cloud":
+                audio_bytes = await _synthesize_kokoro_sidecar(sentence)
+                if audio_bytes:
+                    provider = "kokoro-sidecar"
+
+            if audio_bytes is None and mode != "cloud":
+                audio_bytes = await _synthesize_wyoming_piper(sentence)
+                if audio_bytes:
+                    provider = "wyoming-piper"
 
             if audio_bytes is None and mode != "cloud":
                 audio_bytes = await _synthesize_kokoro(sentence)
@@ -579,7 +1364,10 @@ async def _get_faster_whisper_model():
         try:
             from faster_whisper import WhisperModel  # type: ignore
             device = "cuda" if os.environ.get("ZOE_WHISPER_DEVICE", "").lower() == "cuda" else "cpu"
-            compute_type = "float16" if device == "cuda" else "int8"
+            # int8_float16 = int8-quantized weights + float16 compute: best speed/memory for Jetson
+            # Falls back to int8 if VRAM is very tight
+            default_compute = "int8_float16" if device == "cuda" else "int8"
+            compute_type = os.environ.get("ZOE_WHISPER_COMPUTE_TYPE", default_compute).strip() or default_compute
             logger.info("Loading faster-whisper model=%s device=%s", model_name, device)
             _faster_whisper_model = WhisperModel(model_name, device=device, compute_type=compute_type)
             _faster_whisper_model_name = model_name
@@ -704,7 +1492,12 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
 
 
 @router.post("/command")
-async def voice_command(payload: dict, caller: dict = Depends(_require_voice_auth)):
+async def voice_command(
+    payload: dict,
+    caller: dict = Depends(_require_voice_auth),
+    stream: bool = Query(False, description="When true, stream audio chunks as they are produced."),
+    db=Depends(get_db),
+):
     """
     Receive a transcribed voice command from the Pi daemon (after wake word + STT).
 
@@ -715,16 +1508,65 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
     text = str((payload or {}).get("text", "")).strip()
     panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or "unknown"))
     identified_user_id: Optional[str] = (payload or {}).get("identified_user_id") or None
+    # Forwarded by /voice/turn so end-to-end total can be recorded from the
+    # true start of the request (audio upload). Falls back to command start.
+    _t_turn_start = (payload or {}).get("_t_turn_start")
+    _t_cmd_start = time.monotonic()
+    _turn_key = str(time.monotonic_ns())
+    _quick_intent_name: Optional[str] = None
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
+
+    # Classify identity source for Pass 3 observability (Pass 1 is measurement-only).
+    try:
+        from voice_metrics import voice_identity_source_count
+        if identified_user_id:
+            voice_identity_source_count.labels(source="daemon_vid").inc()
+        elif caller.get("panel_id"):
+            # device-token path resolves to family-admin today (Pass 0 finding).
+            voice_identity_source_count.labels(source="fallback_family_admin").inc()
+        else:
+            voice_identity_source_count.labels(source="fallback_guest").inc()
+    except Exception:
+        pass
 
     # Session continuity: reuse the same session for follow-up commands within 5 min.
     # Caller can override with an explicit session_id (e.g. for HA bridge routing).
     explicit_session = str((payload or {}).get("session_id", "")).strip()
     session_id = explicit_session if explicit_session else _get_or_create_voice_session(panel_id)
 
+    # Pass 3 B3: if daemon supplied an identified_user_id, bind it to the session
+    # so the next turn from the same panel doesn't need to re-verify.
+    if identified_user_id:
+        _ses = _VOICE_SESSIONS.get(panel_id)
+        if _ses:
+            _ses["bound_user_id"] = identified_user_id
+
+    # Resolve effective user once so all downstream branches (intent fast path,
+    # scope checks, Pi agent, and OpenClaw fallback) share the same identity.
+    _bound_user = (_VOICE_SESSIONS.get(panel_id) or {}).get("bound_user_id")
+    _panel_recent_user = await _resolve_recent_panel_session_user(panel_id, db)
+    if not _bound_user and _panel_recent_user:
+        _ses = _VOICE_SESSIONS.get(panel_id)
+        if _ses is not None:
+            _ses["bound_user_id"] = _panel_recent_user
+        _bound_user = _panel_recent_user
+    _panel_default_user = await _resolve_panel_default_user(panel_id, db)
+    _scope_identity_user = identified_user_id or _bound_user or _panel_recent_user
+    _has_scope_identity = bool(_scope_identity_user)
+    effective_user = (
+        identified_user_id
+        or _bound_user
+        or _panel_recent_user
+        or _panel_default_user
+        or caller.get("user_id")
+        or "guest"
+    )
+    if effective_user == "voice-daemon":
+        effective_user = _panel_default_user or "guest"
+
     logger.info("voice/command panel=%s session=%s user=%s len=%d",
-                panel_id, session_id, identified_user_id or "anon", len(text))
+                panel_id, session_id, effective_user, len(text))
 
     # ── Voice confirmation: check if we're waiting for yes/no ─────────────
     pending = _PENDING_CONFIRMATIONS.get(panel_id)
@@ -735,7 +1577,7 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
             pending = None
         else:
             lc = text.lower().strip().rstrip(".!?")
-            if any(kw in lc for kw in _CONFIRM_KEYWORDS):
+            if _contains_decision_keyword(lc, _CONFIRM_KEYWORDS):
                 # User confirmed — execute the intent now.
                 del _PENDING_CONFIRMATIONS[panel_id]
                 from intent_router import execute_intent, Intent
@@ -749,6 +1591,8 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
                     _uid = identified_user_id or pending.get("user_id", "voice-daemon")
                     result = await execute_intent(confirmed_intent, _uid)
                     reply_text = result or "Done!"
+                    if confirmed_intent.name in {"calendar_create", "calendar_show", "daily_briefing"}:
+                        await _broadcast_calendar_ui(panel_id, reply_text, turn_key=_turn_key)
                 except Exception as exc:
                     logger.error("Confirmed intent execution failed: %s", exc)
                     reply_text = "Sorry, that failed. Please try again."
@@ -766,7 +1610,7 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
                     pass
                 return {"ok": True, "panel_id": panel_id, "reply": reply_text,
                         "audio_base64": audio_b64_conf, "content_type": ct_conf}
-            elif any(kw in lc for kw in _CANCEL_KEYWORDS):
+            elif _contains_decision_keyword(lc, _CANCEL_KEYWORDS):
                 del _PENDING_CONFIRMATIONS[panel_id]
                 reply_text = "Okay, cancelled."
                 try:
@@ -814,7 +1658,114 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
     # wait for 'yes/confirm' from the user before actually executing.
     try:
         from intent_router import detect_intent as _detect
+        _t_scope_start = time.monotonic()
         _quick_intent = _detect(text)
+        _quick_intent_name = _quick_intent.name if _quick_intent else None
+        try:
+            from voice_metrics import voice_stage_seconds, voice_intent_hit_count
+            voice_stage_seconds.labels(stage="scope").observe(time.monotonic() - _t_scope_start)
+            voice_intent_hit_count.labels(
+                intent=(_quick_intent.name if _quick_intent else "none"),
+            ).inc()
+        except Exception:
+            pass
+        if _quick_intent and _quick_intent.name in _CONFIRM_INTENTS:
+            # User-scoped intents must go through PIN challenge first.
+            try:
+                from voice_scope import classify as _vscope_pre
+                _quick_scope = _vscope_pre(text, _quick_intent)
+                if _quick_scope.scope == "user_scoped" and not _has_scope_identity:
+                    _quick_intent = None
+            except Exception:
+                pass
+        if _quick_intent and _quick_intent.name == "list_add":
+            # Fast-path list adds so the touch chat can immediately show the updated list.
+            _allow_quick_list = True
+            try:
+                from voice_scope import classify as _vscope_list
+                _list_scope = _vscope_list(text, _quick_intent)
+                if _list_scope.scope == "user_scoped" and not _has_scope_identity:
+                    _allow_quick_list = False
+            except Exception:
+                pass
+            if _allow_quick_list:
+                try:
+                    from intent_router import execute_intent as _exec_list
+                    slots = _quick_intent.slots or {}
+                    _list_reply = await _exec_list(_quick_intent, effective_user)
+                    reply_text = _list_reply or "Added to your list."
+                    await _broadcast_list_ui(
+                        panel_id=panel_id,
+                        item_text=str(slots.get("item", "")),
+                        list_type=str(slots.get("list_type", "shopping")),
+                        summary=reply_text,
+                        turn_key=_turn_key,
+                    )
+                    _list_audio = await synthesize({"text": reply_text}, caller=caller)
+                    return {
+                        "ok": True,
+                        "panel_id": panel_id,
+                        "reply": reply_text,
+                        "audio_base64": base64.b64encode(_list_audio.body).decode("ascii"),
+                        "content_type": _list_audio.media_type,
+                        "intent": "list_add",
+                    }
+                except Exception as _list_exc:
+                    logger.warning("voice/command quick list_add failed: %s", _list_exc)
+        if _quick_intent and _quick_intent.name == "calendar_create":
+            # Calendar writes: execute immediately, then navigate to calendar page.
+            _allow_quick_calendar = True
+            try:
+                from voice_scope import classify as _vscope_cal
+                _cal_scope = _vscope_cal(text, _quick_intent)
+                if _cal_scope.scope == "user_scoped" and not _has_scope_identity:
+                    _allow_quick_calendar = False
+            except Exception:
+                pass
+            if _allow_quick_calendar:
+                try:
+                    from intent_router import execute_intent as _exec_cal
+                    slots = _quick_intent.slots or {}
+                    _cal_reply = await _exec_cal(_quick_intent, effective_user)
+                    reply_text = _cal_reply or "I added that calendar event."
+                    await _broadcast_calendar_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
+                    _cal_audio = await synthesize({"text": reply_text}, caller=caller)
+                    return {
+                        "ok": True,
+                        "panel_id": panel_id,
+                        "reply": reply_text,
+                        "audio_base64": base64.b64encode(_cal_audio.body).decode("ascii"),
+                        "content_type": _cal_audio.media_type,
+                        "intent": "calendar_create",
+                    }
+                except Exception as _cal_exc:
+                    logger.warning("voice/command quick calendar_create failed: %s", _cal_exc)
+        if _quick_intent and _quick_intent.name == "reminder_create":
+            _allow_quick_reminder = True
+            try:
+                from voice_scope import classify as _vscope_rem
+                _rem_scope = _vscope_rem(text, _quick_intent)
+                if _rem_scope.scope == "user_scoped" and not _has_scope_identity:
+                    _allow_quick_reminder = False
+            except Exception:
+                pass
+            if _allow_quick_reminder:
+                try:
+                    from intent_router import execute_intent as _exec_rem
+                    _rem_reply = await _exec_rem(_quick_intent, effective_user)
+                    reply_text = _rem_reply or "I set that reminder."
+                    await _broadcast_reminder_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
+                    _rem_audio = await synthesize({"text": reply_text}, caller=caller)
+                    return {
+                        "ok": True,
+                        "panel_id": panel_id,
+                        "reply": reply_text,
+                        "audio_base64": base64.b64encode(_rem_audio.body).decode("ascii"),
+                        "content_type": _rem_audio.media_type,
+                        "intent": "reminder_create",
+                    }
+                except Exception as _rem_exc:
+                    logger.warning("voice/command quick reminder_create failed: %s", _rem_exc)
         if _quick_intent and _quick_intent.name in _CONFIRM_INTENTS:
             slots = _quick_intent.slots or {}
             # Build a human-readable confirmation phrase.
@@ -824,8 +1775,10 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
                     + (f" at {s.get('time', '')}" if s.get("time") else "")
                     + ". Shall I confirm?",
                 "list_add": lambda s: f"Add '{s.get('item', 'item')}' to "
-                    + f"{s.get('list_name', 'the list')}. Shall I confirm?",
-                "reminder_create": lambda s: f"Set a reminder: {s.get('text', 'reminder')}. Shall I confirm?",
+                    + ("your shopping list" if s.get("list_type") == "shopping"
+                       else f"your {s.get('list_type', 'shopping').replace('_', ' ')} list")
+                    + ". Shall I confirm?",
+                "reminder_create": lambda s: f"Set a reminder: {s.get('title', s.get('text', 'reminder'))}. Shall I confirm?",
                 "note_create": lambda s: "Create a new note. Shall I confirm?",
                 "journal_create": lambda s: "Create a journal entry. Shall I confirm?",
                 "transaction_create": lambda s: f"Record a transaction of {s.get('amount', '')}. Shall I confirm?",
@@ -838,7 +1791,7 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
                 "slots": slots,
                 "expire_at": time.monotonic() + _CONFIRM_TIMEOUT_S,
                 "session_id": session_id,
-                "user_id": identified_user_id or "voice-daemon",
+                "user_id": effective_user,
             }
             try:
                 audio_resp = await synthesize({"text": confirm_phrase}, caller=caller)
@@ -862,44 +1815,507 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
     except Exception as exc:
         logger.debug("voice confirmation pre-check failed (non-fatal): %s", exc)
 
-    # Forward to chat pipeline (non-streaming, synchronous for voice path).
-    # Use the device token for auth — do NOT send X-Session-ID because:
-    # - The auto-generated session_id doesn't exist in zoe-auth, which would cause 401
-    # - The device token lets get_current_user resolve the panel user directly
-    device_token = caller.get("raw_token") or ""
+    # ── Pass 2e A7: public-intent short-circuit ─────────────────────────────
+    # If intent_router already has a direct answer (time, date, timer, recipe)
+    # we skip the LLM entirely — TTS the answer straight from execute_intent.
+    # This gives <=500ms first-audio-byte for the most common "quick query" phrases.
+    from guest_policy import (
+        PUBLIC_HOUSEHOLD_INTENTS as _PUBLIC_VOICE_INTENTS,
+        can_use_voice_intent as _can_use_voice_intent,
+        record_policy_decision as _record_guest_policy,
+    )
+    _voice_policy_user = {
+        "user_id": _scope_identity_user or "guest",
+        "role": "user" if _has_scope_identity else "guest",
+    }
+    try:
+        from intent_router import detect_intent as _detect_pub, execute_intent as _exec_pub
+        _pub_intent = _detect_pub(text)
+        if _pub_intent and _pub_intent.name in _PUBLIC_VOICE_INTENTS:
+            if not await _can_use_voice_intent(db, _voice_policy_user, _pub_intent.name):
+                _record_guest_policy(
+                    "blocked",
+                    surface="voice",
+                    resource="intent_fast",
+                    action=_pub_intent.name,
+                )
+                _blocked_phrase = "That request is not available in the current role."
+                _blocked_audio = await synthesize({"text": _blocked_phrase}, caller=caller)
+                return {
+                    "ok": True,
+                    "panel_id": panel_id,
+                    "reply": _blocked_phrase,
+                    "audio_base64": base64.b64encode(_blocked_audio.body).decode("ascii"),
+                    "content_type": _blocked_audio.media_type,
+                    "status": "role_blocked",
+                }
+            _pub_reply = await _exec_pub(_pub_intent, effective_user if effective_user != "family-admin" else "guest")
+            if _pub_reply:
+                if _pub_intent.name == "weather":
+                    await _broadcast_weather_ui(panel_id, _pub_reply, turn_key=_turn_key)
+                if _pub_intent.name in {"calendar_show", "daily_briefing"}:
+                    await _broadcast_calendar_ui(panel_id, _pub_reply, turn_key=_turn_key)
+                try:
+                    from voice_metrics import voice_stage_seconds, voice_turn_count, voice_intent_hit_count
+                    voice_stage_seconds.labels(stage="llm_first_token").observe(0.0)
+                    voice_intent_hit_count.labels(intent=_pub_intent.name).inc()
+                    voice_turn_count.labels(outcome="ok", path="intent_fast").inc()
+                except Exception:
+                    pass
+                try:
+                    from push import broadcaster as _bc_pub
+                    await _bc_pub.broadcast("all", "voice:responding", {"panel_id": panel_id, "text": _pub_reply[:200]})
+                except Exception:
+                    pass
+                _pub_audio_resp = await synthesize({"text": _pub_reply}, caller=caller)
+                _pub_audio_b64 = base64.b64encode(_pub_audio_resp.body).decode("ascii")
+                try:
+                    from push import broadcaster as _bc_pub2
+                    await _bc_pub2.broadcast("all", "voice:done", {"panel_id": panel_id})
+                except Exception:
+                    pass
+                try:
+                    from voice_metrics import voice_stage_seconds
+                    voice_stage_seconds.labels(stage="tts_first_byte").observe(time.monotonic() - _t_cmd_start)
+                    voice_stage_seconds.labels(stage="total").observe(time.monotonic() - _t_cmd_start)
+                except Exception:
+                    pass
+                _record_guest_policy(
+                    "guest_allowed" if not _has_scope_identity else "auth_ok",
+                    surface="voice",
+                    resource="intent_fast",
+                    action=_pub_intent.name,
+                )
+                return {
+                    "ok": True, "panel_id": panel_id,
+                    "reply": _pub_reply,
+                    "audio_base64": _pub_audio_b64,
+                    "content_type": _pub_audio_resp.media_type,
+                    "intent": _pub_intent.name,
+                }
+    except Exception as _pub_exc:
+        logger.warning("voice/command public-intent check failed: %s", _pub_exc)
+
+    # Weather fallback: if public-intent short-circuit failed for any reason,
+    # still resolve weather deterministically instead of dropping to generic LLM text.
+    try:
+        from intent_router import detect_intent as _detect_weather_fb, execute_intent as _exec_weather_fb
+        _weather_fb_intent = _detect_weather_fb(text)
+        if _weather_fb_intent and _weather_fb_intent.name == "weather":
+            _weather_fb_reply = await _exec_weather_fb(
+                _weather_fb_intent,
+                effective_user if effective_user != "family-admin" else "guest",
+            )
+            if _weather_fb_reply:
+                await _broadcast_weather_ui(panel_id, _weather_fb_reply, turn_key=_turn_key)
+                _weather_fb_audio = await synthesize({"text": _weather_fb_reply}, caller=caller)
+                return {
+                    "ok": True,
+                    "panel_id": panel_id,
+                    "reply": _weather_fb_reply,
+                    "audio_base64": base64.b64encode(_weather_fb_audio.body).decode("ascii"),
+                    "content_type": _weather_fb_audio.media_type,
+                    "intent": "weather",
+                }
+    except Exception as _weather_fb_exc:
+        logger.warning("voice/command weather fallback failed: %s", _weather_fb_exc)
+
+    # ── Pass 3 B3/B4: scope gate + PIN challenge ─────────────────────────────
+    # Check if this utterance needs a known user. If so, and we have none,
+    # challenge via panel_auth rather than leaking personal data to guest.
+    _ident_for_scope = _scope_identity_user
+    if os.environ.get("ZOE_VOICE_IDENT", "").strip() in ("1", "true"):
+        try:
+            from voice_scope import classify as _vscope, ScopeDecision as _SD
+            from intent_router import detect_intent as _detect_scope
+            _scope_intent = _detect_scope(text) if "_pub_intent" not in dir() else locals().get("_pub_intent")
+            _scope: _SD = _vscope(text, _scope_intent)
+            _scope_action = _scope.intent_name or "text"
+            _scope_allowed = True
+            if _scope.intent_name:
+                _scope_allowed = await _can_use_voice_intent(db, _voice_policy_user, _scope.intent_name)
+            if _scope.intent_name and not _scope_allowed and not (_scope.scope == "user_scoped" and not _ident_for_scope):
+                _record_guest_policy(
+                    "blocked",
+                    surface="voice",
+                    resource="scope_gate",
+                    action=_scope_action,
+                )
+                _blocked_phrase = "That request is blocked for this role. Please sign in with an allowed profile."
+                _blocked_audio = await synthesize({"text": _blocked_phrase}, caller=caller)
+                return {
+                    "ok": True,
+                    "panel_id": panel_id,
+                    "reply": _blocked_phrase,
+                    "status": "role_blocked",
+                    "audio_base64": base64.b64encode(_blocked_audio.body).decode("ascii"),
+                    "content_type": _blocked_audio.media_type,
+                }
+            if _scope.scope == "user_scoped" and not _ident_for_scope:
+                _record_guest_policy(
+                    "auth_required",
+                    surface="voice",
+                    resource="scope_gate",
+                    action=_scope_action,
+                )
+                import uuid as _uuid_mod
+                _pending_id = _uuid_mod.uuid4().hex
+                _pending_payload = {
+                    "pending_id": _pending_id,
+                    "transcript": text,
+                    "session_id": session_id,
+                    "expire_at": time.monotonic() + 120,
+                }
+                _PENDING_VOICE_IDENT[panel_id] = {
+                    **_pending_payload,
+                }
+                _pin_phrase = "Please authenticate on the touch panel. Choose your profile and enter your PIN to continue."
+                _pin_audio_resp = await synthesize({"text": _pin_phrase}, caller=caller)
+                _pin_b64 = base64.b64encode(_pin_audio_resp.body).decode("ascii")
+                _challenge_id = None
+                try:
+                    from routers.panel_auth import create_pin_challenge_internal
+                    from database import get_db as _get_db
+                    async for _db in _get_db():
+                        _challenge = await create_pin_challenge_internal(
+                            panel_id=panel_id,
+                            user_id=None,
+                            action_context={
+                                "kind": "voice_turn",
+                                "pending_id": _pending_id,
+                                "panel_id": panel_id,
+                                # Durable replay fallback if process-local in-memory maps are lost.
+                                "pending_transcript": text,
+                                "pending_session_id": session_id,
+                            },
+                            db=_db,
+                        )
+                        _challenge_id = (_challenge or {}).get("challenge_id")
+                        break
+                except Exception as _challenge_exc:
+                    logger.warning("voice/command PIN challenge failed: %s", _challenge_exc)
+                if not _challenge_id:
+                    _fail_phrase = "I could not open the authentication screen just now. Please open the touch login page and try again."
+                    _fail_audio = await synthesize({"text": _fail_phrase}, caller=caller)
+                    return {
+                        "ok": True,
+                        "panel_id": panel_id,
+                        "reply": _fail_phrase,
+                        "status": "auth_unavailable",
+                        "audio_base64": base64.b64encode(_fail_audio.body).decode("ascii"),
+                        "content_type": _fail_audio.media_type,
+                    }
+
+                _requested = await _request_auth_ui(
+                    panel_id=panel_id,
+                    challenge_id=_challenge_id,
+                    reason="Voice command needs identity. Enter your PIN to continue.",
+                )
+                if not _requested:
+                    logger.warning(
+                        "voice/command auth challenge created but panel auth action was not delivered: panel=%s challenge=%s",
+                        panel_id,
+                        _challenge_id,
+                    )
+                try:
+                    from voice_metrics import voice_turn_count
+                    voice_turn_count.labels(outcome="ok", path="awaiting_pin").inc()
+                except Exception:
+                    pass
+                return {
+                    "ok": True,
+                    "panel_id": panel_id,
+                    "reply": _pin_phrase,
+                    "status": "awaiting_pin",
+                    "audio_base64": _pin_b64,
+                    "content_type": _pin_audio_resp.media_type,
+                }
+            _record_guest_policy(
+                "guest_allowed" if not _ident_for_scope else "auth_ok",
+                surface="voice",
+                resource="scope_gate",
+                action=_scope_action,
+            )
+        except Exception as _scope_exc:
+            logger.debug("voice/command scope gate failed (non-fatal): %s", _scope_exc)
+
+    # Forward to chat pipeline.
     reply_text = ""
     audio_b64: Optional[str] = None
     content_type = "audio/wav"
 
     try:
         t_chat_start = time.monotonic()
+
+        # ── A4 (Pass 2c): in-process streaming + F3 identity fix ──────────
+        # Previously we did an httpx.post -> /api/chat/?stream=false, which
+        #   (a) paid TCP+JSON serialization cost twice,
+        #   (b) silently dropped `identified_user_id` because chat.py never
+        #       reads that field (Pass 0 finding), causing every identified
+        #       turn to resolve to the device-token's user (family-admin).
+        # We now call run_pi_agent_streaming directly:
+        #   * user_id is passed explicitly -> memory writes, MemPalace reads,
+        #     transaction rows, etc. all land under the right user.
+        #   * token_budget is the same tight voice budget.
+        #   * Streaming tokens are accumulated so that Pass 2b can hand the
+        #     sentence-buffered stream to Kokoro.create_stream() and bring
+        #     first-audio-byte latency down further.
+        from pi_agent import run_pi_agent_streaming
+
         voice_timeout = float(os.environ.get("ZOE_VOICE_CHAT_TIMEOUT_S", "20"))
-        async with httpx.AsyncClient(timeout=voice_timeout) as client:
-            chat_url = os.environ.get("ZOE_CHAT_URL", "http://localhost:8000")
-            headers: dict[str, str] = {
-                "Content-Type": "application/json",
-                "X-Voice-Mode": "true",
-            }
-            if device_token:
-                headers["X-Device-Token"] = device_token
-            r = await client.post(
-                f"{chat_url}/api/chat/?stream=false",
-                json={
-                    "message": text,
-                    "session_id": session_id,
-                    "panel_id": panel_id,
-                    "max_tokens": int(os.environ.get("ZOE_VOICE_MAX_TOKENS", "150")),
-                    **({"identified_user_id": identified_user_id} if identified_user_id else {}),
-                },
-                headers=headers,
+        try:
+            _openclaw_cap = float(os.environ.get("ZOE_VOICE_OPENCLAW_TIMEOUT_S", str(voice_timeout)))
+        except Exception:
+            _openclaw_cap = voice_timeout
+        openclaw_voice_timeout = max(5.0, min(voice_timeout, _openclaw_cap))
+        _t_first_token: Optional[float] = None
+
+        if stream:
+            # Stream mode: emit chunks as soon as sentence boundaries appear.
+            async def _generate_voice_stream():
+                from push import broadcaster as _bc_stream
+                import json as _json
+
+                chunk_index = 0
+                token_buf = ""
+                full_reply_parts: list[str] = []
+                _t_first_audio: Optional[float] = None
+
+                try:
+                    async def _emit_sentence(sentence: str):
+                        nonlocal chunk_index, _t_first_audio
+                        s = sentence.strip()
+                        if not s:
+                            return
+                        full_reply_parts.append(s)
+                        await _bc_stream.broadcast("all", "voice:responding", {
+                            "panel_id": panel_id,
+                            "text": s[:200],
+                        })
+
+                        # Prefer kokoro-sidecar (natural GPU voice); fall back to wyoming-piper then Kokoro stream
+                        wav_bytes = await _synthesize_kokoro_sidecar(s)
+                        _tts_provider = "kokoro-sidecar"
+                        if not wav_bytes:
+                            wav_bytes = await _synthesize_wyoming_piper(s)
+                            _tts_provider = "wyoming-piper"
+                        if wav_bytes:
+                            if _t_first_audio is None:
+                                _t_first_audio = time.monotonic() - t_chat_start
+                                try:
+                                    from voice_metrics import voice_stage_seconds
+                                    voice_stage_seconds.labels(stage="tts_first_byte").observe(_t_first_audio)
+                                except Exception:
+                                    pass
+                            header = _json.dumps({
+                                "chunk": chunk_index,
+                                "text": s[:80],
+                                "provider": _tts_provider,
+                            })
+                            yield (header + "\n").encode()
+                            yield base64.b64encode(wav_bytes) + b"\n"
+                            chunk_index += 1
+                            return
+
+                        sent_any = False
+                        async for wav_bytes in _stream_kokoro_sentence_wavs(s):
+                            if _t_first_audio is None:
+                                _t_first_audio = time.monotonic() - t_chat_start
+                                try:
+                                    from voice_metrics import voice_stage_seconds
+                                    voice_stage_seconds.labels(stage="tts_first_byte").observe(_t_first_audio)
+                                except Exception:
+                                    pass
+                            header = _json.dumps({
+                                "chunk": chunk_index,
+                                "text": s[:80],
+                                "provider": "kokoro-onnx-stream",
+                            })
+                            yield (header + "\n").encode()
+                            yield base64.b64encode(wav_bytes) + b"\n"
+                            chunk_index += 1
+                            sent_any = True
+
+                        if sent_any:
+                            return
+                        # Fallback if stream synthesis unavailable.
+                        audio_resp = await synthesize({"text": s}, caller=caller)
+                        if _t_first_audio is None:
+                            _t_first_audio = time.monotonic() - t_chat_start
+                            try:
+                                from voice_metrics import voice_stage_seconds
+                                voice_stage_seconds.labels(stage="tts_first_byte").observe(_t_first_audio)
+                            except Exception:
+                                pass
+                        header = _json.dumps({
+                            "chunk": chunk_index,
+                            "text": s[:80],
+                            "provider": audio_resp.headers.get("X-Zoe-TTS-Provider", "fallback"),
+                        })
+                        yield (header + "\n").encode()
+                        yield base64.b64encode(audio_resp.body) + b"\n"
+                        chunk_index += 1
+
+                    async def _emit_line(line: dict):
+                        yield (_json.dumps(line) + "\n").encode()
+
+                    async for delta in run_pi_agent_streaming(text, session_id, user_id=effective_user, voice_mode=True):
+                        if not delta:
+                            continue
+                        if delta.startswith("__ESCALATE__:") or delta.startswith("__ESCALATE_BG__:"):
+                            try:
+                                from openclaw_ws import openclaw_cli
+                                _, body = delta.split(":", 1)
+                                reason, _, oc_task = body.partition("|")
+                                oc_prompt = (oc_task or text).strip()
+                                logger.info("voice/command stream escalation -> OpenClaw reason=%s", reason or "unspecified")
+                                try:
+                                    await _bc_stream.broadcast("all", "voice:responding", {
+                                        "panel_id": panel_id,
+                                        "text": "Give me a second - this one may take a little longer. I will come back with the result.",
+                                    })
+                                except Exception:
+                                    pass
+                                delta = (
+                                    await asyncio.wait_for(
+                                        openclaw_cli(oc_prompt, session_id, user_id=effective_user),
+                                        timeout=openclaw_voice_timeout,
+                                    )
+                                ).strip()
+                                if not delta:
+                                    continue
+                            except Exception as esc_exc:
+                                logger.warning("voice/command OpenClaw escalation failed: %s", esc_exc)
+                                delta = "I couldn't complete that advanced request right now. Please try again."
+                        if _t_first_token is None:
+                            _t_first_token = time.monotonic() - t_chat_start
+                            try:
+                                from voice_metrics import voice_stage_seconds
+                                voice_stage_seconds.labels(stage="llm_first_token").observe(_t_first_token)
+                            except Exception:
+                                pass
+                        token_buf += delta
+                        ready, token_buf = _extract_complete_sentences(token_buf)
+                        for sentence in ready:
+                            async for out_chunk in _emit_sentence(sentence):
+                                yield out_chunk
+
+                    if token_buf.strip():
+                        async for out_chunk in _emit_sentence(token_buf):
+                            yield out_chunk
+                        token_buf = ""
+
+                    final_reply = " ".join(part.strip() for part in full_reply_parts if part.strip()).strip()
+                    try:
+                        await _bc_stream.broadcast("all", "ui_action", {
+                            "action": {
+                                "id": f"voice_card_{panel_id}",
+                                "action_type": "show_card",
+                                "payload": {
+                                    "type": "answer",
+                                    "data": {"text": final_reply[:300]},
+                                    "panel_id": panel_id,
+                                },
+                            }
+                        })
+                    except Exception:
+                        pass
+                    try:
+                        await _bc_stream.broadcast("all", "voice:done", {"panel_id": panel_id})
+                    except Exception:
+                        pass
+                    try:
+                        from voice_metrics import voice_stage_seconds, voice_turn_count
+                        if _t_turn_start is None:
+                            voice_stage_seconds.labels(stage="total").observe(time.monotonic() - _t_cmd_start)
+                        voice_turn_count.labels(outcome="ok", path="command").inc()
+                    except Exception:
+                        pass
+                    async for out_line in _emit_line({"done": True, "reply": final_reply, "panel_id": panel_id}):
+                        yield out_line
+                except asyncio.TimeoutError:
+                    async for out_line in _emit_line({"error": "voice command stream timeout"}):
+                        yield out_line
+                except Exception as exc:
+                    logger.warning("voice/command stream error: %s", exc)
+                    async for out_line in _emit_line({"error": "voice command stream failure"}):
+                        yield out_line
+
+            return StreamingResponse(
+                _generate_voice_stream(),
+                media_type="application/x-zoe-audio-stream",
+                headers={"Cache-Control": "no-cache"},
             )
-            r.raise_for_status()
-            reply_json = r.json()
-            reply_text = reply_json.get("response") or reply_json.get("reply") or reply_json.get("message") or ""
-        logger.info("voice/command LLM %.1fs reply=%d chars", time.monotonic() - t_chat_start, len(reply_text))
+
+        collected: list[str] = []
+
+        async def _stream_collect() -> None:
+            nonlocal _t_first_token
+            async for delta in run_pi_agent_streaming(
+                text,
+                session_id,
+                user_id=effective_user,
+                voice_mode=True,
+            ):
+                if not delta:
+                    continue
+                if delta.startswith("__ESCALATE__:") or delta.startswith("__ESCALATE_BG__:"):
+                    try:
+                        from openclaw_ws import openclaw_cli
+                        from push import broadcaster as _bc_escalate
+                        _, body = delta.split(":", 1)
+                        reason, _, oc_task = body.partition("|")
+                        oc_prompt = (oc_task or text).strip()
+                        logger.info("voice/command escalation -> OpenClaw reason=%s", reason or "unspecified")
+                        try:
+                            await _bc_escalate.broadcast("all", "voice:responding", {
+                                "panel_id": panel_id,
+                                "text": "Give me a second - this one may take a little longer. I will come back with the result.",
+                            })
+                        except Exception:
+                            pass
+                        delta = (
+                            await asyncio.wait_for(
+                                openclaw_cli(oc_prompt, session_id, user_id=effective_user),
+                                timeout=openclaw_voice_timeout,
+                            )
+                        ).strip()
+                        if not delta:
+                            continue
+                    except Exception as esc_exc:
+                        logger.warning("voice/command OpenClaw escalation failed: %s", esc_exc)
+                        delta = "I couldn't complete that advanced request right now. Please try again."
+                if _t_first_token is None:
+                    _t_first_token = time.monotonic() - t_chat_start
+                    try:
+                        from voice_metrics import voice_stage_seconds
+                        voice_stage_seconds.labels(stage="llm_first_token").observe(_t_first_token)
+                    except Exception:
+                        pass
+                collected.append(delta)
+
+        _llm_timed_out = False
+        try:
+            await asyncio.wait_for(_stream_collect(), timeout=voice_timeout)
+        except asyncio.TimeoutError:
+            logger.warning("voice/command LLM stream timeout after %.1fs", voice_timeout)
+            _llm_timed_out = True
+
+        reply_text = "".join(collected).strip()
+        _t_llm_total = time.monotonic() - t_chat_start
+
+        logger.info(
+            "voice/command LLM first_token=%.2fs total=%.2fs reply=%d chars user=%s",
+            (_t_first_token if _t_first_token is not None else -1.0),
+            _t_llm_total, len(reply_text), effective_user,
+        )
     except Exception as exc:
         logger.error("voice/command chat error: %s", exc)
-        # Speak an error fallback — never let the panel go silent after wake word.
+        try:
+            from voice_metrics import voice_failure_reason_count
+            voice_failure_reason_count.labels(path="command", reason="llm_error").inc()
+        except Exception:
+            pass
         audio_b64, content_type = await _make_fallback_audio()
         try:
             from push import broadcaster as _bc_err
@@ -913,6 +2329,13 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
             "audio_base64": audio_b64,
             "content_type": content_type,
         }
+
+    degraded_reason: Optional[str] = None
+    if not reply_text:
+        degraded_reason = "llm_timeout" if _llm_timed_out else "llm_empty"
+        reply_text = _FALLBACK_PHRASE
+        audio_b64, content_type = await _make_fallback_audio()
+        logger.warning("voice/command degraded fallback reason=%s panel=%s", degraded_reason, panel_id)
 
     # Fire broadcasts and TTS concurrently — TTS is the slow path (~1-2s).
     if reply_text:
@@ -934,20 +2357,34 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
                         },
                     }
                 })
+                if _should_handoff_calendar(text, reply_text, _quick_intent_name):
+                    await _broadcast_calendar_ui(panel_id, reply_text, turn_key=_turn_key)
             except Exception:
                 pass
 
         async def _run_tts():
-            nonlocal audio_b64, content_type
+            nonlocal audio_b64, content_type, degraded_reason
+            if degraded_reason and audio_b64:
+                return
             try:
                 t0 = time.monotonic()
                 audio_resp = await synthesize({"text": reply_text}, caller=caller)
                 audio_b64 = base64.b64encode(audio_resp.body).decode("ascii")
                 content_type = audio_resp.media_type
-                logger.info("voice/command TTS %.1fs for %d chars", time.monotonic() - t0, len(reply_text))
+                _tts_elapsed = time.monotonic() - t0
+                try:
+                    # Pre-streaming: this is full TTS duration. Post-A3 it becomes
+                    # first-audio-byte latency.
+                    from voice_metrics import voice_stage_seconds
+                    voice_stage_seconds.labels(stage="tts_first_byte").observe(_tts_elapsed)
+                except Exception:
+                    pass
+                logger.info("voice/command TTS %.1fs for %d chars", _tts_elapsed, len(reply_text))
             except Exception as exc:
                 logger.warning("voice/command TTS failed: %s", exc)
                 audio_b64, content_type = await _make_fallback_audio()
+                if not degraded_reason:
+                    degraded_reason = "tts_failed"
 
         await asyncio.gather(_broadcast_response(), _run_tts())
 
@@ -955,6 +2392,19 @@ async def voice_command(payload: dict, caller: dict = Depends(_require_voice_aut
     try:
         from push import broadcaster as _bc3
         await _bc3.broadcast("all", "voice:done", {"panel_id": panel_id})
+    except Exception:
+        pass
+
+    # Record command-path total. If /voice/turn forwarded _t_turn_start we use
+    # that so "total" is true end-to-end including STT; otherwise we bound it
+    # to the command path only so the two labels stay comparable.
+    try:
+        from voice_metrics import voice_stage_seconds, voice_turn_count, voice_failure_reason_count
+        if _t_turn_start is None:
+            voice_stage_seconds.labels(stage="total").observe(time.monotonic() - _t_cmd_start)
+        voice_turn_count.labels(outcome="degraded" if degraded_reason else "ok", path="command").inc()
+        if degraded_reason:
+            voice_failure_reason_count.labels(path="command", reason=degraded_reason).inc()
     except Exception:
         pass
 
@@ -981,15 +2431,20 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth))
     panel_id = str((payload or {}).get("panel_id", caller.get("panel_id") or "unknown"))
     if not b64:
         raise HTTPException(status_code=400, detail="audio_base64 is required")
+
+    t_turn_start = time.monotonic()
+
+    # t_upload: base64 decode cost is our proxy for payload unpack time.
     try:
         raw = base64.b64decode(b64, validate=True)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
+    t_upload = time.monotonic() - t_turn_start
 
     suffix = ".wav" if (len(raw) >= 4 and raw[:4] == b"RIFF") else ".raw"
 
     # ── Phase 1: STT ──
-    t_turn_start = time.monotonic()
+    t_stt_start = time.monotonic()
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(raw)
@@ -1003,11 +2458,33 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth))
                 pass
     except Exception as exc:
         logger.error("voice/turn STT failed: %s", exc)
+        try:
+            from voice_metrics import voice_turn_count, voice_failure_reason_count
+            voice_turn_count.labels(outcome="error", path="turn").inc()
+            voice_failure_reason_count.labels(path="turn", reason="stt_error").inc()
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=f"Transcription failed: {exc}") from exc
 
-    t_stt = time.monotonic() - t_turn_start
+    t_stt = time.monotonic() - t_stt_start
+
+    # Record upload + STT histograms right away so they're observable even
+    # if the turn aborts later.
+    try:
+        from voice_metrics import voice_stage_seconds
+        voice_stage_seconds.labels(stage="upload").observe(t_upload)
+        voice_stage_seconds.labels(stage="stt").observe(t_stt)
+    except Exception:
+        pass
+
     transcript = transcript.strip()
     if not transcript:
+        try:
+            from voice_metrics import voice_turn_count, voice_failure_reason_count
+            voice_turn_count.labels(outcome="empty_transcript", path="turn").inc()
+            voice_failure_reason_count.labels(path="turn", reason="stt_empty").inc()
+        except Exception:
+            pass
         return {"ok": True, "panel_id": panel_id, "text": "", "reply": "", "audio_base64": None}
 
     logger.info("voice/turn panel=%s STT=%.1fs transcript=%r", panel_id, t_stt, transcript[:80])
@@ -1023,13 +2500,23 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth))
     command_payload = {
         "text": transcript,
         "panel_id": panel_id,
+        "_t_turn_start": t_turn_start,  # forwarded so voice_command can record end-to-end total
     }
     if (payload or {}).get("identified_user_id"):
         command_payload["identified_user_id"] = payload["identified_user_id"]
 
-    result = await voice_command(command_payload, caller=caller)
+    result = await voice_command(command_payload, caller=caller, stream=False)
     result["text"] = transcript
     t_total = time.monotonic() - t_turn_start
+    try:
+        from voice_metrics import voice_stage_seconds, voice_turn_count
+        voice_stage_seconds.labels(stage="total").observe(t_total)
+        voice_turn_count.labels(
+            outcome="ok" if result.get("ok") else "error",
+            path="turn",
+        ).inc()
+    except Exception:
+        pass
     logger.info("voice/turn total=%.1fs (STT=%.1fs LLM+TTS=%.1fs)", t_total, t_stt, t_total - t_stt)
     return result
 
@@ -1337,8 +2824,8 @@ _CONFIRM_TIMEOUT_S = 30  # seconds to wait for "yes/confirm" before expiring
 
 # Intents that require confirmation before execution (irreversible writes).
 _CONFIRM_INTENTS = frozenset({
-    "calendar_create", "list_add", "note_create", "journal_create",
-    "reminder_create", "transaction_create", "people_create",
+    "note_create", "journal_create",
+    "transaction_create", "people_create",
 })
 
 _CONFIRM_KEYWORDS = frozenset({

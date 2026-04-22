@@ -3,6 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#fafbfc">
+    <!-- Zoe theme bootstrap (must run before UI scripts) -->
+    <script>
+    (function(){
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name=theme-color]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch(e) {}
+    })();
+    </script>
     <title>Zoe - Welcome</title>
     <style>
         * { 

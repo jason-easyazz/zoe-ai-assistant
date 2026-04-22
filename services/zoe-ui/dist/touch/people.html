@@ -2,1970 +2,660 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <!-- TOUCH: kiosk bypass + auto-theme (must run before auth.js) -->
     <script>
     (function(){
-        // Persist kiosk mode across navigations
-        if(localStorage.getItem('zoe_kiosk')==='1') return;
-        var p=new URLSearchParams(location.search);
-        if(p.get('kiosk')==='1') localStorage.setItem('zoe_kiosk','1');
+        if (localStorage.getItem('zoe_kiosk') === '1') return;
+        var p = new URLSearchParams(location.search);
+        if (p.get('kiosk') === '1') localStorage.setItem('zoe_kiosk', '1');
     })();
     (function(){
-        // Auto-theme: light 7am-7pm, dark otherwise, manual override via zoe_theme
-        var s=localStorage.getItem('zoe_theme')||'auto';
-        var h=new Date().getHours();
-        var dark=s==='dark'||(s==='auto'&&(h<7||h>=19));
-        if(dark) document.documentElement.classList.add('dark-mode');
-        var mc=document.querySelector('meta[name=theme-color]');
-        if(mc) mc.content=dark?'#060610':'#fafbfc';
+        var s = localStorage.getItem('zoe_theme') || 'auto';
+        var h = new Date().getHours();
+        var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+        if (dark) document.documentElement.classList.add('dark-mode');
+        var mc = document.querySelector('meta[name=theme-color]');
+        if (mc) mc.content = dark ? '#060610' : '#fafbfc';
     })();
-    // Suppress browser dialogs in kiosk
     window.prompt  = function(msg, def) { return def || ''; };
     window.alert   = function() {};
     window.confirm = function() { return true; };
     </script>
-    <!-- TOUCH: adapter CSS (hides desktop nav, sets touch targets) -->
     <link rel="stylesheet" href="/touch/css/touch-adapter.css">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#fafbfc">
     <title>Zoe — People</title>
     <style>
-        :root {
-            --font-display: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif;
-            --font-text: 'SF Pro Text', -apple-system, BlinkMacSystemFont, sans-serif;
-            --bg-primary: #fafbfc;
-            --bg-secondary: #f1f3f6;
-            --glass-bg: rgba(255, 255, 255, 0.7);
-            --glass-border: rgba(255, 255, 255, 0.5);
-            --text-primary: #1f2937;
-            --text-secondary: #6b7280;
-            --text-tertiary: #9ca3af;
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
-            --purple: #7c3aed;
-            --rose: #ec4899;
-            --teal: #14b8a6;
-            --amber: #f59e0b;
-            --green: #10b981;
-        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --primary: #7B61FF;
+            --teal: #5AE0E0;
+            --gradient: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            --bg: #fafbfc;
+            --card: #ffffff;
+            --card-soft: #f7f8ff;
+            --border: rgba(123, 97, 255, 0.12);
+            --text: #1A202C;
+            --text-soft: #4A5568;
+            --text-mute: #718096;
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.04);
+            --shadow-md: 0 8px 24px rgba(123, 97, 255, 0.10);
+        }
+        html.dark-mode {
+            --bg: #060610;
+            --card: rgba(28, 28, 44, 0.9);
+            --card-soft: rgba(40, 40, 60, 0.6);
+            --border: rgba(123, 97, 255, 0.25);
+            --text: #f0f0f5;
+            --text-soft: #b4b4c8;
+            --text-mute: #8a8aa0;
+        }
+
         body {
-            font-family: var(--font-text);
-            background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
-            color: var(--text-primary);
-            overflow: hidden;
-            height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100dvh;
+            padding-top: var(--ta-nav-h, 64px);
+            -webkit-font-smoothing: antialiased;
         }
-        
-        /* Navigation Bar */
-        .nav-bar {
-            position: fixed; top: 0; left: 0; right: 0;
-            background: var(--glass-bg); backdrop-filter: blur(20px);
-            border-bottom: 1px solid var(--glass-border);
-            padding: 12px 24px; z-index: 100;
-            display: flex; justify-content: space-between;
-            align-items: center; height: 60px;
+
+        .page-wrap {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px 24px 80px;
         }
-        .nav-left { display: flex; align-items: center; gap: 20px; }
-        .mini-orb {
-            width: 36px; height: 36px; border-radius: 50%;
-            background: linear-gradient(135deg, #7c3aed 0%, #0891b2 100%);
-            cursor: pointer; transition: transform 0.2s;
-            animation: breathe 4s ease-in-out infinite;
+
+        .page-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 18px;
+            flex-wrap: wrap;
         }
-        .mini-orb:hover { transform: scale(1.1); animation: none; }
-        .nav-menu { display: flex; gap: 8px; }
-        .nav-item {
-            color: var(--text-secondary); text-decoration: none;
-            font-size: 14px; font-weight: 500; padding: 8px 16px;
-            border-radius: 8px; transition: all 0.2s;
-            background: none; border: none; cursor: pointer;
+        .page-title {
+            font-size: 28px;
+            font-weight: 700;
+            background: var(--gradient);
+            -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+            letter-spacing: -0.02em;
         }
-        .nav-item:hover { color: var(--purple); background: rgba(124, 58, 237, 0.1); }
-        .nav-item.active { color: var(--purple); background: rgba(124, 58, 237, 0.1); }
-        .nav-right { display: flex; align-items: center; gap: 10px; }
-        
-        .more-nav-btn { 
-            color: var(--text-secondary); text-decoration: none;
-            font-size: 14px; font-weight: 500; padding: 8px 16px;
-            border-radius: 8px; transition: all 0.2s;
-            background: none; border: none; cursor: pointer;
+
+        .btn-primary {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 12px 20px; border: none; border-radius: 999px;
+            background: var(--gradient); color: #fff;
+            font-size: 15px; font-weight: 700; cursor: pointer;
+            box-shadow: 0 6px 18px rgba(123, 97, 255, 0.35);
+            min-height: 48px;
+            transition: transform 0.15s ease;
         }
-        .more-nav-btn:hover { color: var(--purple); background: rgba(124, 58, 237, 0.1); }
-        
-        .notifications-btn { 
-            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
-            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
-            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: var(--text-secondary);
-            font-size: 16px; font-weight: bold; position: relative;
-        }
-        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: var(--text-primary); }
-        
-        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
-        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
-        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
-        .api-indicator.connecting { background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
-        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-        .api-indicator.online::before { background: #22c55e; }
-        .api-indicator.offline::before { background: #ef4444; }
-        .api-indicator.connecting::before { background: #3b82f6; }
-        
-        .time-date-display {
-            display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
-            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
-        }
-        .current-time { font-size: 16px; font-weight: 500; color: #333; line-height: 1.2; }
-        .current-date { font-size: 11px; color: #666; line-height: 1.2; }
-        
-        @keyframes breathe {
-            0%, 100% { transform: scale(1); opacity: 1; }
-            50% { transform: scale(1.02); opacity: 0.95; }
-        }
-        
-        /* Main Layout */
-        .main-layout { display: flex; height: calc(100vh - 60px); margin-top: 60px; }
-        
-        /* People Sidebar */
-        .people-sidebar {
-            width: 360px; background: var(--glass-bg);
-            backdrop-filter: blur(40px);
-            border-right: 1px solid var(--glass-border);
-            padding: 24px; overflow-y: auto;
-        }
-        .people-header {
-            display: flex; justify-content: space-between;
-            align-items: center; margin-bottom: 24px;
-        }
-        .people-title { font-size: 18px; font-weight: 600; font-family: var(--font-display); }
-        
-        .search-box {
-            margin-bottom: 16px; position: relative;
+        .btn-primary:active { transform: scale(0.96); }
+
+        .search-row {
+            display: flex; gap: 10px; margin-bottom: 14px; align-items: center;
         }
         .search-input {
-            width: 100%; padding: 12px 40px 12px 16px;
-            border: 1px solid var(--glass-border);
-            border-radius: 10px; background: rgba(255, 255, 255, 0.9);
-            font-size: 14px; outline: none; transition: all 0.2s;
-        }
-        .search-input:focus {
-            border-color: var(--purple);
-            box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
-        }
-        .search-icon {
-            position: absolute; right: 12px; top: 50%;
-            transform: translateY(-50%); color: var(--text-tertiary);
-            pointer-events: none; font-size: 16px;
-        }
-        
-        .filter-chips {
-            display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px;
-        }
-        .filter-chip {
-            padding: 6px 12px; border-radius: 16px;
-            font-size: 12px; font-weight: 500;
-            cursor: pointer; transition: all 0.2s;
-            background: rgba(255, 255, 255, 0.9);
-            border: 1px solid var(--glass-border);
-            color: var(--text-secondary);
-        }
-        .filter-chip.active {
-            background: var(--purple);
-            color: white; border-color: var(--purple);
-        }
-        
-        .person-card {
-            background: rgba(255, 255, 255, 0.9);
-            border: 1px solid var(--glass-border);
-            border-radius: 12px; padding: 16px;
-            margin-bottom: 12px; transition: all 0.2s; cursor: pointer;
-        }
-        .person-card:hover { transform: translateX(4px); box-shadow: var(--shadow-md); }
-        .person-card.urgent { border-left: 3px solid var(--amber); }
-        .person-card.positive { border-left: 3px solid var(--green); }
-        .person-label {
-            font-size: 11px; text-transform: uppercase;
-            letter-spacing: 0.5px; color: var(--text-tertiary); margin-bottom: 6px;
-        }
-        .person-text { font-size: 14px; color: var(--text-primary); line-height: 1.5; }
-        .person-action { margin-top: 8px; font-size: 13px; color: var(--purple); font-weight: 500; }
-        
-        /* Canvas Container */
-        .canvas-container { flex: 1; position: relative; overflow: hidden; }
-        #peopleCanvas { width: 100%; height: 100%; cursor: grab; }
-        #peopleCanvas.dragging { cursor: grabbing; }
-        
-        .canvas-legend {
-            position: absolute; bottom: 24px; left: 24px;
-            background: var(--glass-bg); backdrop-filter: blur(20px);
-            border: 1px solid var(--glass-border); border-radius: 12px;
-            padding: 16px; box-shadow: var(--shadow-md);
-        }
-        .legend-title {
-            font-size: 12px; font-weight: 600; text-transform: uppercase;
-            letter-spacing: 0.5px; color: var(--text-tertiary); margin-bottom: 12px;
-        }
-        .legend-item { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; font-size: 13px; }
-        .legend-circle { width: 16px; height: 16px; border-radius: 50%; border: 2px solid; }
-        
-        .canvas-controls { position: absolute; top: 24px; right: 24px; display: flex; gap: 8px; }
-        .control-btn {
-            width: 40px; height: 40px; background: var(--glass-bg);
-            backdrop-filter: blur(20px); border: 1px solid var(--glass-border);
-            border-radius: 10px; display: flex; align-items: center;
-            justify-content: center; cursor: pointer; transition: all 0.2s;
-            font-size: 18px; color: var(--text-primary);
-        }
-        .control-btn:hover {
-            background: rgba(255, 255, 255, 0.9);
-            transform: translateY(-2px); box-shadow: var(--shadow-md);
-        }
-        
-        /* Floating Add Button */
-        .floating-add-btn { 
-            position: fixed; bottom: 30px; right: 30px; width: 72px; height: 72px; 
-            border-radius: 50%; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
-            border: none; color: white; cursor: pointer; display: flex; align-items: center; 
-            justify-content: center; font-size: 32px; transition: all 0.3s ease; 
-            z-index: 1000; box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3);
-        }
-        .floating-add-btn:hover { transform: scale(1.1); box-shadow: 0 6px 16px rgba(123, 97, 255, 0.4); }
-        
-        /* Detail Panel */
-        .detail-panel {
-            position: fixed; top: 60px; right: -600px; width: 600px;
-            height: calc(100vh - 60px); background: var(--glass-bg);
-            backdrop-filter: blur(40px); border-left: 1px solid var(--glass-border);
-            z-index: 90; transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            overflow-y: auto; box-shadow: -4px 0 24px rgba(0, 0, 0, 0.1);
-        }
-        .detail-panel.open { right: 0; }
-        .detail-header {
-            background: linear-gradient(135deg, var(--purple) 0%, #0891b2 100%);
-            padding: 24px; color: white; position: relative;
-        }
-        .detail-close {
-            position: absolute; top: 12px; right: 12px;
-            width: 32px; height: 32px; border: none;
-            background: rgba(255, 255, 255, 0.2); border-radius: 50%;
-            color: white; font-size: 18px; cursor: pointer; transition: all 0.2s;
-        }
-        .detail-close:hover { background: rgba(255, 255, 255, 0.3); transform: rotate(90deg); }
-        .detail-avatar {
-            width: 64px; height: 64px; border-radius: 50%;
-            background: rgba(255, 255, 255, 0.3);
-            border: 3px solid rgba(255, 255, 255, 0.5);
-            display: flex; align-items: center; justify-content: center;
-            font-size: 28px; margin-bottom: 12px;
-        }
-        .detail-name {
-            font-size: 24px; font-weight: 300;
-            margin-bottom: 4px; font-family: var(--font-display);
-        }
-        .detail-subtitle { font-size: 13px; opacity: 0.9; }
-        .detail-content { padding: 20px; }
-        .detail-section { margin-bottom: 24px; }
-        .section-title {
-            font-size: 12px; font-weight: 600; text-transform: uppercase;
-            letter-spacing: 0.5px; color: var(--text-tertiary); margin-bottom: 10px;
-        }
-        .connection-health, .memory-details, .info-grid {
-            background: rgba(255, 255, 255, 0.9);
-            border: 1px solid var(--glass-border);
-            border-radius: 10px; padding: 14px;
-        }
-        .health-bar {
-            height: 6px; background: #e5e7eb;
-            border-radius: 3px; overflow: hidden; margin: 10px 0;
-        }
-        .health-fill {
-            height: 100%; background: linear-gradient(90deg, var(--purple), #0891b2);
-            transition: width 0.3s;
-        }
-        .health-stats {
-            display: grid; grid-template-columns: repeat(3, 1fr);
-            gap: 10px; margin-top: 10px;
-        }
-        .stat-box { background: rgba(0, 0, 0, 0.02); padding: 10px; border-radius: 6px; }
-        .stat-label { font-size: 10px; color: var(--text-tertiary); margin-bottom: 3px; }
-        .stat-value { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-        .tags-container { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-        .tag {
-            padding: 3px 10px; background: rgba(124, 58, 237, 0.1);
-            color: var(--purple); border-radius: 10px;
-            font-size: 11px; font-weight: 500;
-        }
-        .quick-actions {
-            display: grid; grid-template-columns: repeat(4, 1fr);
-            gap: 8px; margin-top: 12px;
-        }
-        .quick-action-btn {
-            padding: 10px; background: rgba(255,255,255,0.9);
-            border: 1px solid var(--glass-border); border-radius: 8px;
-            text-align: center; cursor: pointer; transition: all 0.2s;
-        }
-        .quick-action-btn:hover {
-            background: rgba(124, 58, 237, 0.1);
-            border-color: var(--purple);
-        }
-        .quick-action-icon { font-size: 18px; margin-bottom: 3px; }
-        .quick-action-label { font-size: 10px; font-weight: 500; color: var(--text-secondary); }
-        
-        /* Edit mode styles */
-        .detail-panel.editing .quick-action-btn:not([onclick*="editPerson"]) {
-            opacity: 0.5;
-            pointer-events: none;
-        }
-        .edit-field {
-            width: 100%;
-            padding: 8px 12px;
-            border: 1px solid var(--glass-border);
-            border-radius: 6px;
-            background: rgba(255,255,255,0.9);
-            font-size: 14px;
-            color: var(--text-primary);
-            transition: all 0.2s ease;
-        }
-        .edit-field:focus {
-            outline: none;
-            border-color: var(--purple);
-            background: white;
-            box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
-        }
-        .edit-field::placeholder {
-            color: var(--text-secondary);
-            opacity: 0.7;
-        }
-        .notes-textarea {
-            min-height: 80px;
-            resize: vertical;
-            font-family: inherit;
-        }
-        .info-item .edit-field {
-            margin-top: 4px;
-        }
-        .timeline-item, .activity-item, .note-item, .gift-item {
-            padding: 10px; background: rgba(255,255,255,0.9);
-            border-radius: 8px; margin-bottom: 6px;
-            display: flex; gap: 10px; align-items: start;
-        }
-        .timeline-icon {
-            width: 28px; height: 28px; border-radius: 50%;
-            background: rgba(124, 58, 237, 0.1);
-            display: flex; align-items: center; justify-content: center;
-            font-size: 14px; flex-shrink: 0;
-        }
-        .timeline-content { flex: 1; }
-        .timeline-title { font-size: 13px; font-weight: 500; margin-bottom: 3px; }
-        .timeline-meta { font-size: 11px; color: var(--text-tertiary); }
-        .info-grid {
-            display: grid; grid-template-columns: repeat(2, 1fr);
-            gap: 12px;
-        }
-        .info-item {
-            padding: 10px; background: rgba(0,0,0,0.02); border-radius: 6px;
-        }
-        .info-label { font-size: 10px; color: var(--text-tertiary); margin-bottom: 4px; }
-        .info-value { font-size: 13px; font-weight: 500; }
-        .shared-goals {
-            display: flex; flex-direction: column; gap: 8px;
-        }
-        .goal-item {
-            padding: 10px; background: rgba(255,255,255,0.9);
-            border-radius: 8px; display: flex; justify-content: space-between;
-            align-items: center;
-        }
-        .goal-text { font-size: 13px; }
-        .goal-status {
-            padding: 3px 8px; border-radius: 6px;
-            font-size: 10px; font-weight: 500;
-        }
-        .goal-status.planned { background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
-        
-        /* Add Person Modal */
-        .modal-overlay {
-            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0, 0, 0, 0.3); backdrop-filter: blur(4px);
-            display: none; align-items: center; justify-content: center;
-            z-index: 200;
-        }
-        .modal-overlay.show { display: flex; }
-        .modal {
-            background: white; border-radius: 16px; padding: 24px;
-            width: 90%; max-width: 400px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }
-        .modal-title {
-            font-size: 20px; font-weight: 600; margin-bottom: 20px;
-        }
-        .modal-field { margin-bottom: 16px; }
-        .modal-label {
-            font-size: 13px; font-weight: 500; color: var(--text-secondary);
-            margin-bottom: 8px; display: block;
-        }
-        .modal-input {
-            width: 100%; padding: 10px 12px; border: 1px solid var(--glass-border);
-            border-radius: 8px; font-size: 14px; outline: none; transition: all 0.2s;
-        }
-        .modal-input:focus {
-            border-color: var(--purple);
-            box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.1);
-        }
-        .modal-actions {
-            display: flex; gap: 12px; margin-top: 24px;
-        }
-        .modal-btn {
-            flex: 1; padding: 10px; border: none; border-radius: 8px;
-            font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s;
-        }
-        .modal-btn-primary {
-            background: linear-gradient(135deg, var(--purple), #0891b2);
-            color: white;
-        }
-        .modal-btn-primary:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
-        }
-        .modal-btn-secondary {
-            background: rgba(0,0,0,0.05);
-            color: var(--text-secondary);
-        }
-        .modal-btn-secondary:hover { background: rgba(0,0,0,0.1); }
-        
-        .tooltip {
-            position: absolute; background: rgba(0, 0, 0, 0.9);
-            color: white; padding: 8px 12px; border-radius: 6px;
-            font-size: 12px; pointer-events: none; z-index: 1000;
-            white-space: nowrap; opacity: 0; transition: opacity 0.2s;
-        }
-        .tooltip.show { opacity: 1; }
-        
-        /* Mobile Navigation */
-        .mobile-nav-menu {
-            position: fixed; top: 0; left: -280px; width: 280px; height: 100vh;
-            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
-            border-right: 1px solid rgba(255, 255, 255, 0.3); z-index: 2000;
-            transition: left 0.3s ease; display: flex; flex-direction: column;
-        }
-        .mobile-nav-menu.open { left: 0; }
-        .mobile-nav-header {
-            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-            display: flex; justify-content: space-between; align-items: center;
-        }
-        .mobile-nav-header h3 { margin: 0; font-size: 20px; font-weight: 600; color: #333; }
-        .mobile-nav-close {
-            width: 40px; height: 40px; border-radius: 50%; border: none;
-            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 24px;
-            cursor: pointer; display: flex; align-items: center; justify-content: center;
-            transition: all 0.3s ease;
-        }
-        .mobile-nav-close:active { background: rgba(255, 255, 255, 0.5); }
-        .mobile-nav-content { flex: 1; overflow-y: auto; padding: 10px; }
-        .mobile-nav-item {
-            display: flex; align-items: center; gap: 12px; padding: 16px; margin: 4px 0;
-            color: #666; text-decoration: none; font-size: 16px; font-weight: 500;
-            border-radius: 12px; transition: all 0.3s ease;
-        }
-        .mobile-nav-item:active { background: rgba(123, 97, 255, 0.1); color: #7B61FF; }
-        .mobile-nav-item.active { background: rgba(123, 97, 255, 0.15); color: #7B61FF; font-weight: 600; }
-        .mobile-nav-item.logout { color: #ff4444; }
-        .mobile-nav-divider { height: 1px; background: rgba(255, 255, 255, 0.3); margin: 10px 0; }
-        .mobile-nav-overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0, 0, 0, 0.3); z-index: 1999; opacity: 0;
-            pointer-events: none; transition: opacity 0.3s ease;
-        }
-        .mobile-nav-overlay.open { opacity: 1; pointer-events: auto; }
-        
-        /* Responsive */
-        @media (max-width: 768px) {
-            .nav-menu { display: none !important; }
-            .mini-orb { display: flex !important; }
-        }
-        @media (min-width: 769px) {
-            .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
-        }
-        
-        /* Onboarding Prompt Modal */
-        .onboarding-prompt-modal {
-            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(8px);
-            display: flex; align-items: center; justify-content: center;
-            z-index: 10000; animation: fadeIn 0.3s ease;
-        }
-        .onboarding-prompt-content {
-            background: var(--glass-bg); backdrop-filter: blur(40px);
-            border-radius: 20px; padding: 40px; max-width: 400px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            text-align: center;
-        }
-        .onboarding-zoe-orb {
-            width: 80px; height: 80px; border-radius: 50%;
-            background: linear-gradient(135deg, #7c3aed 0%, #0891b2 100%);
-            margin: 0 auto 20px; animation: breathe 4s ease-in-out infinite;
-        }
-        .onboarding-prompt-content h2 {
-            font-size: 24px; font-weight: 600; margin-bottom: 12px;
-            color: var(--text-primary);
-        }
-        .onboarding-prompt-content p {
-            font-size: 15px; color: var(--text-secondary);
-            margin-bottom: 24px; line-height: 1.6;
-        }
-        .onboarding-prompt-actions {
-            display: flex; gap: 12px; margin-bottom: 16px;
-        }
-        .onboarding-btn-primary, .onboarding-btn-secondary {
-            flex: 1; padding: 12px 24px; border-radius: 10px;
-            font-size: 15px; font-weight: 500; cursor: pointer;
-            transition: all 0.2s; border: none;
-        }
-        .onboarding-btn-primary {
-            background: linear-gradient(135deg, var(--purple), #0891b2);
-            color: white;
-        }
-        .onboarding-btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(124, 58, 237, 0.4); }
-        .onboarding-btn-secondary {
-            background: rgba(255, 255, 255, 0.6);
-            color: var(--text-secondary);
-        }
-        .onboarding-btn-secondary:hover { background: rgba(255, 255, 255, 0.8); }
-        .onboarding-skip-option {
-            display: block; font-size: 13px; color: var(--text-tertiary);
-            cursor: pointer;
-        }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-    </style>
-    
-    <!-- PWA Meta Tags -->
-    <meta name="application-name" content="Zoe AI">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Zoe">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="theme-color" content="#7B61FF">
-    <meta name="msapplication-TileColor" content="#7B61FF">
-    <meta name="msapplication-tap-highlight" content="no">
-    
-    <!-- Icons & Manifest -->
-    <link rel="manifest" href="/manifest.json">
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
-    <link rel="mask-icon" href="/icons/icon-maskable-512.png" color="#7B61FF">
-    
-    <!-- Service Worker Registration -->
-    <script src="/js/sw-registration.js" defer></script>
-</head>
-<body>
-    <div class="nav-bar">
-        <div class="nav-left">
-            <div class="mini-orb" onclick="toggleMobileMenu()"></div>
-            <div class="nav-menu">
-                <a href="/chat.html" class="nav-item">Chat</a>
-                <a href="/dashboard.html" class="nav-item">Dashboard</a>
-                <a href="/lists.html" class="nav-item">Lists</a>
-                <a href="/calendar.html" class="nav-item">Calendar</a>
-                <a href="/journal.html" class="nav-item">Journal</a>
-                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
-            </div>
-        </div>
-        <div class="nav-right">
-            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
-            
-            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
-            
-            <!-- Time/Date Display -->
-            <div class="time-date-display">
-                <div class="current-time" id="navCurrentTime">--:--</div>
-                <div class="current-date" id="navCurrentDate"></div>
-            </div>
-        </div>
-    </div>
-    
-    <div class="main-layout">
-        <div class="people-sidebar">
-            <div class="people-header">
-                <h2 class="people-title">People Intelligence</h2>
-            </div>
-            
-            <div class="search-box">
-                <input type="text" class="search-input" placeholder="Search people..." oninput="searchPeople(this.value)">
-                <span class="search-icon">🔍</span>
-            </div>
-            
-            <div id="filterChips" class="filter-chips"></div>
-            <div id="peopleList"></div>
-        </div>
-        
-        <div class="canvas-container">
-            <canvas id="peopleCanvas"></canvas>
-            
-            <div class="canvas-controls">
-                <div class="control-btn" onclick="resetView()" title="Reset View">⟲</div>
-                <div class="control-btn" onclick="zoomIn()" title="Zoom In">+</div>
-                <div class="control-btn" onclick="zoomOut()" title="Zoom Out">−</div>
-            </div>
-            <div class="canvas-legend" id="canvasLegend"></div>
-        </div>
-    </div>
-    
-    <!-- Add Person Modal -->
-    <div class="modal-overlay" id="addPersonModal">
-        <div class="modal">
-            <div class="modal-title">Add Person</div>
-            <div class="modal-field">
-                <label class="modal-label">Name *</label>
-                <input type="text" class="modal-input" id="personName" placeholder="Enter person's name" required>
-            </div>
-            <div class="modal-field">
-                <label class="modal-label">Category</label>
-                <select class="modal-input" id="personCategory">
-                    <option value="inner">Inner Circle</option>
-                    <option value="circle">Circle</option>
-                    <option value="acquaintance">Acquaintances</option>
-                    <option value="professional">Professional</option>
-                    <option value="archive">Archive</option>
-                </select>
-            </div>
-            <div class="modal-field">
-                <label class="modal-label">Birthday</label>
-                <input type="date" class="modal-input" id="personBirthday">
-            </div>
-            <div class="modal-field">
-                <label class="modal-label">Phone</label>
-                <input type="tel" class="modal-input" id="personPhone" placeholder="555-1234">
-            </div>
-            <div class="modal-field">
-                <label class="modal-label">Email</label>
-                <input type="email" class="modal-input" id="personEmail" placeholder="name@example.com">
-            </div>
-            <div class="modal-field">
-                <label class="modal-label">Address</label>
-                <input type="text" class="modal-input" id="personAddress" placeholder="123 Main Street">
-            </div>
-            <div class="modal-field">
-                <label class="modal-label">Notes</label>
-                <textarea class="modal-input" id="personNotes" placeholder="Add any notes about this person" rows="3"></textarea>
-            </div>
-            <div class="modal-field">
-                <label class="modal-label">Custom Fields</label>
-                <div id="personCustomFields"></div>
-            </div>
-            <div class="modal-actions">
-                <button class="modal-btn modal-btn-secondary" onclick="closeAddPersonModal()">Cancel</button>
-                <button class="modal-btn modal-btn-primary" onclick="createPerson()">Add Person</button>
-            </div>
-        </div>
-    </div>
-    
-    <div class="detail-panel" id="detailPanel">
-        <div class="detail-header">
-            <button class="detail-close" onclick="closeDetail()">×</button>
-            <div class="detail-avatar" id="detailIcon"></div>
-            <h1 class="detail-name" id="detailName"></h1>
-            <div class="detail-subtitle" id="detailSubtitle"></div>
-        </div>
-        <div class="detail-content" id="detailContent"></div>
-    </div>
-    
-    <!-- Mobile Navigation Menu -->
-    <div class="mobile-nav-menu" id="mobileNavMenu">
-        <div class="mobile-nav-header">
-            <h3>Navigation</h3>
-            <button class="mobile-nav-close" onclick="toggleMobileMenu()">✕</button>
-        </div>
-        <div class="mobile-nav-content">
-            <a href="/chat.html" class="mobile-nav-item">💬 Chat</a>
-            <a href="/dashboard.html" class="mobile-nav-item">📊 Dashboard</a>
-            <a href="/lists.html" class="mobile-nav-item">✅ Lists</a>
-            <a href="/calendar.html" class="mobile-nav-item">📅 Calendar</a>
-            <a href="/journal.html" class="mobile-nav-item">📔 Journal</a>
-            <a href="/music.html" class="mobile-nav-item">🎵 Music</a>
-            <a href="/games.html" class="mobile-nav-item">🎮 Games</a>
-            <a href="/people.html" class="mobile-nav-item active">👥 People</a>
-            <a href="/memories.html" class="mobile-nav-item">🧠 Memories</a>
-            <a href="/settings.html" class="mobile-nav-item">⚙️ Settings</a>
-            <div class="mobile-nav-divider"></div>
-            <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
-        </div>
-    </div>
-    <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
+            flex: 1; padding: 12px 16px;
+            border: 1.5px solid var(--border); border-radius: 14px;
+            background: var(--card); color: var(--text);
+            font-size: 15px; min-height: 48px; outline: none;
+        }
+        .search-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(123,97,255,0.15); }
 
-    <!-- More Overlay -->
-    <div class="more-overlay" id="moreOverlay">
-        <div class="more-content">
-            <button class="more-close" onclick="closeMoreOverlay()">×</button>
-            <div class="more-header">
-                <h2 class="more-title">More Options</h2>
+        .circle-filter {
+            display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px;
+        }
+        .circle-chip {
+            padding: 10px 16px; border: 1.5px solid var(--border);
+            border-radius: 999px; background: var(--card);
+            color: var(--text); font-size: 14px; font-weight: 600;
+            cursor: pointer; min-height: 42px;
+            display: inline-flex; align-items: center; gap: 6px;
+            transition: all 0.15s ease;
+        }
+        .circle-chip.active {
+            background: var(--gradient); color: #fff; border-color: transparent;
+            box-shadow: 0 4px 14px rgba(123, 97, 255, 0.3);
+        }
+        .circle-chip .chip-count {
+            background: rgba(0,0,0,0.1); border-radius: 999px;
+            padding: 1px 8px; font-size: 12px; font-weight: 700;
+        }
+        .circle-chip.active .chip-count { background: rgba(255,255,255,0.25); }
+
+        .circle-group { margin-bottom: 28px; }
+        .group-header {
+            display: flex; align-items: baseline; justify-content: space-between;
+            margin-bottom: 12px; padding: 0 2px;
+        }
+        .group-title {
+            font-size: 18px; font-weight: 700; color: var(--text);
+            display: flex; align-items: center; gap: 8px;
+        }
+        .group-title-emoji { font-size: 22px; }
+        .group-count { font-size: 13px; color: var(--text-mute); }
+
+        .people-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+            gap: 14px;
+        }
+
+        .person-card {
+            background: var(--card);
+            border: 1.5px solid var(--border);
+            border-radius: 18px;
+            padding: 18px 16px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            gap: 6px;
+            cursor: pointer;
+            box-shadow: var(--shadow-sm);
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+            min-height: 170px;
+        }
+        .person-card:active {
+            transform: scale(0.97);
+            box-shadow: var(--shadow-md);
+        }
+
+        .avatar {
+            width: 64px; height: 64px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            color: #fff;
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            margin-bottom: 4px;
+            user-select: none;
+        }
+
+        .person-name {
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--text);
+            line-height: 1.25;
+            word-break: break-word;
+        }
+        .person-rel {
+            font-size: 12px;
+            color: var(--text-mute);
+            text-transform: capitalize;
+        }
+        .person-hints {
+            display: flex; gap: 8px; justify-content: center;
+            font-size: 14px; margin-top: 2px;
+        }
+        .person-hint { opacity: 0.7; }
+
+        .empty-state {
+            text-align: center; padding: 60px 20px; color: var(--text-mute);
+            grid-column: 1 / -1;
+        }
+        .empty-state-icon { font-size: 48px; margin-bottom: 10px; }
+        .empty-state-title { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+
+        /* ── Editor sheet ──────────────────────────────────────── */
+        .editor-overlay {
+            position: fixed; inset: 0;
+            background: radial-gradient(ellipse at top, rgba(123,97,255,0.18) 0%, rgba(0,0,0,0.55) 70%);
+            backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+            z-index: 3000; display: none;
+            align-items: flex-end; justify-content: center;
+            opacity: 0; transition: opacity 0.3s ease;
+        }
+        .editor-overlay.open { display: flex; opacity: 1; }
+        .editor-sheet {
+            background: var(--card); width: 100%; max-width: 700px;
+            max-height: 92dvh; border-radius: 24px 24px 0 0;
+            box-shadow: 0 -24px 80px rgba(0,0,0,0.35);
+            display: flex; flex-direction: column; overflow: hidden;
+            transform: translateY(100%);
+            transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.25, 1);
+        }
+        .editor-overlay.open .editor-sheet { transform: translateY(0); }
+        @media (min-width: 700px) {
+            .editor-overlay { align-items: center; padding: 40px; }
+            .editor-sheet { border-radius: 24px; max-height: 88dvh; }
+        }
+
+        .editor-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 18px 22px; border-bottom: 1px solid var(--border);
+        }
+        .editor-title-text { font-size: 20px; font-weight: 700; color: var(--text); }
+
+        .btn-ghost {
+            padding: 10px 16px; border: 1.5px solid var(--border);
+            border-radius: 12px; background: transparent;
+            color: var(--text); font-size: 14px; font-weight: 600;
+            cursor: pointer; min-height: 44px;
+        }
+        .btn-ghost:active { background: var(--card-soft); }
+        .btn-danger { border-color: rgba(255, 77, 106, 0.3); color: #FF4D6A; }
+        .btn-danger:active { background: rgba(255, 77, 106, 0.1); }
+        .editor-actions { display: flex; gap: 8px; }
+
+        .editor-body {
+            padding: 18px 22px; overflow-y: auto; flex: 1;
+            display: flex; flex-direction: column; gap: 14px;
+        }
+
+        .field { display: flex; flex-direction: column; gap: 6px; }
+        .field-label {
+            font-size: 12px; font-weight: 700;
+            color: var(--text-soft); text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .field-input, .field-textarea, .field-select {
+            width: 100%; padding: 12px 14px;
+            border: 1.5px solid var(--border); border-radius: 12px;
+            background: var(--card-soft); color: var(--text);
+            font-size: 15px; font-family: inherit; outline: none;
+        }
+        .field-textarea { min-height: 100px; resize: vertical; line-height: 1.5; }
+        .field-input:focus, .field-textarea:focus, .field-select:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(123,97,255,0.15);
+        }
+
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        @media (max-width: 500px) { .two-col { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body class="people-page">
+
+    <div class="page-wrap">
+        <header class="page-header">
+            <h1 class="page-title">People</h1>
+            <button class="btn-primary" onclick="openEditor()">
+                <span style="font-size:18px;line-height:1">+</span>
+                New Person
+            </button>
+        </header>
+
+        <div class="search-row">
+            <input id="searchInput" class="search-input" type="text" placeholder="Search by name, relationship, email, phone…" />
+        </div>
+
+        <div class="circle-filter" id="circleFilter">
+            <!-- Populated by JS -->
+        </div>
+
+        <div id="groupsContainer">
+            <div class="empty-state"><div class="empty-state-icon">⏳</div><div>Loading…</div></div>
+        </div>
+    </div>
+
+    <!-- Editor overlay -->
+    <div class="editor-overlay" id="editorOverlay" onclick="if(event.target===this)closeEditor()">
+        <div class="editor-sheet">
+            <div class="editor-header">
+                <div class="editor-title-text" id="editorTitleText">New Person</div>
+                <div class="editor-actions">
+                    <button class="btn-ghost btn-danger" id="editorDeleteBtn" style="display:none" onclick="deleteCurrent()">Delete</button>
+                    <button class="btn-ghost" onclick="closeEditor()">Cancel</button>
+                    <button class="btn-primary" id="saveBtn" onclick="savePerson()">Save</button>
+                </div>
             </div>
-            <div class="more-grid">
-                <div class="more-item" onclick="navigateToPage('people.html')">
-                    <div class="more-item-icon">👥</div>
-                    <div class="more-item-label">People</div>
+            <div class="editor-body">
+                <div class="field">
+                    <div class="field-label">Name *</div>
+                    <input id="fName" class="field-input" type="text" placeholder="Jane Doe" />
                 </div>
-                <div class="more-item" onclick="navigateToPage('memories.html')">
-                    <div class="more-item-icon">🧠</div>
-                    <div class="more-item-label">Memories</div>
+                <div class="two-col">
+                    <div class="field">
+                        <div class="field-label">Relationship</div>
+                        <input id="fRel" class="field-input" type="text" placeholder="friend, mom, colleague…" list="relSuggestions" />
+                        <datalist id="relSuggestions">
+                            <option>spouse</option><option>partner</option><option>parent</option>
+                            <option>mother</option><option>father</option><option>child</option>
+                            <option>son</option><option>daughter</option><option>sibling</option>
+                            <option>brother</option><option>sister</option><option>grandparent</option>
+                            <option>aunt</option><option>uncle</option><option>cousin</option>
+                            <option>niece</option><option>nephew</option><option>friend</option>
+                            <option>best friend</option><option>colleague</option><option>coworker</option>
+                            <option>boss</option><option>manager</option><option>report</option>
+                            <option>client</option><option>neighbor</option><option>doctor</option>
+                        </datalist>
+                    </div>
+                    <div class="field">
+                        <div class="field-label">Circle</div>
+                        <select id="fCircle" class="field-select">
+                            <option value="">Auto (from relationship)</option>
+                            <option value="inner">Inner Circle</option>
+                            <option value="family">Family</option>
+                            <option value="friends">Friends</option>
+                            <option value="work">Work</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('music.html')">
-                    <div class="more-item-icon">🎵</div>
-                    <div class="more-item-label">Music</div>
+                <div class="two-col">
+                    <div class="field">
+                        <div class="field-label">Email</div>
+                        <input id="fEmail" class="field-input" type="email" placeholder="jane@example.com" />
+                    </div>
+                    <div class="field">
+                        <div class="field-label">Phone</div>
+                        <input id="fPhone" class="field-input" type="tel" placeholder="+1 555-123-4567" />
+                    </div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('games.html')">
-                    <div class="more-item-icon">🎮</div>
-                    <div class="more-item-label">Games</div>
+                <div class="field">
+                    <div class="field-label">Birthday</div>
+                    <input id="fBday" class="field-input" type="date" />
                 </div>
-                <div class="more-item" onclick="navigateToPage('settings.html')">
-                    <div class="more-item-icon">⚙️</div>
-                    <div class="more-item-label">Settings</div>
-                </div>
-                <div class="more-item" onclick="navigateToPage('developer/index.html')">
-                    <div class="more-item-icon">👨‍💻</div>
-                    <div class="more-item-label">Developer</div>
+                <div class="field">
+                    <div class="field-label">Notes</div>
+                    <textarea id="fNotes" class="field-textarea" placeholder="How did you meet? Kids' names? Coffee order? Anything worth remembering."></textarea>
                 </div>
             </div>
         </div>
     </div>
-    
-    <div class="tooltip" id="tooltip"></div>
-    
-    <!-- Floating Add Button -->
-    <button class="floating-add-btn" onclick="openAddPersonModal()" title="Add Person">+</button>
-    
-    <script src="/js/auth.js"></script>
+
     <script src="/js/common.js"></script>
     <script src="/js/notifications-panel.js"></script>
-    <script>
-        const canvas = document.getElementById('peopleCanvas');
-        const ctx = canvas.getContext('2d');
-        let width, height, centerX, centerY;
-        let scale = 1, offsetX = 0, offsetY = 0;
-        let isDragging = false, dragStartX = 0, dragStartY = 0;
-        let draggedItem = null, hoveredItem = null;
-        let animationFrame;
-        let breathePhase = 0;
-        let activeFilters = ['inner', 'circle', 'acquaintance', 'professional'];
-        let mouseDownTime = 0;
-        let mouseDownItem = null;
-        const DRAG_THRESHOLD = 200;
-        
-        let people = [];
-        let currentUser = null;
-        let peopleFieldSchema = [];
-        
-        // Load data from API
-        async function loadPeople() {
-            console.log("=== Loading People ===");
-            try {
-                const response = await apiRequest('/api/people');
-                console.log("API Response:", response);
-                
-                if (!response || !response.people) {
-                    console.error("Invalid API response:", response);
-                    people = [];
-                    return;
-                }
-                
-                people = response.people.map(person => ({
-                    id: `p${person.id}`,
-                    type: 'person',
-                    category: person.relationship || person.metadata?.category || 'inner',
-                    name: person.name,
-                    angle: person.metadata?.angle || Math.random() * 360,
-                    distance: person.metadata?.distance || 100 + Math.random() * 100,
-                    lastContact: person.metadata?.lastContact || 7,
-                    frequency: person.metadata?.frequency || 14,
-                    strength: person.metadata?.strength || 0.5,
-                    birthday: person.birthday,
-                    relationshipType: person.relationship,
-                    phone: person.phone,
-                    email: person.email,
-                    address: person.address,
-                    notes: person.notes,
-                    relationships: person.metadata?.relationships || []
-                }));
-                
-                console.log(`✅ Loaded ${people.length} people`);
-                
-                if (people.length === 0) {
-                    showNotification('👋 No people yet! Click + to add your first person', 'info');
-                }
-            } catch (error) {
-                console.error("Error loading people:", error);
-                people = [];
-                showNotification('⚠️ Failed to load people', 'error');
-            }
-        }
-        
-        async function loadEnhancedPerson(personId) {
-            try {
-                const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_info?.user_id || session?.user_id;
-                const response = await fetch(`/api/people/${personId}/analysis?user_id=${userId}`);
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                
-                const data = await response.json();
-                const person = data.person;
-                return {
-                    id: `p${person.id}`,
-                    type: 'person',
-                    category: person.metadata?.category || 'inner',
-                    name: person.name,
-                    angle: person.metadata?.angle || Math.random() * 360,
-                    distance: person.metadata?.distance || 100 + Math.random() * 100,
-                    lastContact: person.metadata?.lastContact || 7,
-                    frequency: person.metadata?.frequency || 14,
-                    strength: person.metadata?.strength || 0.5,
-                    birthday: person.birthday,
-                    relationshipType: person.relationship,
-                    phone: person.phone,
-                    email: person.email,
-                    notes: person.notes,
-                    timeline: person.timeline,
-                    activities: person.activities,
-                    conversations: person.conversations,
-                    gifts: person.gifts,
-                    importantDates: person.important_dates,
-                    relationships: person.relationships.map(r => `p${r.person_id}`)
-                };
-            } catch (error) {
-                console.error('Failed to load enhanced person:', error);
-                return null;
-            }
-        }
-        
-        function resizeCanvas() {
-            width = canvas.parentElement.clientWidth;
-            height = canvas.parentElement.clientHeight;
-            canvas.width = width * window.devicePixelRatio;
-            canvas.height = height * window.devicePixelRatio;
-            canvas.style.width = width + 'px';
-            canvas.style.height = height + 'px';
-            ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-            centerX = width / 2;
-            centerY = height / 2;
-        }
-        
-        function openAddPersonModal() {
-            document.getElementById('addPersonModal').classList.add('show');
-        }
-
-        function closeAddPersonModal() {
-            document.getElementById('addPersonModal').classList.remove('show');
-            document.getElementById('personName').value = '';
-            document.getElementById('personCategory').value = 'inner';
-            document.getElementById('personBirthday').value = '';
-            document.getElementById('personPhone').value = '';
-            document.getElementById('personEmail').value = '';
-            document.getElementById('personAddress').value = '';
-            document.getElementById('personNotes').value = '';
-        }
-        
-        async function createPerson() {
-            const name = document.getElementById('personName').value.trim();
-            const category = document.getElementById('personCategory').value;
-            const birthday = document.getElementById('personBirthday').value;
-            const phone = document.getElementById('personPhone').value.trim();
-            const email = document.getElementById('personEmail').value.trim();
-            const address = document.getElementById('personAddress').value.trim();
-            const notes = document.getElementById('personNotes').value.trim();
-            const customFields = {};
-            document.querySelectorAll('#personCustomFields [data-field-key]').forEach(el => {
-                if (el.value && el.value.trim() !== '') customFields[el.dataset.fieldKey] = el.value.trim();
-            });
-            
-            if (!name) {
-                showNotification('⚠️ Name is required', 'error');
-                return;
-            }
-            
-            try {
-                const personData = {
-                    name: name,
-                    relationship: category,
-                    birthday: birthday || null,
-                    phone: phone || null,
-                    email: email || null,
-                    notes: notes || null,
-                    custom_fields: customFields,
-                };
-                if (address) {
-                    personData.preferences = { address: address };
-                }
-                
-                const result = await apiRequest('/api/people/', {
-                    method: 'POST',
-                    body: JSON.stringify(personData)
-                });
-                
-                if (result && result.id) {
-                    const strengthMap = { inner: 0.9, circle: 0.7, acquaintance: 0.5, professional: 0.6 };
-                    const freqMap = { inner: 7, circle: 14, acquaintance: 30, professional: 21 };
-                    const newPerson = {
-                        id: 'p' + result.id,
-                        name: name,
-                        category: category,
-                        birthday: birthday,
-                        phone: phone,
-                        email: email,
-                        address: address,
-                        notes: notes,
-                        relationshipType: category,
-                        strength: strengthMap[category] || 0.3,
-                        frequency: freqMap[category] || 90,
-                        lastContact: 7,
-                        angle: Math.random() * Math.PI * 2,
-                        distance: 100 + Math.random() * 100,
-                        relationships: []
-                    };
-                    
-                    people.push(newPerson);
-                    closeAddPersonModal();
-                    updateSidebar();
-                    updateLegend();
-                    showNotification('Added ' + name + '!', 'success');
-                } else {
-                    throw new Error('Invalid response from server');
-                }
-            } catch (error) {
-                console.error('Failed to create person:', error);
-                showNotification('❌ Failed to add person', 'error');
-            }
-        }
-        
-        function animate() {
-            breathePhase += 0.02;
-            draw();
-            animationFrame = requestAnimationFrame(animate);
-        }
-        
-        function draw() {
-            const bgGradient = ctx.createLinearGradient(0, 0, width, height);
-            bgGradient.addColorStop(0, '#fafbfc');
-            bgGradient.addColorStop(1, '#f1f3f6');
-            ctx.fillStyle = bgGradient;
-            ctx.fillRect(0, 0, width, height);
-            
-            ctx.save();
-            ctx.translate(centerX + offsetX, centerY + offsetY);
-            ctx.scale(scale, scale);
-            
-            drawPeopleView();
-            
-            ctx.restore();
-        }
-        
-        function drawPeopleView() {
-            const blendedGlow = ctx.createRadialGradient(0, 0, 0, 0, 0, 250);
-            blendedGlow.addColorStop(0, 'rgba(236, 72, 153, 0.15)');
-            blendedGlow.addColorStop(0.3, 'rgba(168, 85, 247, 0.12)');
-            blendedGlow.addColorStop(0.6, 'rgba(20, 184, 166, 0.12)');
-            blendedGlow.addColorStop(1, 'rgba(20, 184, 166, 0)');
-            ctx.fillStyle = blendedGlow;
-            ctx.beginPath();
-            ctx.arc(0, 0, 250, 0, Math.PI * 2);
-            ctx.fill();
-            
-            const visiblePeople = people.filter(p => activeFilters.includes(p.category));
-            visiblePeople.forEach(p => {
-                if (p.relationships) {
-                    p.relationships.forEach(relId => {
-                        const related = people.find(person => person.id === relId);
-                        if (related && activeFilters.includes(related.category)) {
-                            const pos1 = getPolarPosition(p);
-                            const pos2 = getPolarPosition(related);
-                            ctx.strokeStyle = 'rgba(124, 58, 237, 0.15)';
-                            ctx.lineWidth = 2;
-                            ctx.setLineDash([5, 5]);
-                            ctx.beginPath();
-                            ctx.moveTo(pos1.x, pos1.y);
-                            ctx.lineTo(pos2.x, pos2.y);
-                            ctx.stroke();
-                            ctx.setLineDash([]);
-                        }
-                    });
-                }
-            });
-            
-            visiblePeople.forEach(p => {
-                const pos = getPolarPosition(p);
-                const o = p.strength * 0.25;
-                const g = ctx.createLinearGradient(0, 0, pos.x, pos.y);
-                if (p.category === 'inner') {
-                    g.addColorStop(0, `rgba(124, 58, 237, ${o*0.8})`);
-                    g.addColorStop(1, `rgba(236, 72, 153, ${o})`);
-                    ctx.lineWidth = 1.5;
-                } else {
-                    g.addColorStop(0, `rgba(124, 58, 237, ${o*0.6})`);
-                    g.addColorStop(1, `rgba(20, 184, 166, ${o*0.8})`);
-                    ctx.lineWidth = 1;
-                    ctx.setLineDash([3, 3]);
-                }
-                ctx.strokeStyle = g;
-                ctx.beginPath();
-                ctx.moveTo(0, 0);
-                ctx.lineTo(pos.x, pos.y);
-                ctx.stroke();
-            });
-            ctx.setLineDash([]);
-            
-            visiblePeople.forEach(p => drawPerson(p));
-            drawYouNode();
-        }
-        
-        function drawYouNode() {
-            const r = 48;
-            const breathe = 1 + Math.sin(breathePhase) * 0.02;
-            
-            // Draw completeness ring if available
-            if (userProfile && userProfile.profile_completeness > 0) {
-                const completeness = userProfile.profile_completeness || 0;
-                ctx.beginPath();
-                ctx.arc(0, 0, r + 8, 0, Math.PI * 2);
-                ctx.strokeStyle = 'rgba(124, 58, 237, 0.1)';
-                ctx.lineWidth = 4;
-                ctx.stroke();
-                
-                // Draw completeness arc
-                ctx.beginPath();
-                ctx.arc(0, 0, r + 8, -Math.PI/2, -Math.PI/2 + (completeness * 2 * Math.PI));
-                ctx.strokeStyle = '#10b981';
-                ctx.lineWidth = 4;
-                ctx.lineCap = 'round';
-                ctx.stroke();
-            }
-            
-            // Main node
-            ctx.beginPath();
-            ctx.arc(0, 0, r * breathe, 0, Math.PI * 2);
-            const g = ctx.createRadialGradient(-r*0.3, -r*0.3, 0, 0, 0, r);
-            g.addColorStop(0, '#a855f7');
-            g.addColorStop(0.5, '#8b5cf6');
-            g.addColorStop(1, '#7c3aed');
-            ctx.fillStyle = g;
-            ctx.fill();
-            
-            // Add glow effect
-            ctx.beginPath();
-            ctx.arc(0, 0, r * breathe * 1.3, 0, Math.PI * 2);
-            const glowGradient = ctx.createRadialGradient(0, 0, 0, 0, 0, r * breathe * 1.3);
-            glowGradient.addColorStop(0, 'rgba(168, 85, 247, 0.3)');
-            glowGradient.addColorStop(1, 'rgba(168, 85, 247, 0)');
-            ctx.fillStyle = glowGradient;
-            ctx.fill();
-            
-            ctx.fillStyle = 'white';
-            ctx.font = 'bold 16px var(--font-text)';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            
-            // Display user's name if available
-            const userName = (userProfile && userProfile.name) ? userProfile.name : 'You';
-            ctx.fillText(userName.length > 8 ? userName.substring(0, 8) + '...' : userName, 0, 0);
-        }
-        
-        function drawPerson(p) {
-            const pos = getPolarPosition(p);
-            const floatOffset = !isDragging && !draggedItem ? Math.sin(breathePhase * 1.5 + p.angle) * 3 : 0;
-            pos.y += floatOffset;
-            
-            const r = 28;
-            const hov = hoveredItem?.id === p.id;
-            const ring = p.category === 'inner' ? '#ec4899' : 
-                         p.category === 'circle' ? '#14b8a6' : 
-                         p.category === 'acquaintance' ? '#9ca3af' :
-                         p.category === 'professional' ? '#3b82f6' :
-                         p.category === 'archive' ? '#6b7280' : '#9ca3af';
-            const needsAttention = p.lastContact > p.frequency * 1.5;
-            const pulseScale = needsAttention ? 1 + Math.sin(breathePhase * 2) * 0.05 : 1;
-            const hoverScale = hov ? 1.15 : 1;
-            const finalScale = pulseScale * hoverScale;
-            
-            if (needsAttention) {
-                const pulseSize = r * 2 * (1 + Math.sin(breathePhase * 2) * 0.1);
-                const og = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, pulseSize);
-                og.addColorStop(0, 'rgba(245, 158, 11, 0.3)');
-                og.addColorStop(1, 'rgba(245, 158, 11, 0)');
-                ctx.fillStyle = og;
-                ctx.beginPath();
-                ctx.arc(pos.x, pos.y, pulseSize, 0, Math.PI * 2);
-                ctx.fill();
-            }
-            
-            ctx.beginPath();
-            ctx.arc(pos.x, pos.y, r * finalScale, 0, Math.PI * 2);
-            ctx.fillStyle = 'white';
-            ctx.fill();
-            ctx.strokeStyle = ring;
-            ctx.lineWidth = hov ? 4 : 3.5;
-            ctx.stroke();
-            
-            ctx.fillStyle = '#1f2937';
-            ctx.font = '600 14px var(--font-text)';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.shadowColor = 'rgba(255, 255, 255, 0.9)';
-            ctx.shadowBlur = 4;
-            ctx.fillText(p.name, pos.x, pos.y + r * finalScale + 20);
-            ctx.shadowBlur = 0;
-        }
-        
-        function getPolarPosition(item) {
-            const a = (item.angle * Math.PI) / 180;
-            return { x: Math.cos(a) * item.distance, y: Math.sin(a) * item.distance };
-        }
-        
-        canvas.addEventListener('mousedown', e => {
-            const rect = canvas.getBoundingClientRect();
-            const mx = (e.clientX - rect.left - centerX - offsetX) / scale;
-            const my = (e.clientY - rect.top - centerY - offsetY) / scale;
-            const item = getItemAtPosition(mx, my);
-            
-            mouseDownTime = Date.now();
-            mouseDownItem = item;
-            
-            if (!item) {
-                isDragging = true;
-                dragStartX = e.clientX - offsetX;
-                dragStartY = e.clientY - offsetY;
-            }
-        });
-        
-        canvas.addEventListener('mousemove', e => {
-            const rect = canvas.getBoundingClientRect();
-            const mx = (e.clientX - rect.left - centerX - offsetX) / scale;
-            const my = (e.clientY - rect.top - centerY - offsetY) / scale;
-            
-            if (isDragging) {
-                offsetX = e.clientX - dragStartX;
-                offsetY = e.clientY - dragStartY;
-            } else {
-                const item = getItemAtPosition(mx, my);
-                if (item !== hoveredItem) {
-                    hoveredItem = item;
-                    if (item) {
-                        showTooltip(e.clientX, e.clientY, item.name);
-                    } else hideTooltip();
-                }
-            }
-        });
-        
-        canvas.addEventListener('mouseup', e => {
-            const rect = canvas.getBoundingClientRect();
-            const mx = (e.clientX - rect.left - centerX - offsetX) / scale;
-            const my = (e.clientY - rect.top - centerY - offsetY) / scale;
-            const distFromCenter = Math.sqrt(mx * mx + my * my);
-            const clickDuration = Date.now() - mouseDownTime;
-            
-            // Check if clicking on center "You" node
-            if (!mouseDownItem && distFromCenter < 48 && clickDuration < DRAG_THRESHOLD) {
-                showUserProfile();
-                return;
-            }
-            
-            if (mouseDownItem && clickDuration < DRAG_THRESHOLD) {
-                if (mouseDownItem.type === 'person') {
-                    console.log('Canvas click: showing person', mouseDownItem.name);
-                    showPersonDetail(mouseDownItem);
-                }
-            } else if (!mouseDownItem && clickDuration < DRAG_THRESHOLD) {
-                const panel = document.getElementById('detailPanel');
-                if (panel.classList.contains('open')) {
-                    closeDetail();
-                }
-            }
-            
-            isDragging = false;
-            mouseDownItem = null;
-        });
-        
-        canvas.addEventListener('mouseleave', () => {
-            isDragging = false;
-            hoveredItem = null;
-            mouseDownItem = null;
-            hideTooltip();
-        });
-        
-        function getItemAtPosition(mx, my) {
-            for (const p of people.filter(p => activeFilters.includes(p.category))) {
-                const pos = getPolarPosition(p);
-                const dist = Math.sqrt(Math.pow(mx - pos.x, 2) + Math.pow(my - pos.y, 2));
-                if (dist < 28) {
-                    console.log('Found person at position:', p.name, 'distance:', dist);
-                    return p;
-                }
-            }
-            return null;
-        }
-        
-        function showPersonById(personId) {
-            const person = people.find(p => p.id === personId);
-            if (person) {
-                showPersonDetail(person);
-            } else {
-                console.error('Person not found:', personId);
-                showNotification('⚠️ Person not found', 'error');
-            }
-        }
-        
-        async function showPersonDetail(person) {
-            if (!person) {
-                console.error('showPersonDetail called with no person');
-                return;
-            }
-            
-            const panel = document.getElementById('detailPanel');
-            const icon = document.getElementById('detailIcon');
-            const name = document.getElementById('detailName');
-            const subtitle = document.getElementById('detailSubtitle');
-            const content = document.getElementById('detailContent');
-            const isEditing = panel.classList.contains('editing');
-            
-            icon.textContent = '👤';
-            
-            if (isEditing) {
-                name.innerHTML = `<input type="text" id="editPersonName" value="${person.name}" class="edit-field" placeholder="Full name">`;
-                subtitle.innerHTML = `<select id="editPersonCategory" class="edit-field">
-                    <option value="inner" ${person.category === 'inner' ? 'selected' : ''}>Inner Circle</option>
-                    <option value="circle" ${person.category === 'circle' ? 'selected' : ''}>Circle</option>
-                    <option value="acquaintance" ${person.category === 'acquaintance' ? 'selected' : ''}>Acquaintances</option>
-                    <option value="professional" ${person.category === 'professional' ? 'selected' : ''}>Professional</option>
-                    <option value="archive" ${person.category === 'archive' ? 'selected' : ''}>Archive</option>
-                </select>`;
-            } else {
-                name.textContent = person.name;
-                subtitle.textContent = person.relationshipType || 'Friend';
-            }
-            
-            // Load enhanced person data
-            const personId = person.id.replace('p', '');
-            const enhancedPerson = await loadEnhancedPerson(personId);
-            if (enhancedPerson) {
-                person = enhancedPerson;
-            }
-            
-            let htmlSections = [];
-            
-            htmlSections.push(`
-                <div class="detail-section">
-                    <div class="section-title">Connection Health</div>
-                    <div class="connection-health">
-                        <div>Based on your usual pattern</div>
-                        <div class="health-bar"><div class="health-fill" style="width: ${Math.min(100, person.strength * 100)}%"></div></div>
-                        <div class="health-stats">
-                            <div class="stat-box"><div class="stat-label">Last Contact</div><div class="stat-value">${Math.floor(person.lastContact / 7)}w ago</div></div>
-                            <div class="stat-box"><div class="stat-label">Frequency</div><div class="stat-value">Every ${Math.floor(person.frequency / 7)}w</div></div>
-                            <div class="stat-box"><div class="stat-label">Strength</div><div class="stat-value">${Math.round(person.strength * 100)}%</div></div>
-                        </div>
-                        <div class="tags-container">
-                            <span class="tag">${person.category === 'inner' ? 'Inner Circle' : 
-                                               person.category === 'circle' ? 'Circle' : 
-                                               person.category === 'acquaintance' ? 'Acquaintances' :
-                                               person.category === 'professional' ? 'Professional' :
-                                               person.category === 'archive' ? 'Archive' : person.category}</span>
-                            ${person.birthday ? `<span class="tag">🎂 ${person.birthday}</span>` : ''}
-                        </div>
-                    </div>
-                    <div class="quick-actions">
-                        <div class="quick-action-btn" onclick="scheduleWithPerson('${person.id}')"><div class="quick-action-icon">📅</div><div class="quick-action-label">Schedule</div></div>
-                        <div class="quick-action-btn" onclick="createTodoForPerson('${person.id}')"><div class="quick-action-icon">✓</div><div class="quick-action-label">To-Do</div></div>
-                        <div class="quick-action-btn" onclick="addNoteToPerson('${person.id}')"><div class="quick-action-icon">📝</div><div class="quick-action-label">Note</div></div>
-                        <div class="quick-action-btn" onclick="setGoalWithPerson('${person.id}')"><div class="quick-action-icon">🎯</div><div class="quick-action-label">Goal</div></div>
-                        <div class="quick-action-btn" onclick="addGiftForPerson('${person.id}')"><div class="quick-action-icon">🎁</div><div class="quick-action-label">Gift</div></div>
-                        <div class="quick-action-btn" onclick="logConversationWithPerson('${person.id}')"><div class="quick-action-icon">💬</div><div class="quick-action-label">Log</div></div>
-                        <div class="quick-action-btn" onclick="trackDebtWithPerson('${person.id}')"><div class="quick-action-icon">💰</div><div class="quick-action-label">Debt</div></div>
-                        <div class="quick-action-btn" onclick="editPerson('${person.id}')"><div class="quick-action-icon">${isEditing ? '💾' : '✏️'}</div><div class="quick-action-label">${isEditing ? 'Save' : 'Edit'}</div></div>
-                    </div>
-                </div>
-            `);
-            
-            // Contact & Background section
-            htmlSections.push(`
-                <div class="detail-section">
-                    <div class="section-title">Contact & Background</div>
-                    <div class="info-grid">
-                        <div class="info-item">
-                            <div class="info-label">Phone</div>
-                            <div class="info-value">
-                                ${isEditing ? `<input type="tel" id="editPersonPhone" value="${person.phone || ''}" class="edit-field" placeholder="Phone number">` : (person.phone || 'Not provided')}
-                            </div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Email</div>
-                            <div class="info-value">
-                                ${isEditing ? `<input type="email" id="editPersonEmail" value="${person.email || ''}" class="edit-field" placeholder="Email address">` : (person.email || 'Not provided')}
-                            </div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Birthday</div>
-                            <div class="info-value">
-                                ${isEditing ? `<input type="date" id="editPersonBirthday" value="${person.birthday || ''}" class="edit-field">` : (person.birthday || 'Not provided')}
-                            </div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Address</div>
-                            <div class="info-value">
-                                ${isEditing ? `<input type="text" id="editPersonAddress" value="${person.address || ''}" class="edit-field" placeholder="Address">` : (person.address || 'Not provided')}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `);
-            
-            // Notes section
-            htmlSections.push(`
-                <div class="detail-section">
-                    <div class="section-title">Notes & Preferences</div>
-                    <div class="notes-section">
-                        ${isEditing ? `
-                            <textarea id="editPersonNotes" class="edit-field notes-textarea" placeholder="Add notes about this person...">${person.notes || ''}</textarea>
-                        ` : `
-                            <div class="note-item">
-                                <div class="timeline-title">${person.notes || 'No notes yet'}</div>
-                            </div>
-                        `}
-                    </div>
-                </div>
-            `);
-
-            // Custom fields section
-            if (peopleFieldSchema && peopleFieldSchema.length) {
-                const custom = person.custom_fields || {};
-                htmlSections.push(`
-                    <div class="detail-section">
-                        <div class="section-title">Custom Fields</div>
-                        <div class="info-grid">
-                            ${peopleFieldSchema.map(field => `
-                                <div class="info-item">
-                                    <div class="info-label">${field.label}</div>
-                                    <div class="info-value">
-                                        ${isEditing
-                                            ? `<input type="text" class="edit-field" data-edit-field-key="${field.field_key}" value="${custom[field.field_key] || ''}" placeholder="${field.label}">`
-                                            : (custom[field.field_key] || 'Not set')}
-                                    </div>
-                                </div>
-                            `).join('')}
-                        </div>
-                    </div>
-                `);
-            }
-            
-            content.innerHTML = htmlSections.join('');
-            panel.classList.add('open');
-        }
-        
-        // Person detail action functions
-        async function scheduleWithPerson(personId) {
-            const person = people.find(p => p.id === personId);
-            if (!person) return;
-            const title = prompt(`Schedule something with ${person.name}:`, `Meeting with ${person.name}`);
-            if (!title) return;
-            const dateStr = prompt('Date (YYYY-MM-DD):', new Date(Date.now() + 7*86400000).toISOString().slice(0,10));
-            if (!dateStr) return;
-            const timeStr = prompt('Time (HH:MM, optional):', '10:00');
-            try {
-                const res = await apiRequest('/api/calendar/events', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title, start_date: dateStr, start_time: timeStr || null, category: 'social' })
-                });
-                if (res && res.id) showNotification(`Scheduled "${title}" on ${dateStr}`, 'success');
-                else showNotification('Failed to create event', 'error');
-            } catch (e) { showNotification('Error creating event', 'error'); }
-        }
-        
-        async function createTodoForPerson(personId) {
-            const person = people.find(p => p.id === personId);
-            if (!person) return;
-            const todo = prompt(`Create a reminder for ${person.name}:`, `Call ${person.name} to check in`);
-            if (!todo) return;
-            try {
-                const res = await apiRequest('/api/reminders/', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: todo, category: 'personal', priority: 'normal' })
-                });
-                if (res && (res.id || res.reminder_id)) showNotification(`Reminder created: ${todo}`, 'success');
-                else showNotification('Failed to create reminder', 'error');
-            } catch (e) { showNotification('Error creating reminder', 'error'); }
-        }
-        
-        async function addNoteToPerson(personId) {
-            const person = people.find(p => p.id === personId);
-            if (!person) return;
-            const note = prompt(`Add a note about ${person.name}:`, '');
-            if (!note) return;
-            try {
-                const res = await apiRequest('/api/notes/', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: `Note: ${person.name}`, content: note, category: 'people' })
-                });
-                if (res && (res.id || res.note_id)) showNotification(`Note saved about ${person.name}`, 'success');
-                else showNotification('Failed to save note', 'error');
-            } catch (e) { showNotification('Error saving note', 'error'); }
-        }
-        
-        async function setGoalWithPerson(personId) {
-            const person = people.find(p => p.id === personId);
-            if (!person) return;
-            const goal = prompt(`Set a goal with ${person.name}:`, 'Plan a trip together');
-            if (!goal) return;
-            const deadline = prompt('Deadline (YYYY-MM-DD, optional):', '');
-            try {
-                const res = await apiRequest('/api/reminders/', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: `Goal: ${goal} (${person.name})`, category: 'goals', priority: 'normal', due_date: deadline || null })
-                });
-                if (res && (res.id || res.reminder_id)) showNotification(`Goal set: ${goal}`, 'success');
-                else showNotification('Failed to set goal', 'error');
-            } catch (e) { showNotification('Error setting goal', 'error'); }
-        }
-        
-        async function addGiftForPerson(personId) {
-            const person = people.find(p => p.id === personId);
-            if (!person) return;
-            const gift = prompt(`Gift idea for ${person.name}:`, '');
-            if (!gift) return;
-            const occasion = prompt('Occasion (optional):', 'Birthday');
-            try {
-                const res = await apiRequest('/api/notes/', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: `Gift idea for ${person.name}`, content: `${gift}${occasion ? ` (${occasion})` : ''}`, category: 'gifts' })
-                });
-                if (res && (res.id || res.note_id)) showNotification(`Gift idea saved for ${person.name}`, 'success');
-                else showNotification('Failed to save gift idea', 'error');
-            } catch (e) { showNotification('Error saving gift idea', 'error'); }
-        }
-        
-        async function logConversationWithPerson(personId) {
-            const person = people.find(p => p.id === personId);
-            if (!person) return;
-            const topic = prompt(`What did you talk about with ${person.name}?`, '');
-            if (!topic) return;
-            try {
-                const res = await apiRequest('/api/journal/entries', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ content: `Conversation with ${person.name}: ${topic}`, mood: 'neutral', tags: 'people,conversation' })
-                });
-                if (res && (res.id || res.entry_id)) showNotification(`Conversation with ${person.name} logged`, 'success');
-                else showNotification('Failed to log conversation', 'error');
-            } catch (e) { showNotification('Error logging conversation', 'error'); }
-        }
-        
-        async function trackDebtWithPerson(personId) {
-            const person = people.find(p => p.id === personId);
-            if (!person) return;
-            const amountStr = prompt(`Amount with ${person.name} (positive = they owe you, negative = you owe them):`, '0');
-            if (amountStr === null) return;
-            const amount = parseFloat(amountStr);
-            if (isNaN(amount) || amount === 0) return;
-            const reason = prompt('Reason (optional):', '');
-            try {
-                const desc = amount > 0 ? `${person.name} owes you` : `You owe ${person.name}`;
-                const res = await apiRequest('/api/transactions/', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ amount: Math.abs(amount), category: 'debt', description: `${desc}${reason ? ': ' + reason : ''}`, type: amount > 0 ? 'income' : 'expense' })
-                });
-                if (res && (res.id || res.transaction_id)) showNotification(`Debt tracked: $${Math.abs(amount)} (${desc})`, 'success');
-                else showNotification('Failed to track debt', 'error');
-            } catch (e) { showNotification('Error tracking debt', 'error'); }
-        }
-        
-        function editPerson(personId) {
-            const person = people.find(p => p.id === personId);
-            if (!person) {
-                console.error('editPerson: Person not found:', personId);
-                showNotification('⚠️ Person not found', 'error');
-                return;
-            }
-            
-            const panel = document.getElementById('detailPanel');
-            const isEditing = panel.classList.contains('editing');
-            
-            if (isEditing) {
-                savePersonChanges(personId);
-            } else {
-                panel.classList.add('editing');
-                showPersonDetail(person);
-            }
-        }
-        
-        async function savePersonChanges(personId) {
-            const person = people.find(p => p.id === personId);
-            if (!person) {
-                console.error('savePersonChanges: Person not found:', personId);
-                showNotification('⚠️ Person not found', 'error');
-                return;
-            }
-            
-            const name = document.getElementById('editPersonName')?.value || person.name;
-            const category = document.getElementById('editPersonCategory')?.value || person.category;
-            const phone = document.getElementById('editPersonPhone')?.value || '';
-            const email = document.getElementById('editPersonEmail')?.value || '';
-            const birthday = document.getElementById('editPersonBirthday')?.value || '';
-            const address = document.getElementById('editPersonAddress')?.value || '';
-            const notes = document.getElementById('editPersonNotes')?.value || '';
-            const customFields = {};
-            document.querySelectorAll('[data-edit-field-key]').forEach(el => {
-                if (el.value && el.value.trim() !== '') customFields[el.dataset.editFieldKey] = el.value.trim();
-            });
-            
-            if (!name) {
-                showNotification('⚠️ Name is required', 'error');
-                return;
-            }
-            
-            try {
-                // Extract numeric ID from personId (remove 'p' prefix)
-                const id = personId.replace('p', '');
-                
-                // Prepare update data
-                const updateData = {
-                    name: name,
-                    relationship: category,
-                    phone: phone || null,
-                    email: email || null,
-                    birthday: birthday || null,
-                    address: address || null,
-                    notes: notes || null,
-                    custom_fields: customFields
-                };
-                
-                // Call backend API to update
-                await apiRequest(`/api/people/${id}`, {
-                    method: 'PUT',
-                    body: JSON.stringify(updateData)
-                });
-                
-                // Update local object
-                person.name = name;
-                person.category = category;
-                person.relationshipType = category;
-                person.phone = phone;
-                person.email = email;
-                person.birthday = birthday;
-                person.address = address;
-                person.notes = notes;
-                
-                // Exit edit mode and refresh display
-                const panel = document.getElementById('detailPanel');
-                panel.classList.remove('editing');
-                showPersonDetail(person);
-                updateSidebar();
-                updateLegend();
-                
-                showNotification(`✅ Updated ${name}!`, 'success');
-            } catch (error) {
-                console.error('Failed to update person:', error);
-                showNotification('❌ Failed to update person', 'error');
-            }
-        }
-        
-        function updateSidebar() {
-            const list = document.getElementById('peopleList');
-            const filters = document.getElementById('filterChips');
-            
-            filters.innerHTML = `
-                <div class="filter-chip ${activeFilters.includes('inner') ? 'active' : ''}" onclick="toggleFilter('inner')">Inner Circle</div>
-                <div class="filter-chip ${activeFilters.includes('circle') ? 'active' : ''}" onclick="toggleFilter('circle')">Circle</div>
-                <div class="filter-chip ${activeFilters.includes('acquaintance') ? 'active' : ''}" onclick="toggleFilter('acquaintance')">Acquaintances</div>
-                <div class="filter-chip ${activeFilters.includes('professional') ? 'active' : ''}" onclick="toggleFilter('professional')">Professional</div>
-                <div class="filter-chip ${activeFilters.includes('archive') ? 'active' : ''}" onclick="toggleFilter('archive')">Archive</div>
-            `;
-            
-            list.innerHTML = people.filter(person => activeFilters.length === 0 || activeFilters.includes(person.category)).map(person => `
-                <div class="person-card" onclick="showPersonById('${person.id}')">
-                    <div class="person-label">${person.name}</div>
-                    <div class="person-text">${person.relationshipType || person.category}${person.birthday ? ` • Birthday: ${person.birthday}` : ""}</div>
-                    <div class="person-action">View Details</div>
-                </div>
-            `).join("");
-        }
-        
-        function toggleFilter(category) {
-            const index = activeFilters.indexOf(category);
-            if (index > -1) {
-                activeFilters.splice(index, 1);
-            } else {
-                activeFilters.push(category);
-            }
-            updateSidebar();
-        }
-        
-        function updateLegend() {
-            const legend = document.getElementById('canvasLegend');
-            legend.innerHTML = `
-                <div class="legend-title">Relationship Map</div>
-                <div class="legend-item">
-                    <div class="legend-circle" style="border-color: #ec4899; background: white;"></div>
-                    <span>Inner Circle</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-circle" style="border-color: #14b8a6; background: white;"></div>
-                    <span>Circle</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-circle" style="border-color: #9ca3af; background: white;"></div>
-                    <span>Acquaintances</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-circle" style="border-color: #3b82f6; background: white;"></div>
-                    <span>Professional</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-circle" style="border-color: #6b7280; background: white;"></div>
-                    <span>Archive</span>
-                </div>
-            `;
-        }
-        
-        function showUserProfile() {
-            const panel = document.getElementById('detailPanel');
-            const icon = document.getElementById('detailIcon');
-            const name = document.getElementById('detailName');
-            const subtitle = document.getElementById('detailSubtitle');
-            const content = document.getElementById('detailContent');
-            
-            if (!userProfile) {
-                alert('Profile not loaded. Please refresh the page.');
-                return;
-            }
-            
-            icon.textContent = '👤';
-            name.textContent = userProfile.name || 'Your Profile';
-            subtitle.textContent = 'Profile Management';
-            
-            // Create profile content
-            const html = `
-                <div class="detail-section">
-                    <div class="section-title">Your Profile</div>
-                    <div class="info-grid">
-                        <div class="info-item">
-                            <div class="info-label">Name</div>
-                            <div class="info-value">${userProfile.name || 'Not set'}</div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Bio</div>
-                            <div class="info-value">${userProfile.bio || 'Not set'}</div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Location</div>
-                            <div class="info-value">${userProfile.location || 'Not set'}</div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Birthday</div>
-                            <div class="info-value">${userProfile.birthday || 'Not set'}</div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Profile Completeness</div>
-                            <div class="info-value">${Math.round((userProfile.profile_completeness || 0) * 100)}%</div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Confidence Score</div>
-                            <div class="info-value">${Math.round((userProfile.confidence_score || 0) * 100)}%</div>
-                        </div>
-                    </div>
-                </div>
-                
-                ${userProfile.ai_insights ? `
-                <div class="detail-section">
-                    <div class="section-title">AI Insights</div>
-                    <div class="connection-health">
-                        <p>Based on my analysis of your conversations, journal entries, and activities, here's what I've learned about you:</p>
-                        ${userProfile.ai_insights.observed_patterns ? `
-                        <div class="tags-container">
-                            ${userProfile.ai_insights.observed_patterns.slice(0, 5).map(pattern => `
-                                <span class="tag">${pattern.type}</span>
-                            `).join('')}
-                        </div>
-                        ` : '<p class="info-value">No insights yet. Keep using Zoe!</p>'}
-                    </div>
-                </div>
-                ` : ''}
-                
-                <div class="detail-section">
-                    <div class="quick-actions">
-                        <div class="quick-action-btn" onclick="enrichProfile()"><div class="quick-action-icon">✨</div><div class="quick-action-label">Enrich</div></div>
-                        <div class="quick-action-btn" onclick="editUserProfile()"><div class="quick-action-icon">✏️</div><div class="quick-action-label">Edit</div></div>
-                    </div>
-                </div>
-            `;
-            
-            content.innerHTML = html;
-            panel.classList.add('open');
-        }
-        
-        async function enrichProfile() {
-            try {
-                await apiRequest('/api/user/profile/analyze', {
-                    method: 'POST'
-                });
-                alert('Analysis started! Your profile will be updated with new insights.');
-                await loadUserProfile();
-                showUserProfile();
-            } catch (error) {
-                console.error('Failed to start analysis:', error);
-                alert('Failed to start analysis');
-            }
-        }
-        
-        function editUserProfile() {
-            // Redirect to settings page for profile editing
-            window.location.href = 'settings.html?tab=profile';
-        }
-        
-        function closeDetail() { 
-            const panel = document.getElementById('detailPanel');
-            panel.classList.remove('open');
-            panel.classList.remove('editing');
-        }
-        
-        function showTooltip(x, y, t) { 
-            const el = document.getElementById('tooltip'); 
-            el.textContent = t; 
-            el.style.left = x + 'px'; 
-            el.style.top = (y - 40) + 'px'; 
-            el.classList.add('show'); 
-        }
-        function hideTooltip() { document.getElementById('tooltip').classList.remove('show'); }
-        function resetView() { scale = 1; offsetX = 0; offsetY = 0; }
-        function zoomIn() { scale = Math.min(2, scale * 1.2); }
-        function zoomOut() { scale = Math.max(0.5, scale / 1.2); }
-        function searchPeople(q) {
-            if (!q || q.length < 1) {
-                updateSidebar();
-                return;
-            }
-            const query = q.toLowerCase();
-            const sidebar = document.getElementById('peopleList');
-            if (!sidebar) return;
-            const filtered = people.filter(p =>
-                (p.name && p.name.toLowerCase().includes(query)) ||
-                (p.email && p.email.toLowerCase().includes(query)) ||
-                (p.phone && p.phone.includes(query)) ||
-                (p.category && p.category.toLowerCase().includes(query))
-            );
-            sidebar.innerHTML = filtered.map(p => `
-                <div class="person-item" onclick="selectPerson('${p.id}')">
-                    <div class="person-name">${p.name || 'Unknown'}</div>
-                    <div class="person-type">${p.category || p.relationshipType || ''}</div>
-                </div>
-            `).join('');
-        }
-        
-        // Show notification (imported from common.js but add fallback)
-        if (typeof showNotification === 'undefined') {
-            function showNotification(message, type = 'info') {
-                const notification = document.createElement('div');
-                notification.style.cssText = `
-                    position: fixed; top: 80px; right: 20px; 
-                    background: ${type === 'error' ? '#ef4444' : type === 'success' ? '#22c55e' : '#7B61FF'};
-                    color: white; padding: 12px 20px; border-radius: 12px;
-                    font-size: 14px; font-weight: 500; z-index: 9999;
-                    box-shadow: 0 8px 24px rgba(0,0,0,0.2);
-                    max-width: 300px; word-wrap: break-word;
-                `;
-                notification.textContent = message;
-                document.body.appendChild(notification);
-                
-                setTimeout(() => {
-                    notification.style.opacity = '0';
-                    notification.style.transform = 'translateX(400px)';
-                    setTimeout(() => notification.remove(), 300);
-                }, 3000);
-            }
-        }
-        
-        // Mobile menu functions
-        function toggleMobileMenu() {
-            if (window.innerWidth > 768) { window.location.href = 'chat.html'; return; }
-            const menu = document.getElementById('mobileNavMenu');
-            const overlay = document.getElementById('mobileNavOverlay');
-            if (menu && overlay) {
-                menu.classList.toggle('open');
-                overlay.classList.toggle('open');
-            }
-        }
-
-        function handleLogout() {
-            if (window.innerWidth <= 768) {
-                toggleMobileMenu();
-            }
-            if (window.zoeAuth && typeof window.zoeAuth.logout === 'function') {
-                window.zoeAuth.logout();
-            } else if (typeof logout === 'function') {
-                logout();
-            } else {
-                console.error('logout function not found');
-                localStorage.removeItem('zoe_session');
-                window.location.href = 'chat.html';
-            }
-        }
-
-        // More overlay functions
-        function openMoreOverlay() {
-            document.getElementById('moreOverlay').classList.add('active');
-        }
-
-        function closeMoreOverlay() {
-            document.getElementById('moreOverlay').classList.remove('active');
-        }
-
-        function navigateToPage(page) {
-            window.location.href = page;
-        }
-
-        function updateNavTime() {
-            const now = new Date();
-            const timeEl = document.getElementById('navCurrentTime');
-            const dateEl = document.getElementById('navCurrentDate');
-            if (timeEl) timeEl.textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-            if (dateEl) dateEl.textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
-        }
-
-        // User profile storage
-        let userProfile = null;
-
-        async function loadPeopleFieldSchema() {
-            try {
-                const res = await apiRequest('/api/people/fields');
-                peopleFieldSchema = (res.fields || []).filter(f => f.is_active !== false);
-                const container = document.getElementById('personCustomFields');
-                if (container) {
-                    container.innerHTML = peopleFieldSchema.map(field => `
-                        <div class="modal-field">
-                            <label class="modal-label">${field.label}</label>
-                            <input type="text" class="modal-input" data-field-key="${field.field_key}" placeholder="${field.label}">
-                        </div>
-                    `).join('');
-                }
-            } catch (error) {
-                console.error('Failed to load people fields:', error);
-            }
-        }
-        
-        async function loadUserProfile() {
-            try {
-                const response = await apiRequest('/api/user/profile');
-                userProfile = response;
-                
-                // Check if onboarding is needed
-                if (!userProfile.onboarding_completed) {
-                    showOnboardingPrompt();
-                }
-            } catch (error) {
-                console.error('Failed to load user profile:', error);
-            }
-        }
-        
-        function showOnboardingPrompt() {
-            const modal = document.createElement('div');
-            modal.className = 'onboarding-prompt-modal';
-            modal.innerHTML = `
-                <div class="onboarding-prompt-content">
-                    <div class="onboarding-zoe-orb"></div>
-                    <h2>Hi! I'm Zoe 👋</h2>
-                    <p>Would you like to do your onboarding now? It helps me learn about you so I can be more helpful!</p>
-                    <div class="onboarding-prompt-actions">
-                        <button class="onboarding-btn-primary" onclick="startOnboarding()">Let's do it!</button>
-                        <button class="onboarding-btn-secondary" onclick="closeOnboardingPrompt(this)">Maybe later</button>
-                    </div>
-                    <label class="onboarding-skip-option">
-                        <input type="checkbox" onchange="toggleOnboardingReminder(this.checked)">
-                        Don't ask again
-                    </label>
-                </div>
-            `;
-            document.body.appendChild(modal);
-        }
-        
-        function startOnboarding() {
-            window.location.href = 'chat.html?onboarding=true';
-        }
-        
-        function closeOnboardingPrompt(btn) {
-            btn.closest('.onboarding-prompt-modal').remove();
-        }
-        
-        function toggleOnboardingReminder(checked) {
-            if (checked) {
-                // Mark profile as onboarding completed (minimal)
-                apiRequest('/api/user/profile', {
-                    method: 'PUT',
-                    body: JSON.stringify({ onboarding_completed: true })
-                });
-            }
-        }
-        
-        // Initialize on page load
-        document.addEventListener('DOMContentLoaded', async () => {
-            updateAPIStatus();
-            await loadPeopleFieldSchema();
-            await loadUserProfile();
-            await loadPeople();
-            updateSidebar();
-            updateLegend();
-            updateNavTime();
-            setInterval(updateNavTime, 30000);
-        });
-
-        async function updateAPIStatus() {
-            const statusEl = document.getElementById('apiStatus');
-            try {
-                await apiRequest('/health');
-                statusEl.textContent = 'Online';
-                statusEl.className = 'api-indicator online';
-            } catch (error) {
-                statusEl.textContent = 'Offline';
-                statusEl.className = 'api-indicator offline';
-            }
-        }
-        
-        window.addEventListener('resize', resizeCanvas);
-        resizeCanvas();
-        animate();
-    </script>
     <script src="/js/websocket-sync.js"></script>
-    <script>
-        (function() {
-            const session = window.zoeAuth?.getCurrentSession();
-            const userId = session?.user_info?.user_id || session?.user_id || 'family-admin';
-            if (typeof ZoeWebSockets !== 'undefined') {
-                ZoeWebSockets.init(userId);
-            }
-        })();
-    </script>
-
-    <!-- TOUCH: gesture navigation (edge swipe) -->
-    <script src="/touch/js/gestures.js"></script>
-    <!-- TOUCH: premium nav bar with orb, tabs, theme, clock -->
     <script src="/touch/js/touch-menu.js"></script>
-    <!-- TOUCH: executor for voice/backend UI actions -->
-    <script src="/js/touch-ui-executor.js"></script>
-    <!-- TOUCH: floating orb chat overlay -->
-    <script src="/js/orb-loader.js"></script>
-    <!-- TOUCH: lock gridstack to static (no drag) on kiosk -->
+
     <script>
-    (function(){
-        // Wait for Gridstack to initialise, then lock it
-        function lockGrids(){
-            if(typeof GridStack !== 'undefined'){
-                document.querySelectorAll('.grid-stack').forEach(function(el){
-                    var g = GridStack.init({}, el);
-                    if(g && g.setStatic) g.setStatic(true);
-                });
-            }
+    const CIRCLES = [
+        { id: 'inner',   label: 'Inner Circle', emoji: '💜' },
+        { id: 'family',  label: 'Family',       emoji: '👨‍👩‍👧' },
+        { id: 'friends', label: 'Friends',      emoji: '🤝' },
+        { id: 'work',    label: 'Work',         emoji: '💼' },
+        { id: 'other',   label: 'Other',        emoji: '🌐' },
+    ];
+
+    const REL_TO_CIRCLE = {
+        inner:  ['spouse','partner','wife','husband','child','son','daughter','kid',
+                 'parent','mother','father','mom','dad','sibling','brother','sister'],
+        family: ['grandparent','grandma','grandpa','grandmother','grandfather',
+                 'aunt','uncle','cousin','niece','nephew','in-law','stepparent',
+                 'stepchild','stepmother','stepfather','stepbrother','stepsister',
+                 'mother-in-law','father-in-law','brother-in-law','sister-in-law','family'],
+        friends:['friend','best friend','buddy','pal','mate','roommate','housemate','bff'],
+        work:   ['colleague','coworker','boss','manager','report','teammate','client',
+                 'customer','supplier','mentor','mentee','assistant','employee','coach',
+                 'contractor','partner (business)','business partner','investor','advisor'],
+    };
+
+    const state = {
+        people: [],
+        search: '',
+        activeCircle: 'all',
+        editingId: null,
+    };
+
+    // ─────────────────────────────────────────────
+    // Circle derivation
+    function deriveCircle(person) {
+        // 1. Manual override in custom_fields.circle
+        const custom = person.custom_fields?.circle;
+        if (custom && CIRCLES.find(c => c.id === custom)) return custom;
+        // 2. preferences.circle
+        const pref = person.preferences?.circle;
+        if (pref && CIRCLES.find(c => c.id === pref)) return pref;
+        // 3. Derive from relationship
+        const rel = (person.relationship || '').toLowerCase().trim();
+        if (!rel) return 'other';
+        for (const [circle, keys] of Object.entries(REL_TO_CIRCLE)) {
+            if (keys.some(k => rel === k || rel.includes(k))) return circle;
         }
-        window.addEventListener('load', function(){ setTimeout(lockGrids, 1000); });
-        window.addEventListener('widgets-registered', lockGrids);
-    })();
+        return 'other';
+    }
+
+    // ─────────────────────────────────────────────
+    // Avatar colour hashing
+    function avatarGradient(name) {
+        const palettes = [
+            ['#7B61FF', '#5AE0E0'],
+            ['#FF6B9D', '#FFB55E'],
+            ['#5AE0E0', '#7B61FF'],
+            ['#FFB55E', '#FF4D6A'],
+            ['#4CC9F0', '#4361EE'],
+            ['#52C41A', '#5AE0E0'],
+            ['#F72585', '#7B61FF'],
+            ['#06D6A0', '#118AB2'],
+        ];
+        let hash = 0;
+        for (const c of (name || '?')) hash = (hash * 31 + c.charCodeAt(0)) >>> 0;
+        const [a, b] = palettes[hash % palettes.length];
+        return `linear-gradient(135deg, ${a} 0%, ${b} 100%)`;
+    }
+    function initials(name) {
+        if (!name) return '?';
+        const parts = name.trim().split(/\s+/);
+        return (parts[0][0] + (parts.length > 1 ? parts[parts.length-1][0] : '')).toUpperCase();
+    }
+
+    // ─────────────────────────────────────────────
+    // Load
+    const API = (typeof API_BASE !== 'undefined') ? API_BASE : '/api';
+
+    async function loadPeople() {
+        try {
+            const res = await fetch(`${API}/people/?limit=500`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            state.people = (data.people || []).map(p => ({ ...p, _circle: deriveCircle(p) }));
+            render();
+        } catch (err) {
+            console.error(err);
+            document.getElementById('groupsContainer').innerHTML =
+                '<div class="empty-state"><div class="empty-state-icon">⚠️</div>' +
+                '<div class="empty-state-title">Couldn\'t load people</div>' +
+                '<div>' + (err.message || '') + '</div></div>';
+        }
+    }
+
+    function filteredPeople() {
+        const q = state.search.toLowerCase();
+        return state.people.filter(p => {
+            if (state.activeCircle !== 'all' && p._circle !== state.activeCircle) return false;
+            if (!q) return true;
+            const hay = [p.name, p.relationship, p.email, p.phone, p.notes]
+                .filter(Boolean).join(' ').toLowerCase();
+            return hay.includes(q);
+        });
+    }
+
+    function renderFilter() {
+        const counts = { all: state.people.length };
+        for (const c of CIRCLES) counts[c.id] = 0;
+        for (const p of state.people) counts[p._circle]++;
+        const row = document.getElementById('circleFilter');
+        const chips = [{ id: 'all', label: 'All', emoji: '✨' }, ...CIRCLES];
+        row.innerHTML = chips.map(c => `
+            <button class="circle-chip ${state.activeCircle === c.id ? 'active' : ''}" data-id="${c.id}">
+                <span>${c.emoji}</span>
+                <span>${c.label}</span>
+                <span class="chip-count">${counts[c.id] || 0}</span>
+            </button>`).join('');
+        row.querySelectorAll('.circle-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                state.activeCircle = chip.getAttribute('data-id');
+                render();
+            });
+        });
+    }
+
+    function renderGroups() {
+        const filtered = filteredPeople();
+        const container = document.getElementById('groupsContainer');
+        if (filtered.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">👥</div>
+                    <div class="empty-state-title">${state.people.length === 0 ? 'No people yet' : 'No matches'}</div>
+                    <div>${state.people.length === 0 ? 'Tap "New Person" to add your first contact.' : 'Try a different search or filter.'}</div>
+                </div>`;
+            return;
+        }
+
+        // If filtered to a single circle, render flat
+        if (state.activeCircle !== 'all') {
+            const circle = CIRCLES.find(c => c.id === state.activeCircle);
+            container.innerHTML = `
+                <div class="circle-group">
+                    <div class="group-header">
+                        <div class="group-title"><span class="group-title-emoji">${circle.emoji}</span>${circle.label}</div>
+                        <div class="group-count">${filtered.length} ${filtered.length === 1 ? 'person' : 'people'}</div>
+                    </div>
+                    <div class="people-grid">${filtered.map(cardHtml).join('')}</div>
+                </div>`;
+        } else {
+            // Group by circle, in CIRCLES order
+            let html = '';
+            for (const circle of CIRCLES) {
+                const group = filtered.filter(p => p._circle === circle.id);
+                if (group.length === 0) continue;
+                html += `
+                    <div class="circle-group">
+                        <div class="group-header">
+                            <div class="group-title"><span class="group-title-emoji">${circle.emoji}</span>${circle.label}</div>
+                            <div class="group-count">${group.length}</div>
+                        </div>
+                        <div class="people-grid">${group.map(cardHtml).join('')}</div>
+                    </div>`;
+            }
+            container.innerHTML = html;
+        }
+
+        container.querySelectorAll('.person-card').forEach(c => {
+            c.addEventListener('click', () => openEditor(c.getAttribute('data-id')));
+        });
+    }
+
+    function cardHtml(p) {
+        const hints = [];
+        if (p.phone) hints.push('📞');
+        if (p.email) hints.push('✉️');
+        if (p.birthday) hints.push('🎂');
+        if (p.notes) hints.push('📝');
+        const safeName = (p.name || 'Unknown').replace(/</g, '&lt;');
+        return `
+            <div class="person-card" data-id="${p.id}">
+                <div class="avatar" style="background:${avatarGradient(p.name)}">${initials(p.name)}</div>
+                <div class="person-name">${safeName}</div>
+                ${p.relationship ? `<div class="person-rel">${p.relationship.replace(/</g, '&lt;')}</div>` : ''}
+                ${hints.length ? `<div class="person-hints">${hints.map(h => `<span class="person-hint">${h}</span>`).join('')}</div>` : ''}
+            </div>`;
+    }
+
+    function render() {
+        renderFilter();
+        renderGroups();
+    }
+
+    // ─────────────────────────────────────────────
+    // Search
+    document.getElementById('searchInput').addEventListener('input', (e) => {
+        state.search = e.target.value;
+        renderGroups();
+    });
+
+    // ─────────────────────────────────────────────
+    // Editor
+    function openEditor(personId) {
+        state.editingId = personId || null;
+        ['fName','fRel','fEmail','fPhone','fBday','fNotes','fCircle'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+        });
+
+        if (personId) {
+            const p = state.people.find(x => x.id === personId);
+            if (p) {
+                document.getElementById('editorTitleText').textContent = 'Edit Person';
+                document.getElementById('editorDeleteBtn').style.display = 'inline-block';
+                document.getElementById('fName').value  = p.name || '';
+                document.getElementById('fRel').value   = p.relationship || '';
+                document.getElementById('fEmail').value = p.email || '';
+                document.getElementById('fPhone').value = p.phone || '';
+                document.getElementById('fBday').value  = p.birthday || '';
+                document.getElementById('fNotes').value = p.notes || '';
+                const circleOverride = p.custom_fields?.circle || p.preferences?.circle || '';
+                document.getElementById('fCircle').value = circleOverride;
+            }
+        } else {
+            document.getElementById('editorTitleText').textContent = 'New Person';
+            document.getElementById('editorDeleteBtn').style.display = 'none';
+        }
+        document.getElementById('editorOverlay').classList.add('open');
+        setTimeout(() => document.getElementById('fName').focus(), 350);
+    }
+
+    function closeEditor() {
+        document.getElementById('editorOverlay').classList.remove('open');
+        state.editingId = null;
+    }
+
+    async function savePerson() {
+        const name = document.getElementById('fName').value.trim();
+        if (!name) { document.getElementById('fName').focus(); return; }
+        const payload = {
+            name,
+            relationship: document.getElementById('fRel').value.trim() || null,
+            email: document.getElementById('fEmail').value.trim() || null,
+            phone: document.getElementById('fPhone').value.trim() || null,
+            birthday: document.getElementById('fBday').value || null,
+            notes: document.getElementById('fNotes').value.trim() || null,
+            visibility: 'family',
+        };
+        const circleOverride = document.getElementById('fCircle').value;
+        if (circleOverride) {
+            payload.preferences = { circle: circleOverride };
+        }
+
+        const btn = document.getElementById('saveBtn');
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
+        try {
+            if (state.editingId) {
+                const r = await fetch(`${API}/people/${state.editingId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            } else {
+                const r = await fetch(`${API}/people/`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            }
+            closeEditor();
+            await loadPeople();
+        } catch (err) {
+            console.error('savePerson failed', err);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Save';
+        }
+    }
+
+    async function deleteCurrent() {
+        if (!state.editingId) return;
+        try {
+            const r = await fetch(`${API}/people/${state.editingId}`, { method: 'DELETE' });
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            closeEditor();
+            await loadPeople();
+        } catch (err) {
+            console.error('deletePerson failed', err);
+        }
+    }
+
+    // Boot
+    loadPeople();
     </script>
 </body>
 </html>
-
-

@@ -1,8 +1,35 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script>
+    // Apply saved theme before first paint to prevent flash (ported from touch).
+    (function () {
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name="theme-color"]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch (e) {}
+    })();
+    </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#fafbfc">
+    <!-- Zoe theme bootstrap (must run before UI scripts) -->
+    <script>
+    (function(){
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name=theme-color]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch(e) {}
+    })();
+    </script>
     <title>Zoe - Memories Intelligence</title>
     <style>
         :root {
@@ -1168,6 +1195,7 @@
     
     <!-- Service Worker Registration -->
     <script src="/js/sw-registration.js" defer></script>
+    <link rel="stylesheet" href="css/dark-mode-shared.css">
 </head>
 <body>
     <div class="nav-bar">
@@ -1184,13 +1212,12 @@
         </div>
         <div class="nav-right">
             <div class="api-indicator connecting" id="apiStatus">Connecting</div>
-            
-            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
-            
-            <!-- Time/Date Display -->
+            <button class="refresh-btn notifications-btn" onclick="forceRefreshCache()" title="Refresh App (clears cache)">🔄</button>
+            <button class="theme-nav-btn notifications-btn" title="Toggle theme" onclick="window.cycleZoeTheme && window.cycleZoeTheme()">🌓</button>
+            <button class="notifications-btn" onclick="openNotificationsSafe()" title="Notifications">🔔</button>
             <div class="time-date-display">
                 <div class="current-time" id="navCurrentTime">--:--</div>
-                <div class="current-date" id="navCurrentDate"></div>
+                <div class="current-date" id="navCurrentDate">Loading...</div>
             </div>
         </div>
     </div>
@@ -1278,9 +1305,16 @@
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
             <a href="music.html" class="mobile-nav-item">🎵 Music</a>
-            <a href="games.html" class="mobile-nav-item">🎮 Games</a>
             <a href="people.html" class="mobile-nav-item">👥 People</a>
             <a href="memories.html" class="mobile-nav-item active">🧠 Memories</a>
+            <a href="notes.html" class="mobile-nav-item">📝 Notes</a>
+
+            <a href="cooking.html" class="mobile-nav-item">🍳 Cooking</a>
+
+            <a href="smart-home.html" class="mobile-nav-item">🏠 Smart Home</a>
+
+            <a href="updates.html" class="mobile-nav-item">⬇️ Updates</a>
+
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
             <div class="mobile-nav-divider"></div>
             <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
@@ -1297,7 +1331,6 @@
         <div class="notifications-content" id="notificationsContent">
             <div class="no-notifications">No notifications</div>
         </div>
-    </div>
 
     <!-- More Overlay -->
     <div class="more-overlay" id="moreOverlay">
@@ -1319,9 +1352,21 @@
                     <div class="more-item-icon">🎵</div>
                     <div class="more-item-label">Music</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('games.html')">
-                    <div class="more-item-icon">🎮</div>
-                    <div class="more-item-label">Games</div>
+                <div class="more-item" onclick="navigateToPage('notes.html')">
+                    <div class="more-item-icon">📝</div>
+                    <div class="more-item-label">Notes</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('cooking.html')">
+                    <div class="more-item-icon">🍳</div>
+                    <div class="more-item-label">Cooking</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('smart-home.html')">
+                    <div class="more-item-icon">🏠</div>
+                    <div class="more-item-label">Smart Home</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('updates.html')">
+                    <div class="more-item-icon">⬇️</div>
+                    <div class="more-item-label">Updates</div>
                 </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
@@ -1393,8 +1438,7 @@
                 const response = await fetch(`/api/collections/${collectionId}/tiles`, {
                                 method: 'POST',
                                 headers: {
-                                    'Content-Type': 'application/json',
-                                    ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                                    'Content-Type': 'application/json'
                                 },
                                 body: JSON.stringify({
                                     collection_id: parseInt(collectionId),
@@ -1412,9 +1456,11 @@
                                     }
                                 })
                             });
-                            
+                            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                            const data = await response.json();
+
                             const newTile = {
-                                id: `t${response.tile.id}`,
+                                id: `t${data.tile.id}`,
                                 type: 'tile',
                                 name: "",
                                 x: Math.random() * 300 - 150,
@@ -1427,7 +1473,7 @@
                                     title: "Pasted Image",
                                     description: "Image from clipboard"
                                 },
-                                dbId: response.tile.id // Store the actual database ID
+                                dbId: data.tile.id // Store the actual database ID
                             };
                             
                             col.items.push(newTile);
@@ -1462,8 +1508,7 @@
                 const response = await fetch(`/api/collections/${collectionId}/tiles`, {
                             method: 'POST',
                             headers: {
-                                'Content-Type': 'application/json',
-                                ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                                'Content-Type': 'application/json'
                             },
                             body: JSON.stringify({
                                 collection_id: parseInt(collectionId),
@@ -1474,9 +1519,11 @@
                                 content: text
                             })
                         });
-                        
+                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                        const data = await response.json();
+
                         const newTile = {
-                            id: `t${response.tile.id}`,
+                            id: `t${data.tile.id}`,
                             type: 'tile',
                             name: "",
                             x: Math.random() * 300 - 150,
@@ -1484,7 +1531,7 @@
                             size: 50,
                             content: text,
                             preview: null,
-                            dbId: response.tile.id // Store the actual database ID
+                            dbId: data.tile.id // Store the actual database ID
                         };
                         
                         // Auto-detect URLs and fetch preview
@@ -1510,8 +1557,7 @@
                 const response = await fetch('/api/memories/link-preview', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
-                        ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                        'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({ url: url })
                 });
@@ -1594,6 +1640,9 @@
             canvas.height = height * window.devicePixelRatio;
             canvas.style.width = width + 'px';
             canvas.style.height = height + 'px';
+            // Reset any previous transform before applying DPR scale so repeated
+            // resizes do not compound the scale.
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
             centerX = width / 2;
             centerY = height / 2;
@@ -1630,16 +1679,8 @@
             document.getElementById('collectionName').value = '';
         }
 
-        function openAddPersonModal() {
-            document.getElementById('addPersonModal').classList.add('show');
-        }
-
-        function closeAddPersonModal() {
-            document.getElementById('addPersonModal').classList.remove('show');
-            document.getElementById('personName').value = '';
-            document.getElementById('personCategory').value = 'inner';
-            document.getElementById('personNotes').value = '';
-        }
+        // openAddPersonModal / closeAddPersonModal removed: the addPersonModal DOM
+        // no longer lives on this page (people management has its own page).
         
         async function createCollection() {
             const name = document.getElementById('collectionName').value.trim();
@@ -1650,8 +1691,7 @@
                 const response = await fetch('/api/collections', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
-                        ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                        'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
                         name: name,
@@ -1662,9 +1702,11 @@
                         color: selectedColor
                     })
                 });
-                
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+
                 const newCol = {
-                    id: `c${response.collection.id}`,
+                    id: `c${data.collection.id}`,
                     type: 'collection',
                     name: name,
                     icon: "📁",
@@ -1694,8 +1736,7 @@
                 const response = await fetch(`/api/collections/${collectionId}/tiles`, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
-                        ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                        'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
                         collection_id: parseInt(collectionId),
@@ -1706,9 +1747,11 @@
                         content: ""
                     })
                 });
-                
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+
                 const newTile = {
-                    id: `t${response.tile.id}`,
+                    id: `t${data.tile.id}`,
                     type: 'tile',
                     name: "",
                     x: Math.random() * 300 - 150,
@@ -1716,7 +1759,7 @@
                     size: 50,
                     content: "",
                     preview: null,
-                    dbId: response.tile.id // Store the actual database ID
+                    dbId: data.tile.id // Store the actual database ID
                 };
                 col.items.push(newTile);
                 setTimeout(() => openTile(newTile), 100);
@@ -1920,8 +1963,7 @@
                 await fetch(`/api/tiles/${tileId}`, {
                     method: 'PUT',
                     headers: {
-                        'Content-Type': 'application/json',
-                        ...(session ? { 'Authorization': `Bearer ${session.token}` } : {})
+                        'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
                         collection_id: parseInt(currentCollection.replace('c', '')),
@@ -1992,9 +2034,15 @@
         }
         
         function draw() {
+            const isDark = document.documentElement.classList.contains('dark-mode');
             const bgGradient = ctx.createLinearGradient(0, 0, width, height);
-            bgGradient.addColorStop(0, '#fafbfc');
-            bgGradient.addColorStop(1, '#f1f3f6');
+            if (isDark) {
+                bgGradient.addColorStop(0, '#0a0a14');
+                bgGradient.addColorStop(1, '#12121f');
+            } else {
+                bgGradient.addColorStop(0, '#fafbfc');
+                bgGradient.addColorStop(1, '#f1f3f6');
+            }
             ctx.fillStyle = bgGradient;
             ctx.fillRect(0, 0, width, height);
             
@@ -2033,6 +2081,7 @@
         }
         
         function drawCanvasItem(item, isDragged, isHovered) {
+            const isDark = document.documentElement.classList.contains('dark-mode');
             const color = item.color || '#7c3aed';
             const r = (item.size || 50) / 2;
             const scale = isDragged ? 1.1 : isHovered ? 1.05 : 1;
@@ -2042,7 +2091,7 @@
             ctx.scale(scale, scale);
             ctx.globalAlpha = isDragged ? 0.7 : 1;
             
-            ctx.fillStyle = 'white';
+            ctx.fillStyle = isDark ? '#1b1b2e' : 'white';
             ctx.strokeStyle = color;
             ctx.lineWidth = 3;
             ctx.beginPath();
@@ -2058,10 +2107,10 @@
             
             ctx.restore();
             
-            ctx.fillStyle = '#1f2937';
+            ctx.fillStyle = isDark ? '#e5e7eb' : '#1f2937';
             ctx.font = '600 12px var(--font-text)';
             ctx.textAlign = 'center';
-            ctx.shadowColor = 'rgba(255, 255, 255, 0.9)';
+            ctx.shadowColor = isDark ? 'rgba(0, 0, 0, 0.6)' : 'rgba(255, 255, 255, 0.9)';
             ctx.shadowBlur = 4;
             ctx.fillText(item.name || 'Untitled', item.x, item.y + r * scale + 16);
             ctx.shadowBlur = 0;
@@ -2465,12 +2514,14 @@
 
         async function updateAPIStatus() {
             const statusEl = document.getElementById('apiStatus');
+            if (!statusEl) return;
+            // /health lives outside /api/*; bypass apiRequest's routing.
             try {
-                await apiRequest('/health');
+                const r = await fetch('/health', { cache: 'no-store' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
                 statusEl.textContent = 'Online';
                 statusEl.className = 'api-indicator online';
             } catch (error) {
-                console.error("Error loading people:", error);
                 statusEl.textContent = 'Offline';
                 statusEl.className = 'api-indicator offline';
             }

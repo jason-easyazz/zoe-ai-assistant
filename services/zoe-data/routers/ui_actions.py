@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import get_current_user
 from database import get_db
+from guest_policy import can_use_ui_action, require_feature_access
 from push import broadcaster
 from ui_orchestrator import (
     ACTION_STATES,
@@ -21,6 +22,7 @@ async def bind_panel(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    await require_feature_access(db, user, feature="ui_actions", action="bind")
     user_id = user["user_id"]
     panel_id = payload.get("panel_id")
     if not panel_id:
@@ -60,10 +62,13 @@ async def create_ui_action(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    await require_feature_access(db, user, feature="ui_actions", action="create")
     user_id = user["user_id"]
     action_type = payload.get("action_type")
     if action_type not in ALLOWED_ACTION_TYPES:
         raise HTTPException(status_code=400, detail="Unsupported action_type")
+    if not await can_use_ui_action(db, user, action_type):
+        raise HTTPException(status_code=403, detail="Role cannot enqueue this action type")
     data = payload.get("payload", {})
     result = await enqueue_ui_action(
         db,
@@ -86,6 +91,7 @@ async def get_pending_ui_actions(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    await require_feature_access(db, user, feature="ui_actions", action="read")
     # Resolve the panel's registered user_id from ui_panel_sessions.
     # Actions are stored under the panel's user (who polls for them), which may differ
     # from the caller's user_id when actions are queued by OpenClaw/API on behalf of the panel.
@@ -123,6 +129,7 @@ async def ack_ui_action(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    await require_feature_access(db, user, feature="ui_actions", action="ack")
     user_id = user["user_id"]
     status = payload.get("status")
     if status not in ACTION_STATES:
@@ -183,6 +190,7 @@ async def sync_ui_state(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    await require_feature_access(db, user, feature="ui_actions", action="sync")
     user_id = user["user_id"]
     panel_id = payload.get("panel_id")
     if not panel_id:
@@ -215,6 +223,7 @@ async def get_session_context(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    await require_feature_access(db, user, feature="ui_actions", action="read")
     user_id = user["user_id"]
     cursor = await db.execute(
         """SELECT panel_id, page, ui_context, is_foreground, last_seen_at
@@ -239,6 +248,7 @@ async def get_action_ledger(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    await require_feature_access(db, user, feature="ui_actions", action="read")
     user_id = user["user_id"]
     cursor = await db.execute(
         "SELECT id FROM ui_actions WHERE id = ? AND user_id = ?",
@@ -268,6 +278,7 @@ async def retry_ui_action(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    await require_feature_access(db, user, feature="ui_actions", action="retry")
     user_id = user["user_id"]
     cursor = await db.execute(
         """SELECT id, panel_id, status, retry_count, max_retries
@@ -320,6 +331,7 @@ async def requeue_stale_actions(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    await require_feature_access(db, user, feature="ui_actions", action="requeue")
     user_id = user["user_id"]
     cursor = await db.execute(
         """SELECT id, panel_id, retry_count, max_retries

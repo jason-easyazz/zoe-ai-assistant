@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import get_current_user
 from database import get_db
+from guest_policy import require_feature_access
 from models import ReminderCreate, ReminderUpdate, SnoozeBody
 from push import broadcaster
 
@@ -58,6 +59,7 @@ async def create_reminder(
     db=Depends(get_db),
 ):
     """Create a new reminder."""
+    await require_feature_access(db, user, feature="reminders", action="create")
     user_id = user["user_id"]
     reminder_id = str(uuid.uuid4())
 
@@ -109,6 +111,7 @@ async def list_reminders(
     db=Depends(get_db),
 ):
     """List reminders with optional filters."""
+    await require_feature_access(db, user, feature="reminders", action="read")
     user_id = user["user_id"]
     conditions = [_visibility_filter_sql()]
     params: list = [user_id]
@@ -138,6 +141,7 @@ async def list_today_reminders(
     db=Depends(get_db),
 ):
     """Get today's reminders (active, due today)."""
+    await require_feature_access(db, user, feature="reminders", action="read")
     user_id = user["user_id"]
     today = date.today().isoformat()
     sql = """
@@ -160,6 +164,7 @@ async def update_reminder(
     db=Depends(get_db),
 ):
     """Update an existing reminder."""
+    await require_feature_access(db, user, feature="reminders", action="update")
     user_id = user["user_id"]
     where = f"{_visibility_filter_sql()} AND id = ?"
     cursor = await db.execute(
@@ -207,6 +212,7 @@ async def delete_reminder(
     db=Depends(get_db),
 ):
     """Soft delete a reminder."""
+    await require_feature_access(db, user, feature="reminders", action="delete")
     user_id = user["user_id"]
     where = f"{_visibility_filter_sql()} AND id = ?"
     cursor = await db.execute(
@@ -235,6 +241,7 @@ async def snooze_reminder(
     db=Depends(get_db),
 ):
     """Snooze a reminder by N minutes."""
+    await require_feature_access(db, user, feature="reminders", action="snooze")
     user_id = user["user_id"]
     where = f"{_visibility_filter_sql()} AND id = ?"
     cursor = await db.execute(
@@ -275,6 +282,7 @@ async def acknowledge_reminder(
     db=Depends(get_db),
 ):
     """Mark a reminder as acknowledged."""
+    await require_feature_access(db, user, feature="reminders", action="acknowledge")
     user_id = user["user_id"]
     where = f"{_visibility_filter_sql()} AND id = ?"
     cursor = await db.execute(
@@ -313,6 +321,7 @@ async def list_pending_notifications(
     db=Depends(get_db),
 ):
     """List pending notifications from notifications table."""
+    await require_feature_access(db, user, feature="reminders", action="read")
     user_id = user["user_id"]
     cursor = await db.execute(
         """SELECT * FROM notifications
@@ -342,6 +351,7 @@ async def mark_notification_delivered(
     db=Depends(get_db),
 ):
     """Mark a notification as delivered."""
+    await require_feature_access(db, user, feature="reminders", action="deliver_notification")
     user_id = user["user_id"]
     cursor = await db.execute(
         "SELECT * FROM notifications WHERE id = ? AND user_id = ?",

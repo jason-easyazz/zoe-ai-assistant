@@ -122,6 +122,31 @@ class WeatherWidget extends WidgetModule {
         
         // Initial layout update
         this.updateResponsiveLayout(element);
+
+        // React to widget settings changes
+        this.applyPrefs(element);
+        this._onSettingsUpdate = (e) => {
+            if (!e.detail || e.detail.type !== 'weather') return;
+            if (e.detail.widget && e.detail.widget !== element) return;
+            this.applyPrefs(element);
+            // Re-fetch hero + forecast so unit/forecastDays/useGeo take effect immediately.
+            this.loadWeather();
+            this.loadForecast();
+        };
+        window.addEventListener('widget-settings:update', this._onSettingsUpdate);
+    }
+
+    getPrefs() {
+        try {
+            const all = JSON.parse(localStorage.getItem('zoe_widget_settings') || '{}');
+            return all.weather || {};
+        } catch(_) { return {}; }
+    }
+
+    applyPrefs(element) {
+        const p = this.getPrefs();
+        const forecast = element.querySelector('.weather-forecast-compact');
+        if (forecast) forecast.style.display = (p.showForecast === false) ? 'none' : '';
     }
     
     updateResponsiveLayout(element) {
@@ -209,193 +234,193 @@ class WeatherWidget extends WidgetModule {
         const element = this.element;
         if (!element) return;
         
-        // Get temperature with unit symbol
-        const tempUnit = data.temperature_unit === 'fahrenheit' ? '°F' : '°C';
-        const temp = `${data.temperature}${tempUnit}`;
-        
-        // Map condition to emoji (time-aware)
-        const conditionEmoji = this.getWeatherEmoji(data.condition);
-        
-        // Update all size variants
+        // API returns `temp` (not `temperature`); we also accept `temperature` as a fallback.
+        const rawTemp = (data.temp !== undefined && data.temp !== null)
+            ? data.temp
+            : data.temperature;
+        const rawFeels = (data.feels_like !== undefined && data.feels_like !== null)
+            ? data.feels_like
+            : data.temperature;
+        const unit = (data.temperature_unit === 'fahrenheit' || data.unit === 'fahrenheit') ? '°F' : '°C';
+        const tempDisplay = (rawTemp === undefined || rawTemp === null || rawTemp === '')
+            ? '—' : `${Math.round(rawTemp)}${unit}`;
+        const feelsDisplay = (rawFeels === undefined || rawFeels === null || rawFeels === '')
+            ? '—' : `${Math.round(rawFeels)}${unit}`;
+
+        // The backend sends description like "partly cloudy" + icon like "02n".
+        // Use the icon's day/night suffix when available for better emoji accuracy.
+        const isNightIcon = typeof data.icon === 'string' && /n$/.test(data.icon);
+        const conditionEmoji = this.getWeatherEmoji(data.condition || data.description, isNightIcon);
+        const conditionText = data.description || data.condition || '';
+
         element.querySelectorAll('.weather-temp').forEach(el => {
-            el.textContent = temp;
+            el.textContent = tempDisplay;
         });
         
         element.querySelectorAll('.weather-condition').forEach(el => {
-            el.textContent = data.description;
+            el.textContent = conditionText;
         });
         
         element.querySelectorAll('.weather-icon-large').forEach(el => {
             el.textContent = conditionEmoji;
         });
         
-        // Update hidden details section
         const detailsSection = element.querySelector('#weather-details');
         if (detailsSection) {
             const windEl = detailsSection.querySelector(':nth-child(1) .detail-value');
             const humidityEl = detailsSection.querySelector(':nth-child(2) .detail-value');
             const feelsLikeEl = detailsSection.querySelector(':nth-child(3) .detail-value');
             const visEl = detailsSection.querySelector(':nth-child(4) .detail-value');
-            
-            if (windEl) windEl.textContent = `${data.wind_speed} km/h`;
-            if (humidityEl) humidityEl.textContent = `${data.humidity}%`;
-            if (feelsLikeEl) feelsLikeEl.textContent = `${data.temperature}°C`;
-            if (visEl) visEl.textContent = '10km';
+
+            // Backend wind_speed is m/s — convert to km/h for display.
+            const windKmh = (data.wind_speed !== undefined && data.wind_speed !== null)
+                ? Math.round(Number(data.wind_speed) * 3.6) : null;
+
+            if (windEl) windEl.textContent = windKmh !== null ? `${windKmh} km/h` : '—';
+            if (humidityEl) humidityEl.textContent = (data.humidity !== undefined && data.humidity !== null)
+                ? `${data.humidity}%` : '—';
+            if (feelsLikeEl) feelsLikeEl.textContent = feelsDisplay;
+            if (visEl) visEl.textContent = data.visibility ? `${Math.round(data.visibility)}km` : '10km';
         }
-        
-        // Update background class (with time-aware styling)
-        this.updateWeatherBackground(data.condition);
-        
-        // Apply time-based theme
-        const hour = new Date().getHours();
-        const isNight = hour >= 19 || hour < 6;
-        if (isNight) {
-            element.classList.add('weather-nighttime');
-        } else {
-            element.classList.remove('weather-nighttime');
+
+        this.updateWeatherBackground(conditionText, isNightIcon);
+
+        // Prefer the backend's sunrise/sunset for day/night; fall back to local clock.
+        let isNight = isNightIcon;
+        if (!isNight && data.sunrise && data.sunset) {
+            const now = Date.now();
+            const rise = new Date(data.sunrise).getTime();
+            const set = new Date(data.sunset).getTime();
+            if (!isNaN(rise) && !isNaN(set)) isNight = now < rise || now > set;
+        } else if (!isNight) {
+            const hour = new Date().getHours();
+            isNight = hour >= 19 || hour < 6;
         }
-        
-        // Load forecast for large widget
+        element.classList.toggle('weather-nighttime', isNight);
+
         if (element.classList.contains('size-large')) {
             this.loadForecast();
         }
     }
     
-    getWeatherEmoji(condition) {
+    getWeatherEmoji(condition, forceNight) {
         const hour = new Date().getHours();
-        const isNight = hour >= 19 || hour < 6; // 7pm to 6am is night
-        
-        // Base condition map
-        const conditionMap = {
-            'clear': isNight ? '🌙' : '☀️',
-            'sunny': isNight ? '🌙' : '☀️',
-            'partly-cloudy': isNight ? '☁️🌙' : '⛅',
-            'cloudy': '☁️',
-            'overcast': '☁️',
-            'rain': '🌧️',
-            'drizzle': '🌦️',
-            'thunderstorm': '⛈️',
-            'snow': '❄️',
-            'fog': '🌫️'
-        };
-        
-        let emoji = conditionMap[condition.toLowerCase()] || '☀️';
-        
-        // If night and not explicitly night-related, use moon
-        if (isNight && condition.toLowerCase().includes('partly')) {
-            emoji = '☁️🌙';
+        const isNight = forceNight !== undefined ? forceNight : (hour >= 19 || hour < 6);
+        const safeCondition = (typeof condition === 'string' ? condition : '').toLowerCase();
+
+        if (safeCondition.includes('thunder') || safeCondition.includes('storm')) return '⛈️';
+        if (safeCondition.includes('snow') || safeCondition.includes('sleet') || safeCondition.includes('blizzard')) return '❄️';
+        if (safeCondition.includes('drizzle')) return '🌦️';
+        if (safeCondition.includes('rain') || safeCondition.includes('shower')) return '🌧️';
+        if (safeCondition.includes('fog') || safeCondition.includes('mist') || safeCondition.includes('haze')) return '🌫️';
+        if (safeCondition.includes('overcast')) return '☁️';
+        if (safeCondition.includes('partly') || safeCondition.includes('scattered')) return isNight ? '☁️' : '⛅';
+        if (safeCondition.includes('cloud')) return '☁️';
+        if (safeCondition.includes('clear') || safeCondition.includes('sunny') || safeCondition.includes('sun')) {
+            return isNight ? '🌙' : '☀️';
         }
-        
-        return emoji;
+        return isNight ? '🌙' : '☀️';
     }
     
     async loadForecast() {
         try {
             const userId = localStorage.getItem('user_id') || 'default';
-            
-            // Check if using current location for forecast too
             const prefsResponse = await fetch(`/api/weather/preferences?user_id=${userId}`);
-            const prefs = await prefsResponse.json();
-            
+            const prefs = prefsResponse.ok ? await prefsResponse.json() : {};
+
+            const fetchForecast = async (query) => {
+                const cacheBuster = `&_t=${Date.now()}`;
+                const r = await fetch(`/api/weather/forecast?days=4&user_id=${userId}${query}${cacheBuster}`);
+                if (!r.ok) return;
+                const data = await r.json();
+                this.updateForecastDisplay(data);
+            };
+
             if (prefs.use_current_location && navigator.geolocation) {
-                // Use device location for forecast (4 days)
                 navigator.geolocation.getCurrentPosition(
-                    async (position) => {
-                        const lat = position.coords.latitude;
-                        const lon = position.coords.longitude;
-                        const cacheBuster = `&_t=${Date.now()}`;
-                        const response = await fetch(`/api/weather/forecast?days=4&user_id=${userId}&lat=${lat}&lon=${lon}${cacheBuster}`);
-                        if (response.ok) {
-                            const data = await response.json();
-                            this.updateForecastDisplay(data.forecast);
-                        }
-                    },
-                    async () => {
-                        // Fallback to saved location
-                        const cacheBuster = `&_t=${Date.now()}`;
-                        const response = await fetch(`/api/weather/forecast?days=4&user_id=${userId}${cacheBuster}`);
-                        if (response.ok) {
-                            const data = await response.json();
-                            this.updateForecastDisplay(data.forecast);
-                        }
-                    },
+                    pos => fetchForecast(`&lat=${pos.coords.latitude}&lon=${pos.coords.longitude}`),
+                    () => fetchForecast(''),
                     { maximumAge: 300000 }
                 );
             } else {
-                // Use saved location with cache-busting (4 days)
-                const cacheBuster = `&_t=${Date.now()}`;
-                const response = await fetch(`/api/weather/forecast?days=4&user_id=${userId}${cacheBuster}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    this.updateForecastDisplay(data.forecast);
-                }
+                await fetchForecast('');
             }
         } catch (error) {
             console.error('Failed to load forecast:', error);
         }
     }
-    
-    updateForecastDisplay(forecast) {
+
+    updateForecastDisplay(data) {
         const forecastContainer = this.element?.querySelector('.weather-forecast-compact');
-        if (!forecastContainer || !forecast) return;
-        
-        forecastContainer.innerHTML = forecast.slice(0, 4).map((day, index) => {
-            const date = new Date(day.date);
-            const dayName = date.toLocaleDateString('en-US', { weekday: 'short' });
-            // For forecast, always use day icons (not time-specific)
-            const conditionMap = {
-                'clear': '☀️',
-                'sunny': '☀️',
-                'partly-cloudy': '⛅',
-                'cloudy': '☁️',
-                'overcast': '☁️',
-                'rain': '🌧️',
-                'drizzle': '🌦️',
-                'thunderstorm': '⛈️',
-                'snow': '❄️',
-                'fog': '🌫️'
-            };
-            const emoji = conditionMap[day.condition.toLowerCase()] || '☀️';
-            
+        if (!forecastContainer || !data) return;
+
+        // Backend returns { hourly: [...], daily: [...] }.
+        // Also tolerate older shape { forecast: [...] }.
+        const daily = Array.isArray(data.daily)
+            ? data.daily
+            : (Array.isArray(data.forecast) ? data.forecast : []);
+        if (!daily.length) return;
+
+        const pickEmoji = (condOrDesc) => {
+            const s = (typeof condOrDesc === 'string' ? condOrDesc : '').toLowerCase();
+            if (s.includes('thunder') || s.includes('storm')) return '⛈️';
+            if (s.includes('snow')) return '❄️';
+            if (s.includes('drizzle')) return '🌦️';
+            if (s.includes('rain') || s.includes('shower')) return '🌧️';
+            if (s.includes('fog') || s.includes('mist')) return '🌫️';
+            if (s.includes('overcast')) return '☁️';
+            if (s.includes('partly') || s.includes('scattered')) return '⛅';
+            if (s.includes('cloud')) return '☁️';
+            return '☀️';
+        };
+
+        forecastContainer.innerHTML = daily.slice(0, 4).map((day) => {
+            // Backend returns { day: "YYYY-MM-DD", high, low, description }.
+            // Also tolerate older shapes (date/time, temp_max, temperature_max, ...).
+            const d = new Date(day.day || day.date || day.time || Date.now());
+            const dayName = d.toLocaleDateString('en-US', { weekday: 'short' });
+            const emoji = pickEmoji(day.description || day.condition);
+            const hi = day.high ?? day.temp_max ?? day.temperature_max ?? day.temp ?? day.temperature;
+            const lo = day.low  ?? day.temp_min ?? day.temperature_min ?? day.temp ?? day.temperature;
             return `
                 <div class="forecast-compact">
                     <div class="forecast-day-name">${dayName}</div>
                     <div class="forecast-icon">${emoji}</div>
                     <div class="forecast-temps">
-                        <span class="forecast-high">${Math.round(day.temperature_max || day.temperature)}°</span>
-                        <span class="forecast-low">${Math.round(day.temperature_min || day.temperature)}°</span>
+                        <span class="forecast-high">${hi !== undefined ? Math.round(hi) + '°' : '—'}</span>
+                        <span class="forecast-low">${lo !== undefined ? Math.round(lo) + '°' : '—'}</span>
                     </div>
                 </div>
             `;
         }).join('');
     }
     
-    updateWeatherBackground(condition) {
+    updateWeatherBackground(condition, isNight) {
         const widget = this.element;
         if (!widget) return;
-        
-        // Remove all weather classes
-        widget.classList.remove('weather-sunny', 'weather-cloudy', 'weather-rainy', 
-                                 'weather-stormy', 'weather-snowy', 'weather-partly-cloudy');
-        
-        // Add appropriate class based on condition
-        const conditionLower = condition.toLowerCase();
-        
-        if (conditionLower.includes('sun') || conditionLower.includes('clear')) {
-            widget.classList.add('weather-sunny');
-        } else if (conditionLower.includes('rain') || conditionLower.includes('drizzle')) {
-            widget.classList.add('weather-rainy');
-        } else if (conditionLower.includes('storm') || conditionLower.includes('thunder')) {
+
+        widget.classList.remove('weather-sunny', 'weather-cloudy', 'weather-rainy',
+                                 'weather-stormy', 'weather-snowy', 'weather-partly-cloudy',
+                                 'weather-clear-night');
+
+        const conditionLower = (typeof condition === 'string' ? condition : '').toLowerCase();
+
+        if (conditionLower.includes('storm') || conditionLower.includes('thunder')) {
             widget.classList.add('weather-stormy');
         } else if (conditionLower.includes('snow') || conditionLower.includes('sleet')) {
             widget.classList.add('weather-snowy');
+        } else if (conditionLower.includes('rain') || conditionLower.includes('drizzle') || conditionLower.includes('shower')) {
+            widget.classList.add('weather-rainy');
+        } else if (conditionLower.includes('overcast')) {
+            widget.classList.add('weather-cloudy');
         } else if (conditionLower.includes('partly') || conditionLower.includes('scattered')) {
             widget.classList.add('weather-partly-cloudy');
-        } else if (conditionLower.includes('cloud') || conditionLower.includes('overcast')) {
+        } else if (conditionLower.includes('cloud')) {
             widget.classList.add('weather-cloudy');
+        } else if (conditionLower.includes('sun') || conditionLower.includes('clear')) {
+            widget.classList.add(isNight ? 'weather-clear-night' : 'weather-sunny');
         } else {
-            // Default to partly cloudy
-            widget.classList.add('weather-partly-cloudy');
+            widget.classList.add(isNight ? 'weather-clear-night' : 'weather-partly-cloudy');
         }
     }
 }

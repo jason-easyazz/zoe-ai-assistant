@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.26.0';
+const SW_VERSION = '4.62.29';
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -198,6 +198,12 @@ if (workbox) {
             const p = url.pathname;
             return p === '/health' ||
                 p.startsWith('/api/auth/') ||
+                p.startsWith('/api/ui/actions/pending') ||
+                /\/api\/ui\/actions\/[^/]+\/ack$/.test(p) ||
+                p.startsWith('/api/ui/panel/') ||
+                p.startsWith('/api/ui/state/') ||
+                p.startsWith('/api/panels/') ||
+                p.startsWith('/api/touch-panel/') ||
                 p === '/api/chat' ||
                 p.startsWith('/api/chat/') ||
                 p.startsWith('/api/admin/') ||
@@ -502,91 +508,54 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
     console.log(`✅ Service Worker ${SW_VERSION} activated`);
-    
-    // Clean up OLD version caches only — keep current version's precache and all runtime caches.
-    // Pattern: delete versioned precache caches from previous SW versions (e.g. zoe-precache-v2-4.18.0)
-    // but NOT the current version's precache or named runtime caches (zoe-api, zoe-css, etc.).
+
+    // 1) Clean up OLD version caches only — keep current version's precache
+    //    and all runtime caches (zoe-api, zoe-css, …).
     const currentPrecache = `zoe-precache-v2-${SW_VERSION}`;
-    event.waitUntil(
-        caches.keys().then((cacheNames) => {
-            return Promise.all(
-                cacheNames
-                    .filter((cacheName) => {
-                        // Only delete versioned precaches from older SW versions
-                        return /^zoe-precache-v\d+-/.test(cacheName) && cacheName !== currentPrecache;
-                    })
-                    .map((cacheName) => {
-                        console.log(`🗑️ Deleting old cache: ${cacheName}`);
-                        return caches.delete(cacheName);
-                    })
-            );
-        })
-    );
-});
+    const purgeOldPrecaches = caches.keys().then((cacheNames) => {
+        return Promise.all(
+            cacheNames
+                .filter((cacheName) => /^zoe-precache-v\d+-/.test(cacheName) && cacheName !== currentPrecache)
+                .map((cacheName) => {
+                    console.log(`🗑️ Deleting old cache: ${cacheName}`);
+                    return caches.delete(cacheName);
+                })
+        );
+    });
 
-// ===== PUSH NOTIFICATIONS =====
-self.addEventListener('push', (event) => {
-    let data = { title: 'Zoe', body: 'New notification', url: '/' };
-    try {
-        if (event.data) data = Object.assign(data, event.data.json());
-    } catch (e) {
-        if (event.data) data.body = event.data.text();
-    }
-    event.waitUntil(
-        self.registration.showNotification(data.title, {
-            body: data.body,
-            icon: '/icons/icon-192.png',
-            badge: '/icons/icon-96.png',
-            data: { url: data.url || '/' },
-            vibrate: [100, 50, 100],
-        })
-    );
-});
-
-self.addEventListener('notificationclick', (event) => {
-    event.notification.close();
-    const url = event.notification.data?.url || '/';
-    event.waitUntil(
-        clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-            for (const client of clientList) {
-                if (client.url.includes(self.location.origin) && 'focus' in client) {
-                    client.navigate(url);
-                    return client.focus();
-                }
-            }
-            return clients.openWindow(url);
-        })
-    );
-});
-
-// On activate, purge cached /modules/qd/ and /modules/jag-board/ entries that may have been
-// stored as index.html before the nginx proxy was added.
-self.addEventListener('activate', (event) => {
-    event.waitUntil(
-        caches.keys().then(names =>
-            Promise.all(names.map(name =>
-                caches.open(name).then(cache =>
-                    cache.keys().then(requests =>
-                        Promise.all(requests
-                            .filter(r => {
-                                const p = new URL(r.url).pathname;
-                                return (
-                                    p === '/modules/qd' ||
-                                    p.startsWith('/modules/qd/') ||
-                                    p === '/modules/jag-board' ||
-                                    p.startsWith('/modules/jag-board/') ||
-                                    p === '/modules/orbit' ||
-                                    p.startsWith('/modules/orbit/')
-                                );
-                            })
-                            .map(r => cache.delete(r))
-                        )
+    // 2) Purge stale /modules/qd, /modules/jag-board and /modules/orbit
+    //    index.html entries that may have been cached before nginx began
+    //    proxying those paths. This used to live in a second activate
+    //    listener; merged here so we only register one.
+    const purgeStaleModules = caches.keys().then((names) =>
+        Promise.all(names.map((name) =>
+            caches.open(name).then((cache) =>
+                cache.keys().then((requests) =>
+                    Promise.all(requests
+                        .filter((r) => {
+                            const p = new URL(r.url).pathname;
+                            return (
+                                p === '/modules/qd' ||
+                                p.startsWith('/modules/qd/') ||
+                                p === '/modules/jag-board' ||
+                                p.startsWith('/modules/jag-board/') ||
+                                p === '/modules/orbit' ||
+                                p.startsWith('/modules/orbit/')
+                            );
+                        })
+                        .map((r) => cache.delete(r))
                     )
                 )
-            ))
-        )
+            )
+        ))
     );
+
+    event.waitUntil(Promise.all([purgeOldPrecaches, purgeStaleModules]));
 });
+
+// NOTE: a second copy of 'push', 'notificationclick' and 'activate' handlers
+// used to live here. They fired in addition to the richer handlers defined
+// above, causing notifications to be shown twice. Removed intentionally.
 
 console.log(`🎯 Zoe Service Worker ${SW_VERSION} loaded successfully`);
 

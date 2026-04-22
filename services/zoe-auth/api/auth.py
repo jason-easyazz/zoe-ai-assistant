@@ -32,7 +32,8 @@ class LoginRequest(BaseModel):
 
 class PasscodeLoginRequest(BaseModel):
     """Passcode login request model"""
-    username: str = Field(..., min_length=1, max_length=50)
+    username: Optional[str] = Field(None, min_length=1, max_length=50)
+    user_id: Optional[str] = Field(None, min_length=1, max_length=50)
     passcode: str = Field(..., min_length=4, max_length=8, pattern=r'^\d+$')
     device_info: Dict[str, Any] = Field(default_factory=dict)
 
@@ -88,36 +89,102 @@ class UserResponse(BaseModel):
 
 # Authentication endpoints
 @router.get("/profiles")
-async def get_user_profiles():
+async def get_user_profiles(panel_id: Optional[str] = None):
     """
-    Get list of active user profiles for login page
-    No authentication required - public endpoint
-    
+    Get list of active user profiles for login page.
+    No authentication required - public endpoint.
+
+    Args:
+        panel_id: optional touch-panel identifier. When provided and that
+            panel has user bindings configured, the response is filtered to
+            the bound users and enriched with panel context so the touch
+            kiosk can auto-select a default user or hide the guest tile.
+
     Returns:
-        List of active users with basic info
+        - No panel_id (or unbound panel): a flat list of profiles (legacy
+          shape; desktop login + unconfigured panels rely on this).
+        - panel_id with bindings: an object
+              {
+                "profiles":        [ {user_id, username, role, avatar}, ... ],
+                "default_user_id": "jason" | null,
+                "allow_guest":     true | false,
+                "panel_name":      "Kitchen Panel",
+                "panel_id":        "kitchen-panel"
+              }
     """
     try:
         profiles = []
         with auth_db.get_connection() as conn:
-            cursor = conn.execute("""
+            cursor = conn.execute(
+                """
                 SELECT user_id, username, role
                 FROM auth_users
                 WHERE user_id != 'system'
                 ORDER BY username
-            """)
-            
+                """
+            )
             for row in cursor.fetchall():
                 profiles.append({
                     "user_id": row["user_id"],
                     "username": row["username"],
                     "role": row["role"],
-                    "avatar": row["username"][0].upper() if row["username"] else "?"
+                    "avatar": row["username"][0].upper() if row["username"] else "?",
                 })
-        
-        return profiles
+
+        if not panel_id:
+            return profiles  # legacy flat-array shape
+
+        # Panel-aware response: read panel + bindings from the same shared
+        # SQLite (zoe-data writes, zoe-auth reads). Missing tables just mean
+        # zoe-data hasn't run yet — treat as unbound and fall back silently.
+        panel_name = None
+        allow_guest = True
+        default_user_id: Optional[str] = None
+        allowed_user_ids: List[str] = []
+        try:
+            with auth_db.get_connection() as conn:
+                prow = conn.execute(
+                    "SELECT panel_id, name, allow_guest FROM panels WHERE panel_id = ?",
+                    (panel_id,),
+                ).fetchone()
+                if prow:
+                    panel_name = prow["name"]
+                    try:
+                        allow_guest = bool(prow["allow_guest"])
+                    except (IndexError, KeyError):
+                        allow_guest = True
+                    brows = conn.execute(
+                        "SELECT user_id, binding_type FROM panel_user_bindings WHERE panel_id = ?",
+                        (panel_id,),
+                    ).fetchall()
+                    for b in brows:
+                        if b["binding_type"] == "default":
+                            default_user_id = b["user_id"]
+                        elif b["binding_type"] == "allowed":
+                            allowed_user_ids.append(b["user_id"])
+        except Exception as inner:
+            # Tables may not exist yet (zoe-data never booted) — graceful fallback.
+            logger.debug("Panel lookup failed for %s: %s", panel_id, inner)
+
+        bound_ids = set(allowed_user_ids) | ({default_user_id} if default_user_id else set())
+        filtered = [p for p in profiles if p["user_id"] in bound_ids] if bound_ids else profiles
+
+        return {
+            "panel_id": panel_id,
+            "panel_name": panel_name,
+            "allow_guest": allow_guest,
+            "default_user_id": default_user_id if default_user_id in {p["user_id"] for p in filtered} else None,
+            "profiles": filtered,
+        }
     except Exception as e:
         logger.error(f"Get profiles error: {e}", exc_info=True)
-        return []  # Return empty list on error for login page
+        return [] if not panel_id else {
+            "panel_id": panel_id,
+            "panel_name": None,
+            "allow_guest": True,
+            "default_user_id": None,
+            "profiles": [],
+        }
 
 @router.post("/guest")
 async def guest_login(request: dict, http_request: Request):
@@ -260,8 +327,11 @@ async def login(request: LoginRequest, http_request: Request):
 @router.post("/login/passcode", response_model=AuthResponse)
 async def login_passcode(request: PasscodeLoginRequest, http_request: Request):
     """
-    Authenticate with username and passcode
-    
+    Authenticate with username (or user_id) and passcode.
+
+    Accepts either ``username`` or ``user_id`` — the panel/voice system passes
+    ``user_id`` while the web login page passes ``username``.
+
     Args:
         request: Passcode credentials and device info
         http_request: FastAPI request object for IP extraction
@@ -272,20 +342,41 @@ async def login_passcode(request: PasscodeLoginRequest, http_request: Request):
     try:
         # Get client IP
         ip_address = http_request.client.host
+        user_id: Optional[str] = None
         
-        # Get user ID from username
+        # Resolve user_id: accept either username (web login) or user_id (panel/voice).
         with auth_db.get_connection() as conn:
-            cursor = conn.execute(
-                "SELECT user_id FROM auth_users WHERE username = ? AND is_active = 1",
-                (request.username,)
-            )
-            row = cursor.fetchone()
-            if not row:
-                return AuthResponse(
-                    success=False,
-                    error_message="Invalid credentials"
+            if request.user_id:
+                cursor = conn.execute(
+                    "SELECT user_id FROM auth_users WHERE user_id = ?",
+                    (request.user_id,)
                 )
-            user_id = row[0]
+            elif request.username:
+                cursor = conn.execute(
+                    "SELECT user_id FROM auth_users WHERE LOWER(username) = LOWER(?)",
+                    (request.username,)
+                )
+            else:
+                # Voice/panel PIN challenges may not include identity. If exactly
+                # one active passcode exists, use that user as the implicit target.
+                active = conn.execute(
+                    "SELECT user_id FROM passcodes WHERE is_active = 1"
+                ).fetchall()
+                if len(active) == 1:
+                    user_id = active[0]["user_id"] if hasattr(active[0], "keys") else active[0][0]
+                    cursor = None
+                elif len(active) == 0:
+                    return AuthResponse(success=False, error_message="No passcode configured")
+                else:
+                    return AuthResponse(success=False, error_message="username or user_id required")
+            if user_id is None:
+                row = cursor.fetchone()
+                if not row:
+                    return AuthResponse(
+                        success=False,
+                        error_message="Invalid credentials"
+                    )
+                user_id = row[0]
 
         # Verify passcode
         passcode_result = passcode_manager.verify_passcode(user_id, request.passcode, ip_address)

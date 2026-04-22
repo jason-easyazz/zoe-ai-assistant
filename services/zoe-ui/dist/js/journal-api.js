@@ -3,7 +3,13 @@
  * Connects journal.html to backend APIs
  */
 
-const API_BASE = '/api'; // Use nginx proxy
+// API_BASE is declared globally by js/common.js (as `const`). Do not redeclare
+// here or we get "Identifier 'API_BASE' has already been declared" when both
+// scripts load together (e.g. journal.html). Guarantee a sane fallback on
+// `window.API_BASE` for the rare page that loads this file without common.js.
+if (typeof window.API_BASE === 'undefined') {
+    window.API_BASE = '/api';
+}
 
 // Resolve authenticated user id from Zoe Auth (fallback to undefined)
 function getUserId() {
@@ -163,10 +169,12 @@ async function createJournalEntry(entryData) {
             method: 'POST',
             body: JSON.stringify(entryData)
         });
-        
+
         showSuccess('Journal entry created!');
-        loadJournalEntries(); // Reload timeline
-        return response.entry;
+        loadJournalEntries();
+        // Different backend revisions return either { entry: {...} } or the
+        // entry dict itself. Tolerate both.
+        return response?.entry || response || null;
     } catch (error) {
         console.error('Failed to create entry:', error);
         showError('Failed to create journal entry');
@@ -349,22 +357,27 @@ function createTimelineEntry(entry, index) {
         ? entry.tags.map(t => `<span class="tag">${t}</span>`).join('')
         : '';
     
+    const previewText = (entry.content || '').toString();
+    const preview = previewText.length > 150
+        ? `${previewText.substring(0, 150)}...`
+        : previewText;
+
     entryDiv.innerHTML = `
         <div class="entry-spacer"></div>
         <div class="timeline-dot-container">
             <div class="timeline-dot"></div>
             <div class="timeline-date">${dateStr}${isToday ? '<br>Today' : ''}</div>
         </div>
-        <div class="entry-card" onclick="openEntry(${entry.id})">
+        <div class="entry-card" onclick="openEntry('${String(entry.id).replace(/'/g, "\\'")}')">
             ${imageHtml}
             <div class="entry-content">
                 <div class="entry-header">
                     <div>
-                        <div class="entry-title">${entry.title}</div>
+                        <div class="entry-title">${entry.title || 'Untitled'}</div>
                         <div class="entry-time">${timeStr} · ${entry.read_time_minutes || 1} min read</div>
                     </div>
                 </div>
-                <div class="entry-text">${entry.content.substring(0, 150)}...</div>
+                <div class="entry-text">${preview}</div>
                 <div class="entry-footer">
                     <div class="entry-tags">
                         ${tagsHtml}
@@ -399,12 +412,12 @@ function displayOnThisDay(data) {
     section.style.cssText = 'background: linear-gradient(135deg, rgba(123,97,255,0.1), rgba(90,224,224,0.1)); padding: 30px; border-radius: 16px; margin-bottom: 40px;';
     
     const entriesHtml = data.entries.slice(0, 3).map(entry => `
-        <div style="background: rgba(255,255,255,0.8); padding: 20px; border-radius: 12px; margin-bottom: 15px; cursor: pointer;" onclick="openEntry(${entry.id})">
+        <div style="background: rgba(255,255,255,0.8); padding: 20px; border-radius: 12px; margin-bottom: 15px; cursor: pointer;" onclick="openEntry('${String(entry.id).replace(/'/g, "\\'")}')">
             <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-                <h3 style="font-size: 18px; font-weight: 600; color: #7B61FF;">${entry.title}</h3>
-                <span style="font-size: 12px; color: #666; font-weight: 500;">${entry.label}</span>
+                <h3 style="font-size: 18px; font-weight: 600; color: #7B61FF;">${entry.title || 'Untitled'}</h3>
+                <span style="font-size: 12px; color: #666; font-weight: 500;">${entry.label || ''}</span>
             </div>
-            <p style="font-size: 14px; color: #666; line-height: 1.6;">${entry.content}</p>
+            <p style="font-size: 14px; color: #666; line-height: 1.6;">${entry.content || ''}</p>
         </div>
     `).join('');
     
@@ -419,34 +432,43 @@ function displayOnThisDay(data) {
 }
 
 function displayPrompts(prompts) {
-    // Show prompts in a banner at the top
+    // The /journal/prompts endpoint can return either a list of strings
+    // (current zoe-data shape: {"prompts": ["...", "..."]}) or a list of
+    // prompt objects with {prompt_text, auto_fill, context}. Normalise so
+    // downstream logic can treat both shapes uniformly.
+    const firstRaw = prompts[0];
+    if (firstRaw == null) return;
+    const prompt = typeof firstRaw === 'string'
+        ? { prompt_text: firstRaw }
+        : { prompt_text: firstRaw.prompt_text || firstRaw.text || '', ...firstRaw };
+
     const timelineView = document.getElementById('timelineView');
+    if (!timelineView) return;
+
     const existingPrompts = document.getElementById('journalPrompts');
-    
-    if (existingPrompts) {
-        existingPrompts.remove();
-    }
-    
+    if (existingPrompts) existingPrompts.remove();
+
     const promptsDiv = document.createElement('div');
     promptsDiv.id = 'journalPrompts';
     promptsDiv.style.cssText = 'background: linear-gradient(135deg, #7B61FF, #5AE0E0); padding: 20px; border-radius: 16px; margin-bottom: 30px; color: white;';
-    
-    const prompt = prompts[0]; // Show first prompt
-    
+
     promptsDiv.innerHTML = `
-        <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px;">
             <div>
                 <div style="font-size: 14px; opacity: 0.9; margin-bottom: 5px;">✨ Journal Prompt</div>
-                <div style="font-size: 18px; font-weight: 600;">${prompt.prompt_text}</div>
+                <div style="font-size: 18px; font-weight: 600;">${prompt.prompt_text || ''}</div>
             </div>
-            <button onclick="openEntryWithPrompt(${JSON.stringify(prompt).replace(/"/g, '&quot;')})" 
-                    style="background: rgba(255,255,255,0.2); border: 2px solid white; padding: 12px 24px; border-radius: 12px; color: white; font-weight: 600; cursor: pointer; transition: all 0.3s;">
+            <button id="journalPromptBtn"
+                    style="background: rgba(255,255,255,0.2); border: 2px solid white; padding: 12px 24px; border-radius: 12px; color: white; font-weight: 600; cursor: pointer; transition: all 0.3s; white-space: nowrap;">
                 Write About It →
             </button>
         </div>
     `;
-    
+
     timelineView.insertBefore(promptsDiv, timelineView.firstChild);
+
+    const btn = promptsDiv.querySelector('#journalPromptBtn');
+    if (btn) btn.addEventListener('click', () => openEntryWithPrompt(prompt));
 }
 
 function displayStreak(data) {
@@ -498,14 +520,15 @@ function displayJourneys(journeys) {
 }
 
 function createCurrentJourneyHtml(journey) {
+    const safeId = String(journey.id).replace(/'/g, "\\'");
     return `
         <div class="current-journey">
             <div class="current-journey-header">
                 <div>
-                    <h2 class="journey-title">🧳 ${journey.title}</h2>
+                    <h2 class="journey-title">🧳 ${journey.title || ''}</h2>
                     <p class="journey-subtitle">${journey.description || ''} · Started ${new Date(journey.start_date || journey.created_at).toLocaleDateString()}</p>
                 </div>
-                <button class="check-in-btn" onclick="openJourneyCheckin(${journey.id})">
+                <button class="check-in-btn" onclick="openJourneyCheckin('${safeId}')">
                     <span>📍</span>
                     <span>Check In</span>
                 </button>
@@ -516,8 +539,9 @@ function createCurrentJourneyHtml(journey) {
 }
 
 function createPastJourneyCard(journey) {
+    const safeId = String(journey.id).replace(/'/g, "\\'");
     return `
-        <div class="journey-card" onclick="viewJourney(${journey.id})">
+        <div class="journey-card" onclick="viewJourney('${safeId}')">
             ${journey.cover_photo ? `<img src="${journey.cover_photo}" class="journey-image">` : ''}
             <div class="journey-content">
                 <div class="journey-location">📍 ${journey.title}</div>
@@ -545,18 +569,20 @@ window.openEntry = async function(entryId) {
 
 window.openEntryWithPrompt = function(prompt) {
     openNewEntry();
-    
-    // Pre-fill form with prompt data
+
+    // `prompt` may be the normalised object from displayPrompts or a raw
+    // string from elsewhere. Null-guard every nested access so a plain
+    // string prompt does not throw.
+    const p = (typeof prompt === 'string') ? { prompt_text: prompt } : (prompt || {});
     setTimeout(() => {
-        if (prompt.auto_fill) {
+        const autoFill = p.auto_fill || {};
+        const ctx = p.context || {};
+        if (autoFill.title) {
             const titleInput = document.querySelector('#newEntryModal .form-input');
-            if (titleInput && prompt.auto_fill.title) {
-                titleInput.value = prompt.auto_fill.title;
-            }
+            if (titleInput) titleInput.value = autoFill.title;
         }
-        
-        currentJourneyId = prompt.context?.journey_id || null;
-        currentStopId = prompt.context?.stop_id || null;
+        currentJourneyId = ctx.journey_id || null;
+        currentStopId = ctx.stop_id || null;
     }, 100);
 };
 

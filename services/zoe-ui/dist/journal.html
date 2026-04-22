@@ -1,8 +1,35 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script>
+    // Apply saved theme before first paint to prevent flash (ported from touch).
+    (function () {
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name="theme-color"]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch (e) {}
+    })();
+    </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#fafbfc">
+    <!-- Zoe theme bootstrap (must run before UI scripts) -->
+    <script>
+    (function(){
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name=theme-color]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch(e) {}
+    })();
+    </script>
     <title>Zoe - Journal</title>
     
     <!-- FilePond CSS -->
@@ -1711,12 +1738,13 @@
     
     <!-- Service Worker Registration -->
     <script src="/js/sw-registration.js" defer></script>
+    <link rel="stylesheet" href="css/dark-mode-shared.css">
 </head>
 <body>
     <!-- Navigation -->
     <div class="nav-bar">
         <div class="nav-left">
-            <div class="mini-orb" onclick="toggleMobileMenu()"></div>
+            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
             <div class="nav-menu">
                 <a href="chat.html" class="nav-item">Chat</a>
                 <a href="dashboard.html" class="nav-item">Dashboard</a>
@@ -1728,16 +1756,19 @@
         </div>
         <div class="nav-right">
             <div class="api-indicator connecting" id="apiStatus">Connecting</div>
-            
-            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
-            
-            <!-- Time/Date Display -->
+            <button class="refresh-btn notifications-btn" onclick="forceRefreshCache()" title="Refresh App (clears cache)">🔄</button>
+            <button class="theme-nav-btn notifications-btn" title="Toggle theme" onclick="window.cycleZoeTheme && window.cycleZoeTheme()">🌓</button>
+            <button class="notifications-btn" onclick="openNotificationsSafe()" title="Notifications">🔔</button>
             <div class="time-date-display">
                 <div class="current-time" id="navCurrentTime">--:--</div>
                 <div class="current-date" id="navCurrentDate">Loading...</div>
             </div>
         </div>
     </div>
+
+    
+
+    
 
     <!-- More Overlay -->
     <div class="more-overlay" id="moreOverlay">
@@ -1759,9 +1790,21 @@
                     <div class="more-item-icon">🎵</div>
                     <div class="more-item-label">Music</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('games.html')">
-                    <div class="more-item-icon">🎮</div>
-                    <div class="more-item-label">Games</div>
+                <div class="more-item" onclick="navigateToPage('notes.html')">
+                    <div class="more-item-icon">📝</div>
+                    <div class="more-item-label">Notes</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('cooking.html')">
+                    <div class="more-item-icon">🍳</div>
+                    <div class="more-item-label">Cooking</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('smart-home.html')">
+                    <div class="more-item-icon">🏠</div>
+                    <div class="more-item-label">Smart Home</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('updates.html')">
+                    <div class="more-item-icon">⬇️</div>
+                    <div class="more-item-label">Updates</div>
                 </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
@@ -1788,8 +1831,15 @@
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item active">📔 Journal</a>
             <a href="music.html" class="mobile-nav-item">🎵 Music</a>
-            <a href="games.html" class="mobile-nav-item">🎮 Games</a>
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
+            <a href="notes.html" class="mobile-nav-item">📝 Notes</a>
+
+            <a href="cooking.html" class="mobile-nav-item">🍳 Cooking</a>
+
+            <a href="smart-home.html" class="mobile-nav-item">🏠 Smart Home</a>
+
+            <a href="updates.html" class="mobile-nav-item">⬇️ Updates</a>
+
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
             <div class="mobile-nav-divider"></div>
             <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
@@ -2013,7 +2063,8 @@
                 <div class="read-modal-tags"></div>
                 
                 <div class="read-modal-actions">
-                    <button class="btn-edit" onclick="editCurrentEntry()">
+                    <!-- Edit is a stub on zoe-data (no PUT /journal/{id}); hidden until backend is ready. -->
+                    <button class="btn-edit" onclick="editCurrentEntry()" style="display:none;">
                         <span>✏️</span>
                         <span>Edit</span>
                     </button>
@@ -2288,30 +2339,12 @@
             document.getElementById('navCurrentDate').textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
         }
         
-        // Check API status
+        // API status is handled globally by common.js checkAPI() which hits
+        // /health (served by zoe-data at root). We previously duplicated it
+        // here calling /api/health (a 404), which always flipped the nav
+        // indicator to "API Offline" even when the service was healthy.
         async function checkApiStatus() {
-            try {
-                const response = await fetch('/api/health', {
-                    method: 'GET',
-                    headers: { 'Accept': 'application/json' }
-                });
-                
-                const indicator = document.getElementById('apiStatus');
-                if (response.ok) {
-                    indicator.classList.remove('offline', 'connecting');
-                    indicator.classList.add('online');
-                    indicator.textContent = 'Online';
-            } else {
-                    indicator.classList.remove('online', 'connecting');
-                    indicator.classList.add('offline');
-                    indicator.textContent = 'API Offline';
-                }
-                } catch (error) {
-                const indicator = document.getElementById('apiStatus');
-                indicator.classList.remove('online', 'connecting');
-                indicator.classList.add('offline');
-                indicator.textContent = 'API Offline';
-            }
+            if (typeof checkAPI === 'function') return checkAPI();
         }
         
         /**
@@ -2591,8 +2624,8 @@
             updateNavTime();
             setInterval(updateNavTime, 30000);
             
-            checkApiStatus();
-            setInterval(checkApiStatus, 30000); // Check every 30 seconds
+            // common.js already calls checkAPI() on DOMContentLoaded +
+            // every 30s, so we do not schedule another poller here.
             
             // Load notifications only when authenticated
             if (window.zoeAuth?.isAuthenticated?.()) {
@@ -2807,12 +2840,39 @@
             });
         });
 
-        // Search functionality (placeholder)
-        document.querySelector('.search-input').addEventListener('input', (e) => {
-            const searchTerm = e.target.value.toLowerCase();
-            // TODO: Implement search filtering
-            console.log('Searching for:', searchTerm);
-        });
+        // Client-side search: filter the rendered timeline entries in place.
+        const _searchInput = document.querySelector('.search-input');
+        if (_searchInput) {
+            _searchInput.addEventListener('input', (e) => {
+                const q = (e.target.value || '').toLowerCase().trim();
+                const entries = document.querySelectorAll('#timelineView .timeline-entry');
+                let visibleCount = 0;
+                entries.forEach(el => {
+                    if (!q) {
+                        el.style.display = '';
+                        visibleCount++;
+                        return;
+                    }
+                    const text = el.textContent.toLowerCase();
+                    const match = text.includes(q);
+                    el.style.display = match ? '' : 'none';
+                    if (match) visibleCount++;
+                });
+                // Hide month separators whose entries all got filtered out.
+                document.querySelectorAll('#timelineView .timeline-month-separator').forEach(sep => {
+                    let next = sep.nextElementSibling;
+                    let anyVisible = false;
+                    while (next && !next.classList.contains('timeline-month-separator')) {
+                        if (next.classList.contains('timeline-entry') && next.style.display !== 'none') {
+                            anyVisible = true;
+                            break;
+                        }
+                        next = next.nextElementSibling;
+                    }
+                    sep.style.display = q && !anyVisible ? 'none' : '';
+                });
+            });
+        }
         
         // More overlay functions
         function openMoreOverlay() {

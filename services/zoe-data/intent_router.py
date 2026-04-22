@@ -22,6 +22,19 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _spoken_day_ordinal(day: int) -> str:
+    ordinals = {
+        1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth",
+        6: "sixth", 7: "seventh", 8: "eighth", 9: "ninth", 10: "tenth",
+        11: "eleventh", 12: "twelfth", 13: "thirteenth", 14: "fourteenth", 15: "fifteenth",
+        16: "sixteenth", 17: "seventeenth", 18: "eighteenth", 19: "nineteenth", 20: "twentieth",
+        21: "twenty-first", 22: "twenty-second", 23: "twenty-third", 24: "twenty-fourth", 25: "twenty-fifth",
+        26: "twenty-sixth", 27: "twenty-seventh", 28: "twenty-eighth", 29: "twenty-ninth", 30: "thirtieth",
+        31: "thirty-first",
+    }
+    return ordinals.get(day, str(day))
+
 # Short user phrases → expanded OpenClaw task (see openclaw_user_message in chat router).
 # Imperative: models often answer "setup home automation" with generic menus unless told not to.
 HA_FULL_SETUP_OPENCLAW_MESSAGE = (
@@ -36,6 +49,50 @@ HA_FULL_SETUP_OPENCLAW_MESSAGE = (
     "add http trusted_proxies for the Zoe nginx reverse proxy in homeassistant configuration.yaml, "
     "docker restart homeassistant, confirm control via browser. "
     "Reply briefly only with progress/status — not a catalog of automation ideas."
+)
+
+# Zoe self-extension: build a new widget, page, or capability. Admin-gated.
+# openclaw_user_message routes each to the right builder skill. execute_intent
+# returns None so the request falls through to OpenClaw.
+_BUILD_WIDGET_OPENCLAW_MSG = (
+    "[ZOE_SELF_BUILD: widget]\n"
+    "The user asked to build a new dashboard widget. Follow the `zoe-widget-builder` "
+    "skill: check admin role, call zoe_self_capabilities to confirm the widget does "
+    "not already exist, draft a spec, plan-then-confirm with the user, stage via "
+    "scripts/preview/stage_widget.py, and hand off to the zoe-verify skill. Do NOT "
+    "write any file outside services/zoe-ui/dist/_preview/ until verify approves.\n"
+    "\n"
+    "OUTPUT CONTRACT — this is mandatory:\n"
+    "• Your final reply must be ≤2 short sentences (e.g. \"Here's a moon-phase widget — does it look right?\").\n"
+    "• NEVER include code fences (```), JS, HTML, CSS, or any file contents in the chat reply. The user wants to SEE the widget working, not read its source.\n"
+    "• After stage_widget.py prints its preview_url, emit exactly these two blocks at the end of your reply (literal text, no substitutions other than the URL/task_id you got back):\n"
+    "  :::zoe-ui\n  {\"action\":\"navigate\",\"url\":\"<preview_url>\",\"target\":\"iframe\"}\n  :::\n"
+    "  :::zoe-ui\n  {\"action\":\"orb_prompt\",\"prompt\":\"Here's your widget. Does it look right?\",\"auto_mic\":true,\"task_id\":\"<task_id>\"}\n  :::"
+)
+_BUILD_PAGE_OPENCLAW_MSG = (
+    "[ZOE_SELF_BUILD: page]\n"
+    "The user asked to build a new Zoe page. Follow the `zoe-page-builder` skill: "
+    "admin role check, call zoe_self_capabilities to confirm the slug is free, "
+    "plan-then-confirm, stage via scripts/preview/stage_page.py (generates desktop "
+    "+ touch variants), and hand off to zoe-verify. Only promote after approval.\n"
+    "\n"
+    "OUTPUT CONTRACT — this is mandatory:\n"
+    "• Your final reply must be ≤2 short sentences (e.g. \"Here's the page — take a look.\").\n"
+    "• NEVER include code fences (```), HTML, JS, CSS, or any file contents. The preview iframe is the evidence.\n"
+    "• After stage_page.py prints its preview_url, emit exactly these two blocks at the end of your reply:\n"
+    "  :::zoe-ui\n  {\"action\":\"navigate\",\"url\":\"<preview_url>\",\"target\":\"iframe\"}\n  :::\n"
+    "  :::zoe-ui\n  {\"action\":\"orb_prompt\",\"prompt\":\"Here's your page. Does it look right?\",\"auto_mic\":true,\"task_id\":\"<task_id>\"}\n  :::"
+)
+_EXTEND_CAPABILITY_OPENCLAW_MSG = (
+    "[ZOE_SELF_BUILD: capability]\n"
+    "The user asked for a capability Zoe doesn't currently have. Follow the "
+    "`zoe-capability-extender` skill: admin role check, search installed skills + "
+    "openclaw plugins + ClawHub before composing anything new. If composing, stage "
+    "under ~/.openclaw/workspace/_skill_preview/ and run a smoke test before install.\n"
+    "\n"
+    "OUTPUT CONTRACT — this is mandatory:\n"
+    "• Final reply is ≤2 short sentences describing WHAT new capability Zoe now has — not HOW you wired it.\n"
+    "• NEVER include code fences (```) or skill source in the chat reply."
 )
 
 MCPORTER = shutil.which("mcporter-safe") or os.path.expanduser("~/bin/mcporter-safe")
@@ -139,8 +196,15 @@ class Intent:
 
 def openclaw_user_message(intent: Optional[Intent], user_text: str) -> str:
     """Map intent + user text to the string sent to OpenClaw (expand shorthand tasks)."""
-    if intent is not None and intent.name == "ha_full_setup":
-        return HA_FULL_SETUP_OPENCLAW_MESSAGE
+    if intent is not None:
+        if intent.name == "ha_full_setup":
+            return HA_FULL_SETUP_OPENCLAW_MESSAGE
+        if intent.name == "build_widget":
+            return f"{_BUILD_WIDGET_OPENCLAW_MSG}\n\nOriginal request: {user_text}"
+        if intent.name == "build_page":
+            return f"{_BUILD_PAGE_OPENCLAW_MSG}\n\nOriginal request: {user_text}"
+        if intent.name == "extend_capability":
+            return f"{_EXTEND_CAPABILITY_OPENCLAW_MSG}\n\nOriginal request: {user_text}"
     # Same phrases when intent fast path is off (e.g. force_openclaw) — still expand.
     tnorm = _normalize_chat_intent_text(user_text)
     if _is_ha_full_setup_message(tnorm):
@@ -163,12 +227,66 @@ _DATE_QUERY_RE = re.compile(
 )
 
 
+_BUILD_VERB = r"(?:add|build|create|make|scaffold|generate|put|design|code)"
+# Broad match: build-verb at start + the word 'widget' appearing later in the sentence.
+_BUILD_WIDGET_RE = re.compile(
+    rf"^(?:can you |please |could you )?{_BUILD_VERB}\b.*\bwidget\b",
+    re.IGNORECASE,
+)
+_BUILD_PAGE_RE = re.compile(
+    rf"^(?:can you |please |could you )?{_BUILD_VERB}\b.*\bpage\b",
+    re.IGNORECASE,
+)
+# Also catch "I want a <thing> widget/page"
+_WANT_WIDGET_RE = re.compile(
+    r"^(?:i\s+want|i'?d\s+like|i\s+need)\s+(?:a\s+|an\s+)?(?:new\s+|custom\s+)?.*\bwidget\b",
+    re.IGNORECASE,
+)
+_WANT_PAGE_RE = re.compile(
+    r"^(?:i\s+want|i'?d\s+like|i\s+need)\s+(?:a\s+|an\s+)?"
+    r"(?:new\s+|custom\s+|dedicated\s+)?.*\bpage\b",
+    re.IGNORECASE,
+)
+_EXTEND_CAPABILITY_RE = re.compile(
+    r"^(?:can you |please |could you )?"
+    r"(?:teach yourself|learn|add support|extend yourself|gain the ability|install a skill|"
+    r"build me the ability|add the ability|learn how)\b",
+    re.IGNORECASE,
+)
+
+# "forget that" / "never mind what I said" — retract the last memory written.
+_FORGET_LAST_RE = re.compile(
+    r"^(?:please\s+)?"
+    r"(?:forget\s+(?:that|what\s+i\s+(?:just\s+)?said|what\s+i\s+told\s+you|the\s+last\s+thing|that\s+memory)"
+    r"|don'?t\s+remember\s+that"
+    r"|scrap\s+(?:that|what\s+i\s+said)"
+    r"|delete\s+that(?:\s+memory)?"
+    r"|never\s+mind\s+(?:what\s+i\s+(?:just\s+)?said|that))"
+    r"\.?\s*$",
+    re.IGNORECASE,
+)
+
+
 def detect_intent(text: str) -> Optional[Intent]:
     t = _normalize_chat_intent_text(text)
 
     # Full Home Assistant / automation setup → OpenClaw (execute_intent returns None; chat expands message)
     if _is_ha_full_setup_message(t):
         return Intent("ha_full_setup", {})
+
+    # "forget that" — retract the most recent memory write for the caller.
+    # Matched very early so it never collides with other verbs.
+    if _FORGET_LAST_RE.match(t):
+        return Intent("memory_forget_last", {})
+
+    # Zoe self-extension — always routes to OpenClaw (admin-gated in the skill).
+    # Checked BEFORE list/reminder/etc so "add X widget" doesn't become list_add.
+    if _BUILD_WIDGET_RE.match(t) or _WANT_WIDGET_RE.match(t):
+        return Intent("build_widget", {"raw": text})
+    if _BUILD_PAGE_RE.match(t) or _WANT_PAGE_RE.match(t):
+        return Intent("build_page", {"raw": text})
+    if _EXTEND_CAPABILITY_RE.match(t):
+        return Intent("extend_capability", {"raw": text})
 
     # === CLOCK / CALENDAR QUERIES — checked before domain patterns (no slots needed) ===
 
@@ -194,6 +312,24 @@ def detect_intent(text: str) -> Optional[Intent]:
         category = _infer_event_category(title)
         return Intent("calendar_create", {"title": title, "date": date_str, "time": time_str, "category": category})
 
+    # "please add an event in my calendar beach at 230 today"
+    m = re.match(
+        r"^(?:please\s+)?(?:add|create|schedule|put|make)\s+(?:an?\s+)?(?:event|appointment|meeting)"
+        r"\s+(?:to|in|on)\s+(?:the\s+|my\s+)?(?:calendar|schedule)\s+(.+?)(?:\s+at\s+(.+))?$",
+        t,
+    )
+    if m:
+        title = m.group(1).strip()
+        tail = (m.group(2) or "").strip()
+        date_str = ""
+        time_str = tail
+        tm = re.match(r"^([0-9]{1,4}(?::[0-9]{2})?\s*(?:am|pm)?)(?:\s+(.+))?$", tail)
+        if tm:
+            time_str = (tm.group(1) or "").strip()
+            date_str = (tm.group(2) or "").strip()
+        category = _infer_event_category(title)
+        return Intent("calendar_create", {"title": title, "date": date_str, "time": time_str, "category": category})
+
     # "create/schedule a [keyword] called/titled/named X on DATE at TIME" (most specific first)
     m = re.match(
         r"^(?:create|add|schedule|set up|make) (?:a |an )?(?:event|appointment|meeting)"
@@ -203,6 +339,27 @@ def detect_intent(text: str) -> Optional[Intent]:
         title = m.group(1).strip()
         date_str = (m.group(2) or "").strip()
         time_str = (m.group(3) or "").strip()
+        category = _infer_event_category(title)
+        return Intent("calendar_create", {"title": title, "date": date_str, "time": time_str, "category": category})
+
+    # "add an appointment at 2.30 today for the dentist"
+    m = re.match(
+        r"^(?:add|create|schedule|set up|make)\s+(?:an?\s+)?(?:appointment|event|meeting)"
+        r"(?:\s+at\s+(.+?))?(?:\s+for\s+(.+))?$",
+        t,
+    )
+    if m:
+        at_clause = (m.group(1) or "").strip()
+        title = (m.group(2) or "appointment").strip()
+        date_str = ""
+        time_str = ""
+        if at_clause:
+            tm = re.match(r"^([0-9]{1,4}(?::[0-9]{2})?(?:\.[0-9]{2})?\s*(?:am|pm)?)(?:\s+(.+))?$", at_clause)
+            if tm:
+                time_str = (tm.group(1) or "").strip()
+                date_str = (tm.group(2) or "").strip()
+            else:
+                date_str = at_clause
         category = _infer_event_category(title)
         return Intent("calendar_create", {"title": title, "date": date_str, "time": time_str, "category": category})
 
@@ -224,8 +381,17 @@ def detect_intent(text: str) -> Optional[Intent]:
         r"^what(?:'s| is) on my (?:calendar|schedule)(.*)$",
         r"^whats on my (?:calendar|schedule)(.*)$",
         r"^(?:show|check) (?:me )?my (?:calendar|schedule|events)(.*)$",
+        r"^(?:show|open|bring up|go to|take me to) (?:the |my )?(?:calendar|schedule)(?: (?:page|screen|view))?(.*)$",
         r"^my (?:calendar|schedule|events)$",
         r"^(?:upcoming|today'?s) (?:events|calendar|schedule)$",
+        r"^show me (?:my )?week(?: at a glance)?$",
+        r"^whats on today$",
+        r"^what'?s on today$",
+        r"^whats happening (?:today|this afternoon|this evening|tomorrow)(.*)$",
+        r"^what'?s happening (?:today|this afternoon|this evening|tomorrow)(.*)$",
+        r"^whats my first event(?: tomorrow| today)?$",
+        r"^what'?s my first event(?: tomorrow| today)?$",
+        r"^do i have free time(?: today| tomorrow| tomorrow evening| this evening)?$",
         r"^what (?:events )?do i have(?: today| this week| tomorrow)?$",
     ]:
         m = re.match(pattern, t)
@@ -253,6 +419,9 @@ def detect_intent(text: str) -> Optional[Intent]:
     for pattern in [
         r"^(?:show|list|check|what are) (?:my )?reminders$",
         r"^my reminders$",
+        r"^(?:open|show|bring up|go to|take me to) (?:the |my )?reminders(?: (?:page|screen|view))?$",
+        r"^show todays reminders$",
+        r"^show today'?s reminders$",
     ]:
         if re.match(pattern, t):
             return Intent("reminder_list", {})
@@ -301,7 +470,8 @@ def detect_intent(text: str) -> Optional[Intent]:
     m = re.match(r"^(?:find|look up) (.+)$", t)
     if m:
         query = m.group(1).strip()
-        blocked = {"notes", "note", "list", "calendar", "schedule", "events", "reminders"}
+        blocked = {"notes", "note", "list", "calendar", "schedule", "events",
+                   "reminders", "recipe", "recipes", "weather", "timer"}
         if not any(kw in query for kw in blocked):
             return Intent("people_search", {"query": query})
 
@@ -310,15 +480,23 @@ def detect_intent(text: str) -> Optional[Intent]:
         r"^what(?:'s| is) the weather(?: like)?(.*)$",
         r"^whats the weather(?: like)?(.*)$",
         r"^how(?:'s| is) the weather(.*)$",
+        r"^(?:(?:can|could) you |please )?(?:show|open|bring up|pull up|go to|take me to)(?: me)? (?:the )?weather(?: (?:screen|page|panel))?(.*)$",
         r"^(?:will it|is it going to) rain(.*)$",
         r"^do i need (?:a |an )?(?:jacket|umbrella|coat)(.*)$",
         r"^temperature (?:today|tomorrow|outside)(.*)$",
-        r"^weather(?:\s+(?:today|tomorrow|forecast|this week))?(.*)$",
+        r"^weather(\s+(?:today|tomorrow|forecast|this week))?(.*)$",
     ]:
         m = re.match(pattern, t)
         if m:
-            qualifier = (m.group(1) if m.lastindex else "").strip()
-            is_forecast = any(kw in qualifier for kw in ("tomorrow", "week", "forecast")) or "tomorrow" in t
+            # Collect every captured group — the "weather" pattern uses two
+            # capture groups (qualifier + trailing) so we combine them to
+            # detect "weather forecast" / "weather this week".
+            groups = m.groups() or ()
+            qualifier = " ".join((g or "").strip() for g in groups).strip()
+            is_forecast = (
+                any(kw in qualifier for kw in ("tomorrow", "week", "forecast"))
+                or any(kw in t for kw in ("tomorrow", "this week", "forecast"))
+            )
             return Intent("weather", {"qualifier": qualifier, "forecast": is_forecast})
 
     # --- JOURNAL ---
@@ -414,10 +592,11 @@ def detect_intent(text: str) -> Optional[Intent]:
         r"^add (.+?) to (?:the |my )?(.+?) ?list$",
         r"^put (.+?) on (?:the |my )?(.+?) ?list$",
         r"^add (.+?) to (?:the |my )?(shopping|grocery|groceries|todo|to do|to-do|personal|work|bucket)$",
+        r"^(?:(?:can|could) you |please )?(?:add|put) (.+?) (?:to|on) (?:the |my )?(.+?) ?list$",
     ]:
         m = re.match(pattern, t)
         if m:
-            item, lst = m.group(1).strip(), m.group(2).strip()
+            item, lst = _sanitize_list_item(m.group(1)), m.group(2).strip()
             list_type = _normalize_list(lst)
             return Intent("list_add", {"item": item, "list_type": list_type})
 
@@ -425,10 +604,12 @@ def detect_intent(text: str) -> Optional[Intent]:
     for pattern in [
         r"^add (.+)$",
         r"^put (.+)$",
+        r"^(?:(?:can|could) you |please )?add (.+)$",
+        r"^(?:(?:can|could) you |please )?put (.+)$",
     ]:
         m = re.match(pattern, t)
         if m:
-            item = m.group(1).strip()
+            item = _sanitize_list_item(m.group(1))
             list_type = _infer_list(item)
             return Intent("list_add", {"item": item, "list_type": list_type})
 
@@ -437,7 +618,7 @@ def detect_intent(text: str) -> Optional[Intent]:
         r"^(?:i need to buy|we need|we'?re out of|don'?t forget|buy|get) (.+)$", t
     )
     if m:
-        item = m.group(1).strip()
+        item = _sanitize_list_item(m.group(1))
         return Intent("list_add", {"item": item, "list_type": "shopping"})
 
     # --- LIST SHOW ---
@@ -448,6 +629,10 @@ def detect_intent(text: str) -> Optional[Intent]:
         r"^what do i need to (?:buy|get)$",
         r"^what'?s on my list$",
         r"^show my list$",
+        r"^(?:open|show|bring up|go to|take me to) (?:the |my )?(?:shopping |grocery |groceries )?list(?: page| screen| view)?$",
+        r"^(?:open|show|bring up|go to|take me to) lists?$",
+        r"^(?:open|show|bring up|go to|take me to) (?:the |my )?(?:shopping|grocery|groceries)$",
+        r"^show me list$",
     ]:
         m = re.match(pattern, t)
         if m:
@@ -489,6 +674,16 @@ def _infer_list(item: str) -> str:
     return "shopping"
 
 
+def _sanitize_list_item(raw: str) -> str:
+    item = str(raw or "").strip()
+    item = re.sub(r"\s+", " ", item)
+    item = re.sub(r"^(please|pls)\s+", "", item, flags=re.IGNORECASE)
+    item = re.sub(r"^(add|put|get|buy)\s+", "", item, flags=re.IGNORECASE)
+    item = re.sub(r"\s+(to|on)\s+(?:the\s+|my\s+)?(?:shopping|grocery|groceries)\s+list$", "", item, flags=re.IGNORECASE)
+    item = re.sub(r"[.,;:!?]+$", "", item)
+    return item.strip()
+
+
 async def _run_mcporter(cmd: str) -> Optional[str]:
     """Run a single mcporter-safe command, return raw stdout or None on failure."""
     env = os.environ.copy()
@@ -523,12 +718,33 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         import platform
         now = datetime.now()
         fmt = "%-I:%M %p" if platform.system() != "Windows" else "%I:%M %p"
-        return f"It's {now.strftime(fmt)} on {now.strftime('%A, %d %B %Y')}."
+        # Keep this short and natural for spoken output.
+        return f"It's {now.strftime(fmt)}."
 
     if intent.name == "date_query":
         from datetime import datetime
         now = datetime.now()
-        return f"Today is {now.strftime('%A, %d %B %Y')}."
+        spoken_day = _spoken_day_ordinal(now.day)
+        return f"Today is {now.strftime('%A')}, {now.strftime('%B')} {spoken_day}."
+
+    # "forget that" / "never mind what I said" — retract the last MemPalace write.
+    # Scoped to the caller's user_id and to writes within the last 10 minutes so
+    # a stale retraction can't wipe anything older. Short window keeps the
+    # semantics predictable across voice + SSE clients.
+    if intent.name == "memory_forget_last":
+        try:
+            from memory_service import get_memory_service
+            svc = get_memory_service()
+            ref = await svc.forget_last(user_id=user_id)
+        except Exception as exc:
+            logger.info("memory_forget_last: service unavailable: %s", exc)
+            return "I couldn't reach the memory store right now, so nothing was changed."
+        if ref is None:
+            return "There's nothing recent I can forget — no new memories in the last few minutes."
+        preview = (ref.text or "").strip()
+        if len(preview) > 80:
+            preview = preview[:77] + "…"
+        return f"Done — I forgot: \"{preview}\"."
 
     # Timer and recipe intents need panel navigation — emit a nav action so the cooking
     # page opens and the timer/recipe widget is pre-filled.  The text response is spoken
@@ -543,6 +759,11 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         query = intent.slots.get("query", "")
         # Panel nav to cooking page handled by _broadcast_intent_nav in chat.py.
         return f"Looking up a recipe for {query}."
+
+    # Weather should not depend on mcporter command availability.
+    # Route directly to the weather backend helpers for deterministic voice UX.
+    if intent.name == "weather":
+        return await _execute_weather_direct(user_id=user_id, forecast=bool(intent.slots.get("forecast")))
 
     try:
         cmd = _build_command(intent, user_id)
@@ -607,6 +828,55 @@ async def _execute_daily_briefing(user_id: str) -> Optional[str]:
             lines.append(f"  - {r.get('title', '?')}{suffix}")
 
     return "\n".join(lines)
+
+
+async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optional[str]:
+    """Direct weather path used by voice fast-intent execution.
+
+    This bypasses mcporter so household voice weather works even if external
+    command tooling is unavailable.
+    """
+    try:
+        from database import get_db
+        from routers.weather import _row_to_prefs, _resolve_location, _get_current, _get_forecast
+        async for db in get_db():
+            cursor = await db.execute(
+                "SELECT * FROM weather_preferences WHERE user_id = ?",
+                [user_id],
+            )
+            prefs = _row_to_prefs(await cursor.fetchone())
+            lat, lon, city, country = _resolve_location(prefs)
+            current = await _get_current(lat, lon, city, country)
+            city_name = current.get("city") or city or "your area"
+            if forecast:
+                f = await _get_forecast(lat, lon)
+                daily = f.get("daily", [])[:5]
+                if not daily:
+                    return f"I couldn't get the forecast for {city_name} right now."
+                lines = [f"Forecast for {city_name}:"]
+                for item in daily:
+                    day = item.get("day", "?")
+                    hi = item.get("high", "?")
+                    lo = item.get("low", "?")
+                    desc = item.get("description", "unknown")
+                    lines.append(f"  - {day}: {hi}°C/{lo}°C, {desc}")
+                return "\n".join(lines)
+            temp = current.get("temp")
+            desc = current.get("description", "")
+            feels = current.get("feels_like")
+            if temp is None:
+                return f"I couldn't get the weather for {city_name} right now."
+            msg = f"It's {temp}°C in {city_name} ({desc})"
+            if feels is not None:
+                try:
+                    if abs(float(feels) - float(temp)) > 2:
+                        msg += f", feels like {feels}°C"
+                except Exception:
+                    pass
+            return msg + "."
+    except Exception as exc:
+        logger.warning("direct weather intent failed: %s", exc)
+        return None
 
 
 def _build_command(intent: Intent, user_id: str) -> Optional[str]:
@@ -959,14 +1229,26 @@ def _parse_date(raw: str) -> Optional[str]:
 
 def _parse_time(raw: str) -> Optional[str]:
     raw = raw.strip().lower()
-    m = re.match(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", raw)
+    raw = raw.replace(".", ":")
+    m = re.match(r"^(\d{1,4})(?::(\d{2}))?\s*(am|pm)?(?:\b|$)", raw)
     if m:
-        hour = int(m.group(1))
-        minute = int(m.group(2) or 0)
+        hour_str = m.group(1)
+        minute_group = m.group(2)
         ampm = m.group(3)
+        if minute_group is not None:
+            hour = int(hour_str)
+            minute = int(minute_group)
+        elif len(hour_str) in (3, 4):
+            hour = int(hour_str[:-2])
+            minute = int(hour_str[-2:])
+        else:
+            hour = int(hour_str)
+            minute = 0
         if ampm == "pm" and hour < 12:
             hour += 12
         elif ampm == "am" and hour == 12:
             hour = 0
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+            return None
         return f"{hour:02d}:{minute:02d}"
     return None

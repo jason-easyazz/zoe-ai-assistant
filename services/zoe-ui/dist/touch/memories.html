@@ -968,207 +968,37 @@
         @media (min-width: 769px) {
             .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
         }
-    </style>
-        <!-- Zoe Orb Styles -->
-        <style>
-        .zoe-orb {
-            position: fixed; bottom: 24px; right: 24px; width: 70px; height: 70px;
-            border-radius: 50%; cursor: pointer; transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-            z-index: 1200; display: flex; align-items: center; justify-content: center;
-            overflow: hidden;
-            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
-            background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 50%, #A855F7 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
-        }
-        .zoe-orb::before {
-            content: ""; position: absolute; top: 50%; left: 50%; width: 20px; height: 20px;
-            background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
-            border-radius: 50%; transform: translate(-50%, -50%);
-            animation: orb-inner-glow 2s ease-in-out infinite alternate;
-        }
-        .zoe-orb:hover {
-            transform: scale(1.12);
-            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.5), 0 0 50px rgba(123, 97, 255, 0.3);
-            animation-duration: 8s, 3s;
-        }
-        .zoe-orb:active { transform: scale(0.95); }
-        .zoe-orb.connecting {
-            background: linear-gradient(135deg, #7B61FF 0%, #6366F1 50%, #8B5CF6 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
-        }
-        .zoe-orb.connected {
-            background: linear-gradient(135deg, #7B61FF 0%, #10B981 50%, #34D399 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(16, 185, 129, 0.2);
-        }
-        .zoe-orb.thinking {
-            background: linear-gradient(135deg, #7B61FF 0%, #F59E0B 50%, #FBBF24 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(245, 158, 11, 0.2);
-            animation: orb-thinking-gentle 3s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
-        }
-        .zoe-orb.proactive {
-            background: linear-gradient(135deg, #7B61FF 0%, #EC4899 50%, #F472B6 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(236, 72, 153, 0.2);
-            animation: orb-proactive-gentle 4s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
-        }
-        .zoe-orb.error {
-            background: linear-gradient(135deg, #7B61FF 0%, #EF4444 50%, #F87171 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(239, 68, 68, 0.2);
-            animation: orb-error-shake 0.5s ease-in-out infinite, orb-liquid-swirl 3s ease-in-out infinite;
-        }
-        .zoe-orb.chatting {
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 50%, #06B6D4 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.6), 0 0 60px rgba(123, 97, 255, 0.4);
-            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
-        }
-        .zoe-orb.badge::after {
-            content: ""; position: absolute; top: 8px; right: 8px; width: 12px; height: 12px;
-            background: #F59E0B; border-radius: 50%; border: 2px solid white;
-            box-shadow: 0 0 12px rgba(245, 158, 11, 0.8);
-            animation: badge-pulse 2s ease-in-out infinite;
-        }
-        @keyframes orb-liquid-swirl {
-            0%, 100% { background-position: 0% 50%; border-radius: 50% 45% 55% 50%; }
-            25% { background-position: 100% 50%; border-radius: 55% 50% 45% 55%; }
-            50% { background-position: 100% 100%; border-radius: 45% 55% 50% 45%; }
-            75% { background-position: 0% 100%; border-radius: 50% 45% 55% 50%; }
-        }
-        @keyframes orb-breathe {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-        }
-        @keyframes orb-inner-glow {
-            0% { opacity: 0.3; transform: translate(-50%, -50%) scale(1); }
-            100% { opacity: 0.6; transform: translate(-50%, -50%) scale(1.1); }
-        }
-        @keyframes orb-thinking-gentle {
-            0%, 100% { transform: rotate(0deg); }
-            25% { transform: rotate(5deg); }
-            75% { transform: rotate(-5deg); }
-        }
-        @keyframes orb-proactive-gentle {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.08); }
-        }
-        @keyframes orb-error-shake {
-            0%, 100% { transform: translateX(0); }
-            25% { transform: translateX(-2px); }
-            75% { transform: translateX(2px); }
-        }
-        @keyframes badge-pulse {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.7; transform: scale(1.2); }
-        }
-        
 
-        /* Navigation Bar - Standardized */
-        .nav-bar {
-            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
-            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
-            align-items: center; height: 60px;
+        /* ============================================================
+           DARK MODE OVERRIDES
+           ============================================================ */
+        html.dark-mode .tile {
+            background: #1b1b2e !important;
+            border-color: rgba(255, 255, 255, 0.08) !important;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+            color: #e5e7eb;
         }
-        .nav-left { display: flex; align-items: center; gap: 15px; }
-        .mini-orb { 
-            width: 32px; height: 32px; border-radius: 50%; 
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); 
-            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+        html.dark-mode .tile-header {
+            border-bottom-color: rgba(255, 255, 255, 0.08) !important;
         }
-        .mini-orb:hover { transform: scale(1.1); }
-        .nav-menu { display: flex; gap: 20px; }
-        .nav-item { 
-            color: #666; text-decoration: none; font-size: 13px; font-weight: 400;
-            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
-            min-height: 44px; display: flex; align-items: center;
+        html.dark-mode .tile-title { color: #f1f5f9 !important; }
+        html.dark-mode .tile-close {
+            background: rgba(255, 255, 255, 0.08) !important;
+            color: rgba(255, 255, 255, 0.7) !important;
         }
-        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
-        .nav-right { display: flex; align-items: center; gap: 10px; }
-        
-        .more-nav-btn { 
-            color: #666; text-decoration: none; font-size: 13px; font-weight: 400; 
-            transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
-            min-height: 44px; display: flex; align-items: center; cursor: pointer;
-            background: none; border: none;
+        html.dark-mode .tile-close:hover { background: rgba(255, 255, 255, 0.15) !important; }
+        html.dark-mode .tile-editor,
+        html.dark-mode .tile-editor:focus {
+            color: #e5e7eb !important;
+            background: transparent !important;
         }
-        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
-        
-        .notifications-btn { 
-            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
-            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
-            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
-            font-size: 16px; font-weight: bold;
+        html.dark-mode .control-btn:hover {
+            background: rgba(255, 255, 255, 0.12) !important;
         }
-        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
-        .notifications-btn.has-notifications { animation: notificationPulse 2s ease-in-out infinite; }
-        .notifications-btn.has-notifications::after {
-            content: ''; position: absolute; top: 6px; right: 6px;
-            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
-            border: 2px solid white;
+        html.dark-mode .canvas-legend {
+            background: rgba(20, 20, 34, 0.85) !important;
+            border-color: rgba(255, 255, 255, 0.1) !important;
         }
-        
-        @keyframes notificationPulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.1); }
-        }
-        
-        .api-indicator { 
-            font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 8px; 
-            display: flex; align-items: center; gap: 6px; 
-        }
-        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
-        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
-        .api-indicator.connecting { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
-        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-        .api-indicator.online::before { background: #22c55e; }
-        .api-indicator.offline::before { background: #ef4444; }
-        .api-indicator.connecting::before { background: #ea580c; }
-        
-        /* Time/Date Display */
-        .time-date-display {
-            display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
-            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
-        }
-        .current-time { font-size: 16px; font-weight: 500; color: #333; line-height: 1.2; }
-        .current-date { font-size: 11px; color: #666; line-height: 1.2; }
-
-        /* Notifications Panel */
-        .notifications-panel {
-            position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
-            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
-            border-left: 1px solid rgba(255, 255, 255, 0.3); z-index: 1000;
-            transition: right 0.3s ease; overflow-y: auto;
-        }
-        .notifications-panel.open { right: 0; }
-        .notifications-header {
-            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-            display: flex; justify-content: space-between; align-items: center; 
-        }
-        .notifications-title { font-size: 18px; font-weight: 600; color: #333; margin: 0; }
-        .notifications-close {
-            width: 32px; height: 32px; border-radius: 50%; border: none;
-            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 18px;
-            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
-        }
-        .notifications-close:hover { background: rgba(255, 255, 255, 0.5); }
-        .notifications-content { padding: 20px; display: flex; flex-direction: column; gap: 15px; }
-        .notification-item {
-            background: rgba(255, 255, 255, 0.6); backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 12px;
-            padding: 15px; transition: all 0.3s ease; cursor: pointer;
-        }
-        .notification-item:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1); }
-        .notification-item.unread { border-left: 4px solid #7B61FF; }
-        .notification-title { font-size: 14px; font-weight: 600; color: #333; margin-bottom: 5px; }
-        .notification-meta { font-size: 12px; color: #666; display: flex; gap: 10px; }
-        .notification-time { color: #7B61FF; font-weight: 500; }
-        .no-notifications { text-align: center; color: #666; font-size: 14px; padding: 40px 20px; }
-
     </style>
 <!-- PWA Meta Tags -->
     <meta name="application-name" content="Zoe AI">
@@ -2016,9 +1846,15 @@
         }
         
         function draw() {
+            const isDark = document.documentElement.classList.contains('dark-mode');
             const bgGradient = ctx.createLinearGradient(0, 0, width, height);
-            bgGradient.addColorStop(0, '#fafbfc');
-            bgGradient.addColorStop(1, '#f1f3f6');
+            if (isDark) {
+                bgGradient.addColorStop(0, '#0a0a14');
+                bgGradient.addColorStop(1, '#12121f');
+            } else {
+                bgGradient.addColorStop(0, '#fafbfc');
+                bgGradient.addColorStop(1, '#f1f3f6');
+            }
             ctx.fillStyle = bgGradient;
             ctx.fillRect(0, 0, width, height);
             
@@ -2057,6 +1893,7 @@
         }
         
         function drawCanvasItem(item, isDragged, isHovered) {
+            const isDark = document.documentElement.classList.contains('dark-mode');
             const color = item.color || '#7c3aed';
             const r = (item.size || 50) / 2;
             const scale = isDragged ? 1.1 : isHovered ? 1.05 : 1;
@@ -2066,7 +1903,7 @@
             ctx.scale(scale, scale);
             ctx.globalAlpha = isDragged ? 0.7 : 1;
             
-            ctx.fillStyle = 'white';
+            ctx.fillStyle = isDark ? '#1b1b2e' : 'white';
             ctx.strokeStyle = color;
             ctx.lineWidth = 3;
             ctx.beginPath();
@@ -2082,10 +1919,10 @@
             
             ctx.restore();
             
-            ctx.fillStyle = '#1f2937';
+            ctx.fillStyle = isDark ? '#e5e7eb' : '#1f2937';
             ctx.font = '600 12px var(--font-text)';
             ctx.textAlign = 'center';
-            ctx.shadowColor = 'rgba(255, 255, 255, 0.9)';
+            ctx.shadowColor = isDark ? 'rgba(0, 0, 0, 0.6)' : 'rgba(255, 255, 255, 0.9)';
             ctx.shadowBlur = 4;
             ctx.fillText(item.name || 'Untitled', item.x, item.y + r * scale + 16);
             ctx.shadowBlur = 0;
@@ -2499,36 +2336,6 @@
                 statusEl.className = 'api-indicator offline';
             }
         }
-    </script>
-
-        
-        <!-- Load Zoe Orb Component -->
-    <script>
-        // Load the JavaScript first
-        const orbScript = document.createElement('script');
-        orbScript.src = '/js/zoe-orb.js';
-        orbScript.onload = function() {
-            // Then load the HTML component
-            fetch('/components/zoe-orb-complete.html')
-                .then(r => r.text())
-                .then(html => {
-                    const div = document.createElement('div');
-                    div.innerHTML = html;
-                    // Remove the script tag from the HTML (we already loaded it)
-                    const scripts = div.querySelectorAll('script');
-                    scripts.forEach(s => s.remove());
-                    // Append all elements
-                    while (div.firstChild) {
-                        document.body.appendChild(div.firstChild);
-                    }
-                    // Initialize
-                    if (typeof initOrbChat === 'function') {
-                        initOrbChat();
-                    }
-                })
-                .catch(err => console.error('Failed to load Zoe orb:', err));
-        };
-        document.head.appendChild(orbScript);
     </script>
     <script src="/js/websocket-sync.js"></script>
 

@@ -81,6 +81,54 @@
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+    display: inline-flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 0.12em;
+    white-space: nowrap;
+}
+
+/* Hours:minutes digits inherit the full time-display font-size. */
+.time-display .time-digits {
+    font-size: inherit;
+    font-weight: inherit;
+    letter-spacing: -0.03em;
+    line-height: 1;
+}
+
+/* Seconds sit slightly smaller — like a classic digital clock subscript. */
+.time-display .time-seconds {
+    font-size: 0.48em;
+    font-weight: 300;
+    opacity: 0.75;
+    letter-spacing: 0;
+    padding-left: 0.08em;
+    padding-bottom: 0.08em;
+    align-self: flex-end;
+    line-height: 1;
+    /* Opt out of the gradient-clip so the seconds actually show up. */
+    -webkit-text-fill-color: rgba(255,255,255,0.92);
+    background: none;
+    -webkit-background-clip: border-box;
+    background-clip: border-box;
+}
+
+/* AM/PM period: tiny vertical cap label that never dominates the clock. */
+.time-display .time-period {
+    font-size: 0.28em;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    opacity: 0.78;
+    padding-left: 0.12em;
+    padding-bottom: 0.55em;
+    align-self: flex-end;
+    line-height: 1;
+    /* Opt out of the gradient-clip so it stays crisp white. */
+    -webkit-text-fill-color: rgba(255,255,255,0.92);
+    background: none;
+    -webkit-background-clip: border-box;
+    background-clip: border-box;
 }
 
 @keyframes timeReveal {
@@ -198,11 +246,12 @@
 .weather-unified {
     display: flex !important;
     flex-direction: column;
-    gap: clamp(0.3rem, 1.2cqh, 0.6rem);
-    padding: clamp(0.4rem, 2cqh, 0.9rem);
+    gap: clamp(0.3rem, 2cqh, 1.4rem);
+    padding: clamp(0.4rem, 2.5cqh, 1.5rem);
     height: 100%;
+    width: 100%;
     justify-content: center;
-    align-items: center;
+    align-items: stretch;
     text-align: center;
 }
 
@@ -211,8 +260,11 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: clamp(0.15rem, 0.7cqh, 0.4rem);
+    justify-content: center;
+    gap: clamp(0.15rem, 1.4cqh, 0.9rem);
     transition: all 0.3s ease;
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 /* Collapsed state - shrinks when clicked to make room for details */
@@ -221,16 +273,16 @@
 }
 
 .weather-icon-large {
-    font-size: clamp(2rem, 12cqw, 5rem);
+    font-size: clamp(2rem, 18cqw, 10rem);
     line-height: 1;
     filter: drop-shadow(0 4px 20px rgba(0,0,0,0.3));
     animation: weatherIconPulse 4s ease-in-out infinite, weatherIconReveal 0.8s ease-out;
     transition: font-size 0.3s ease, transform 0.3s ease;
 }
 
-/* Collapsed icon - much smaller */
+/* Collapsed icon - much smaller (but still scales with cell size on larger widgets). */
 .weather-hero.weather-collapsed .weather-icon-large {
-    font-size: clamp(1.25rem, 7cqw, 2.5rem);
+    font-size: clamp(1.25rem, 8cqw, 5rem) !important;
     animation: none; /* Stop pulse when collapsed */
 }
 
@@ -253,7 +305,7 @@
 }
 
 .weather-temp {
-    font-size: clamp(1.5rem, 9cqw, 3.5rem);
+    font-size: clamp(1.5rem, 14cqw, 7rem);
     font-weight: 100;
     line-height: 1;
     letter-spacing: -0.02em;
@@ -264,11 +316,12 @@
     background-clip: text;
     animation: tempFadeIn 0.6s ease-out 0.2s both;
     transition: font-size 0.3s ease;
+    font-variant-numeric: tabular-nums;
 }
 
-/* Collapsed temperature - smaller */
+/* Collapsed temperature - smaller (still scales up on larger cells). */
 .weather-hero.weather-collapsed .weather-temp {
-    font-size: clamp(1rem, 6cqw, 2rem);
+    font-size: clamp(1rem, 7cqw, 4rem) !important;
     animation: none; /* Stop fade-in when collapsed */
 }
 
@@ -284,7 +337,7 @@
 }
 
 .weather-condition {
-    font-size: clamp(0.875rem, 4cqw, 1.5rem);
+    font-size: clamp(0.875rem, 5cqw, 2.25rem);
     font-weight: 400;
     opacity: 0.95;
     text-transform: capitalize;
@@ -293,9 +346,9 @@
     transition: font-size 0.3s ease;
 }
 
-/* Collapsed condition text - smaller */
+/* Collapsed condition text - smaller (still scales up on larger cells). */
 .weather-hero.weather-collapsed .weather-condition {
-    font-size: clamp(0.65rem, 3cqw, 1rem);
+    font-size: clamp(0.65rem, 3.5cqw, 2rem) !important;
     animation: none; /* Stop fade-in when collapsed */
 }
 
@@ -591,3 +644,102 @@
     }
 }
 
+
+/* ============================================
+   PROGRESSIVE DISCLOSURE — container queries
+   Widgets show more/less based on their cell size.
+   ============================================ */
+
+/* TIME WIDGET — progressive reveal */
+.widget[data-widget-type="time"] .time-display {
+    font-size: clamp(2.4rem, 22cqw, 9rem) !important;
+    line-height: 0.95;
+}
+.widget[data-widget-type="time"] .date-display {
+    font-size: clamp(0.9rem, 5cqw, 2rem) !important;
+}
+.widget[data-widget-type="time"] .day-display {
+    font-size: clamp(0.75rem, 4cqw, 1.4rem) !important;
+}
+
+/* Tiny: show only time */
+@container time-widget (max-width: 220px) {
+    .date-display, .day-display { display: none !important; }
+    .time-display { font-size: clamp(2rem, 34cqw, 5rem) !important; }
+}
+/* Small: time + day of week only */
+@container time-widget (min-width: 221px) and (max-width: 320px) {
+    .date-display { display: none !important; }
+    .time-display { font-size: clamp(2.4rem, 30cqw, 6rem) !important; }
+    .day-display { font-size: clamp(0.8rem, 6cqw, 1.2rem) !important; }
+}
+/* Medium+: all three, generous time */
+@container time-widget (min-width: 321px) {
+    .time-display { font-size: clamp(3rem, 24cqw, 9rem) !important; }
+}
+/* Very large: extra spacious */
+@container time-widget (min-width: 500px) and (min-height: 320px) {
+    .time-display { font-size: clamp(4rem, 26cqw, 14rem) !important; }
+    .date-display { font-size: clamp(1.25rem, 5.5cqw, 2.75rem) !important; }
+    .day-display { font-size: clamp(1rem, 4.5cqw, 2.25rem) !important; }
+}
+
+/* Tiny cells: hide seconds (they don't fit alongside AM/PM at this width) and
+   bump the period a notch larger so 12h mode stays readable. */
+@container time-widget (max-width: 260px) {
+    .time-display .time-seconds { display: none; }
+    .time-display .time-period { font-size: 0.34em; padding-bottom: 0.45em; padding-left: 0.18em; }
+}
+
+/* Prevent overflow on small widgets: keep the display shrinkable and the
+   content centered horizontally. */
+.time-display {
+    max-width: 100%;
+    padding: 0 0.25em;
+}
+
+/* WEATHER WIDGET — progressive reveal */
+
+/* Tiny: icon + temp only (hide condition + forecast) */
+@container weather-widget (max-width: 200px) {
+    .weather-condition { display: none !important; }
+    .weather-forecast-compact { display: none !important; }
+    .weather-unified { gap: 0.15rem !important; padding: 0.4rem !important; }
+    .weather-icon-large { font-size: clamp(2.4rem, 42cqw, 3.5rem) !important; }
+    .weather-temp { font-size: clamp(1.4rem, 26cqw, 2.2rem) !important; }
+}
+/* Small: icon + temp + condition (no forecast yet) */
+@container weather-widget (min-width: 201px) and (max-width: 300px) {
+    .weather-forecast-compact { display: none !important; }
+    .weather-icon-large { font-size: clamp(2.2rem, 22cqw, 3.5rem) !important; }
+    .weather-temp { font-size: clamp(1.6rem, 16cqw, 2.6rem) !important; }
+    .weather-condition { font-size: clamp(0.85rem, 5cqw, 1.1rem) !important; }
+}
+/* Medium: show 2-day forecast */
+@container weather-widget (min-width: 301px) and (max-width: 420px) {
+    .weather-forecast-compact .forecast-compact:nth-child(n+3) { display: none !important; }
+}
+/* Large: full 4-day forecast with generous hero.
+   Scope hero rules to :not(.weather-collapsed) so click-to-collapse still works. */
+@container weather-widget (min-width: 421px) and (max-width: 600px) {
+    .weather-hero:not(.weather-collapsed) .weather-icon-large { font-size: clamp(3rem, 16cqw, 7rem) !important; }
+    .weather-hero:not(.weather-collapsed) .weather-temp       { font-size: clamp(2rem, 12cqw, 5.5rem) !important; }
+    .weather-hero:not(.weather-collapsed) .weather-condition  { font-size: clamp(1rem, 4.5cqw, 1.8rem) !important; }
+}
+
+/* XL: ultra-spacious (600px+ cells) — uncap the hero, enlarge the forecast.
+   Hero sizing only applies to the non-collapsed state. */
+@container weather-widget (min-width: 601px) {
+    .weather-hero:not(.weather-collapsed) .weather-icon-large { font-size: clamp(4rem, 18cqw, 11rem) !important; }
+    .weather-hero:not(.weather-collapsed) .weather-temp       { font-size: clamp(2.5rem, 14cqw, 8rem) !important; }
+    .weather-hero:not(.weather-collapsed) .weather-condition  { font-size: clamp(1.2rem, 5cqw, 2.25rem) !important; }
+    .forecast-compact .forecast-day-name { font-size: clamp(0.7rem, 2.4cqw, 1.5rem) !important; }
+    .forecast-compact .forecast-icon     { font-size: clamp(1.5rem, 7.5cqw, 4.5rem) !important; }
+    .forecast-compact .forecast-temps    { font-size: clamp(0.8rem, 3cqw, 1.75rem) !important; }
+}
+
+/* Tall cells: promote to column layout with larger forecast cards */
+@container weather-widget (min-height: 420px) {
+    .weather-forecast-compact { gap: clamp(0.3rem, 1cqw, 0.8rem) !important; }
+    .forecast-compact { aspect-ratio: auto; padding: clamp(0.4rem, 2cqh, 1rem) clamp(0.3rem, 1.5cqw, 0.9rem) !important; }
+}

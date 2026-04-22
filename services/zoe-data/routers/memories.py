@@ -1,101 +1,102 @@
-"""Semantic-first memories API with review workflow."""
+"""Semantic-first memories API.
+
+Every operation here lives in MemPalace, reached through `MemoryService`. The
+earlier SQLite `memory_items` mirror has been retired: proposals land as
+`status='pending'` rows in MemPalace, review flips the status, and
+search/list read back through the service with per-user scoping.
+
+See `docs/architecture/memory.md` for the full design.
+"""
+
+from __future__ import annotations
 
 import json
-import uuid
-from typing import Optional
+import logging
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from auth import get_current_user
+from auth import get_current_user, require_admin
 from database import get_db
-from memory_gateway import MemoryGateway
+from guest_policy import require_feature_access
+from memory_service import (
+    MemoryRef,
+    MemoryService,
+    MemoryServiceError,
+    get_memory_service,
+)
 from models import MemoryProposalCreate, MemoryReviewBody
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/memories", tags=["memories"])
-gateway = MemoryGateway()
 
 
-def _visibility_filter_sql() -> str:
-    return "(visibility = 'family' OR user_id = ?)"
+# ─── Helpers ─────────────────────────────────────────────────────────────
+
+_STATUS_ALIASES = {
+    # Accept both the new canonical statuses and the legacy `memory_items`
+    # values so the review UI doesn't need to change in lockstep.
+    "pending_review": "pending",
+    "pending": "pending",
+    "approved": "approved",
+    "rejected": "rejected",
+    "archived": "archived",
+    "superseded": "superseded",
+}
 
 
-def _row_to_memory(row) -> dict:
-    provenance = row["provenance_json"]
-    if provenance and isinstance(provenance, str):
-        try:
-            provenance = json.loads(provenance)
-        except json.JSONDecodeError:
-            provenance = None
+def _ref_to_dict(ref: MemoryRef) -> dict[str, Any]:
+    """Serialise MemoryRef for HTTP, keeping the legacy shape where practical.
+
+    The journal / memories UIs expect `id`, `content`, `memory_type`, and a
+    few other fields that used to come from `memory_items`. We map MemPalace
+    metadata back into that shape so we don't have to rev every consumer in
+    the same PR.
+    """
+    meta = ref.metadata or {}
     return {
-        "id": row["id"],
-        "user_id": row["user_id"],
-        "memory_type": row["memory_type"],
-        "title": row["title"],
-        "content": row["content"],
-        "entity_type": row["entity_type"],
-        "entity_id": row["entity_id"],
-        "confidence": row["confidence"],
-        "source_type": row["source_type"],
-        "source_id": row["source_id"],
-        "source_excerpt": row["source_excerpt"],
-        "provenance": provenance,
-        "visibility": row["visibility"],
-        "status": row["status"],
-        "observed_at": row["observed_at"],
-        "last_verified_at": row["last_verified_at"],
-        "reviewed_by": row["reviewed_by"],
-        "reviewed_at": row["reviewed_at"],
-        "review_note": row["review_note"],
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
+        "id": ref.id,
+        "user_id": meta.get("user_id") or meta.get("wing"),
+        "memory_type": meta.get("memory_type", "fact"),
+        "content": ref.text,
+        "title": meta.get("title"),
+        "entity_type": meta.get("entity_type"),
+        "entity_id": meta.get("entity_id"),
+        "confidence": float(meta.get("confidence", 0.0) or 0.0),
+        "source_type": meta.get("source"),
+        "source_id": meta.get("session_id") or meta.get("user_turn_id"),
+        "source_excerpt": meta.get("source_excerpt"),
+        "visibility": meta.get("visibility", "personal"),
+        "status": meta.get("status", "approved"),
+        "tags": [t for t in str(meta.get("tags", "") or "").split(",") if t],
+        "observed_at": meta.get("added_at"),
+        "last_verified_at": meta.get("reviewed_at"),
+        "reviewed_by": meta.get("reviewed_by"),
+        "reviewed_at": meta.get("reviewed_at"),
+        "review_note": meta.get("review_note"),
+        "created_at": meta.get("added_at"),
+        "updated_at": meta.get("reviewed_at") or meta.get("added_at"),
+        "expires_at": meta.get("expires_at"),
+        "supersedes_id": meta.get("supersedes_id"),
+        "superseded_by_id": meta.get("superseded_by_id"),
+        "access_count": int(meta.get("access_count", 0) or 0),
+        "source": "mempalace",
     }
 
 
-async def create_memory_item(
-    db,
-    user_id: str,
-    proposal: MemoryProposalCreate,
-    default_status: str = "pending_review",
-) -> dict:
-    memory_id = str(uuid.uuid4())
-    await db.execute(
-        """INSERT INTO memory_items
-           (id, user_id, memory_type, title, content, entity_type, entity_id, confidence,
-            source_type, source_id, source_excerpt, provenance_json, visibility, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            memory_id,
-            user_id,
-            proposal.memory_type,
-            proposal.title,
-            proposal.content,
-            proposal.entity_type,
-            proposal.entity_id,
-            proposal.confidence,
-            proposal.source_type,
-            proposal.source_id,
-            proposal.source_excerpt,
-            json.dumps(proposal.provenance) if proposal.provenance else None,
-            proposal.visibility,
-            default_status,
-        ),
-    )
-    await db.execute(
-        """INSERT INTO memory_audit (id, memory_id, user_id, action, new_value, reason)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (
-            str(uuid.uuid4()),
-            memory_id,
-            user_id,
-            "create",
-            json.dumps(proposal.model_dump()),
-            "proposal_created",
-        ),
-    )
-    await db.commit()
-    cur = await db.execute("SELECT * FROM memory_items WHERE id = ?", (memory_id,))
-    row = await cur.fetchone()
-    return _row_to_memory(row)
+def _normalise_status(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    key = raw.lower().strip()
+    return _STATUS_ALIASES.get(key, key)
+
+
+def _svc() -> MemoryService:
+    return get_memory_service()
+
+
+# ─── Endpoints ───────────────────────────────────────────────────────────
 
 
 @router.get("/")
@@ -106,21 +107,22 @@ async def list_memories(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    user_id = user["user_id"]
-    where = ["deleted = 0", _visibility_filter_sql()]
-    params = [user_id]
-    if status:
-        where.append("status = ?")
-        params.append(status)
-    sql = f"""SELECT * FROM memory_items
-              WHERE {' AND '.join(where)}
-              ORDER BY observed_at DESC
-              LIMIT ? OFFSET ?"""
-    params.extend([limit, offset])
-    cur = await db.execute(sql, params)
-    rows = await cur.fetchall()
-    items = [_row_to_memory(r) for r in rows]
-    return {"memories": items, "count": len(items)}
+    """List memories for the caller, optionally filtered by status.
+
+    Status defaults to `approved` so the UI "my memories" tab doesn't see
+    pending / rejected rows unless it asks.
+    """
+    await require_feature_access(db, user, feature="memories", action="read")
+    svc = _svc()
+    filter_status = _normalise_status(status) or "approved"
+    rows = await svc.list_by_status(
+        user_id=user["user_id"],
+        status=filter_status,
+        limit=limit,
+        offset=offset,
+    )
+    memories = [_ref_to_dict(r) for r in rows]
+    return {"memories": memories, "count": len(memories)}
 
 
 @router.post("/proposals")
@@ -129,24 +131,38 @@ async def create_memory_proposal(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    status = "approved" if body.confidence >= 0.9 and body.memory_type == "preference" else "pending_review"
-    memory = await create_memory_item(db, user["user_id"], body, default_status=status)
-    if memory["status"] == "approved":
-        await gateway.ingest_memory(
-            {
-                "title": memory.get("title"),
-                "content": memory.get("content"),
-                "metadata": {
-                    "memory_id": memory["id"],
-                    "entity_type": memory.get("entity_type"),
-                    "entity_id": memory.get("entity_id"),
-                    "source_type": memory.get("source_type"),
-                    "confidence": memory.get("confidence"),
-                },
-                "tags": ["zoe-memory", memory.get("memory_type", "fact")],
-            }
+    """Create a memory proposal.
+
+    High-confidence preferences auto-approve (same heuristic as before); all
+    other proposals land as `status='pending'` and surface in the review
+    queue. The write goes straight into MemPalace — no SQLite mirror.
+    """
+    await require_feature_access(db, user, feature="memories", action="write")
+    svc = _svc()
+    auto_approve = body.confidence >= 0.9 and body.memory_type == "preference"
+    status = "approved" if auto_approve else "pending"
+    tags = ["zoe-memory", body.memory_type or "fact"]
+    if body.source_type:
+        tags.append(f"src:{body.source_type}")
+    try:
+        ref = await svc.ingest(
+            body.content,
+            user_id=user["user_id"],
+            source=body.source_type or "proposal",
+            memory_type=body.memory_type or "fact",
+            confidence=float(body.confidence or 0.5),
+            status=status,
+            tags=tags,
+            entity_type=body.entity_type,
+            entity_id=body.entity_id,
         )
-    return memory
+    except MemoryServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if ref is None:
+        # Silent drops (PII / dedup / opt-out) return 202 so the caller can
+        # distinguish "we took no action" from a hard failure.
+        return {"status": "dropped", "reason": "pii_or_dedup"}, 202
+    return _ref_to_dict(ref)
 
 
 @router.get("/review")
@@ -155,16 +171,13 @@ async def list_review_queue(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    cur = await db.execute(
-        """SELECT * FROM memory_items
-           WHERE deleted = 0 AND status = 'pending_review'
-             AND (visibility = 'family' OR user_id = ?)
-           ORDER BY observed_at DESC
-           LIMIT ?""",
-        (user["user_id"], limit),
+    """Surface rows awaiting human review for the current user."""
+    await require_feature_access(db, user, feature="memories", action="review")
+    svc = _svc()
+    rows = await svc.list_by_status(
+        user_id=user["user_id"], status="pending", limit=limit
     )
-    rows = await cur.fetchall()
-    items = [_row_to_memory(r) for r in rows]
+    items = [_ref_to_dict(r) for r in rows]
     return {"items": items, "count": len(items)}
 
 
@@ -175,59 +188,34 @@ async def review_memory(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    action = body.action.lower().strip()
+    await require_feature_access(db, user, feature="memories", action="review")
+    action = (body.action or "").lower().strip()
     if action not in {"approve", "reject", "edit"}:
         raise HTTPException(status_code=400, detail="action must be approve|reject|edit")
-    cur = await db.execute(
-        "SELECT * FROM memory_items WHERE id = ? AND deleted = 0",
-        (memory_id,),
-    )
-    row = await cur.fetchone()
-    if not row:
+    svc = _svc()
+    # Safety: callers can only review their own memories unless they're admin.
+    current = await svc.get(memory_id)
+    if current is None:
         raise HTTPException(status_code=404, detail="Memory not found")
-    old_content = row["content"]
-    new_status = "approved" if action in {"approve", "edit"} else "rejected"
-    new_content = body.content if action == "edit" and body.content else old_content
-    await db.execute(
-        """UPDATE memory_items
-           SET status = ?, content = ?, review_note = ?, reviewed_by = ?, reviewed_at = datetime('now'),
-               last_verified_at = CASE WHEN ? = 'approved' THEN datetime('now') ELSE last_verified_at END,
-               updated_at = datetime('now')
-           WHERE id = ?""",
-        (new_status, new_content, body.note, user["user_id"], new_status, memory_id),
-    )
-    await db.execute(
-        """INSERT INTO memory_audit (id, memory_id, user_id, action, old_value, new_value, reason)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (
-            str(uuid.uuid4()),
+    owner = current.metadata.get("user_id") or current.metadata.get("wing")
+    is_admin = (user.get("role") or "").lower() == "admin"
+    if owner and owner != user["user_id"] and not is_admin:
+        raise HTTPException(status_code=403, detail="Cannot review another user's memory")
+    try:
+        ref = await svc.review(
             memory_id,
-            user["user_id"],
-            action,
-            old_content,
-            new_content,
-            body.note or "review_action",
-        ),
-    )
-    await db.commit()
-    if new_status == "approved":
-        await gateway.ingest_memory(
-            {
-                "title": row["title"],
-                "content": new_content,
-                "metadata": {
-                    "memory_id": memory_id,
-                    "entity_type": row["entity_type"],
-                    "entity_id": row["entity_id"],
-                    "source_type": row["source_type"],
-                    "confidence": row["confidence"],
-                },
-                "tags": ["zoe-memory", row["memory_type"] or "fact"],
-            }
+            decision=action,
+            actor=user["user_id"],
+            edits=body.content,
+            note=body.note,
         )
-    cur = await db.execute("SELECT * FROM memory_items WHERE id = ?", (memory_id,))
-    updated = await cur.fetchone()
-    return _row_to_memory(updated)
+    except MemoryServiceError as exc:
+        # ValueErrors from bad input become 400, missing-row becomes 404.
+        msg = str(exc)
+        if "not found" in msg.lower():
+            raise HTTPException(status_code=404, detail=msg)
+        raise HTTPException(status_code=400, detail=msg)
+    return _ref_to_dict(ref)
 
 
 @router.get("/search")
@@ -237,28 +225,99 @@ async def search_memories(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    """Semantic search over MemPalace scoped to the caller's user_id."""
+    await require_feature_access(db, user, feature="memories", action="read")
+    svc = _svc()
+    hits = await svc.search(q, user_id=user["user_id"], limit=limit)
+    results = []
+    for ref in hits:
+        row = _ref_to_dict(ref)
+        row["score"] = ref.score
+        results.append(row)
+    return {"query": q, "results": results, "count": len(results)}
+
+
+@router.get("/people")
+async def people_with_memories(
+    limit: int = Query(100, ge=1, le=500),
+    q: Optional[str] = Query(None, description="Optional name filter"),
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Return people the journal UI can tag.
+
+    Implements the endpoint `journal-ui-enhancements.js` has always called
+    but which previously 404ed. Response shape matches the consumer:
+    `{people: [{id,name,relationship,avatar_url}], count}`.
+    """
+    await require_feature_access(db, user, feature="memories", action="read")
     user_id = user["user_id"]
-    pattern = f"%{q}%"
+    params: list = [user_id]
+    where = "WHERE deleted = 0 AND (visibility = 'family' OR user_id = ?)"
+    if q:
+        where += " AND name LIKE ?"
+        params.append(f"%{q}%")
+    params.append(limit)
     cur = await db.execute(
-        """SELECT * FROM memory_items
-           WHERE deleted = 0 AND status = 'approved'
-             AND (visibility = 'family' OR user_id = ?)
-             AND (content LIKE ? OR title LIKE ? OR source_excerpt LIKE ?)
-           ORDER BY confidence DESC, observed_at DESC
-           LIMIT ?""",
-        (user_id, pattern, pattern, pattern, limit),
+        f"""SELECT id, name, relationship, visibility, user_id, preferences
+            FROM people
+            {where}
+            ORDER BY name COLLATE NOCASE
+            LIMIT ?""",
+        params,
     )
     rows = await cur.fetchall()
-    lexical = [
-        {
-            **_row_to_memory(r),
-            "source": "local",
-            "score": float(r["confidence"] or 0.0),
-        }
-        for r in rows
-    ]
-    semantic = await gateway.semantic_search(q, limit=limit)
-    return {"query": q, "results": lexical + semantic, "count": len(lexical) + len(semantic)}
+    people = []
+    for r in rows:
+        avatar = None
+        try:
+            pref = json.loads(r["preferences"]) if r["preferences"] else None
+            if isinstance(pref, dict):
+                avatar = pref.get("avatar_url")
+        except (json.JSONDecodeError, TypeError):
+            pass
+        people.append({
+            "id": r["id"],
+            "name": r["name"],
+            "relationship": r["relationship"],
+            "avatar_url": avatar,
+            "visibility": r["visibility"],
+        })
+    return {"people": people, "count": len(people)}
+
+
+@router.get("/export")
+async def export_user_memories(
+    user_id: Optional[str] = Query(
+        None,
+        description="User to export. Defaults to the caller. Admins may specify any user.",
+    ),
+    admin: dict = Depends(require_admin),
+):
+    """Full MemPalace dump for a user. Admin-only."""
+    target = user_id or admin["user_id"]
+    try:
+        payload = await _svc().export_user(target)
+    except MemoryServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return payload
+
+
+@router.post("/users/{target_user}/forget")
+async def forget_user(
+    target_user: str,
+    admin: dict = Depends(require_admin),
+):
+    """Right-to-be-forgotten: delete all MemPalace rows for a user.
+
+    Audited to `mempalace_audit`. Idempotent — a second call returns
+    `{removed: 0}`.
+    """
+    try:
+        removed = await _svc().delete_user(target_user, actor=admin["user_id"])
+    except MemoryServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"user_id": target_user, "removed": removed}
 
 
 @router.post("/link-preview")
@@ -267,6 +326,13 @@ async def link_preview(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    """Best-effort title/content preview by substring match over notes.
+
+    Still pulls from the `notes` table because notes haven't migrated yet;
+    it's a read-only convenience endpoint used by the journal UI when the
+    user types a URL or keyword.
+    """
+    await require_feature_access(db, user, feature="memories", action="read")
     query = (payload or {}).get("query") or (payload or {}).get("url") or ""
     if not query:
         return {"preview": [], "count": 0}
@@ -285,3 +351,39 @@ async def link_preview(
         "preview": [dict(r) for r in rows],
         "count": len(rows),
     }
+
+
+# ─── Opt-out preference ─────────────────────────────────────────────────
+
+
+@router.get("/opt-out")
+async def get_memory_opt_out(
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Return the caller's memory opt-out flag. Default False."""
+    await require_feature_access(db, user, feature="memories", action="read")
+    from user_prefs import is_memory_opted_out
+    flag = await is_memory_opted_out(user["user_id"])
+    return {"user_id": user["user_id"], "memory_opt_out": flag}
+
+
+@router.put("/opt-out")
+async def set_memory_opt_out(
+    payload: dict,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Toggle the caller's memory opt-out flag.
+
+    When set, the post-turn extractor silently drops new chat-derived
+    memories for this user (PII scrubber / idempotency logic stays intact
+    for explicit ingest paths so the right-to-be-forgotten flow still
+    works). Flipping the flag does NOT purge past memories — use
+    `POST /api/users/{id}/forget` for that.
+    """
+    await require_feature_access(db, user, feature="memories", action="write")
+    value = bool((payload or {}).get("memory_opt_out"))
+    from user_prefs import KEY_MEMORY_OPT_OUT, set_pref
+    await set_pref(user["user_id"], KEY_MEMORY_OPT_OUT, value)
+    return {"user_id": user["user_id"], "memory_opt_out": value}

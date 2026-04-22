@@ -6,6 +6,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from auth import get_current_user
 from database import get_db
+from guest_policy import require_feature_access
 from models import ListCreate, ListUpdate, ListItemCreate, ListItemUpdate
 from push import broadcaster
 
@@ -40,6 +41,7 @@ async def list_lists(
     db=Depends(get_db),
 ):
     """List all lists of a type. Only shows lists where visibility='family' or user_id matches."""
+    await require_feature_access(db, user, feature="lists", action="read")
     if list_type not in VALID_LIST_TYPES:
         raise HTTPException(status_code=404, detail=f"Unknown list type: {list_type}")
     list_type = _normalize_list_type(list_type)
@@ -68,6 +70,7 @@ async def create_list(
     db=Depends(get_db),
 ):
     """Create a new list."""
+    await require_feature_access(db, user, feature="lists", action="create")
     if list_type not in VALID_LIST_TYPES:
         raise HTTPException(status_code=404, detail=f"Unknown list type: {list_type}")
     list_type = _normalize_list_type(list_type)
@@ -110,6 +113,7 @@ async def get_list(
     db=Depends(get_db),
 ):
     """Get a single list with its items. Items sorted by sort_order, then created_at."""
+    await require_feature_access(db, user, feature="lists", action="read")
     if list_type not in VALID_LIST_TYPES:
         raise HTTPException(status_code=404, detail=f"Unknown list type: {list_type}")
     list_type = _normalize_list_type(list_type)
@@ -155,6 +159,7 @@ async def update_list(
     db=Depends(get_db),
 ):
     """Update a list."""
+    await require_feature_access(db, user, feature="lists", action="update")
     if list_type not in VALID_LIST_TYPES:
         raise HTTPException(status_code=404, detail=f"Unknown list type: {list_type}")
     list_type = _normalize_list_type(list_type)
@@ -218,6 +223,7 @@ async def delete_list(
     db=Depends(get_db),
 ):
     """Soft delete a list."""
+    await require_feature_access(db, user, feature="lists", action="delete")
     if list_type not in VALID_LIST_TYPES:
         raise HTTPException(status_code=404, detail=f"Unknown list type: {list_type}")
     list_type = _normalize_list_type(list_type)
@@ -254,6 +260,7 @@ async def add_item(
     db=Depends(get_db),
 ):
     """Add an item to a list."""
+    await require_feature_access(db, user, feature="lists", action="add_item")
     if list_type not in VALID_LIST_TYPES:
         raise HTTPException(status_code=404, detail=f"Unknown list type: {list_type}")
     list_type = _normalize_list_type(list_type)
@@ -317,6 +324,7 @@ async def list_items(
     db=Depends(get_db),
 ):
     """List items of a list. Sorted by sort_order, then created_at."""
+    await require_feature_access(db, user, feature="lists", action="read")
     if list_type not in VALID_LIST_TYPES:
         raise HTTPException(status_code=404, detail=f"Unknown list type: {list_type}")
     list_type = _normalize_list_type(list_type)
@@ -359,6 +367,7 @@ async def update_item(
     db=Depends(get_db),
 ):
     """Update a list item."""
+    await require_feature_access(db, user, feature="lists", action="update_item")
     if list_type not in VALID_LIST_TYPES:
         raise HTTPException(status_code=404, detail=f"Unknown list type: {list_type}")
     list_type = _normalize_list_type(list_type)
@@ -455,6 +464,7 @@ async def delete_item(
     db=Depends(get_db),
 ):
     """Soft delete a list item."""
+    await require_feature_access(db, user, feature="lists", action="delete_item")
     if list_type not in VALID_LIST_TYPES:
         raise HTTPException(status_code=404, detail=f"Unknown list type: {list_type}")
     list_type = _normalize_list_type(list_type)

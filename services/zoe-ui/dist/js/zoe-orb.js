@@ -802,7 +802,10 @@ function toggleOrbVoice() {
             'position:absolute', 'inset:0', 'width:100%', 'height:100%',
             'border-radius:50%', 'pointer-events:none',
         ].join(';');
-        orb.style.position = 'relative';
+        // Only set position if 'static' — fixed/absolute/relative are already valid containing blocks
+        if (window.getComputedStyle(orb).position === 'static') {
+            orb.style.position = 'relative';
+        }
         orb.style.overflow = 'hidden';
         orb.appendChild(_canvas);
 
@@ -851,3 +854,42 @@ function toggleOrbVoice() {
     setTimeout(tryMount, 800);
 })();
 
+
+// ══════════════════════════════════════════════════════════════════════
+// zoe:orb-prompt — fired by chat.html when zoe.ui_orb_prompt arrives.
+// Expands the orb, speaks the prompt (if TTS-ready), and auto-activates
+// the mic so the user can answer by voice (e.g. "Looks good" or "Try again").
+// The verifier skill listens for the transcribed reply via /api/chat.
+// ══════════════════════════════════════════════════════════════════════
+window.addEventListener('zoe:orb-prompt', function (ev) {
+    var detail = (ev && ev.detail) || {};
+    try {
+        // Ensure orb chat is open so mic input has somewhere to land
+        if (typeof openOrbChat === 'function' && !window.orbChatOpen) {
+            openOrbChat();
+        }
+        // Store task_id so the next chat message can carry it back for the
+        // verifier's feedback classifier.
+        if (detail.task_id) {
+            window.__zoeOrbPendingTaskId = detail.task_id;
+            try { sessionStorage.setItem('zoe_orb_pending_task', detail.task_id); } catch (_) {}
+        }
+        // Place prompt text in the input as a placeholder hint
+        var input = document.getElementById('orbChatInput');
+        if (input && detail.prompt) {
+            input.setAttribute('data-orb-prompt', detail.prompt);
+        }
+        // Auto-activate mic after a beat so TTS doesn't pick up its own voice
+        if (detail.auto_mic && typeof toggleOrbVoice === 'function') {
+            setTimeout(function () {
+                try {
+                    if (!window.orbIsListening) toggleOrbVoice();
+                } catch (e) {
+                    console.warn('[orb-prompt] mic auto-activate failed', e);
+                }
+            }, 900);
+        }
+    } catch (e) {
+        console.warn('[orb-prompt] handler failed', e);
+    }
+});

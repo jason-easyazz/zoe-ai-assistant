@@ -71,8 +71,10 @@ class ZoeOrbWidget extends WidgetModule {
             localStorage.setItem('orbWidgetSessionId', this._sessionId);
         }
 
-        // Pre-warm the Hermes session in the background so the first tap is fast.
-        this._warmSession();
+        // Pre-warming via /api/chat/warm/{sid} was a zoe-core optimization
+        // and is not served by zoe-data. Skip the warm-up call entirely so
+        // we don't spam the console with 404s on every page load.
+
         
         // Setup text input Enter key handler
         const input = this.element.querySelector(`#zoeInput-${this.type}`);
@@ -86,14 +88,6 @@ class ZoeOrbWidget extends WidgetModule {
         }
     }
 
-    _warmSession() {
-        const session = window.zoeAuth?.getCurrentSession();
-        const headers = { 'Content-Type': 'application/json' };
-        if (session?.session_id) headers['X-Session-ID'] = session.session_id;
-        fetch(`/api/chat/warm/${encodeURIComponent(this._sessionId)}`, {
-            method: 'POST', headers
-        }).catch(() => {});
-    }
     
     async startConversation() {
         // Open chat if not already open

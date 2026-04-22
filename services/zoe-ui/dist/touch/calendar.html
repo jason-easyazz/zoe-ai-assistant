@@ -39,13 +39,14 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
             overflow: hidden;
-            height: 100vh;
+            height: 100dvh;
         }
         
         .app-container {
             display: grid;
             grid-template-columns: 1fr 350px;
-            height: 100vh;
+            height: calc(100dvh - var(--ta-nav-h, 64px));
+            margin-top: 0;
             gap: 0;
             transition: grid-template-columns 0.3s ease;
         }
@@ -1448,10 +1449,10 @@
             line-height: 1.2;
         }
         
-        /* App Container with nav offset */
+        /* App Container with nav offset — overridden by touch-adapter.css */
         .app-container {
-            margin-top: 60px;
-            height: calc(100vh - 60px);
+            margin-top: 0;
+            height: calc(100dvh - var(--ta-nav-h, 64px));
         }
 
         /* More Overlay */
@@ -1584,104 +1585,171 @@
         @media (min-width: 769px) {
             .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
         }
+
+        /* ============================================================
+           DARK MODE OVERRIDES
+           ============================================================ */
+        html.dark-mode body {
+            background: linear-gradient(135deg, #0a0a14 0%, #12121f 100%) !important;
+            color: #e5e7eb;
+        }
+        html.dark-mode .content-header {
+            background: rgba(20, 20, 34, 0.85) !important;
+            border-bottom-color: rgba(255, 255, 255, 0.08) !important;
+        }
+        html.dark-mode .content-title,
+        html.dark-mode .header-date,
+        html.dark-mode .sidebar-title,
+        html.dark-mode .day-number,
+        html.dark-mode .day-header {
+            color: #f1f5f9 !important;
+        }
+        html.dark-mode .month-grid-wrapper,
+        html.dark-mode .week-view,
+        html.dark-mode .day-view,
+        html.dark-mode .calendar-container {
+            background: transparent !important;
+        }
+        html.dark-mode .day-cell {
+            background: rgba(255, 255, 255, 0.04) !important;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+        html.dark-mode .day-cell:hover {
+            background: rgba(255, 255, 255, 0.07) !important;
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+        }
+        html.dark-mode .day-cell.today {
+            border-color: #5AE0E0;
+            background: rgba(90, 224, 224, 0.08) !important;
+        }
+        html.dark-mode .day-cell.selected {
+            background: rgba(123, 97, 255, 0.12) !important;
+            border-color: #9d85ff;
+        }
+        html.dark-mode .day-cell.other-month {
+            opacity: 0.35;
+        }
+        html.dark-mode .sidebar,
+        html.dark-mode .insights-sidebar,
+        html.dark-mode .mini-calendar,
+        html.dark-mode .month-day-view,
+        html.dark-mode .time-column,
+        html.dark-mode .time-header {
+            background: rgba(20, 20, 34, 0.85) !important;
+            border-left-color: rgba(255, 255, 255, 0.08) !important;
+            border-right-color: rgba(255, 255, 255, 0.08) !important;
+            border-bottom-color: rgba(255, 255, 255, 0.08) !important;
+            color: #e5e7eb;
+        }
+        html.dark-mode .month-day-header {
+            border-bottom-color: rgba(255, 255, 255, 0.08) !important;
+        }
+        html.dark-mode .month-day-date { color: #f1f5f9 !important; }
+        html.dark-mode .month-day-weekday { color: rgba(255, 255, 255, 0.55) !important; }
+        html.dark-mode .sidebar-header,
+        html.dark-mode .sidebar-section,
+        html.dark-mode .sidebar-footer {
+            border-color: rgba(255, 255, 255, 0.08) !important;
+        }
+        html.dark-mode .list-option {
+            background: rgba(255, 255, 255, 0.05) !important;
+            color: rgba(255, 255, 255, 0.7);
+        }
+        html.dark-mode .list-option.all { color: rgba(255, 255, 255, 0.7); }
+        html.dark-mode .btn,
+        html.dark-mode .view-btn,
+        html.dark-mode .nav-btn,
+        html.dark-mode .view-toggle-btn,
+        html.dark-mode button:not(.mini-orb):not(.menu-toggle):not(.nav-notification-btn):not(.clear-btn):not(.primary-btn):not([class*="gradient"]) {
+            background: rgba(255, 255, 255, 0.06) !important;
+            color: #e5e7eb !important;
+            border-color: rgba(255, 255, 255, 0.1) !important;
+        }
+        html.dark-mode .view-toggle {
+            background: rgba(255, 255, 255, 0.04) !important;
+            border-color: rgba(255, 255, 255, 0.1) !important;
+        }
+        html.dark-mode .view-toggle-btn { color: rgba(255, 255, 255, 0.7) !important; background: transparent !important; }
+        html.dark-mode .view-toggle-btn.active,
+        html.dark-mode .view-btn.active {
+            background: linear-gradient(135deg, #7B61FF, #9d85ff) !important;
+            color: #fff !important;
+        }
+        /* Week/Day view timeline */
+        html.dark-mode .week-grid,
+        html.dark-mode .day-grid,
+        html.dark-mode .hour-line {
+            background: transparent !important;
+            border-color: rgba(255, 255, 255, 0.06) !important;
+            color: rgba(255, 255, 255, 0.55);
+        }
+        html.dark-mode .hour-label { color: rgba(255, 255, 255, 0.45) !important; }
+        html.dark-mode .day-header-cell,
+        html.dark-mode .week-day-header {
+            background: rgba(255, 255, 255, 0.03) !important;
+            color: #e5e7eb !important;
+            border-color: rgba(255, 255, 255, 0.08) !important;
+        }
+
+        /* Week/day view internals used by this page (time rail + day columns). */
+        html.dark-mode .time-column,
+        html.dark-mode .time-header,
+        html.dark-mode .day-column-header {
+            background: rgba(20, 20, 34, 0.85) !important;
+            border-color: rgba(255, 255, 255, 0.08) !important;
+            color: #e5e7eb;
+        }
+        html.dark-mode .time-slot-label,
+        html.dark-mode .hour-marker-label {
+            color: rgba(255, 255, 255, 0.5) !important;
+        }
+        html.dark-mode .day-column {
+            border-right-color: rgba(255, 255, 255, 0.06) !important;
+            background: transparent !important;
+        }
+        html.dark-mode .day-column.today {
+            background: rgba(123, 97, 255, 0.08) !important;
+        }
+        html.dark-mode .hour-marker {
+            border-top-color: rgba(255, 255, 255, 0.06) !important;
+        }
+        html.dark-mode .half-hour-marker {
+            border-top-color: rgba(255, 255, 255, 0.03) !important;
+        }
+        html.dark-mode .current-time-line,
+        html.dark-mode .now-line {
+            background: #ff5d73 !important;
+            box-shadow: 0 0 8px rgba(255, 93, 115, 0.6) !important;
+        }
+        html.dark-mode .days-scroll,
+        html.dark-mode .days-grid,
+        html.dark-mode .time-slots-wrapper {
+            background: transparent !important;
+        }
+        /* Event chips keep their category color but get a darker tint + readable text */
+        html.dark-mode .calendar-event {
+            color: #f8fafc !important;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35) !important;
+        }
+        html.dark-mode .calendar-event .event-time,
+        html.dark-mode .calendar-event .event-title {
+            color: inherit !important;
+        }
+        html.dark-mode .all-day-row,
+        html.dark-mode .all-day-section {
+            background: rgba(20, 20, 34, 0.7) !important;
+            border-bottom-color: rgba(255, 255, 255, 0.08) !important;
+        }
+        html.dark-mode input,
+        html.dark-mode select,
+        html.dark-mode textarea {
+            background: rgba(255, 255, 255, 0.06) !important;
+            color: #f1f5f9 !important;
+            border-color: rgba(255, 255, 255, 0.12) !important;
+        }
+        html.dark-mode input::placeholder,
+        html.dark-mode textarea::placeholder { color: rgba(255, 255, 255, 0.35) !important; }
     </style>
-        <!-- Zoe Orb Styles -->
-        <style>
-        .zoe-orb {
-            position: fixed; bottom: 24px; right: 24px; width: 70px; height: 70px;
-            border-radius: 50%; cursor: pointer; transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-            z-index: 1200; display: flex; align-items: center; justify-content: center;
-            overflow: hidden;
-            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
-            background: linear-gradient(135deg, #7B61FF 0%, #8B5CF6 50%, #A855F7 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
-        }
-        .zoe-orb::before {
-            content: ""; position: absolute; top: 50%; left: 50%; width: 20px; height: 20px;
-            background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
-            border-radius: 50%; transform: translate(-50%, -50%);
-            animation: orb-inner-glow 2s ease-in-out infinite alternate;
-        }
-        .zoe-orb:hover {
-            transform: scale(1.12);
-            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.5), 0 0 50px rgba(123, 97, 255, 0.3);
-            animation-duration: 8s, 3s;
-        }
-        .zoe-orb:active { transform: scale(0.95); }
-        .zoe-orb.connecting {
-            background: linear-gradient(135deg, #7B61FF 0%, #6366F1 50%, #8B5CF6 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(123, 97, 255, 0.2);
-        }
-        .zoe-orb.connected {
-            background: linear-gradient(135deg, #7B61FF 0%, #10B981 50%, #34D399 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(16, 185, 129, 0.2);
-        }
-        .zoe-orb.thinking {
-            background: linear-gradient(135deg, #7B61FF 0%, #F59E0B 50%, #FBBF24 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(245, 158, 11, 0.2);
-            animation: orb-thinking-gentle 3s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
-        }
-        .zoe-orb.proactive {
-            background: linear-gradient(135deg, #7B61FF 0%, #EC4899 50%, #F472B6 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(236, 72, 153, 0.2);
-            animation: orb-proactive-gentle 4s ease-in-out infinite, orb-liquid-swirl 10s ease-in-out infinite;
-        }
-        .zoe-orb.error {
-            background: linear-gradient(135deg, #7B61FF 0%, #EF4444 50%, #F87171 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 6px 20px rgba(123, 97, 255, 0.4), 0 0 40px rgba(239, 68, 68, 0.2);
-            animation: orb-error-shake 0.5s ease-in-out infinite, orb-liquid-swirl 3s ease-in-out infinite;
-        }
-        .zoe-orb.chatting {
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 50%, #06B6D4 100%);
-            background-size: 200% 200%;
-            box-shadow: 0 8px 25px rgba(123, 97, 255, 0.6), 0 0 60px rgba(123, 97, 255, 0.4);
-            animation: orb-liquid-swirl 12s ease-in-out infinite, orb-breathe 4s ease-in-out infinite;
-        }
-        .zoe-orb.badge::after {
-            content: ""; position: absolute; top: 8px; right: 8px; width: 12px; height: 12px;
-            background: #F59E0B; border-radius: 50%; border: 2px solid white;
-            box-shadow: 0 0 12px rgba(245, 158, 11, 0.8);
-            animation: badge-pulse 2s ease-in-out infinite;
-        }
-        @keyframes orb-liquid-swirl {
-            0%, 100% { background-position: 0% 50%; border-radius: 50% 45% 55% 50%; }
-            25% { background-position: 100% 50%; border-radius: 55% 50% 45% 55%; }
-            50% { background-position: 100% 100%; border-radius: 45% 55% 50% 45%; }
-            75% { background-position: 0% 100%; border-radius: 50% 45% 55% 50%; }
-        }
-        @keyframes orb-breathe {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-        }
-        @keyframes orb-inner-glow {
-            0% { opacity: 0.3; transform: translate(-50%, -50%) scale(1); }
-            100% { opacity: 0.6; transform: translate(-50%, -50%) scale(1.1); }
-        }
-        @keyframes orb-thinking-gentle {
-            0%, 100% { transform: rotate(0deg); }
-            25% { transform: rotate(5deg); }
-            75% { transform: rotate(-5deg); }
-        }
-        @keyframes orb-proactive-gentle {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.08); }
-        }
-        @keyframes orb-error-shake {
-            0%, 100% { transform: translateX(0); }
-            25% { transform: translateX(-2px); }
-            75% { transform: translateX(2px); }
-        }
-        @keyframes badge-pulse {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.7; transform: scale(1.2); }
-        }
-        </style>
 <!-- PWA Meta Tags -->
     <meta name="application-name" content="Zoe AI">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -4650,35 +4718,6 @@
             // Set initial view
             updateView();
         });
-    </script>
-    
-        <!-- Load Zoe Orb Component -->
-    <script>
-        // Load the JavaScript first
-        const orbScript = document.createElement('script');
-        orbScript.src = '/js/zoe-orb.js';
-        orbScript.onload = function() {
-            // Then load the HTML component
-            fetch('/components/zoe-orb-complete.html')
-                .then(r => r.text())
-                .then(html => {
-                    const div = document.createElement('div');
-                    div.innerHTML = html;
-                    // Remove the script tag from the HTML (we already loaded it)
-                    const scripts = div.querySelectorAll('script');
-                    scripts.forEach(s => s.remove());
-                    // Append all elements
-                    while (div.firstChild) {
-                        document.body.appendChild(div.firstChild);
-                    }
-                    // Initialize
-                    if (typeof initOrbChat === 'function') {
-                        initOrbChat();
-                    }
-                })
-                .catch(err => console.error('Failed to load Zoe orb:', err));
-        };
-        document.head.appendChild(orbScript);
     </script>
 
     <!-- TOUCH: gesture navigation (edge swipe) -->

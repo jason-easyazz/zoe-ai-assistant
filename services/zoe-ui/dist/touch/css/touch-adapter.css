@@ -21,24 +21,232 @@
 #mobileNavOverlay,
 .mobile-nav-overlay       { display: none !important; }
 
-/* Desktop floating action buttons (edit layout, add widget) — not relevant on kiosk */
-.fab-edit-btn,
-.fab-add-widget           { display: none !important; }
+/* Desktop floating action buttons — permanently hidden, nav bar edit button replaces them */
+.fab-edit-btn             { display: none !important; }
 
-/* Widget library overlay triggered by FAB */
-#widgetLibraryOverlay,
-.widget-library-overlay   { display: none !important; }
+/* Add-widget FAB — hidden by default, shown by JS when body.edit-mode is active */
+.fab-add-widget           { display: none !important; }
+body.edit-mode .fab-add-widget { display: flex !important; opacity: 1 !important; pointer-events: auto !important; }
+
+/* ═══════════════════════════════════════════════
+   WIDGET LIBRARY — premium touch redesign
+   Wider, taller, richer cards, pill tabs, grouped by category.
+   ═══════════════════════════════════════════════ */
+
+#widgetLibraryOverlay:not(.active),
+.widget-library-overlay:not(.active) { display: none !important; }
+#widgetLibraryOverlay.active,
+.widget-library-overlay.active {
+    display: flex !important;
+    background: radial-gradient(ellipse at top, rgba(123,97,255,0.18) 0%, rgba(0,0,0,0.55) 70%) !important;
+    backdrop-filter: blur(18px) !important;
+    -webkit-backdrop-filter: blur(18px) !important;
+    animation: ztlOverlayIn .35s cubic-bezier(.2,.8,.2,1) both;
+}
+@keyframes ztlOverlayIn { from { opacity: 0 } to { opacity: 1 } }
+
+/* The modal itself — fills the viewport much better on a 1280-wide touch panel */
+#widgetLibraryOverlay .widget-library,
+.widget-library-overlay .widget-library {
+    background: rgba(255,255,255,0.98) !important;
+    border-radius: 24px !important;
+    padding: 28px 32px !important;
+    max-width: 1140px !important;
+    width: 94vw !important;
+    max-height: 86dvh !important;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.35), 0 2px 8px rgba(123,97,255,0.15) !important;
+    animation: ztlScaleIn .45s cubic-bezier(.2,.9,.25,1.1) both;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+}
+@keyframes ztlScaleIn { from { transform: translateY(24px) scale(.94); opacity:0 } to { transform: translateY(0) scale(1); opacity:1 } }
+
+html.dark-mode #widgetLibraryOverlay .widget-library,
+html.dark-mode .widget-library-overlay .widget-library {
+    background: rgba(22,22,36,0.98) !important;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.55), 0 2px 8px rgba(123,97,255,0.25) !important;
+}
+
+/* Header */
+#widgetLibraryOverlay .library-header,
+.widget-library-overlay .library-header {
+    margin-bottom: 18px !important;
+    padding-bottom: 16px;
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+html.dark-mode #widgetLibraryOverlay .library-header { border-bottom-color: rgba(255,255,255,0.08); }
+
+#widgetLibraryOverlay .library-title,
+.widget-library-overlay .library-title {
+    font-size: 28px !important;
+    font-weight: 700 !important;
+    background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: -0.02em;
+}
+
+#widgetLibraryOverlay .close-library,
+.widget-library-overlay .close-library {
+    width: 44px !important;
+    height: 44px !important;
+    font-size: 22px !important;
+    background: rgba(0,0,0,0.05) !important;
+    transition: all .2s ease;
+}
+#widgetLibraryOverlay .close-library:active {
+    background: #FF4D6A !important;
+    color: #fff !important;
+    transform: scale(0.94);
+}
+
+/* Pill tabs — touch friendly, premium look */
+#widgetLibraryOverlay .library-tab,
+.widget-library-overlay .library-tab {
+    padding: 12px 22px !important;
+    border-radius: 999px !important;
+    border: 1px solid transparent !important;
+    background: rgba(0,0,0,0.04) !important;
+    font-size: 15px !important;
+    font-weight: 600 !important;
+    color: #4A5568 !important;
+    min-height: 44px;
+    letter-spacing: 0.01em;
+}
+#widgetLibraryOverlay .library-tab.active,
+.widget-library-overlay .library-tab.active {
+    background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%) !important;
+    color: #fff !important;
+    border-color: transparent !important;
+    border-bottom: 1px solid transparent !important;
+    box-shadow: 0 4px 14px rgba(123,97,255,0.35);
+}
+#widgetLibraryOverlay [style*="border-bottom: 2px solid #7B61FF"],
+#widgetLibraryOverlay [style*="border-bottom: 2px solid transparent"] {
+    border-bottom: 1px solid transparent !important;
+}
+html.dark-mode #widgetLibraryOverlay .library-tab { background: rgba(255,255,255,0.05) !important; color: rgba(255,255,255,0.7) !important; }
+
+/* Tab row container — use flex+wrap, no bottom border */
+#widgetLibraryOverlay > .widget-library > div[style*="display: flex"]:has(.library-tab) {
+    border-bottom: none !important;
+    margin-bottom: 22px !important;
+    padding: 6px 0 2px !important;
+    gap: 10px !important;
+}
+
+/* Grid — bigger and fluid, shows 5-6 columns on 1140px */
+#widgetLibraryOverlay .library-grid,
+.widget-library-overlay .library-grid {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)) !important;
+    gap: 18px !important;
+    overflow-y: auto;
+    flex: 1 1 auto;
+    padding: 4px 4px 8px;
+    margin: 0 -4px !important;
+}
+
+/* Widget card — glass pill with pastel icon badge */
+#widgetLibraryOverlay .widget-item,
+.widget-library-overlay .widget-item {
+    background: linear-gradient(160deg, #ffffff 0%, #f7f8ff 100%) !important;
+    border: 1.5px solid rgba(123,97,255,0.12) !important;
+    border-radius: 20px !important;
+    padding: 22px 16px 18px !important;
+    display: flex !important;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    min-height: 170px;
+    position: relative;
+    overflow: hidden;
+    transition: all .25s cubic-bezier(.2,.8,.2,1) !important;
+    -webkit-tap-highlight-color: transparent;
+}
+html.dark-mode #widgetLibraryOverlay .widget-item {
+    background: linear-gradient(160deg, rgba(40,40,60,0.9) 0%, rgba(30,30,48,0.9) 100%) !important;
+    border-color: rgba(123,97,255,0.25) !important;
+}
+
+/* Hover glow */
+#widgetLibraryOverlay .widget-item::before {
+    background: linear-gradient(135deg, rgba(123,97,255,0.10) 0%, rgba(90,224,224,0.10) 100%) !important;
+}
+#widgetLibraryOverlay .widget-item:active {
+    transform: scale(0.96) !important;
+    border-color: #7B61FF !important;
+    box-shadow: 0 8px 24px rgba(123,97,255,0.25) !important;
+}
+#widgetLibraryOverlay .widget-item:active::before { opacity: 1 !important; }
+
+/* Icon gets a soft pastel circle behind it for premium feel */
+#widgetLibraryOverlay .widget-item .widget-icon,
+.widget-library-overlay .widget-item .widget-icon {
+    font-size: 42px !important;
+    width: 68px;
+    height: 68px;
+    line-height: 68px;
+    text-align: center;
+    border-radius: 50%;
+    background: linear-gradient(135deg, rgba(123,97,255,0.10) 0%, rgba(90,224,224,0.10) 100%);
+    margin: 0 auto 14px !important;
+    filter: none !important;
+}
+
+#widgetLibraryOverlay .widget-item .widget-name {
+    font-size: 16px !important;
+    font-weight: 700 !important;
+    line-height: 1.25 !important;
+    margin-bottom: 4px !important;
+    color: #1A202C !important;
+}
+html.dark-mode #widgetLibraryOverlay .widget-item .widget-name { color: #fff !important; }
+
+#widgetLibraryOverlay .widget-item .widget-desc {
+    font-size: 12.5px !important;
+    color: #718096 !important;
+    line-height: 1.35 !important;
+}
+html.dark-mode #widgetLibraryOverlay .widget-item .widget-desc { color: rgba(255,255,255,0.55) !important; }
+
+/* AI Generate panel polish */
+#aiGeneratePanel textarea {
+    background: rgba(123,97,255,0.04) !important;
+    border: 1.5px solid rgba(123,97,255,0.15) !important;
+    border-radius: 14px !important;
+    padding: 16px !important;
+    font-size: 15px !important;
+    min-height: 140px !important;
+}
+#aiGeneratePanel textarea:focus {
+    outline: none !important;
+    border-color: #7B61FF !important;
+    box-shadow: 0 0 0 3px rgba(123,97,255,0.15) !important;
+}
+#aiGeneratePanel button {
+    padding: 14px !important;
+    border-radius: 14px !important;
+    font-size: 16px !important;
+    font-weight: 700 !important;
+    box-shadow: 0 6px 20px rgba(123,97,255,0.35) !important;
+    min-height: 52px;
+}
 
 /* Pull-to-refresh affordance (no pull gesture in kiosk) */
 #pullToRefreshIndicator,
 .pull-to-refresh          { display: none !important; }
 
-/* Desktop notifications panel slide-in — handled via WS toasts on touch */
+/* Desktop notifications panel — hidden by default, notifications-panel.js overrides */
 #notificationsPanel,
-.notifications-panel      { display: none !important; }
+.notifications-panel      { display: none; }
 
 /* Auth overlay that may appear on music page */
 #authOverlay              { display: none !important; }
+
+/* Onboarding prompt modal — not appropriate for kiosk touch panel */
+.onboarding-prompt-modal  { display: none !important; }
 
 
 /* ═══════════════════════════════════════════════
@@ -47,18 +255,54 @@
 
 :root {
     --ta-nav-h: 64px;   /* must match TouchMenu NAV_H */
+    --nav-height: 64px; /* alias used by premium touch pages */
 }
 
-/* Anything that was anchored below the 60px desktop nav */
-.main-container,
-.app-container,
-main,
-.main-layout,
-.main-content,
-.settings-layout,
-.page-header {
+/*
+ * Single source of truth for top offset: body gets padding-top.
+ * DO NOT also add padding-top to child containers (.app-container, main, etc)
+ * or you will get a double (120px+) gap at the top of every page.
+ */
+body {
     padding-top: var(--ta-nav-h) !important;
-    margin-top: 0 !important;
+}
+
+/* Fixed-viewport pages (no full-document scrolling — widget grids / dashboards).
+ * Use overflow:hidden on html/body only for these so scrolling pages (notes,
+ * journal, settings, etc.) keep working. */
+body.touch-dashboard,
+body.touch-dashboard html,
+body.lists-page {
+    height: 100dvh;
+    overflow: hidden;
+}
+html:has(body.touch-dashboard),
+html:has(body.lists-page) {
+    height: 100dvh;
+    overflow: hidden;
+}
+
+/* Dashboard is a special case — its #app is absolutely positioned by JS */
+body.dashboard-page {
+    padding-top: 0 !important;
+}
+
+/* Dashboard kiosk: hard-lock vertical overflow so grid never scrolls */
+body.touch-dashboard #app,
+body.touch-dashboard .main-container {
+    overflow: hidden !important;
+    max-height: calc(100dvh - var(--ta-nav-h)) !important;
+}
+
+/* Remove the 60px dead space at top of dashboard main container */
+body.touch-dashboard .main-container {
+    padding-top: 4px !important;
+}
+
+/* Lists page has the same double-offset issue (body nav padding + inline
+   container top padding). Keep only the body offset so widgets start near top. */
+body.lists-page .main-container {
+    padding-top: 4px !important;
 }
 
 /* Full-height layouts that use 100vh need adjustment */
@@ -74,9 +318,9 @@ main,
     margin-top: 0;
 }
 
-/* chat.html specific: the app grid sits margin-top:60px from desktop */
+/* chat.html: strip any explicit margin-top on the app grid — body padding handles offset */
 #appContainer {
-    margin-top: var(--ta-nav-h) !important;
+    margin-top: 0 !important;
 }
 
 
@@ -113,7 +357,7 @@ input[type="search"],
 input[type="number"],
 textarea,
 select {
-    min-height: 44px;
+    min-height: 48px;
     font-size: 16px !important; /* prevents iOS zoom */
     padding: 10px 14px;
 }
@@ -131,7 +375,7 @@ select {
    ═══════════════════════════════════════════════ */
 
 html {
-    font-size: clamp(15px, 2vw, 18px);
+    font-size: clamp(17px, 2.4vw, 21px);
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
 }
@@ -248,6 +492,59 @@ html.dark-mode .caption {
     color: rgba(255,255,255,0.55) !important;
 }
 
+/* Catch-all: buttons that were hard-coded to white/light backgrounds show up
+   on many pages (music "Edit Layout", smart-home refresh, memories control-btn, etc.).
+   Only override the generic cases; pages with explicit dark styling take precedence. */
+html.dark-mode .header-btn,
+html.dark-mode .toolbar-btn,
+html.dark-mode .icon-btn,
+html.dark-mode .ctrl-btn,
+html.dark-mode .control-btn,
+html.dark-mode .btn-secondary,
+html.dark-mode .action-btn,
+html.dark-mode .chip-btn,
+html.dark-mode .refresh-btn,
+html.dark-mode .retry-btn {
+    background: rgba(255,255,255,0.06) !important;
+    border-color: rgba(255,255,255,0.1) !important;
+    color: rgba(255,255,255,0.9) !important;
+}
+html.dark-mode .header-btn:hover,
+html.dark-mode .toolbar-btn:hover,
+html.dark-mode .icon-btn:hover,
+html.dark-mode .ctrl-btn:hover,
+html.dark-mode .control-btn:hover,
+html.dark-mode .btn-secondary:hover,
+html.dark-mode .action-btn:hover,
+html.dark-mode .chip-btn:hover {
+    background: rgba(157,133,255,0.18) !important;
+    border-color: rgba(157,133,255,0.4) !important;
+}
+
+/* Placeholder text */
+html.dark-mode input::placeholder,
+html.dark-mode textarea::placeholder {
+    color: rgba(255,255,255,0.4) !important;
+}
+
+/* Common card backgrounds that pages set to pure white */
+html.dark-mode .content-header,
+html.dark-mode .page-header,
+html.dark-mode .section-header-bar,
+html.dark-mode .tool-bar,
+html.dark-mode .toolbar {
+    background: rgba(20,20,34,0.85) !important;
+    border-bottom-color: rgba(255,255,255,0.08) !important;
+    color: rgba(255,255,255,0.93) !important;
+}
+
+/* Divider lines */
+html.dark-mode hr,
+html.dark-mode .divider {
+    border-color: rgba(255,255,255,0.1) !important;
+    background: rgba(255,255,255,0.1);
+}
+
 
 /* ═══════════════════════════════════════════════
    8. SCROLLING — smooth momentum scrolling
@@ -348,19 +645,217 @@ main,
 
 
 /* ═══════════════════════════════════════════════
-   13. SETTINGS TOUCH FIXES
+   13. SETTINGS TOUCH FIXES — premium polish
    ═══════════════════════════════════════════════ */
 
-.section-header {
-    min-height: 52px;
-    display: flex;
-    align-items: center;
-    cursor: pointer;
+/* Wider layout on the touch panel */
+.settings-layout {
+    max-width: min(1040px, 96vw) !important;
     padding: 0 20px;
 }
+.settings-header { margin-top: 10px !important; margin-bottom: 24px !important; }
+.settings-title {
+    font-size: 34px !important;
+    font-weight: 700 !important;
+    background: linear-gradient(135deg,#7B61FF 0%,#5AE0E0 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: -0.02em;
+}
+.settings-subtitle { color: #64748b !important; font-size: 15px !important; }
 
-.section-content {
-    padding: 0 20px 16px;
+/* Premium section cards */
+.settings-section {
+    background: rgba(255,255,255,0.9) !important;
+    border: 1px solid rgba(123,97,255,0.08) !important;
+    border-radius: 18px !important;
+    margin-bottom: 14px !important;
+    box-shadow: 0 2px 10px rgba(15,23,42,0.04), 0 1px 2px rgba(15,23,42,0.03) !important;
+    overflow: hidden;
+    transition: box-shadow .25s, transform .25s, border-color .25s;
+}
+.settings-section:hover {
+    box-shadow: 0 6px 24px rgba(123,97,255,0.10), 0 2px 4px rgba(15,23,42,0.04) !important;
+    border-color: rgba(123,97,255,0.18) !important;
+}
+
+/* Section header: stack title + subtitle vertically with chevron on right */
+.settings-section .section-header {
+    display: block !important;
+    min-height: 72px !important;
+    padding: 16px 54px 16px 22px !important;
+    background: transparent !important;
+    border-bottom: none !important;
+    position: relative;
+}
+.settings-section .section-header > .section-title,
+.settings-section .section-header > .section-subtitle { display: block; }
+.settings-section .section-header .section-title {
+    font-size: 17px !important;
+    font-weight: 700 !important;
+    color: #1e293b !important;
+    letter-spacing: -0.01em !important;
+    line-height: 1.3 !important;
+}
+.settings-section .section-header .section-subtitle {
+    font-size: 13.5px !important;
+    font-weight: 400 !important;
+    color: #64748b !important;
+    line-height: 1.4 !important;
+}
+.settings-section .section-header::after {
+    content: "›";
+    font-size: 28px;
+    color: #94a3b8;
+    font-weight: 300;
+    position: absolute;
+    right: 20px;
+    top: 50%;
+    transform: translateY(-50%) rotate(90deg);
+    transform-origin: center;
+    transition: transform .25s ease, color .25s;
+    line-height: 1;
+    pointer-events: none;
+}
+.settings-section:has(.section-content.active) .section-header::after {
+    transform: translateY(-50%) rotate(-90deg);
+    color: #7B61FF;
+}
+.settings-section .section-header:active {
+    background: rgba(123,97,255,0.04) !important;
+    transform: scale(0.998);
+}
+
+/* Expanded content area */
+.settings-section .section-content {
+    padding: 4px 22px 20px !important;
+    border-top: 1px solid rgba(15,23,42,0.04);
+    margin-top: 0;
+}
+
+/* Setting item rows — bigger touch targets with soft divider */
+.settings-section .setting-item {
+    padding: 16px 0 !important;
+    min-height: 58px !important;
+    border-bottom: 1px solid rgba(15,23,42,0.05) !important;
+    gap: 16px;
+}
+.settings-section .setting-item:last-child { border-bottom: none !important; }
+.settings-section .setting-name {
+    font-size: 15px !important;
+    font-weight: 600 !important;
+    color: #1e293b !important;
+    margin-bottom: 2px;
+}
+.settings-section .setting-description {
+    font-size: 13px !important;
+    color: #64748b !important;
+    line-height: 1.4;
+}
+
+/* Form controls inside settings: polish inputs, selects, buttons */
+.settings-section input[type="text"],
+.settings-section input[type="email"],
+.settings-section input[type="password"],
+.settings-section input[type="number"],
+.settings-section input[type="tel"],
+.settings-section input[type="url"],
+.settings-section input[type="search"],
+.settings-section select,
+.settings-section textarea,
+.settings-section .form-input,
+.settings-section .form-select {
+    min-height: 46px !important;
+    padding: 10px 14px !important;
+    border-radius: 12px !important;
+    border: 1.5px solid rgba(15,23,42,0.08) !important;
+    background: #fff !important;
+    font-size: 15px !important;
+    color: #1e293b !important;
+    transition: border-color .2s, box-shadow .2s;
+}
+.settings-section input:focus,
+.settings-section select:focus,
+.settings-section textarea:focus {
+    outline: none !important;
+    border-color: #7B61FF !important;
+    box-shadow: 0 0 0 3px rgba(123,97,255,0.15) !important;
+}
+
+.settings-section button,
+.settings-section .btn,
+.settings-section .action-btn {
+    min-height: 44px !important;
+    padding: 10px 18px !important;
+    border-radius: 12px !important;
+    font-size: 14.5px !important;
+    font-weight: 600 !important;
+    transition: all .2s;
+    cursor: pointer;
+}
+.settings-section button:active,
+.settings-section .btn:active { transform: scale(0.97); }
+
+/* Primary buttons inside settings */
+.settings-section .btn-primary,
+.settings-section button[type="submit"] {
+    background: linear-gradient(135deg,#7B61FF 0%,#5AE0E0 100%) !important;
+    color: #fff !important;
+    border: none !important;
+    box-shadow: 0 2px 8px rgba(123,97,255,0.25);
+}
+.settings-section .btn-primary:hover { box-shadow: 0 4px 16px rgba(123,97,255,0.35); }
+
+/* Toggle switches — make bigger for touch */
+.settings-section .toggle-switch,
+.settings-section .switch,
+.settings-section input[type="checkbox"].toggle {
+    transform: scale(1.15);
+    transform-origin: right center;
+}
+
+/* Dark mode for settings page */
+html.dark-mode .settings-title {
+    background: linear-gradient(135deg,#9d85ff 0%,#7fe8e8 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+html.dark-mode .settings-subtitle { color: rgba(255,255,255,0.6) !important; }
+html.dark-mode .settings-section {
+    background: rgba(17,19,30,0.85) !important;
+    border-color: rgba(255,255,255,0.08) !important;
+}
+html.dark-mode .settings-section:hover {
+    border-color: rgba(157,133,255,0.35) !important;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.4) !important;
+}
+html.dark-mode .settings-section .section-title { color: #f1f5f9 !important; }
+html.dark-mode .settings-section .section-subtitle { color: rgba(255,255,255,0.55) !important; }
+html.dark-mode .settings-section .setting-name { color: #f1f5f9 !important; }
+html.dark-mode .settings-section .setting-description { color: rgba(255,255,255,0.55) !important; }
+html.dark-mode .settings-section .setting-item { border-bottom-color: rgba(255,255,255,0.06) !important; }
+html.dark-mode .settings-section .section-content { border-top-color: rgba(255,255,255,0.06); }
+html.dark-mode .settings-section input[type="text"],
+html.dark-mode .settings-section input[type="email"],
+html.dark-mode .settings-section input[type="password"],
+html.dark-mode .settings-section input[type="number"],
+html.dark-mode .settings-section select,
+html.dark-mode .settings-section textarea,
+html.dark-mode .settings-section .form-input,
+html.dark-mode .settings-section .form-select {
+    background: rgba(255,255,255,0.04) !important;
+    border-color: rgba(255,255,255,0.12) !important;
+    color: #f1f5f9 !important;
+}
+html.dark-mode .settings-section .section-header::after { color: rgba(255,255,255,0.4); }
+html.dark-mode .settings-section:has(.section-content.active) .section-header::after { color: #9d85ff; }
+html.dark-mode .settings-section .section-header:active { background: rgba(157,133,255,0.08) !important; }
+
+/* Non-settings pages still use the original single-line section header */
+body:not(:has(.settings-layout)) .section-header {
+    flex-direction: row;
 }
 
 
@@ -392,4 +887,139 @@ main,
 .message-input {
     font-size: 16px !important;
     min-height: 52px;
+}
+
+
+/* ═══════════════════════════════════════════════
+   15. STICKY ELEMENT OFFSETS
+   ═══════════════════════════════════════════════ */
+
+/* Smart-home room tabs, calendar header, any sticky bar must clear the fixed nav */
+.room-tabs-wrap,
+.tabs-sticky,
+[class*="sticky-header"],
+.cal-header-sticky {
+    top: var(--ta-nav-h) !important;
+}
+
+/* Picker / page-sheet from touch-menu opens immediately below nav */
+#ztm-picker { top: var(--ta-nav-h) !important; }
+
+
+/* ═══════════════════════════════════════════════
+   16. PAGE HEIGHT FIXES
+   ═══════════════════════════════════════════════ */
+
+/*
+ * Body already has padding-top: var(--ta-nav-h), so page-level containers
+ * just need their height to account for the nav bar.
+ */
+.lists-page,
+.journal-page,
+.people-page,
+.memories-page,
+.music-page,
+.settings-page {
+    min-height: calc(100dvh - var(--ta-nav-h));
+    overflow-y: auto;
+}
+
+/* Touch-main used by premium pages (weather, notes, cooking, smart-home) */
+.touch-main {
+    min-height: calc(100dvh - var(--ta-nav-h));
+    /* No padding-top here — body already provides the nav offset */
+}
+
+
+/* ═══════════════════════════════════════════════
+   17. GLOBAL FONT SIZE BOOST (touch legibility)
+   ═══════════════════════════════════════════════ */
+
+/*
+ * Pages use many fixed-pixel font sizes (12px, 13px) that are too small
+ * on a kiosk touchscreen. Raise the floor for common text patterns.
+ */
+
+/* Headings — make them count */
+h1 { font-size: max(24px, 1.5rem) !important; font-weight: 700 !important; }
+h2 { font-size: max(20px, 1.25rem) !important; font-weight: 700 !important; }
+h3 { font-size: max(18px, 1.1rem) !important; font-weight: 600 !important; }
+
+/* Section titles and page titles */
+.page-title,
+.section-title,
+.widget-title,
+.panel-title,
+.card-title {
+    font-size: max(18px, 1.1rem) !important;
+    font-weight: 700 !important;
+}
+
+/* Body text — nothing smaller than 16px */
+p, li, td, th, span, div {
+    font-size: max(16px, 1em);
+}
+
+/* Labels, descriptions, meta — raise from 12-13px to at least 15px */
+label,
+.description,
+.setting-description,
+.nav-label,
+.section-label,
+.meta-text,
+.timestamp,
+.session-meta,
+.chat-meta,
+.memory-label,
+.tag-label,
+.chip-label,
+.empty-state-text,
+.empty-hint,
+.hint-text,
+.forecast-label,
+.weather-label,
+.stat-label,
+.timer-label,
+.recipe-label {
+    font-size: max(15px, 0.9rem) !important;
+}
+
+/* Settings section descriptions that run inline with bold title */
+.settings-section .section-header span:last-child,
+.setting-description {
+    font-size: max(14px, 0.875rem) !important;
+    font-weight: 400 !important;
+}
+
+/* Ensure section headers have proper size */
+.section-header {
+    font-size: max(17px, 1.06rem) !important;
+    font-weight: 700 !important;
+}
+
+/* Uppercase letter-spaced labels (e.g. "SESSIONS", "TIMERS", "DEVICES") */
+.sessions-label,
+[class*="-section-title"],
+[class*="section-header"] {
+    font-size: max(13px, 0.8rem) !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.06em;
+}
+
+/* Buttons — make them readable */
+button, [role="button"] {
+    font-size: max(16px, 1rem);
+    font-weight: 600;
+}
+
+/* Tags/chips/badges */
+.tag, .chip, .badge, .filter-chip, .view-toggle-btn, .seg-btn {
+    font-size: max(13px, 0.82rem) !important;
+    font-weight: 600 !important;
+}
+
+/* Empty state icons (emoji) should be visible */
+.empty-state-icon,
+.empty-icon {
+    font-size: max(48px, 3rem) !important;
 }

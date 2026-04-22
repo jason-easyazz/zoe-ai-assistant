@@ -74,7 +74,51 @@ class Dashboard {
     constructor() {
         this.grid = null;
         this.isEditMode = false;
-        this.storageKey = 'zoe_lists_layout';
+        // Widgets that were in the saved layout but whose module wasn't registered
+        // yet at load time. They'll be placed when `widgets-registered` fires.
+        this._pendingLayout = [];
+        this._deferredListenerAttached = false;
+        this.storageKey = this._computeStorageKey();
+        this._migrateLegacyKey();
+    }
+
+    /**
+     * User-scoped storage key so multiple users on the same kiosk don't clobber
+     * each other. Falls back to the legacy global key when no session is known.
+     */
+    _computeStorageKey() {
+        try {
+            // Prefer localStorage session first (available synchronously at boot),
+            // then fall back to zoeAuth. This avoids key drift when auth hydration
+            // races dashboard init on touch pages.
+            let session = null;
+            try {
+                const raw = localStorage.getItem('zoe_session');
+                if (raw) session = JSON.parse(raw);
+            } catch (_) { /* ignore malformed cache */ }
+            if (!session && window.zoeAuth && typeof window.zoeAuth.getCurrentSession === 'function') {
+                session = window.zoeAuth.getCurrentSession();
+            }
+            const userId = session && (session.user_info?.user_id || session.user_id);
+            if (userId) return `zoe_lists_layout:${userId}`;
+        } catch (_) { /* fall through */ }
+        return 'zoe_lists_layout';
+    }
+
+    /**
+     * One-shot migration from the legacy global key to the user-scoped key.
+     * Preserves the legacy copy so we can recover if anything goes wrong.
+     */
+    _migrateLegacyKey() {
+        try {
+            if (this.storageKey === 'zoe_lists_layout') return;
+            const legacyRaw = localStorage.getItem('zoe_lists_layout');
+            const newRaw = localStorage.getItem(this.storageKey);
+            if (legacyRaw && !newRaw) {
+                console.log('🔄 Migrating legacy lists layout → user-scoped key:', this.storageKey);
+                localStorage.setItem(this.storageKey, legacyRaw);
+            }
+        } catch (_) { /* storage errors: ignore */ }
     }
     
     init() {
@@ -94,7 +138,9 @@ class Dashboard {
             column: 12,
             cellHeight: 70,
             margin: 16,
-            float: !isMobile,  // Mobile: compact mode (false = widgets stack), Desktop: free-form (true)
+            // Lists must preserve exact manual placement across reloads on touch panels.
+            // Compact mode (float=false) repacks items and fights explicit positioning.
+            float: true,
             animate: true,
             // Enable NATIVE resize with handles (like the official demo)
             // On mobile: only bottom resize (height), Desktop: all sides
@@ -102,13 +148,9 @@ class Dashboard {
                 handles: isMobile ? 's' : 'e, se, s, sw, w'
             },
             // Mobile-friendly responsive columns
-            disableOneColumnMode: false,
-            columnOpts: {
-                breakpoints: [
-                    {w: 768, c: 6},   // Tablet: 6 columns
-                    {w: 480, c: 4}    // Mobile: 4 columns
-                ]
-            },
+            // Keep a stable 12-col coordinate space on touch panels so saved
+            // x/y positions are not remapped by responsive column compaction.
+            disableOneColumnMode: true,
             // Start in view mode (locked)
             staticGrid: true,
             // Enhanced drag settings for better mobile touch
@@ -119,8 +161,8 @@ class Dashboard {
                 // Better touch handling
                 handle: '.grid-stack-item-content',
                 // Increase touch tolerance for easier dragging
-                distance: 5,  // Pixels to move before drag starts
-                delay: 300,   // Milliseconds to hold before drag (helps distinguish from scroll)
+                distance: 2,  // Start drag sooner to reduce "sticky" feel
+                delay: 100,   // Short hold: smoother touch drag without long press lag
                 // Smooth scrolling during drag
                 scrollSensitivity: 20,
                 scrollSpeed: 10
@@ -143,6 +185,18 @@ class Dashboard {
             if (widget) {
                 this.updateListColumns(widget);
             }
+            if (this.isEditMode) this.saveLayout();
+        });
+
+        // Persist final coordinates at end of drag. `change` can fire multiple
+        // intermediate states during touch movement; this captures the settled one.
+        this.grid.on('dragstart', () => {
+            document.body.classList.add('widget-drag-active');
+        });
+
+        this.grid.on('dragstop', () => {
+            document.body.classList.remove('widget-drag-active');
+            if (this.isEditMode) this.saveLayout();
         });
         
         // Expose globally for other functions
@@ -154,9 +208,9 @@ class Dashboard {
             clearTimeout(resizeTimer);
             resizeTimer = setTimeout(() => {
                 const nowMobile = window.matchMedia('(max-width: 768px)').matches;
-                // Update float mode based on screen size
-                this.grid.float(!nowMobile);
-                console.log(`📱 Screen resize: ${nowMobile ? 'Mobile compact mode' : 'Desktop free-form mode'}`);
+                // Keep free-form layout on all breakpoints for predictable persistence.
+                this.grid.float(true);
+                console.log(`📱 Screen resize: ${nowMobile ? 'Mobile free-form mode' : 'Desktop free-form mode'}`);
             }, 250);
         });
         
@@ -240,16 +294,24 @@ class Dashboard {
         // Update UI button
         const fabBtn = document.getElementById('fabEditBtn');
         const fabIcon = document.getElementById('fabEditIcon');
-        
+        const navBtn = document.getElementById('navEditBtn');
+        const navIcon = document.getElementById('navEditIcon');
+
         if (this.isEditMode) {
             fabBtn?.classList.add('active');
+            navBtn?.classList.add('editing');
             if (fabIcon) fabIcon.textContent = '✓';
+            if (navIcon) navIcon.textContent = '✓';
             if (fabBtn) fabBtn.title = 'Done Editing';
+            if (navBtn) navBtn.title = 'Done Editing';
             console.log('✏️ Edit mode: drag, resize & remove enabled');
         } else {
             fabBtn?.classList.remove('active');
+            navBtn?.classList.remove('editing');
             if (fabIcon) fabIcon.textContent = '✏️';
-            if (fabBtn) fabBtn.title = 'Edit Dashboard';
+            if (navIcon) navIcon.textContent = '✏️';
+            if (fabBtn) fabBtn.title = 'Edit Lists';
+            if (navBtn) navBtn.title = 'Edit Lists';
             this.saveLayout();
             console.log('💾 View mode: layout saved');
         }
@@ -388,91 +450,126 @@ class Dashboard {
     
     saveLayout() {
         if (!this.grid) return;
-        
+
         const layout = [];
         this.grid.engine.nodes.forEach((node, index) => {
             const widget = node.el.querySelector('.widget');
-            if (widget) {
-                const widgetType = widget.getAttribute('data-widget-type');
-                
-                // PROTECTION: Don't save widgets with invalid types
-                if (!widgetType || widgetType === 'undefined' || widgetType === 'null') {
-                    console.warn('⚠️ Skipping widget with invalid type:', widgetType);
-                    return;
-                }
-                
-                // FILTER: Only save list widgets
-                if (!isListWidget(widgetType)) {
-                    console.warn(`⚠️ Skipping non-list widget "${widgetType}" - only list widgets are saved on lists page`);
-                    return;
-                }
-                
-                layout.push({
-                    type: widgetType,
-                    x: node.x,
-                    y: node.y,
-                    w: node.w,
-                    h: node.h,
-                    order: index
-                });
+            if (!widget) return;
+
+            const widgetType = widget.getAttribute('data-widget-type');
+            if (!widgetType || widgetType === 'undefined' || widgetType === 'null') {
+                console.warn('⚠️ Skipping widget with invalid type:', widgetType);
+                return;
             }
+            if (!isListWidget(widgetType)) {
+                console.warn(`⚠️ Skipping non-list widget "${widgetType}" - only list widgets are saved on lists page`);
+                return;
+            }
+
+            layout.push({
+                type: widgetType,
+                x: node.x,
+                y: node.y,
+                w: node.w,
+                h: node.h,
+                order: index
+            });
         });
-        
-        // PROTECTION: Don't save if no valid widgets
+
+        // CRITICAL: merge in widgets that were loaded from storage but whose module
+        // wasn't registered yet. Without this, the first saveLayout() after a racey
+        // load would permanently drop those widgets from localStorage.
+        if (Array.isArray(this._pendingLayout) && this._pendingLayout.length > 0) {
+            this._pendingLayout.forEach(item => {
+                if (!item || !item.type) return;
+                if (!isListWidget(item.type)) return;
+                // Don't double-add if somehow the deferred widget also ended up placed.
+                const already = layout.some(l => l.type === item.type && l.x === item.x && l.y === item.y);
+                if (already) return;
+                layout.push({
+                    type: item.type,
+                    x: item.x, y: item.y, w: item.w, h: item.h,
+                    order: (typeof item.order === 'number') ? item.order : layout.length
+                });
+            });
+        }
+
         if (layout.length === 0) {
             console.error('❌ No valid widgets to save - layout corrupt, not saving');
             return;
         }
-        
-        // Use LayoutProtection if available, otherwise fallback to simple save
+
         if (window.LayoutProtection) {
             LayoutProtection.saveLayout(this.storageKey, layout);
         } else {
             localStorage.setItem(this.storageKey, JSON.stringify(layout));
             console.log('💾 Layout saved:', layout.length, 'list widgets');
         }
+
+        // Compatibility write: keep legacy key in sync so a transient auth/state
+        // mismatch cannot make the next reload appear to "lose" placement.
+        try {
+            if (this.storageKey !== 'zoe_lists_layout') {
+                const current = localStorage.getItem(this.storageKey);
+                if (current) localStorage.setItem('zoe_lists_layout', current);
+            }
+        } catch (_) { /* best effort */ }
     }
     
     loadLayout() {
-        // Use LayoutProtection if available
         let layout = null;
-        
+        const rawSaved = localStorage.getItem(this.storageKey);
+
         if (window.LayoutProtection) {
             layout = LayoutProtection.loadLayout(this.storageKey);
-            
-            if (layout === null) {
-                // Validation failed - clear corrupted data
-                console.warn('🔄 Clearing corrupted layout');
-                localStorage.removeItem(this.storageKey);
+
+            if (layout === null && rawSaved) {
+                // Validation failed BUT there was stored data. Don't nuke it — back it up so
+                // the user (or we) can recover. This path used to permanently overwrite the
+                // real layout with the default set on any transient parse/validation blip.
+                console.warn('⚠️ Saved layout failed validation; backing up to .bak and continuing with defaults');
+                try {
+                    localStorage.setItem(this.storageKey + '.bak', rawSaved);
+                    localStorage.setItem(this.storageKey + '.bak.ts', new Date().toISOString());
+                } catch (_) { /* storage full / quota: ignore */ }
+                // We still have to clear the bad entry so the default path can run without
+                // looping, but the backup above gives us a recovery route.
+                try { localStorage.removeItem(this.storageKey); } catch (_) {}
             }
         } else {
-            // Fallback to old method
-            const saved = localStorage.getItem(this.storageKey);
-            if (saved) {
+            if (rawSaved) {
                 try {
-                    layout = JSON.parse(saved);
+                    layout = JSON.parse(rawSaved);
                 } catch (e) {
                     console.error('Failed to parse layout:', e);
+                    try { localStorage.setItem(this.storageKey + '.bak', rawSaved); } catch (_) {}
                 }
             }
         }
-        
+
         if (layout && Array.isArray(layout) && layout.length > 0) {
             this.loadFromData(layout);
+        } else if (rawSaved) {
+            // Had data but it didn't validate; don't create defaults (which would overwrite the
+            // backup we just made once the user interacts). Start empty and let the user add
+            // widgets back — their .bak is recoverable if they need it.
+            console.warn('📐 Saved layout present but unusable; starting empty (backup retained at ' + this.storageKey + '.bak)');
         } else {
-            console.log('📐 No valid layout found - creating default');
+            console.log('📐 No saved layout found - creating default');
             this.createDefaultLayout();
         }
     }
     
     loadFromData(layout) {
         console.log('📋 Loading layout:', layout.length, 'widgets');
-        
+
         this.grid.removeAll();
-        
+        this._pendingLayout = [];
+
         let loadedCount = 0;
         let filteredCount = 0;
-        
+        let deferredCount = 0;
+
         layout.forEach(item => {
             // FILTER: Only load list widgets
             if (!isListWidget(item.type)) {
@@ -480,29 +577,54 @@ class Dashboard {
                 filteredCount++;
                 return;
             }
-            
-            const config = getWidgetConfig(item.type);
-            const module = WidgetManager.modules[item.type];
-            
+
+            const module = (typeof WidgetManager !== 'undefined') ? WidgetManager.modules[item.type] : null;
             if (!module) {
-                console.warn('Widget type not found:', item.type);
+                // Module hasn't registered yet. Queue and retry when widgets-registered fires.
+                // We DO NOT drop it — dropping here was the root cause of "lists don't remember
+                // their position": subsequent saveLayout() calls would overwrite storage with a
+                // reduced set, permanently erasing these widgets.
+                console.warn(`⏳ Module not registered yet for "${item.type}" — deferring`);
+                this._pendingLayout.push(item);
+                deferredCount++;
                 return;
             }
-            
-            // Determine size class based on widget width
-            let sizeClass = 'size-medium'; // Default
-            if (item.w <= 3) {
-                sizeClass = 'size-small';
-            } else if (item.w >= 7) {
-                sizeClass = 'size-large';
-            }
-            
+
+            if (this._placeWidget(item, module)) loadedCount++;
+        });
+
+        // Attach a one-shot listener so deferred widgets get placed as soon as registration
+        // completes. Idempotent: won't double-attach across re-loads.
+        if (deferredCount > 0) this._attachDeferredPlacer();
+
+        if (filteredCount > 0 && deferredCount === 0) {
+            console.log(`✅ Layout loaded: ${loadedCount} list widgets (${filteredCount} non-list filtered)`);
+            // Only safe to re-save here once nothing is deferred; saving with deferred pending
+            // widgets is handled by saveLayout() which merges them back in.
+            this.saveLayout();
+        } else {
+            console.log(`✅ Layout loaded: ${loadedCount} placed, ${deferredCount} deferred, ${filteredCount} filtered`);
+        }
+    }
+
+    /**
+     * Place a single saved widget into the grid. Returns true on success.
+     * Extracted so loadFromData and the deferred-placer can share logic.
+     */
+    _placeWidget(item, module) {
+        try {
+            const config = getWidgetConfig(item.type);
+
+            let sizeClass = 'size-medium';
+            if (item.w <= 3) sizeClass = 'size-small';
+            else if (item.w >= 7) sizeClass = 'size-large';
+
             const widgetHTML = `
                 <div class="widget ${sizeClass}" data-widget-type="${item.type}">
                     ${module.getTemplate()}
                 </div>
             `;
-            
+
             const gridItem = this.grid.addWidget({
                 x: item.x,
                 y: item.y,
@@ -514,26 +636,49 @@ class Dashboard {
                 maxH: config.maxH,
                 content: widgetHTML
             });
-            
-            // Add remove button
+
             this.addRemoveButton(gridItem);
-            
+
             const widget = gridItem.querySelector('.widget');
             if (widget) {
                 module.init(widget);
                 this.updateListColumns(widget);
             }
-            
-            loadedCount++;
-        });
-        
-        if (filteredCount > 0) {
-            console.log(`✅ Layout loaded: ${loadedCount} list widgets (${filteredCount} non-list widgets filtered out)`);
-            // Save the cleaned layout
-            this.saveLayout();
-        } else {
-            console.log('✅ Layout loaded:', loadedCount, 'list widgets');
+            return true;
+        } catch (err) {
+            console.error(`❌ Failed to place widget "${item.type}":`, err);
+            return false;
         }
+    }
+
+    /**
+     * Idempotently register a one-shot listener that retries any widgets that were
+     * deferred because their module wasn't registered at load time.
+     */
+    _attachDeferredPlacer() {
+        if (this._deferredListenerAttached) return;
+        this._deferredListenerAttached = true;
+        const retry = () => {
+            if (!this._pendingLayout || this._pendingLayout.length === 0) return;
+            const stillPending = [];
+            this._pendingLayout.forEach(item => {
+                const module = (typeof WidgetManager !== 'undefined') ? WidgetManager.modules[item.type] : null;
+                if (!module) { stillPending.push(item); return; }
+                if (!this._placeWidget(item, module)) stillPending.push(item);
+            });
+            const placed = this._pendingLayout.length - stillPending.length;
+            this._pendingLayout = stillPending;
+            if (placed > 0) {
+                console.log(`✅ Placed ${placed} deferred widget(s); ${stillPending.length} still pending`);
+                // Only save once all deferreds are placed (otherwise saveLayout merges them anyway,
+                // but an intermediate save is a waste).
+                if (stillPending.length === 0) this.saveLayout();
+            }
+        };
+        window.addEventListener('widgets-registered', retry, { once: true });
+        // Safety net: even if widgets-registered never fires (e.g. synchronous register completed
+        // before we attached), poll once after a short delay.
+        setTimeout(retry, 500);
     }
     
     createDefaultLayout() {
@@ -596,8 +741,18 @@ window.addEventListener('widgets-registered', () => {
     console.log('🎯 Received widgets-registered event');
     if (!initializationAttempted) {
         setTimeout(() => initializeDashboard(), 50);
+        return;
     }
-}, { once: true });
+    // Dashboard already initialized (probably via the fallback timeout) — re-hydrate
+    // any widgets that were deferred because their module wasn't ready at load time.
+    // Without this, a slow-registering Pi would silently drop those widgets from the grid
+    // and the next saveLayout() would erase them from storage.
+    try {
+        if (window.dashboard && typeof window.dashboard._attachDeferredPlacer === 'function') {
+            window.dashboard._attachDeferredPlacer();
+        }
+    } catch (e) { console.warn('Deferred placer failed:', e); }
+}, { once: false });
 
 // Reinitialize on BFCache restore or soft navigation where the page is resumed
 window.addEventListener('pageshow', (event) => {
@@ -622,15 +777,19 @@ function setupDashboardInitialization() {
         setTimeout(() => initializeDashboard(), 50);
     } else {
         console.log('⏳ Waiting for widgets-registered event or timeout...');
-        
-        // Fallback timeout - initialize dashboard after 2 seconds
+
+        // Fallback timeout — was 2s but on slower touch panels widget registration routinely
+        // takes 2.5-4s (20 widgets × up to 250ms retry). Initializing before registration
+        // finishes caused widgets to be silently dropped from the grid and then erased from
+        // storage by the next save. 10s gives plenty of headroom while still recovering from
+        // a truly stalled registration.
         setTimeout(() => {
             if (!dashboard) {
-                console.warn('⚠️ Widget registration timeout - initializing dashboard anyway');
+                console.warn('⚠️ Widget registration timeout (10s) - initializing dashboard anyway');
                 window.widgetsRegistered = true;
                 initializeDashboard();
             }
-        }, 2000);
+        }, 10000);
     }
 }
 
@@ -753,8 +912,16 @@ function initPullToRefresh() {
     }, { passive: true });
 }
 
-// Initialize pull-to-refresh
-if (window.matchMedia('(max-width: 768px)').matches) {
+// Initialize pull-to-refresh on mobile, but disable in kiosk mode to avoid
+// accidental full-page reloads from touch drags near the top edge.
+const _isKioskMode = (() => {
+    try {
+        return new URLSearchParams(window.location.search).get('kiosk') === '1';
+    } catch (_) {
+        return false;
+    }
+})();
+if (window.matchMedia('(max-width: 768px)').matches && !_isKioskMode) {
     initPullToRefresh();
 }
 

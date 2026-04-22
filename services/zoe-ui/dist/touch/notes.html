@@ -2,13 +2,16 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <!-- TOUCH: kiosk bypass -->
+    <!-- TOUCH: kiosk bypass + dialog suppression -->
     <script>
     (function(){
         if(localStorage.getItem('zoe_kiosk')==='1') return;
         var p=new URLSearchParams(location.search);
         if(p.get('kiosk')==='1') localStorage.setItem('zoe_kiosk','1');
     })();
+    window.prompt  = function(msg, def) { return def || ''; };
+    window.alert   = function() {};
+    window.confirm = function() { return true; };
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -396,10 +399,10 @@
 <div class="toast" id="toast"></div>
 
 <script src="/js/websocket-sync.js"></script>
-<script src="/js/touch-ui-executor.js"></script>
-<script src="/js/orb-loader.js"></script>
 <script src="/touch/js/gestures.js"></script>
 <script src="/touch/js/touch-menu.js"></script>
+<script src="/js/touch-ui-executor.js"></script>
+<script src="/js/orb-loader.js"></script>
 <script>
 const NOTE_COLORS = ['#7B61FF','#5AE0E0','#FF6B9D','#FFB347','#6BCB77','#FF6B6B'];
 
@@ -417,9 +420,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         const userId = session.user_id || session.userId || 'anonymous';
         if (typeof ZoeWebSockets !== 'undefined') {
             ZoeWebSockets.init(userId);
-            ZoeWebSockets.on('note_created', loadNotes);
-            ZoeWebSockets.on('note_updated', loadNotes);
-            ZoeWebSockets.on('note_deleted', loadNotes);
+            // ZoeWebSockets.init() creates individual per-feature sync objects;
+            // the `.notes` instance exposes .on() for event subscriptions.
+            if (ZoeWebSockets.notes && typeof ZoeWebSockets.notes.on === 'function') {
+                ZoeWebSockets.notes.on('note_created', loadNotes);
+                ZoeWebSockets.notes.on('note_updated', loadNotes);
+                ZoeWebSockets.notes.on('note_deleted', loadNotes);
+            }
         }
     } catch(e) { console.warn('WS init:', e); }
 

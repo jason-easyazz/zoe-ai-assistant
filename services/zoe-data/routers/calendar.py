@@ -11,6 +11,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import get_current_user
 from database import get_db
+from guest_policy import (
+    is_guest_user,
+    require_feature_access,
+    record_policy_decision,
+)
 from models import EventCreate, EventUpdate
 from push import broadcaster
 
@@ -46,7 +51,14 @@ async def list_events(
     db=Depends(get_db),
 ):
     """List events with optional start_date, end_date, category filters."""
+    await require_feature_access(db, user, feature="calendar", action="read")
     user_id = user["user_id"]
+    record_policy_decision(
+        "guest_allowed" if is_guest_user(user) else "auth_ok",
+        surface="api",
+        resource="calendar",
+        action="read",
+    )
     conditions = [_visibility_filter_sql()]
     params: list = [user_id]
 
@@ -112,6 +124,7 @@ async def create_event(
     db=Depends(get_db),
 ):
     """Create a new calendar event."""
+    await require_feature_access(db, user, feature="calendar", action="create")
     user_id = user["user_id"]
     event_id = str(uuid.uuid4())
     metadata_json = json.dumps(payload.metadata) if payload.metadata else None
@@ -157,6 +170,7 @@ async def update_event(
     db=Depends(get_db),
 ):
     """Update an existing event."""
+    await require_feature_access(db, user, feature="calendar", action="update")
     user_id = user["user_id"]
     where = f"{_visibility_filter_sql()} AND id = ?"
     cursor = await db.execute(
@@ -208,6 +222,7 @@ async def delete_event(
     db=Depends(get_db),
 ):
     """Soft delete an event (set deleted=1)."""
+    await require_feature_access(db, user, feature="calendar", action="delete")
     user_id = user["user_id"]
     where = f"{_visibility_filter_sql()} AND id = ?"
     cursor = await db.execute(

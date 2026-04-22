@@ -1,8 +1,35 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script>
+    // Apply saved theme before first paint to prevent flash (ported from touch).
+    (function () {
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name="theme-color"]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch (e) {}
+    })();
+    </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#fafbfc">
+    <!-- Zoe theme bootstrap (must run before UI scripts) -->
+    <script>
+    (function(){
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name=theme-color]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch(e) {}
+    })();
+    </script>
     <title>Zoe - People Intelligence</title>
     <style>
         :root {
@@ -507,6 +534,47 @@
             cursor: pointer;
         }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        /* More Overlay (navigation menu) */
+        .more-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s ease;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s ease;
+        }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px;
+            background: rgba(255, 255, 255, 0.6); border: none;
+            border-radius: 50%; width: 36px; height: 36px;
+            font-size: 18px; cursor: pointer; color: #666;
+        }
+        .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
+            transition: all 0.3s ease; min-height: 120px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        .more-item:hover {
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: white; transform: translateY(-4px);
+        }
+        .more-item-icon { font-size: 36px; margin-bottom: 12px; }
+        .more-item-label { font-size: 15px; font-weight: 500; }
     </style>
     
     <!-- PWA Meta Tags -->
@@ -528,6 +596,7 @@
     
     <!-- Service Worker Registration -->
     <script src="/js/sw-registration.js" defer></script>
+    <link rel="stylesheet" href="css/dark-mode-shared.css">
 </head>
 <body>
     <div class="nav-bar">
@@ -544,13 +613,12 @@
         </div>
         <div class="nav-right">
             <div class="api-indicator connecting" id="apiStatus">Connecting</div>
-            
-            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
-            
-            <!-- Time/Date Display -->
+            <button class="refresh-btn notifications-btn" onclick="forceRefreshCache()" title="Refresh App (clears cache)">🔄</button>
+            <button class="theme-nav-btn notifications-btn" title="Toggle theme" onclick="window.cycleZoeTheme && window.cycleZoeTheme()">🌓</button>
+            <button class="notifications-btn" onclick="openNotificationsSafe()" title="Notifications">🔔</button>
             <div class="time-date-display">
                 <div class="current-time" id="navCurrentTime">--:--</div>
-                <div class="current-date" id="navCurrentDate"></div>
+                <div class="current-date" id="navCurrentDate">Loading...</div>
             </div>
         </div>
     </div>
@@ -654,9 +722,16 @@
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
             <a href="music.html" class="mobile-nav-item">🎵 Music</a>
-            <a href="games.html" class="mobile-nav-item">🎮 Games</a>
             <a href="people.html" class="mobile-nav-item active">👥 People</a>
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
+            <a href="notes.html" class="mobile-nav-item">📝 Notes</a>
+
+            <a href="cooking.html" class="mobile-nav-item">🍳 Cooking</a>
+
+            <a href="smart-home.html" class="mobile-nav-item">🏠 Smart Home</a>
+
+            <a href="updates.html" class="mobile-nav-item">⬇️ Updates</a>
+
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
             <div class="mobile-nav-divider"></div>
             <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
@@ -684,9 +759,21 @@
                     <div class="more-item-icon">🎵</div>
                     <div class="more-item-label">Music</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('games.html')">
-                    <div class="more-item-icon">🎮</div>
-                    <div class="more-item-label">Games</div>
+                <div class="more-item" onclick="navigateToPage('notes.html')">
+                    <div class="more-item-icon">📝</div>
+                    <div class="more-item-label">Notes</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('cooking.html')">
+                    <div class="more-item-icon">🍳</div>
+                    <div class="more-item-label">Cooking</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('smart-home.html')">
+                    <div class="more-item-icon">🏠</div>
+                    <div class="more-item-label">Smart Home</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('updates.html')">
+                    <div class="more-item-icon">⬇️</div>
+                    <div class="more-item-label">Updates</div>
                 </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
@@ -771,41 +858,14 @@
         }
         
         async function loadEnhancedPerson(personId) {
+            // /api/people/{id}/analysis is a zoe-core feature and is not served
+            // by the current zoe-data backend. Fall back to the already-loaded
+            // people list so callers always get the basic person object.
             try {
-                const session = window.zoeAuth?.getCurrentSession();
-                const userId = session?.user_info?.user_id || session?.user_id;
-                const response = await fetch(`/api/people/${personId}/analysis?user_id=${userId}`);
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                
-                const data = await response.json();
-                const person = data.person;
-                return {
-                    id: `p${person.id}`,
-                    type: 'person',
-                    category: person.metadata?.category || 'inner',
-                    name: person.name,
-                    angle: person.metadata?.angle || Math.random() * 360,
-                    distance: person.metadata?.distance || 100 + Math.random() * 100,
-                    lastContact: person.metadata?.lastContact || 7,
-                    frequency: person.metadata?.frequency || 14,
-                    strength: person.metadata?.strength || 0.5,
-                    birthday: person.birthday,
-                    relationshipType: person.relationship,
-                    phone: person.phone,
-                    email: person.email,
-                    notes: person.notes,
-                    timeline: person.timeline,
-                    activities: person.activities,
-                    conversations: person.conversations,
-                    gifts: person.gifts,
-                    importantDates: person.important_dates,
-                    relationships: person.relationships.map(r => `p${r.person_id}`)
-                };
+                const match = people.find(p => p.id === `p${personId}` || p.id === personId);
+                return match || null;
             } catch (error) {
-                console.error('Failed to load enhanced person:', error);
+                console.error('loadEnhancedPerson failed:', error);
                 return null;
             }
         }
@@ -817,6 +877,9 @@
             canvas.height = height * window.devicePixelRatio;
             canvas.style.width = width + 'px';
             canvas.style.height = height + 'px';
+            // Reset any previous transform before applying DPR scale so repeated
+            // resizes do not compound the scale.
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
             centerX = width / 2;
             centerY = height / 2;
@@ -890,7 +953,8 @@
                         strength: strengthMap[category] || 0.3,
                         frequency: freqMap[category] || 90,
                         lastContact: 7,
-                        angle: Math.random() * Math.PI * 2,
+                        // Store angle in degrees; drawing converts to radians.
+                        angle: Math.random() * 360,
                         distance: 100 + Math.random() * 100,
                         relationships: []
                     };
@@ -1500,17 +1564,21 @@
                 // Extract numeric ID from personId (remove 'p' prefix)
                 const id = personId.replace('p', '');
                 
-                // Prepare update data
+                // Prepare update data.
+                // Backend PersonUpdate does not accept a top-level `address`
+                // field; tuck it into `preferences` instead.
                 const updateData = {
                     name: name,
                     relationship: category,
                     phone: phone || null,
                     email: email || null,
                     birthday: birthday || null,
-                    address: address || null,
                     notes: notes || null,
                     custom_fields: customFields
                 };
+                if (address) {
+                    updateData.preferences = { address: address };
+                }
                 
                 // Call backend API to update
                 await apiRequest(`/api/people/${id}`, {
@@ -1712,6 +1780,16 @@
         function resetView() { scale = 1; offsetX = 0; offsetY = 0; }
         function zoomIn() { scale = Math.min(2, scale * 1.2); }
         function zoomOut() { scale = Math.max(0.5, scale / 1.2); }
+        // Sidebar click handler: invoked from the rendered person-item buttons.
+        function selectPerson(personId) {
+            const person = people.find(p => p.id === personId);
+            if (!person) {
+                console.warn('selectPerson: id not found', personId);
+                return;
+            }
+            showPersonDetail(person);
+        }
+
         function searchPeople(q) {
             if (!q || q.length < 1) {
                 updateSidebar();
@@ -1892,8 +1970,12 @@
 
         async function updateAPIStatus() {
             const statusEl = document.getElementById('apiStatus');
+            if (!statusEl) return;
+            // /health is served outside the /api/* namespace so it bypasses
+            // apiRequest's service routing. Use plain fetch instead.
             try {
-                await apiRequest('/health');
+                const r = await fetch('/health', { cache: 'no-store' });
+                if (!r.ok) throw new Error(`HTTP ${r.status}`);
                 statusEl.textContent = 'Online';
                 statusEl.className = 'api-indicator online';
             } catch (error) {

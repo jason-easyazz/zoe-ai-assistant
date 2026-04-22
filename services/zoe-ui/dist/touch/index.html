@@ -873,7 +873,7 @@
     <!-- Profile Selection Overlay -->
     <div class="profile-selection" id="profileSelection">
         <div class="profile-container">
-            <h2 class="profile-title">Who's using Zoe today?</h2>
+            <h2 class="profile-title" id="profileTitle">Who's using Zoe today?</h2>
             
             <div class="profile-grid" id="profileGrid">
                 <!-- Profiles will be loaded dynamically -->
@@ -955,6 +955,18 @@
                     <div class="auth-mode password-mode" id="passwordMode">
                         <div class="touch-keyboard" id="touchKeyboard" style="display: none;">
                             <div class="keyboard-row">
+                                <button class="key-btn" onclick="addToPassword('1')">1</button>
+                                <button class="key-btn" onclick="addToPassword('2')">2</button>
+                                <button class="key-btn" onclick="addToPassword('3')">3</button>
+                                <button class="key-btn" onclick="addToPassword('4')">4</button>
+                                <button class="key-btn" onclick="addToPassword('5')">5</button>
+                                <button class="key-btn" onclick="addToPassword('6')">6</button>
+                                <button class="key-btn" onclick="addToPassword('7')">7</button>
+                                <button class="key-btn" onclick="addToPassword('8')">8</button>
+                                <button class="key-btn" onclick="addToPassword('9')">9</button>
+                                <button class="key-btn" onclick="addToPassword('0')">0</button>
+                            </div>
+                            <div class="keyboard-row">
                                 <button class="key-btn" onclick="addToPassword('q')">q</button>
                                 <button class="key-btn" onclick="addToPassword('w')">w</button>
                                 <button class="key-btn" onclick="addToPassword('e')">e</button>
@@ -1001,72 +1013,127 @@
 
     <script>
         let userProfiles = [];
+        // Per-panel context returned by /api/auth/profiles?panel_id=…
+        // Defaults reproduce the pre-panel behaviour: all users + guest tile.
+        let panelContext = {
+            panel_id: null,
+            panel_name: null,
+            allow_guest: true,
+            default_user_id: null,
+        };
+
+        function getPanelId() {
+            try {
+                const params = new URLSearchParams(window.location.search);
+                const fromQuery = params.get('panel_id');
+                if (fromQuery && fromQuery.trim()) {
+                    localStorage.setItem('zoe_panel_id', fromQuery.trim());
+                    localStorage.setItem('zoe_touch_panel_id', fromQuery.trim());
+                    return fromQuery.trim();
+                }
+                return localStorage.getItem('zoe_panel_id')
+                    || localStorage.getItem('zoe_touch_panel_id')
+                    || null;
+            } catch (_) {
+                return null;
+            }
+        }
 
         async function showProfiles() {
             document.getElementById('profileSelection').classList.add('active');
             await loadUserProfiles();
+            const pending = getPendingPanelChallenge();
+            if (pending) {
+                showAuthSuccess('Finish login to continue your voice request');
+            }
         }
 
         async function loadUserProfiles() {
+            const panelId = getPanelId();
+            // Reset context each load; panel-aware response will overwrite fields.
+            panelContext = { panel_id: panelId, panel_name: null, allow_guest: true, default_user_id: null };
+
             try {
-                // Try to load profiles from the auth API
-                const response = await fetch('/api/auth/profiles');
-                if (response.ok) {
-                    userProfiles = await response.json();
-                    // Cache successful response
-                    localStorage.setItem('zoe_user_profiles', JSON.stringify(userProfiles));
+                const url = panelId
+                    ? `/api/auth/profiles?panel_id=${encodeURIComponent(panelId)}`
+                    : '/api/auth/profiles';
+                const response = await fetch(url);
+                if (!response.ok) throw new Error('API returned error');
+                const data = await response.json();
+
+                // Two shapes:
+                //   array                                   → legacy / unbound
+                //   { profiles, default_user_id, allow_guest, panel_name } → panel-aware
+                if (Array.isArray(data)) {
+                    userProfiles = data;
+                } else if (data && Array.isArray(data.profiles)) {
+                    userProfiles = data.profiles;
+                    panelContext = {
+                        panel_id: data.panel_id || panelId,
+                        panel_name: data.panel_name || null,
+                        allow_guest: data.allow_guest !== false,
+                        default_user_id: data.default_user_id || null,
+                    };
                 } else {
-                    throw new Error('API returned error');
+                    userProfiles = [];
                 }
+                // Cache only the profile list (safe for offline re-render).
+                localStorage.setItem('zoe_user_profiles', JSON.stringify(userProfiles));
             } catch (error) {
                 console.warn('Could not load profiles from API, using demo/cached profiles');
-                
-                // Try cached profiles first
+
                 const stored = localStorage.getItem('zoe_user_profiles');
                 if (stored) {
                     userProfiles = JSON.parse(stored);
                 } else {
                     // Fallback to demo profiles for development
                     userProfiles = [
-                        {
-                            user_id: 'demo_admin',
-                            username: 'Admin',
-                            role: 'Administrator',
-                            avatar: 'A',
-                            demo: true
-                        },
-                        {
-                            user_id: 'demo_user',
-                            username: 'User',
-                            role: 'User',
-                            avatar: 'U',
-                            demo: true
-                        }
+                        { user_id: 'demo_admin', username: 'Admin', role: 'Administrator', avatar: 'A', demo: true },
+                        { user_id: 'demo_user',  username: 'User',  role: 'User',          avatar: 'U', demo: true },
                     ];
                     console.info('Using demo profiles - start auth service for full functionality');
                 }
             }
 
             renderProfiles();
+
+            // If the panel declares a default user and that user is present,
+            // skip the picker and jump straight to PIN entry.
+            if (panelContext.default_user_id) {
+                const defaultProfile = userProfiles.find(p => p.user_id === panelContext.default_user_id);
+                if (defaultProfile) {
+                    const avatar = defaultProfile.avatar
+                        || (defaultProfile.username ? defaultProfile.username.charAt(0).toUpperCase() : '?');
+                    selectProfile(defaultProfile.user_id, defaultProfile.username, avatar);
+                }
+            }
         }
 
         function renderProfiles() {
             const grid = document.getElementById('profileGrid');
 
-            // Always add guest as the last profile
-            const allProfiles = [...userProfiles, {
-                user_id: 'guest',
-                username: 'Guest',
-                role: 'guest',
-                avatar: '👤'
-            }];
+            // Title reflects the panel identity when configured.
+            const titleEl = document.getElementById('profileTitle');
+            if (titleEl) {
+                titleEl.textContent = panelContext.panel_name
+                    ? `Who's using the ${panelContext.panel_name}?`
+                    : "Who's using Zoe today?";
+            }
 
-            grid.innerHTML = allProfiles.map(profile => `
-                <div class="profile-card" onclick="selectProfile('${profile.user_id}', '${profile.username}', '${profile.avatar || profile.username.charAt(0).toUpperCase()}')">
-                    <div class="profile-avatar">${profile.avatar || profile.username.charAt(0).toUpperCase()}</div>
+            const allProfiles = [...userProfiles];
+            if (panelContext.allow_guest) {
+                allProfiles.push({ user_id: 'guest', username: 'Guest', role: 'guest', avatar: '👤' });
+            }
+
+            grid.innerHTML = allProfiles.map(profile => {
+                const avatar = profile.avatar || (profile.username ? profile.username.charAt(0).toUpperCase() : '?');
+                return `
+                <div class="profile-card" onclick="selectProfile('${profile.user_id}', '${profile.username}', '${avatar}')">
+                    <div class="profile-avatar">${avatar}</div>
                     <div class="profile-name">${profile.username}</div>
                 </div>
-            `).join('');
+                `;
+            }).join('');
         }
 
         function hideProfiles() {
@@ -1087,6 +1154,48 @@
         let selectedUsername = null;
         let currentPin = '';
         let shiftPressed = false;
+
+        function getPendingPanelChallenge() {
+            try {
+                const raw = sessionStorage.getItem('zoe_panel_auth_challenge');
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                return parsed && parsed.challenge_id ? parsed : null;
+            } catch (_) {
+                return null;
+            }
+        }
+
+        async function resolvePendingPanelChallenge(pinValue) {
+            const pending = getPendingPanelChallenge();
+            if (!pending || !pinValue) return true;
+            try {
+                const payload = {
+                    challenge_id: pending.challenge_id,
+                    pin: pinValue,
+                };
+                if (selectedUserId && selectedUserId !== 'guest') {
+                    payload.user_id = selectedUserId;
+                }
+                const r = await fetch('/api/panels/auth/pin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!r.ok) {
+                    // Stale or already-processed challenges should not block login.
+                    if (r.status === 404 || r.status === 409 || r.status === 410) {
+                        sessionStorage.removeItem('zoe_panel_auth_challenge');
+                        return true;
+                    }
+                    return false;
+                }
+                sessionStorage.removeItem('zoe_panel_auth_challenge');
+                return true;
+            } catch (_) {
+                return false;
+            }
+        }
 
         function selectProfile(userId, username, avatar) {
             selectedUserId = userId;
@@ -1233,24 +1342,79 @@
                         showAuthError('Guest access failed');
                     }
                 } else {
-                    // Try PIN login first (assuming PIN is same as password for demo)
-                    const response = await fetch('/api/auth/login', {
+                    // Use the zoe-auth passcode endpoint (Argon2-verified 4-8 digit PIN)
+                    const response = await fetch('/api/touch-panel/auth', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             username: selectedUsername,
-                            password: currentPin,
-                            device_info: {}
+                            passcode: currentPin,
+                            device_id: 'touch-panel'
                         })
                     });
 
                     if (response.ok) {
-                        const data = await response.json();
+                        let data = await response.json();
+                        // touch-panel/auth can return 200 with success=false.
+                        // Fall back to direct passcode login for compatibility.
+                        if (!data || !data.success || !data.session_id) {
+                            const passFallback = await fetch('/api/auth/login/passcode', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    username: selectedUsername,
+                                    user_id: selectedUserId,
+                                    passcode: currentPin,
+                                    device_info: { source: 'touch-login' }
+                                })
+                            });
+                            if (passFallback.ok) {
+                                const fb = await passFallback.json();
+                                if (fb && fb.success && fb.session_id) {
+                                    data = fb;
+                                } else {
+                                    showAuthError((fb && fb.error_message) || (data && data.error_message) || 'Invalid PIN');
+                                    currentPin = '';
+                                    updatePinDisplay();
+                                    return;
+                                }
+                            } else {
+                                showAuthError((data && data.error_message) || 'Invalid PIN');
+                                currentPin = '';
+                                updatePinDisplay();
+                                return;
+                            }
+                        }
+                        const challengeOk = await resolvePendingPanelChallenge(currentPin);
+                        if (!challengeOk) {
+                            // Keep login flow successful even if challenge handoff fails.
+                            // Voice replay may be skipped, but the user should still enter.
+                            showAuthError('Login worked, but the pending voice request could not be resumed.');
+                        }
                         handleSuccessfulAuth(data);
-                    } else {
-                        showAuthError('Invalid PIN');
+                    } else if (response.status === 401) {
+                        showAuthError('Incorrect PIN');
                         currentPin = '';
                         updatePinDisplay();
+                    } else {
+                        // Fallback: try password login in case passcode not set up yet
+                        const fallback = await fetch('/api/auth/login', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                username: selectedUsername,
+                                password: currentPin,
+                                device_info: {}
+                            })
+                        });
+                        if (fallback.ok) {
+                            const data = await fallback.json();
+                            handleSuccessfulAuth(data);
+                        } else {
+                            showAuthError('Invalid PIN');
+                            currentPin = '';
+                            updatePinDisplay();
+                        }
                     }
                 }
             } catch (error) {
@@ -1282,6 +1446,11 @@
         async function submitPassword() {
             const password = document.getElementById('passwordInput').value;
             if (!password || !selectedUsername) return;
+            if (getPendingPanelChallenge()) {
+                showAuthError('This voice request needs PIN verification. Switch to PIN mode.');
+                switchAuthMode('passcode');
+                return;
+            }
 
             try {
                 const response = await fetch('/api/auth/login', {
@@ -1335,10 +1504,28 @@
             localStorage.setItem('zoe_session', JSON.stringify(data));
             
             // Show success and redirect
-            showAuthSuccess(`Welcome, ${data.username}!`);
+            const welcomeName =
+                data.username
+                || (data.user_info && (data.user_info.username || data.user_info.display_name))
+                || selectedUsername
+                || data.user_id
+                || 'there';
+            showAuthSuccess(`Welcome, ${welcomeName}!`);
             const params = new URLSearchParams(window.location.search);
             const panelId = params.get('panel_id');
-            const panelSuffix = panelId ? `?panel_id=${encodeURIComponent(panelId)}` : '';
+            const withPanelId = (urlPath, pid) => {
+                if (!pid) return urlPath;
+                try {
+                    const u = new URL(urlPath, window.location.origin);
+                    if (!u.searchParams.get('panel_id')) {
+                        u.searchParams.set('panel_id', pid);
+                    }
+                    return `${u.pathname}${u.search}${u.hash}`;
+                } catch (_) {
+                    const join = urlPath.includes('?') ? '&' : '?';
+                    return `${urlPath}${join}panel_id=${encodeURIComponent(pid)}`;
+                }
+            };
             setTimeout(() => {
                 // Use stored destination if we were redirected here from a touch page
                 let dest = '/touch/dashboard.html';
@@ -1349,7 +1536,7 @@
                         dest = stored;
                     }
                 } catch(_) {}
-                window.location.href = dest + panelSuffix;
+                window.location.href = withPanelId(dest, panelId);
             }, 1500);
         }
 
@@ -1471,6 +1658,13 @@
                 return;
             }
             
+            const pendingChallenge = getPendingPanelChallenge();
+            if (pendingChallenge) {
+                // Force auth UI when resuming a voice challenge; do not auto-redirect.
+                showProfiles();
+                return;
+            }
+
             // If there's already a session, validate it before redirecting
             const session = localStorage.getItem('zoe_session');
             if (session) {

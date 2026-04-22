@@ -48,13 +48,13 @@
 }
 
 .detail-compact span:first-child {
-    font-size: clamp(0.75rem, 3.5cqw, 1.25rem);
+    font-size: clamp(0.75rem, 4cqw, 2rem);
     line-height: 1;
     filter: drop-shadow(0 1px 3px rgba(0,0,0,0.2));
 }
 
 .detail-compact .detail-value {
-    font-size: clamp(0.7rem, 3cqw, 1rem);
+    font-size: clamp(0.7rem, 3.5cqw, 1.6rem);
     font-weight: 600;
     line-height: 1.2;
     white-space: nowrap;
@@ -74,8 +74,8 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: clamp(0.1rem, 0.3cqh, 0.25rem);
-    padding: clamp(0.15rem, 0.7cqh, 0.35rem);
+    gap: clamp(0.1rem, 0.8cqh, 0.6rem);
+    padding: clamp(0.2rem, 1.4cqh, 0.9rem) clamp(0.2rem, 1cqw, 0.7rem);
     background: rgba(255,255,255,0.14);
     backdrop-filter: blur(12px) saturate(130%);
     -webkit-backdrop-filter: blur(12px) saturate(130%);
@@ -97,16 +97,16 @@
 }
 
 .forecast-compact .forecast-day-name {
-    font-size: clamp(0.5rem, 2cqw, 0.75rem);
+    font-size: clamp(0.55rem, 2.4cqw, 1.4rem);
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.08em;
     opacity: 0.9;
     line-height: 1;
 }
 
 .forecast-compact .forecast-icon {
-    font-size: clamp(1.25rem, 6cqw, 2rem);
+    font-size: clamp(1.25rem, 7cqw, 3.75rem);
     line-height: 1;
     filter: drop-shadow(0 1px 4px rgba(0,0,0,0.2));
     transition: transform 0.3s ease;
@@ -118,10 +118,11 @@
 
 .forecast-compact .forecast-temps {
     display: flex;
-    gap: clamp(0.25rem, 1cqw, 0.5rem);
-    font-size: clamp(0.625rem, 2.5cqw, 0.875rem);
+    gap: clamp(0.25rem, 1.2cqw, 0.75rem);
+    font-size: clamp(0.65rem, 3cqw, 1.6rem);
     font-weight: 600;
     line-height: 1;
+    font-variant-numeric: tabular-nums;
 }
 
 .forecast-compact .forecast-high {

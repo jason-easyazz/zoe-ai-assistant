@@ -2,13 +2,16 @@
 <html lang="en" class="touch-scroll-root">
 <head>
   <meta charset="UTF-8">
-    <!-- TOUCH: kiosk bypass -->
+    <!-- TOUCH: kiosk bypass + dialog suppression -->
     <script>
     (function(){
         if(localStorage.getItem('zoe_kiosk')==='1') return;
         var p=new URLSearchParams(location.search);
         if(p.get('kiosk')==='1') localStorage.setItem('zoe_kiosk','1');
     })();
+    window.prompt  = function(msg, def) { return def || ''; };
+    window.alert   = function() {};
+    window.confirm = function() { return true; };
     </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -371,6 +374,38 @@
 
     @keyframes spin { to { transform: rotate(360deg); } }
     .spinning { animation: spin 0.7s linear; }
+
+    /* ============================================================
+       DARK MODE OVERRIDES
+       ============================================================ */
+    html.dark-mode body {
+      background: linear-gradient(135deg, #0a0a14 0%, #12121f 100%) !important;
+      color: #e5e7eb;
+    }
+    html.dark-mode .btn-primary,
+    html.dark-mode .reconnect-btn {
+      background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%) !important;
+      color: #fff !important;
+      border: none !important;
+    }
+    html.dark-mode .room-tab {
+      background: rgba(255, 255, 255, 0.05) !important;
+      color: rgba(255, 255, 255, 0.75) !important;
+      border-color: rgba(255, 255, 255, 0.1) !important;
+    }
+    html.dark-mode .room-tab.active {
+      background: linear-gradient(135deg, #7B61FF, #9d85ff) !important;
+      color: #fff !important;
+    }
+    html.dark-mode .scene-card,
+    html.dark-mode .device-card {
+      background: rgba(255, 255, 255, 0.04) !important;
+      border-color: rgba(255, 255, 255, 0.08) !important;
+      color: #e5e7eb;
+    }
+    html.dark-mode .section-label { color: rgba(255, 255, 255, 0.55) !important; }
+    html.dark-mode .error-title { color: #f1f5f9 !important; }
+    html.dark-mode .error-msg { color: rgba(255, 255, 255, 0.6) !important; }
   </style>
 </head>
 <body class="touch-scroll-page">
@@ -410,10 +445,10 @@
 </div>
 
 <script src="/js/websocket-sync.js"></script>
-<script src="/js/touch-ui-executor.js"></script>
-<script src="/js/orb-loader.js"></script>
 <script src="/touch/js/gestures.js"></script>
 <script src="/touch/js/touch-menu.js"></script>
+<script src="/js/touch-ui-executor.js"></script>
+<script src="/js/orb-loader.js"></script>
 <script>
 window.ZOE_OPEN_FORM = null;
 

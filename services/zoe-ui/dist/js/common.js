@@ -1,3 +1,130 @@
+// Inject a tiny stylesheet so the shared refresh button never inherits
+// the notifications badge/pulse when it happens to share the
+// .notifications-btn class with its neighbour. Kept here so every page
+// that loads common.js gets it automatically.
+(function injectSharedNavStyles(){
+    if (typeof document === 'undefined') return;
+    if (document.getElementById('__zoe_shared_nav_styles__')) return;
+    const style = document.createElement('style');
+    style.id = '__zoe_shared_nav_styles__';
+    style.textContent = `
+        .refresh-btn.has-notifications { animation: none; }
+        .refresh-btn.has-notifications::after { display: none; }
+        .refresh-btn::after { display: none !important; }
+        .theme-nav-btn { cursor: pointer; }
+        .theme-nav-btn.has-notifications { animation: none; }
+        .theme-nav-btn.has-notifications::after { display: none !important; }
+        .edit-nav-btn.has-notifications { animation: none; }
+        .edit-nav-btn.has-notifications::after { display: none !important; }
+        /* Bell red-dot + count badge (ported from touch). Only applies to
+         * the notifications bell itself, not its refresh/theme/edit siblings. */
+        button.notifications-btn.has-notifications:not(.refresh-btn):not(.theme-nav-btn):not(.edit-nav-btn) {
+            animation: zoeBellPulse 2s ease-in-out infinite;
+            position: relative;
+        }
+        button.notifications-btn.has-notifications:not(.refresh-btn):not(.theme-nav-btn):not(.edit-nav-btn)::after {
+            content: ''; position: absolute; top: 4px; right: 4px;
+            width: 10px; height: 10px; background: #ff4757; border-radius: 50%;
+            border: 2px solid white;
+        }
+        .bell-count-badge {
+            position: absolute;
+            top: -4px;
+            right: -4px;
+            min-width: 18px;
+            height: 18px;
+            padding: 0 4px;
+            border-radius: 9px;
+            background: linear-gradient(135deg, #ff4757 0%, #ff6b7a 100%);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 700;
+            line-height: 18px;
+            text-align: center;
+            box-shadow: 0 2px 6px rgba(255, 71, 87, 0.4);
+            border: 2px solid #fff;
+            box-sizing: content-box;
+            pointer-events: none;
+            z-index: 2;
+            display: none;
+        }
+        html.dark-mode .bell-count-badge { border-color: #0d0d1a; }
+        @keyframes zoeBellPulse {
+            0%, 100% { transform: scale(1); }
+            50%      { transform: scale(1.08); }
+        }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+})();
+
+// Theme toggle (ported from touch/js/touch-menu.js).
+// Three modes: 'light', 'dark', 'auto'. Auto = dark between 7pm and 7am.
+// Persisted in localStorage under 'zoe_theme'. The actual dark-mode CSS
+// lives in css/dark-mode-shared.css. Pages should include that stylesheet
+// + a small early <script> in <head> that calls window.applyZoeTheme() so
+// the theme is applied before first paint (prevents light/dark flash).
+(function initThemeToggle(){
+    if (typeof window === 'undefined') return;
+    const THEME_ICONS = { light: '☀️', dark: '🌙', auto: '🌓' };
+    const CYCLE = { light: 'dark', dark: 'auto', auto: 'light' };
+
+    function getStored() {
+        try { return localStorage.getItem('zoe_theme') || 'auto'; } catch (_) { return 'auto'; }
+    }
+    function resolveDark(mode) {
+        if (mode === 'dark') return true;
+        if (mode === 'light') return false;
+        const h = new Date().getHours();
+        return h < 7 || h >= 19;
+    }
+    function apply(mode) {
+        const dark = resolveDark(mode || getStored());
+        document.documentElement.classList.toggle('dark-mode', dark);
+        document.body && document.body.classList.remove('dark-mode','light-mode');
+        if (dark && document.body) document.body.classList.add('dark-mode');
+        const mc = document.querySelector('meta[name="theme-color"]');
+        if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+    }
+    function cycle() {
+        const current = getStored();
+        const next = CYCLE[current] || 'auto';
+        try { localStorage.setItem('zoe_theme', next); } catch (_) {}
+        apply(next);
+        syncButtons(next);
+        try {
+            window.dispatchEvent(new CustomEvent('zoe-theme-changed', { detail: { mode: next } }));
+        } catch (_) {}
+        return next;
+    }
+    function syncButtons(mode) {
+        mode = mode || getStored();
+        const icon = THEME_ICONS[mode] || '🔄';
+        const label = mode === 'light' ? 'Light mode' : (mode === 'dark' ? 'Dark mode' : 'Auto (day/night)');
+        document.querySelectorAll('.theme-nav-btn').forEach(btn => {
+            btn.textContent = icon;
+            btn.title = `Theme: ${label} (click to change)`;
+            btn.dataset.zoeTheme = mode;
+        });
+    }
+
+    window.applyZoeTheme = apply;
+    window.cycleZoeTheme = cycle;
+    window.getZoeTheme = getStored;
+
+    function init() {
+        apply();
+        syncButtons();
+        // Re-evaluate auto mode once an hour so 7pm/7am transitions apply
+        // without a reload.
+        setInterval(() => { if (getStored() === 'auto') apply(); }, 60 * 60 * 1000);
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
+
 // API_BASE detection - use relative URLs to leverage nginx proxy
 function getApiBase() {
     // Use relative URL - nginx will proxy /api to the correct backend service
@@ -63,6 +190,37 @@ function closeMoreOverlay() {
     document.getElementById('moreOverlay').classList.remove('active');
 }
 
+// Shared refresh button handler. Previously lived only in dashboard.js /
+// lists-dashboard.js, which meant nav bars on other pages couldn't use the
+// refresh button without a ReferenceError. Exposed globally here so every
+// page can opt in.
+if (typeof window.forceRefreshCache !== 'function') {
+    window.forceRefreshCache = function forceRefreshCache() {
+        try {
+            if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({ type: 'CLEAR_CACHE' });
+                setTimeout(() => window.location.reload(true), 300);
+                return;
+            }
+        } catch (_) { /* fall through */ }
+        window.location.reload(true);
+    };
+}
+
+// Shared notifications toggle. Pages that include notifications-panel.js
+// will have window.zoeNotifications; otherwise we fall back to a
+// per-page openNotifications() if one is defined.
+if (typeof window.openNotificationsSafe !== 'function') {
+    window.openNotificationsSafe = function openNotificationsSafe() {
+        if (window.zoeNotifications && typeof window.zoeNotifications.toggle === 'function') {
+            return window.zoeNotifications.toggle();
+        }
+        if (typeof openNotifications === 'function') {
+            return openNotifications();
+        }
+    };
+}
+
 // Touch feedback
 function addTouchFeedback(element) {
     element.addEventListener('touchstart', () => {
@@ -108,20 +266,39 @@ function formatDate(dateStr) {
     return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-// Update time display
+// Update time display.
+//
+// Pages use two different id conventions for their top nav clock/date:
+//   - legacy: #currentTime + #currentDate (long format)
+//   - modern: #navCurrentTime + #navCurrentDate (compact format)
+// We populate both here so any page that loads common.js gets a live
+// clock without duplicating the snippet in every HTML file.
 function updateTime() {
     const now = new Date();
-    const timeElement = document.getElementById('currentTime');
-    const dateElement = document.getElementById('currentDate');
-    
-    if (timeElement) {
-        timeElement.textContent = now.toLocaleTimeString([], { 
-            hour: 'numeric', minute: '2-digit', hour12: true 
+
+    const legacyTime = document.getElementById('currentTime');
+    const legacyDate = document.getElementById('currentDate');
+    if (legacyTime) {
+        legacyTime.textContent = now.toLocaleTimeString([], {
+            hour: 'numeric', minute: '2-digit', hour12: true
         });
     }
-    if (dateElement) {
-        dateElement.textContent = now.toLocaleDateString([], { 
-            weekday: 'long', month: 'long', day: 'numeric' 
+    if (legacyDate) {
+        legacyDate.textContent = now.toLocaleDateString([], {
+            weekday: 'long', month: 'long', day: 'numeric'
+        });
+    }
+
+    const navTime = document.getElementById('navCurrentTime');
+    const navDate = document.getElementById('navCurrentDate');
+    if (navTime) {
+        navTime.textContent = now.toLocaleTimeString([], {
+            hour: 'numeric', minute: '2-digit'
+        });
+    }
+    if (navDate) {
+        navDate.textContent = now.toLocaleDateString([], {
+            weekday: 'short', day: 'numeric', month: 'short'
         });
     }
 }
@@ -213,8 +390,21 @@ async function apiRequest(endpoint, options = {}) {
             } catch (_) {}
             throw new Error(detail);
         }
-        
-        return await response.json();
+
+        // Tolerate 204 No Content and empty / non-JSON 200s so that callers
+        // (e.g. DELETE handlers) don't throw "Unexpected end of JSON input".
+        if (response.status === 204) return null;
+        const contentType = (response.headers && response.headers.get)
+            ? (response.headers.get('content-type') || '')
+            : '';
+        const rawText = await response.text();
+        if (!rawText) return null;
+        if (contentType.includes('application/json')) {
+            try { return JSON.parse(rawText); } catch (_) { return rawText; }
+        }
+        // Fall back: if it happens to be JSON-shaped, parse it; otherwise
+        // hand the raw text back so callers can decide what to do.
+        try { return JSON.parse(rawText); } catch (_) { return rawText; }
     } catch (error) {
         console.error('API request error:', endpoint, error.message);
         showNotification(`Connection error: ${error.message}`, 'error');
@@ -251,10 +441,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // Add touch feedback to all buttons
     document.querySelectorAll('button, .btn, .touch-target').forEach(addTouchFeedback);
     
-    // Close overlays when clicking outside
+    // Close overlays when clicking outside. Pages that don't define a
+    // closeMoreOverlay helper (most of them) would otherwise trigger a
+    // ReferenceError and break every subsequent click handler.
     document.addEventListener('click', (e) => {
-        if (e.target.classList.contains('more-overlay')) {
-            closeMoreOverlay();
+        if (e.target && e.target.classList && e.target.classList.contains('more-overlay')) {
+            if (typeof closeMoreOverlay === 'function') {
+                closeMoreOverlay();
+            } else {
+                e.target.classList.remove('active');
+            }
         }
     });
 });

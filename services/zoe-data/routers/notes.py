@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import get_current_user
 from database import get_db
+from guest_policy import require_feature_access
 from models import NoteCreate, NoteUpdate
 from push import broadcaster
 
@@ -38,32 +39,36 @@ def _visibility_filter_sql() -> str:
 
 
 async def _store_note_memory(db, user_id: str, note: dict, action: str):
-    import asyncio
+    """Write a note-derived fact to MemPalace through MemoryService.
+
+    `db` is kept in the signature for call-site compatibility but is no
+    longer used — the SQLite `memory_items` mirror has been retired in
+    favour of MemPalace as the single source of truth.
+    """
     title = note.get("title") or "Note"
     content = (note.get("content") or "")[:800]
     if not content:
         return
-    await db.execute(
-        """INSERT INTO memory_items
-           (id, user_id, memory_type, title, content, entity_type, entity_id, confidence,
-            source_type, source_id, source_excerpt, visibility, status)
-           VALUES (?, ?, 'note', ?, ?, 'note', ?, 0.75, 'note', ?, ?, ?, 'approved')""",
-        (
-            str(uuid.uuid4()),
-            user_id,
-            f"{action.title()} note: {title}",
-            content,
-            note.get("id"),
-            note.get("id"),
-            content[:200],
-            note.get("visibility") or "personal",
-        ),
-    )
-    # Mirror to MemPalace so agent memory stays current
+    fact = f"User {action} note titled '{title}': {content[:300]}"
     try:
-        from pi_agent import _mempalace_add  # type: ignore[import]
-        fact = f"User {action} note titled '{title}': {content[:300]}"
-        asyncio.ensure_future(_mempalace_add(fact, user_id=user_id, tags=["note", action]))
+        from memory_service import MemoryServiceError, get_memory_service
+        try:
+            await get_memory_service().ingest(
+                fact,
+                user_id=user_id,
+                source=f"note_{action}",
+                memory_type="note",
+                confidence=0.75,
+                status="approved",
+                tags=["note", action],
+                entity_type="note",
+                entity_id=note.get("id"),
+            )
+        except MemoryServiceError as exc:
+            # MemoryService rejections (PII, empty text, missing user) are
+            # explicit; log and move on.
+            import logging as _lg
+            _lg.getLogger(__name__).info("notes: memory ingest skipped: %s", exc)
     except Exception:
         pass
 
@@ -76,6 +81,7 @@ async def list_notes(
     db=Depends(get_db),
 ):
     """List notes with optional category filter. Returns {notes: [...], count}."""
+    await require_feature_access(db, user, feature="notes", action="read")
     user_id = user["user_id"]
     conditions = [_visibility_filter_sql()]
     params: list = [user_id]
@@ -109,6 +115,7 @@ async def create_note(
     db=Depends(get_db),
 ):
     """Create a new note."""
+    await require_feature_access(db, user, feature="notes", action="create")
     user_id = user["user_id"]
     note_id = str(uuid.uuid4())
     tags_json = json.dumps(payload.tags) if payload.tags else None
@@ -146,6 +153,7 @@ async def update_note(
     db=Depends(get_db),
 ):
     """Update an existing note."""
+    await require_feature_access(db, user, feature="notes", action="update")
     user_id = user["user_id"]
     where = f"{_visibility_filter_sql()} AND id = ?"
     cursor = await db.execute(
@@ -195,6 +203,7 @@ async def delete_note(
     db=Depends(get_db),
 ):
     """Soft delete a note."""
+    await require_feature_access(db, user, feature="notes", action="delete")
     user_id = user["user_id"]
     where = f"{_visibility_filter_sql()} AND id = ?"
     cursor = await db.execute(

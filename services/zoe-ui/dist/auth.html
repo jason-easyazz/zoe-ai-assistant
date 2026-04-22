@@ -3,6 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#fafbfc">
+    <!-- Zoe theme bootstrap (must run before UI scripts) -->
+    <script>
+    (function(){
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name=theme-color]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch(e) {}
+    })();
+    </script>
     <title>Zoe - Authentication</title>
     <style>
         * { 
@@ -454,6 +468,13 @@
                 <input type="password" class="form-input" id="password" placeholder="Enter your password" autocomplete="current-password">
             </div>
 
+            <div class="form-group" style="display:flex; align-items:center; gap:8px;">
+                <input type="checkbox" id="rememberMe" style="width:16px; height:16px; margin:0; cursor:pointer;">
+                <label for="rememberMe" class="form-label" style="margin:0; cursor:pointer; user-select:none;">
+                    Keep me signed in on this device
+                </label>
+            </div>
+
             <div class="device-selector">
                 <label class="form-label">Device Type</label>
                 <div class="device-options">
@@ -462,7 +483,7 @@
                     <div class="device-option" data-device="touch_panel">Touch Panel</div>
                 </div>
             </div>
-            
+
             <button type="submit" class="auth-button" id="passwordLoginBtn">
                 <span class="btn-text">Sign In</span>
             </button>
@@ -524,7 +545,9 @@
             </button>
         </form>
 
-        <div class="forgot-link">
+        <!-- Password recovery is not implemented in zoe-auth yet; hide the
+             link until a real flow exists. -->
+        <div class="forgot-link" style="display:none;">
             <a href="#" id="forgotPassword">Forgot your password?</a>
         </div>
     </div>
@@ -775,12 +798,15 @@
                 this.setLoading(btn, true);
 
                 try {
+                    const rememberMeEl = document.getElementById('rememberMe');
+                    const rememberMe = !!(rememberMeEl && rememberMeEl.checked);
                     const response = await fetch(`${this.apiBase}/api/auth/login`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             username,
                             password,
+                            remember_me: rememberMe,
                             device_info: {
                                 type: this.deviceType,
                                 device_id: this.deviceId,
@@ -849,15 +875,27 @@
                         })
                     });
 
-                    const data = await response.json();
+                    // zoe-auth returns 403 with a FastAPI `detail` field when the
+                    // caller lacks users.create. Surface that distinctly so people
+                    // know registration is admin-only.
+                    let data = null;
+                    try { data = await response.json(); } catch (_) { data = null; }
 
-                    if (data.success) {
+                    if (response.status === 403) {
+                        const detail = (data && (data.detail || data.error_message))
+                            || 'Account creation is restricted to administrators. Please ask an admin to create your account.';
+                        this.showError(detail);
+                    } else if (!response.ok) {
+                        const detail = (data && (data.detail || data.error_message))
+                            || `Account creation failed (HTTP ${response.status})`;
+                        this.showError(detail);
+                    } else if (data && data.success) {
                         this.showSuccess('Account created successfully!');
                         setTimeout(() => {
                             this.handleSuccessfulLogin(data);
                         }, 1500);
                     } else {
-                        this.showError(data.error_message || 'Account creation failed');
+                        this.showError((data && data.error_message) || 'Account creation failed');
                     }
                 } catch (error) {
                     this.showError('Connection error. Please try again.');

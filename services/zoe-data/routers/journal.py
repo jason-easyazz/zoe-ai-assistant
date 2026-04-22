@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import get_current_user
 from database import get_db
+from guest_policy import require_feature_access
 from models import JournalEntryCreate, JournalEntryUpdate
 from push import broadcaster
 
@@ -55,32 +56,30 @@ def _visibility_filter_sql() -> str:
 
 
 async def _store_journal_memory(db, user_id: str, entry: dict, action: str):
-    import asyncio
+    """Write a journal-derived fact to MemPalace through MemoryService."""
     content = (entry.get("content") or "")[:800]
     if not content:
         return
-    await db.execute(
-        """INSERT INTO memory_items
-           (id, user_id, memory_type, title, content, entity_type, entity_id, confidence,
-            source_type, source_id, source_excerpt, visibility, status)
-           VALUES (?, ?, 'journal', ?, ?, 'journal', ?, 0.7, 'journal', ?, ?, 'personal', 'approved')""",
-        (
-            str(uuid.uuid4()),
-            user_id,
-            f"{action.title()} journal entry",
-            content,
-            entry.get("id"),
-            entry.get("id"),
-            content[:220],
-        ),
-    )
-    # Mirror to MemPalace so agent memory stays current
+    mood = entry.get("mood") or ""
+    mood_str = f" [mood: {mood}]" if mood else ""
+    fact = f"Journal entry{mood_str}: {content[:400]}"
     try:
-        from pi_agent import _mempalace_add  # type: ignore[import]
-        mood = entry.get("mood") or ""
-        mood_str = f" [mood: {mood}]" if mood else ""
-        fact = f"Journal entry{mood_str}: {content[:400]}"
-        asyncio.ensure_future(_mempalace_add(fact, user_id=user_id, tags=["journal", action]))
+        from memory_service import MemoryServiceError, get_memory_service
+        try:
+            await get_memory_service().ingest(
+                fact,
+                user_id=user_id,
+                source=f"journal_{action}",
+                memory_type="journal",
+                confidence=0.7,
+                status="approved",
+                tags=["journal", action],
+                entity_type="journal",
+                entity_id=entry.get("id"),
+            )
+        except MemoryServiceError as exc:
+            import logging as _lg
+            _lg.getLogger(__name__).info("journal: memory ingest skipped: %s", exc)
     except Exception:
         pass
 
@@ -97,6 +96,7 @@ async def list_entries(
     db=Depends(get_db),
 ):
     """List journal entries with optional filters."""
+    await require_feature_access(db, user, feature="journal", action="read")
     user_id = user["user_id"]
     conditions = [_visibility_filter_sql()]
     params: list = [user_id]
@@ -131,6 +131,7 @@ async def create_entry(
     db=Depends(get_db),
 ):
     """Create a new journal entry. visibility always 'personal'."""
+    await require_feature_access(db, user, feature="journal", action="create")
     user_id = user["user_id"]
     entry_id = str(uuid.uuid4())
     tags_json = json.dumps(payload.tags) if payload.tags else None
@@ -173,6 +174,7 @@ async def list_on_this_day(
     db=Depends(get_db),
 ):
     """Entries from this day in past years."""
+    await require_feature_access(db, user, feature="journal", action="read")
     user_id = user["user_id"]
     today_md = date.today().strftime("%m-%d")
     sql = """
@@ -194,6 +196,7 @@ async def get_streak_stats(
     db=Depends(get_db),
 ):
     """Return {current_streak, longest_streak, total_entries}."""
+    await require_feature_access(db, user, feature="journal", action="read")
     from datetime import datetime, timedelta
 
     user_id = user["user_id"]
@@ -251,6 +254,7 @@ async def get_mood_stats(
     db=Depends(get_db),
 ):
     """Return mood distribution."""
+    await require_feature_access(db, user, feature="journal", action="read")
     user_id = user["user_id"]
     cursor = await db.execute(
         """SELECT mood, COUNT(*) as cnt
@@ -267,8 +271,10 @@ async def get_mood_stats(
 @router.get("/prompts", response_model=dict)
 async def get_prompts(
     user: dict = Depends(get_current_user),
+    db=Depends(get_db),
 ):
     """Return 5 random journal prompts."""
+    await require_feature_access(db, user, feature="journal", action="read")
     prompts = random.sample(DEFAULT_PROMPTS, min(5, len(DEFAULT_PROMPTS)))
     return {"prompts": prompts}
 
@@ -280,6 +286,7 @@ async def get_entry(
     db=Depends(get_db),
 ):
     """Get a single journal entry by ID."""
+    await require_feature_access(db, user, feature="journal", action="read")
     user_id = user["user_id"]
     cursor = await db.execute(
         "SELECT * FROM journal_entries WHERE id = ? AND " + _visibility_filter_sql(),
@@ -299,6 +306,7 @@ async def update_entry(
     db=Depends(get_db),
 ):
     """Update an existing journal entry."""
+    await require_feature_access(db, user, feature="journal", action="update")
     user_id = user["user_id"]
     cursor = await db.execute(
         "SELECT * FROM journal_entries WHERE id = ? AND " + _visibility_filter_sql(),
@@ -347,6 +355,7 @@ async def delete_entry(
     db=Depends(get_db),
 ):
     """Soft delete a journal entry."""
+    await require_feature_access(db, user, feature="journal", action="delete")
     user_id = user["user_id"]
     cursor = await db.execute(
         "SELECT * FROM journal_entries WHERE id = ? AND " + _visibility_filter_sql(),

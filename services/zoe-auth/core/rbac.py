@@ -389,8 +389,9 @@ class RBACManager:
         
         for user_perm in user_permissions:
             if '*' in user_perm:
-                # Convert wildcard to regex pattern
-                pattern = user_perm.replace('*', '.*').replace('.', r'\.')
+                # Convert wildcard to regex pattern safely.
+                # Escape first, then restore wildcard semantics.
+                pattern = re.escape(user_perm).replace(r"\*", ".*")
                 if re.match(f"^{pattern}$", permission):
                     granted.append(user_perm)
                     

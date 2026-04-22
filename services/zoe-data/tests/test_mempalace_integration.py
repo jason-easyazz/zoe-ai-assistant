@@ -38,25 +38,57 @@ class _FakeCollection:
             if id_ not in self._store:
                 self._store[id_] = {"document": doc, "metadata": dict(meta)}
 
+    @staticmethod
+    def _match_where(meta: dict, where: dict | None) -> bool:
+        """Minimal Chroma where-clause evaluator supporting $or / $and."""
+        if not where:
+            return True
+        for k, v in where.items():
+            if k == "$or":
+                if not any(_FakeCollection._match_where(meta, clause) for clause in v):
+                    return False
+            elif k == "$and":
+                if not all(_FakeCollection._match_where(meta, clause) for clause in v):
+                    return False
+            else:
+                if meta.get(k) != v:
+                    return False
+        return True
+
     def get(self, where=None, include=None):
         results = {"ids": [], "documents": [], "metadatas": []}
         for id_, record in self._store.items():
             meta = record["metadata"]
-            if where:
-                match = all(meta.get(k) == v for k, v in where.items())
-                if not match:
-                    continue
+            if not self._match_where(meta, where):
+                continue
             results["ids"].append(id_)
             results["documents"].append(record["document"])
             results["metadatas"].append(meta)
         return results
 
-    def query(self, query_texts, n_results=5, where=None):
+    def query(self, query_texts, n_results=5, where=None, include=None):
         # Very naive: returns first n_results matching documents (no real vector search)
         docs = self.get(where=where)
         ids = docs["ids"][:n_results]
         docs_out = docs["documents"][:n_results]
-        return {"ids": [ids], "documents": [docs_out]}
+        metas_out = docs["metadatas"][:n_results]
+        distances = [0.0] * len(ids)
+        return {
+            "ids": [ids],
+            "documents": [docs_out],
+            "metadatas": [metas_out],
+            "distances": [distances],
+        }
+
+    def delete(self, ids=None, where=None):
+        if ids is not None:
+            for id_ in ids:
+                self._store.pop(id_, None)
+        elif where:
+            to_del = [i for i, rec in self._store.items()
+                      if self._match_where(rec["metadata"], where)]
+            for i in to_del:
+                self._store.pop(i, None)
 
 
 _GLOBAL_COLLECTION = _FakeCollection()
@@ -106,6 +138,7 @@ from pi_agent import (
     _pi_soul,
     migrate_mempalace_legacy_records,
 )
+from routers.chat import _persist_memory_candidates
 
 
 # ---------------------------------------------------------------------------
@@ -114,8 +147,25 @@ from pi_agent import (
 
 @pytest.fixture(autouse=True)
 def fresh_collection():
-    """Reset the in-memory Chroma collection before each test."""
+    """Reset the in-memory Chroma collection before each test.
+
+    Also resets the MemoryService singleton so per-instance state
+    (idempotency `_seen_keys`, per-user locks, access-tick queue) does
+    not leak between tests — the fake collection is cleared, but the
+    service remembers what it wrote.
+    """
     _reset_collection()
+    try:
+        import memory_service as _ms
+        _ms._service_singleton = None
+    except Exception:
+        pass
+    # Also drop pi_agent's per-turn facts cache.
+    try:
+        import pi_agent as _pa
+        _pa._USER_FACTS_CACHE.clear()
+    except Exception:
+        pass
     yield
 
 
@@ -270,6 +320,43 @@ async def test_all_agents_see_same_facts():
     assert pi_view == bonsai_view == openclaw_view
     assert "44" in pi_view
     assert "Perth" in pi_view
+
+
+# ---------------------------------------------------------------------------
+# 5b. Capture path lockdown — Pi + Hermes/OpenClaw shared hook
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_memory_capture_paths_pi_hermes_openclaw():
+    """All runtime agent paths should persist through shared MemPalace pipeline."""
+    from pi_agent import _background_memory_save
+
+    # Pi-agent post-turn capture
+    await _background_memory_save(
+        "remember that my friend Ava is a designer",
+        "Got it.",
+        user_id="jason",
+    )
+
+    # Hermes/OpenClaw chat router shared persistence hook
+    await _persist_memory_candidates(
+        "jason",
+        "sess-hermes",
+        "remember that i met Noah and he is a plumber",
+        "Noted.",
+    )
+    await _persist_memory_candidates(
+        "jason",
+        "sess-openclaw",
+        "remember that i prefer tea over coffee",
+        "Saved.",
+    )
+
+    facts = await _mempalace_load_user_facts("jason")
+    facts_l = facts.lower()
+    assert "ava" in facts_l
+    assert "noah" in facts_l
+    assert "tea" in facts_l
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="theme-color" content="#fafbfc">
     <!-- TOUCH: kiosk bypass + auto-theme (must run before auth.js) -->
     <script>
     (function(){
@@ -78,8 +79,8 @@
         .app-container {
             display: grid;
             grid-template-columns: 1fr 380px;
-            height: calc(100vh - 60px);
-            margin-top: 60px;
+            height: calc(100dvh - var(--ta-nav-h, 64px));
+            margin-top: 0;
             gap: 0;
             transition: grid-template-columns 0.3s ease;
         }
@@ -1968,6 +1969,63 @@
         .tn-title { font-weight: 700; font-size: 14px; color: var(--clr-primary); }
         .tn-task { font-size: 12px; color: var(--clr-text-2); margin-top: 2px; }
 
+        /* ============================================================
+           DARK MODE OVERRIDES
+           ============================================================ */
+        html.dark-mode body {
+            background: linear-gradient(135deg, #0a0a14 0%, #12121f 100%) !important;
+            color: #e5e7eb;
+        }
+        html.dark-mode .chat-area {
+            background: transparent !important;
+        }
+        html.dark-mode .sessions-panel,
+        html.dark-mode .insights-panel {
+            background: rgba(20, 20, 34, 0.85) !important;
+            border-color: rgba(255, 255, 255, 0.08) !important;
+            color: #e5e7eb;
+        }
+        html.dark-mode .suggestion-chip {
+            background: rgba(255, 255, 255, 0.05) !important;
+            border-color: rgba(255, 255, 255, 0.1) !important;
+            color: #f1f5f9;
+        }
+        html.dark-mode .suggestion-chip:hover {
+            background: rgba(255, 255, 255, 0.1) !important;
+            border-color: rgba(157, 133, 255, 0.35) !important;
+        }
+        html.dark-mode .suggestion-chip-label { color: #f1f5f9 !important; }
+        html.dark-mode .suggestion-chip-arrow { color: rgba(255, 255, 255, 0.45) !important; }
+        html.dark-mode .chat-message.user {
+            background: linear-gradient(135deg, #7B61FF, #9d85ff) !important;
+            color: #fff !important;
+        }
+        html.dark-mode .chat-message.assistant {
+            background: rgba(255, 255, 255, 0.05) !important;
+            color: #f1f5f9 !important;
+            border-color: rgba(255, 255, 255, 0.08) !important;
+        }
+        html.dark-mode .chat-input-wrap,
+        html.dark-mode .composer,
+        html.dark-mode .input-container {
+            background: rgba(20, 20, 34, 0.9) !important;
+            border-color: rgba(255, 255, 255, 0.08) !important;
+        }
+        html.dark-mode input,
+        html.dark-mode textarea {
+            background: rgba(255, 255, 255, 0.06) !important;
+            color: #f1f5f9 !important;
+            border-color: rgba(255, 255, 255, 0.1) !important;
+        }
+        html.dark-mode input::placeholder,
+        html.dark-mode textarea::placeholder { color: rgba(255, 255, 255, 0.4) !important; }
+        html.dark-mode .orb-footer,
+        html.dark-mode .orb-hint-bar {
+            background: rgba(20, 20, 34, 0.95) !important;
+            border-top-color: rgba(255, 255, 255, 0.08) !important;
+            color: rgba(255, 255, 255, 0.65) !important;
+        }
+
     </style>
 <!-- PWA Meta Tags -->
     <meta name="application-name" content="Zoe AI">
@@ -2740,6 +2798,8 @@
 
             // Check for completed background tasks and inject proactive messages
             setTimeout(checkPendingTasks, 1500);
+            setTimeout(handleVoiceListFocusParam, 900);
+            setTimeout(handleVoiceCalendarPrefillParam, 950);
 
             // Listen for background task completions → update context panel
             document.addEventListener('zoe:background-task', (e) => {
@@ -3442,6 +3502,9 @@
                 case 'list_add_form':
                     renderListAddForm(container, data.props || {});
                     break;
+                case 'shopping_list_live':
+                    renderShoppingListLive(container, data.props || {});
+                    break;
                 case 'reminder_create_form':
                     renderReminderCreateForm(container, data.props || {});
                     break;
@@ -3468,6 +3531,9 @@
                     break;
                 case 'data_grid':
                     renderDataGrid(container, data.props || {});
+                    break;
+                case 'research_evidence':
+                    renderResearchEvidence(container, data.props || {});
                     break;
                 case 'openclaw_manager':
                     renderOpenClawManager(container, data.props || {});
@@ -3593,6 +3659,39 @@
                         ${fields}
                         <button type="submit" class="form-submit">${escapeHtml(props.submit_label || 'Submit')}</button>
                     </form>
+                </div>
+            `;
+        }
+
+        function renderResearchEvidence(container, props) {
+            const results = Array.isArray(props.results) ? props.results : [];
+            const screenshots = Array.isArray(props.screenshots) ? props.screenshots : [];
+            const sources = Array.isArray(props.sources) ? props.sources : [];
+            const resultRows = results.slice(0, 6).map((r) => `
+                <tr>
+                    <td>${escapeHtml(String(r.rank ?? ''))}</td>
+                    <td>${escapeHtml(String(r.name || ''))}</td>
+                    <td>${escapeHtml(String(r.value || ''))}</td>
+                    <td>${escapeHtml(String(r.location || ''))}</td>
+                </tr>
+            `).join('');
+            const screenshotsHtml = screenshots.slice(0, 2).map((s) => {
+                if (!s.image_base64) return '';
+                return `<img style="max-width:100%;border-radius:10px;margin-top:8px;" src="data:image/png;base64,${String(s.image_base64).replace(/^data:image\/\\w+;base64,/, '')}" alt="">`;
+            }).join('');
+            const sourceHtml = sources.slice(0, 4).map((u) => `<li>${escapeHtml(String(u))}</li>`).join('');
+            container.innerHTML = `
+                <div class="info-card">
+                    <div class="info-card-body" style="width:100%;">
+                        <div class="info-card-title">Research Evidence</div>
+                        <div class="info-card-desc">${escapeHtml(String(props.query || ''))}</div>
+                        <table class="data-grid-component" style="margin-top:10px;">
+                            <thead><tr><th>#</th><th>Option</th><th>Value</th><th>Location</th></tr></thead>
+                            <tbody>${resultRows || '<tr><td colspan="4">No ranked results.</td></tr>'}</tbody>
+                        </table>
+                        ${screenshotsHtml}
+                        <ul style="margin-top:10px;">${sourceHtml || '<li>No sources captured.</li>'}</ul>
+                    </div>
                 </div>
             `;
         }
@@ -3950,16 +4049,118 @@
                 await apiRequest(`/api/lists/${listType}/${listId}/items`, {
                     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(itemPayload)
                 });
-                wrap.innerHTML = `<div class="cef-wrap"><div class="cef-success">
-                    <div class="cef-success-icon" style="background:linear-gradient(135deg,#10b981,#34d399)">✓</div>
-                    <div class="cef-success-body">
-                        <div class="cef-success-title">${escapeHtml(itemText)}</div>
-                        <div class="cef-success-meta">Added to ${escapeHtml(listType)} list</div>
-                    </div></div></div>`;
+                const liveMount = document.createElement('div');
+                wrap.replaceWith(liveMount);
+                renderShoppingListLive(liveMount, {
+                    list_type: listType,
+                    highlight_item: itemText,
+                    summary: `Added ${itemText} to your ${listType} list.`,
+                });
             } catch(e) {
                 btn.disabled=false; btn.textContent='Add Item';
                 _cefShowError(form, 'Could not add item — please try again.');
             }
+        }
+
+        function _normalizeListTypeForLive(raw) {
+            const t = String(raw || 'shopping').trim().toLowerCase();
+            if (['shopping', 'personal', 'work', 'tasks', 'bucket'].includes(t)) return t;
+            return 'shopping';
+        }
+
+        async function _resolveListIdForType(listType) {
+            const listsResp = await apiRequest(`/api/lists/${listType}`);
+            if (listsResp?.lists?.length) return listsResp.lists[0].id;
+            const created = await apiRequest(`/api/lists/${listType}`, {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ name: listType.charAt(0).toUpperCase()+listType.slice(1), list_type: listType })
+            });
+            return created?.id || created?.list?.id;
+        }
+
+        async function _fetchItemsForListType(listType) {
+            try {
+                const listId = await _resolveListIdForType(listType);
+                if (!listId) return [];
+                const itemsResp = await apiRequest(`/api/lists/${listType}/${listId}/items`);
+                return Array.isArray(itemsResp?.items) ? itemsResp.items : [];
+            } catch (_) {
+                return [];
+            }
+        }
+
+        async function renderShoppingListLive(container, props) {
+            const listType = _normalizeListTypeForLive(props.list_type || 'shopping');
+            const highlightItem = String(props.highlight_item || props.item || '').trim().toLowerCase();
+            const summary = props.summary || `Here is your ${listType} list.`;
+            const mountId = `live-list-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+            container.innerHTML = `
+                <div class="cef-wrap" id="${mountId}">
+                    <div class="cef-header">
+                        <div class="cef-header-icon cef-icon-list">🛒</div>
+                        <div class="cef-header-text">
+                            <div class="cef-header-title">${escapeHtml(listType.charAt(0).toUpperCase()+listType.slice(1))} List</div>
+                            <div class="cef-header-subtitle">${escapeHtml(summary)}</div>
+                        </div>
+                    </div>
+                    <div class="cef-body" style="display:flex;flex-direction:column;gap:10px;">
+                        <form class="live-list-add-form" style="display:flex;gap:8px;">
+                            <input class="cef-input" type="text" name="item_text" placeholder="Add another item..." style="flex:1;">
+                            <button type="submit" class="cef-btn cef-btn-create" style="background:linear-gradient(135deg,#10b981,#34d399);padding:10px 14px;">Add</button>
+                        </form>
+                        <div class="live-list-items">Loading list...</div>
+                    </div>
+                </div>`;
+            const root = document.getElementById(mountId);
+            if (!root) return;
+            const listEl = root.querySelector('.live-list-items');
+            const formEl = root.querySelector('.live-list-add-form');
+
+            const refresh = async (newHighlight = highlightItem) => {
+                const items = await _fetchItemsForListType(listType);
+                if (!listEl) return;
+                if (!items.length) {
+                    listEl.innerHTML = `<div style="color:#94a3b8;font-size:13px;">Your ${escapeHtml(listType)} list is empty.</div>`;
+                    return;
+                }
+                const rows = items.slice(0, 20).map((it) => {
+                    const txt = String(it.text || '').trim();
+                    const match = newHighlight && txt.toLowerCase() === newHighlight.toLowerCase();
+                    const style = match
+                        ? 'background:rgba(16,185,129,0.18);border:1px solid rgba(16,185,129,0.45);'
+                        : 'background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.2);';
+                    return `<li style="padding:8px 10px;border-radius:10px;${style}">${escapeHtml(txt || '(untitled item)')}</li>`;
+                }).join('');
+                listEl.innerHTML = `<ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px;">${rows}</ul>`;
+            };
+
+            if (formEl) {
+                formEl.addEventListener('submit', async (event) => {
+                    event.preventDefault();
+                    const input = formEl.querySelector('input[name="item_text"]');
+                    const btn = formEl.querySelector('button[type="submit"]');
+                    const itemText = String(input?.value || '').trim();
+                    if (!itemText) return;
+                    if (btn) { btn.disabled = true; btn.textContent = 'Adding...'; }
+                    try {
+                        const listId = await _resolveListIdForType(listType);
+                        await apiRequest(`/api/lists/${listType}/${listId}/items`, {
+                            method:'POST',
+                            headers:{'Content-Type':'application/json'},
+                            body: JSON.stringify({ text: itemText }),
+                        });
+                        if (input) input.value = '';
+                        await refresh(itemText);
+                    } catch (_) {
+                        if (listEl) listEl.innerHTML = `<div style="color:#f87171;font-size:13px;">Could not add item. Try again.</div>`;
+                    } finally {
+                        if (btn) { btn.disabled = false; btn.textContent = 'Add'; }
+                    }
+                });
+            }
+
+            await refresh();
         }
 
         // ── Reminder Create Form ──────────────────────────────────────────────
@@ -5566,6 +5767,68 @@
                 window.history.replaceState({}, '', window.location.pathname);
             }
         }
+
+        function handleVoiceListFocusParam() {
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('list_focus') !== '1') return;
+            const listType = params.get('list_type') || 'shopping';
+            const listItem = params.get('list_item') || '';
+            const summary = listItem
+                ? `Added ${listItem}. You can add more items now.`
+                : 'Here is your shopping list. You can add more items now.';
+            const messagesContainer = document.getElementById('messagesContainer');
+            if (!messagesContainer) return;
+            const group = document.createElement('div');
+            group.className = 'message-group assistant';
+            group.innerHTML = `<div class="message-bubble assistant" style="margin-bottom:6px">${escapeHtml(summary)}</div>`;
+            renderChatComponent({
+                component: 'shopping_list_live',
+                props: {
+                    list_type: listType,
+                    highlight_item: listItem,
+                    summary,
+                },
+            }, null, group);
+            messagesContainer.appendChild(group);
+            scrollToBottom();
+
+            params.delete('list_focus');
+            params.delete('list_type');
+            params.delete('list_item');
+            const next = params.toString();
+            window.history.replaceState({}, '', next ? `${window.location.pathname}?${next}` : window.location.pathname);
+        }
+
+        function handleVoiceCalendarPrefillParam() {
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('calendar_focus') !== '1') return;
+            const title = params.get('title') || '';
+            const date = params.get('date') || '';
+            const time = params.get('time') || '';
+            const messagesContainer = document.getElementById('messagesContainer');
+            if (!messagesContainer) return;
+            const group = document.createElement('div');
+            group.className = 'message-group assistant';
+            group.innerHTML = `<div class="message-bubble assistant" style="margin-bottom:6px">I prefilled your calendar event. Review and confirm on screen.</div>`;
+            renderChatComponent({
+                component: 'calendar_event_form',
+                props: {
+                    title,
+                    date,
+                    time,
+                    category: 'general',
+                },
+            }, null, group);
+            messagesContainer.appendChild(group);
+            scrollToBottom();
+
+            params.delete('calendar_focus');
+            params.delete('title');
+            params.delete('date');
+            params.delete('time');
+            const next = params.toString();
+            window.history.replaceState({}, '', next ? `${window.location.pathname}?${next}` : window.location.pathname);
+        }
         
         async function handleOnboardingMode() {
             console.log('Starting onboarding conversation');
@@ -5632,20 +5895,143 @@
     <script src="/js/touch-ui-executor.js"></script>
     <!-- TOUCH: floating orb chat overlay -->
     <script src="/js/orb-loader.js"></script>
-    <!-- TOUCH: lock gridstack to static (no drag) on kiosk -->
+
+    <!-- TOUCH: chat page — voice-first kiosk overrides -->
+    <style>
+    /* Force single-column, sessions panel permanently hidden */
+    #appContainer { grid-template-columns: 1fr !important; }
+    .sessions-panel,
+    .expand-btn,
+    .mobile-sessions-toggle,
+    #toggleSessionsBtn { display: none !important; }
+    /* Hide text input — voice only */
+    .input-area { display: none !important; }
+    /* Give messages container full height now that input is gone */
+    .messages-container { padding-bottom: 80px !important; }
+    /* Voice prompt bar */
+    #voice-prompt-bar {
+        position: fixed; bottom: 0; left: 0; right: 0;
+        height: 64px;
+        display: flex; align-items: center; gap: 16px;
+        padding: 0 24px;
+        background: rgba(255,255,255,0.88);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border-top: 1px solid rgba(0,0,0,0.08);
+        z-index: 100;
+        transition: background 0.3s;
+    }
+    html.dark-mode #voice-prompt-bar {
+        background: rgba(6,6,16,0.92);
+        border-top-color: rgba(255,255,255,0.08);
+    }
+    #vpb-orb-dot {
+        width: 36px; height: 36px; border-radius: 50%;
+        background: linear-gradient(135deg,#7B61FF,#5AE0E0);
+        box-shadow: 0 0 14px rgba(123,97,255,0.45);
+        flex-shrink: 0; cursor: pointer;
+        animation: ztm-breathe 4s ease-in-out infinite;
+        transition: box-shadow 0.3s;
+    }
+    #vpb-label {
+        font-size: 15px; font-weight: 500;
+        color: #888; flex: 1;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    html.dark-mode #vpb-label { color: rgba(255,255,255,0.45); }
+    /* State classes */
+    #voice-prompt-bar.vpb-listening { background: rgba(90,224,224,0.12) !important; }
+    #voice-prompt-bar.vpb-listening #vpb-orb-dot {
+        background: linear-gradient(135deg,#5AE0E0,#7B61FF) !important;
+        box-shadow: 0 0 28px rgba(90,224,224,0.7) !important;
+        animation: none !important;
+    }
+    #voice-prompt-bar.vpb-thinking #vpb-orb-dot {
+        background: linear-gradient(135deg,#FFB340,#FF6B6B) !important;
+        animation: none !important;
+    }
+    #voice-prompt-bar.vpb-responding #vpb-orb-dot {
+        background: linear-gradient(135deg,#7B61FF,#A855F7) !important;
+        box-shadow: 0 0 24px rgba(123,97,255,0.6) !important;
+        animation: none !important;
+    }
+    </style>
+
+    <div id="voice-prompt-bar" class="vpb-idle">
+        <div id="vpb-orb-dot"></div>
+        <span id="vpb-label">Tap orb or say "Hey Jarvis" to start</span>
+    </div>
+
     <script>
-    (function(){
-        // Wait for Gridstack to initialise, then lock it
-        function lockGrids(){
-            if(typeof GridStack !== 'undefined'){
-                document.querySelectorAll('.grid-stack').forEach(function(el){
-                    var g = GridStack.init({}, el);
-                    if(g && g.setStatic) g.setStatic(true);
+    (function wireChatVoice() {
+        // Suppress the VoiceOverlay floating panel — this page is the conversation surface
+        function suppressOverlay() {
+            const ov = document.getElementById('zoe-voice-overlay');
+            if (ov) ov.style.display = 'none';
+        }
+        document.addEventListener('DOMContentLoaded', suppressOverlay);
+        // Also intercept if VoiceOverlay mounts after DOMContentLoaded
+        const _origAppend = document.body.appendChild.bind(document.body);
+        document.body.appendChild = function(node) {
+            const result = _origAppend(node);
+            if (node && node.id === 'zoe-voice-overlay') node.style.display = 'none';
+            return result;
+        };
+
+        function _setVpbState(state, label) {
+            const bar = document.getElementById('voice-prompt-bar');
+            if (!bar) return;
+            bar.className = 'vpb-' + state;
+            const lbl = document.getElementById('vpb-label');
+            if (lbl && label) lbl.textContent = label;
+        }
+
+        // Transcript → user bubble in messagesContainer
+        document.addEventListener('zoe:voice:transcript', function(e) {
+            const text = e.detail && e.detail.text;
+            if (!text) return;
+            if (typeof addUserMessage === 'function') addUserMessage(text, true);
+            const lbl = document.getElementById('vpb-label');
+            if (lbl) lbl.textContent = text;
+        });
+
+        // AI response → assistant bubble
+        document.addEventListener('zoe:voice:responding', function(e) {
+            const text = e.detail && e.detail.text;
+            if (!text) return;
+            if (typeof addAssistantMessage === 'function') {
+                addAssistantMessage(text);
+            } else {
+                const c = document.getElementById('messagesContainer');
+                if (c) {
+                    const d = document.createElement('div');
+                    d.className = 'message-group assistant';
+                    d.innerHTML = '<div class="message-bubble assistant"><div class="message-content">' +
+                        text.replace(/</g, '&lt;').replace(/>/g, '&gt;') +
+                        '</div></div>';
+                    c.appendChild(d);
+                    c.scrollTop = c.scrollHeight;
+                }
+            }
+        });
+
+        // Voice state → prompt bar state classes
+        document.addEventListener('zoe:voice:wake',      function() { _setVpbState('listening', 'Listening…'); });
+        document.addEventListener('zoe:voice:thinking',  function() { _setVpbState('thinking',  'Thinking…'); });
+        document.addEventListener('zoe:voice:responding',function() { _setVpbState('responding','Responding…'); });
+        document.addEventListener('zoe:voice:done',      function() { _setVpbState('idle',      'Tap orb or say "Hey Jarvis" to start'); });
+
+        // Orb dot in the prompt bar triggers voice
+        document.addEventListener('DOMContentLoaded', function() {
+            const dot = document.getElementById('vpb-orb-dot');
+            if (dot) {
+                dot.addEventListener('click', function() {
+                    if (window.TouchMenu && typeof window.TouchMenu._activateVoice === 'function') {
+                        window.TouchMenu._activateVoice();
+                    }
                 });
             }
-        }
-        window.addEventListener('load', function(){ setTimeout(lockGrids, 1000); });
-        window.addEventListener('widgets-registered', lockGrids);
+        });
     })();
     </script>
 </body>

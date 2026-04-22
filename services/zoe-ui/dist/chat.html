@@ -1,11 +1,38 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script>
+    // Apply saved theme before first paint to prevent flash (ported from touch).
+    (function () {
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name="theme-color"]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch (e) {}
+    })();
+    </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
+    <meta name="theme-color" content="#fafbfc">
+    <!-- Zoe theme bootstrap (must run before UI scripts) -->
+    <script>
+    (function(){
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name=theme-color]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch(e) {}
+    })();
+    </script>
     <title>Zoe - AI Chat</title>
     <style>
         :root {
@@ -502,6 +529,83 @@
 
         /* Tool Trace Panel — AG-UI demo quality */
         .tool-trace-panel { margin: 0 0 8px 32px; display: flex; flex-direction: column; gap: 6px; }
+
+        /* Long-Run Notice — sticky banner for multi-minute agent tasks.
+         * Uses position: sticky so the tile stays pinned at the top of the
+         * messages-container viewport while the tool trace below scrolls past.
+         */
+        .long-run-notice {
+            display: none;
+            position: sticky;
+            top: 8px;
+            z-index: 40;
+            margin: 4px 0 10px 32px;
+            padding: 10px 14px;
+            border-radius: var(--radius-sm);
+            background: linear-gradient(135deg, rgba(123,97,255,0.18), rgba(56,189,248,0.18)), rgba(15,23,42,0.92);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(123,97,255,0.35);
+            border-left: 3px solid #7b61ff;
+            font-size: 13px;
+            color: #e2e8f0;
+            box-shadow: 0 6px 24px rgba(15,23,42,0.35), 0 2px 8px rgba(123,97,255,0.15);
+            align-items: center;
+            gap: 12px;
+        }
+        .long-run-notice.visible { display: flex; }
+        .long-run-notice-icon {
+            font-size: 18px;
+            animation: long-run-spin 2.2s linear infinite;
+            flex: 0 0 auto;
+        }
+        @keyframes long-run-spin {
+            from { transform: rotate(0deg); }
+            to   { transform: rotate(360deg); }
+        }
+        .long-run-notice-body { flex: 1 1 auto; min-width: 0; }
+        .long-run-notice-title {
+            font-weight: 600;
+            color: #f1f5f9;
+            margin-bottom: 2px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .long-run-notice-elapsed {
+            font-variant-numeric: tabular-nums;
+            font-size: 11px;
+            color: #94a3b8;
+            padding: 1px 6px;
+            border-radius: 8px;
+            background: rgba(148,163,184,0.12);
+        }
+        .long-run-notice-detail {
+            color: #cbd5e1;
+            font-size: 12px;
+            line-height: 1.35;
+        }
+        .long-run-notice-cancel {
+            flex: 0 0 auto;
+            background: rgba(239,68,68,0.12);
+            border: 1px solid rgba(239,68,68,0.35);
+            color: #fca5a5;
+            font-size: 12px;
+            padding: 5px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+        .long-run-notice-cancel:hover {
+            background: rgba(239,68,68,0.22);
+            color: #fff;
+            border-color: rgba(239,68,68,0.6);
+        }
+        .long-run-notice-cancel:disabled {
+            opacity: 0.55;
+            cursor: default;
+        }
 
         /* Suppress native <details> marker */
         .tool-call-card > summary { list-style: none; }
@@ -1984,12 +2088,13 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="css/dark-mode-shared.css">
 </head>
 <body>
     <!-- Navigation -->
     <div class="nav-bar">
         <div class="nav-left">
-            <div class="mini-orb" onclick="toggleMobileMenu()"></div>
+            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
             <div class="nav-menu">
                 <a href="chat.html" class="nav-item active">Chat</a>
                 <a href="dashboard.html" class="nav-item">Dashboard</a>
@@ -2001,16 +2106,19 @@
         </div>
         <div class="nav-right">
             <div class="api-indicator connecting" id="apiStatus">Connecting</div>
-            
-            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
-            
-            <!-- Time/Date Display -->
+            <button class="refresh-btn notifications-btn" onclick="forceRefreshCache()" title="Refresh App (clears cache)">🔄</button>
+            <button class="theme-nav-btn notifications-btn" title="Toggle theme" onclick="window.cycleZoeTheme && window.cycleZoeTheme()">🌓</button>
+            <button class="notifications-btn" onclick="openNotificationsSafe()" title="Notifications">🔔</button>
             <div class="time-date-display">
                 <div class="current-time" id="navCurrentTime">--:--</div>
                 <div class="current-date" id="navCurrentDate">Loading...</div>
             </div>
         </div>
     </div>
+
+    
+
+    
 
     <!-- More Overlay -->
     <div class="more-overlay" id="moreOverlay">
@@ -2032,9 +2140,21 @@
                     <div class="more-item-icon">🎵</div>
                     <div class="more-item-label">Music</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('games.html')">
-                    <div class="more-item-icon">🎮</div>
-                    <div class="more-item-label">Games</div>
+                <div class="more-item" onclick="navigateToPage('notes.html')">
+                    <div class="more-item-icon">📝</div>
+                    <div class="more-item-label">Notes</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('cooking.html')">
+                    <div class="more-item-icon">🍳</div>
+                    <div class="more-item-label">Cooking</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('smart-home.html')">
+                    <div class="more-item-icon">🏠</div>
+                    <div class="more-item-label">Smart Home</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('updates.html')">
+                    <div class="more-item-icon">⬇️</div>
+                    <div class="more-item-label">Updates</div>
                 </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
@@ -2061,8 +2181,15 @@
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
             <a href="music.html" class="mobile-nav-item">🎵 Music</a>
-            <a href="games.html" class="mobile-nav-item">🎮 Games</a>
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
+            <a href="notes.html" class="mobile-nav-item">📝 Notes</a>
+
+            <a href="cooking.html" class="mobile-nav-item">🍳 Cooking</a>
+
+            <a href="smart-home.html" class="mobile-nav-item">🏠 Smart Home</a>
+
+            <a href="updates.html" class="mobile-nav-item">⬇️ Updates</a>
+
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
             <div class="mobile-nav-divider"></div>
             <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
@@ -2265,6 +2392,44 @@
             }
         }
 
+        /** Show the "working on this" tile for the given context.
+         *
+         * Called when we have strong signal the run will be slow: OpenClaw phase
+         * kicks in, STEP_STARTED fires, or the wall clock crosses 20s in a
+         * still-generating state. Safe to call repeatedly — only activates once
+         * per run, then updates the elapsed label every second.
+         */
+        function showLongRunNotice(ctx, opts) {
+            const lr = ctx && ctx.longRun;
+            if (!lr || !lr.el) return;
+            if (opts && opts.detail && lr.detailEl) {
+                lr.detailEl.textContent = String(opts.detail);
+            }
+            if (lr.started) return;
+            lr.started = true;
+            lr.startedAt = Date.now();
+            lr.el.classList.add('visible');
+            const tick = () => {
+                if (!lr.started) return;
+                const secs = Math.floor((Date.now() - lr.startedAt) / 1000);
+                if (lr.elapsedEl) {
+                    lr.elapsedEl.textContent = secs < 60
+                        ? `${secs}s`
+                        : `${Math.floor(secs / 60)}m ${secs % 60}s`;
+                }
+            };
+            tick();
+            lr.timer = setInterval(tick, 1000);
+        }
+
+        function hideLongRunNotice(ctx) {
+            const lr = ctx && ctx.longRun;
+            if (!lr || !lr.el) return;
+            if (lr.timer) { clearInterval(lr.timer); lr.timer = null; }
+            lr.started = false;
+            lr.el.classList.remove('visible');
+        }
+
         /**
          * Central dispatcher: canonical AG-UI types + legacy Zoe SSE aliases.
          */
@@ -2348,12 +2513,31 @@
                     // Only show agent panel for tool-calling (openclaw) runs
                     if (snap.phase === 'openclaw') {
                         showAgentPanel(snap.model || 'OpenClaw');
+                        // OpenClaw runs are always multi-second; surface the
+                        // long-run notice immediately so the user isn't left
+                        // wondering whether the chat is stuck.
+                        showLongRunNotice(ctx, {
+                            detail: 'Zoe is using the agent system (OpenClaw) to fulfil this request. Complex tasks like building widgets, pages, or new skills can take 1–3 minutes. You can cancel at any time.',
+                        });
+                    } else if (snap.status === 'generating') {
+                        // Non-openclaw phases: only surface the tile if we've
+                        // been waiting a while (>20s) — small talk shouldn't
+                        // trigger it.
+                        const m = /(\d+)s\b/.exec(String(snap.detail || ''));
+                        if (m && parseInt(m[1], 10) >= 20) {
+                            showLongRunNotice(ctx, {
+                                detail: 'This is taking a bit longer than usual — Zoe is still generating your reply.',
+                            });
+                        }
                     }
                 }
                 return;
             }
             if (t === 'STEP_STARTED') {
                 const stepName = data.stepName || data.step_name || 'Agent';
+                showLongRunNotice(ctx, {
+                    detail: 'Zoe is running the agent pipeline (' + stepName + '). Complex tasks can take 1–3 minutes — you\'ll see the result here when it\'s ready.',
+                });
                 // Seal any previous open subgraph card before creating new one
                 if (ctx.activeSubgraphCard) {
                     const prevStatus = ctx.activeSubgraphCard.querySelector('.subgraph-status');
@@ -2492,6 +2676,9 @@
                 if (stream.text.length === 0 && thinkingIndicator && thinkingIndicator.parentNode) {
                     thinkingIndicator.remove();
                 }
+                if (stream.text.length === 0) {
+                    hideLongRunNotice(ctx);
+                }
                 stream.text += delta;
                 contentEl.innerHTML = escapeHtml(stream.text) + '<span class="streaming-cursor"></span>';
                 scrollToBottom();
@@ -2523,6 +2710,7 @@
                 if (thinkingIndicator && thinkingIndicator.parentNode) {
                     thinkingIndicator.remove();
                 }
+                hideLongRunNotice(ctx);
 
                 // Seal the active subgraph card
                 if (ctx.activeSubgraphCard) {
@@ -2560,6 +2748,7 @@
                 const msg = data.message || data.error?.message || 'Unknown error';
                 contentEl.innerHTML = '<span style="color: #ef4444;">Error: ' + escapeHtml(msg) + '</span>';
                 if (thinkingIndicator && thinkingIndicator.parentNode) thinkingIndicator.remove();
+                hideLongRunNotice(ctx);
                 isStreaming = false;
                 document.getElementById('sendBtn').disabled = false;
                 const stopBtn = document.getElementById('stopStreamBtn');
@@ -2575,6 +2764,14 @@
             }
             if (t === 'CUSTOM' && data.name === 'zoe.ui_command') {
                 executeDashboardCommand(data.value || {});
+                return;
+            }
+            if (t === 'CUSTOM' && data.name === 'zoe.ui_navigate') {
+                handleZoeUiNavigate(data.value || {}, group);
+                return;
+            }
+            if (t === 'CUSTOM' && data.name === 'zoe.ui_orb_prompt') {
+                handleZoeUiOrbPrompt(data.value || {}, group);
                 return;
             }
 
@@ -2716,6 +2913,8 @@
 
             // Check for completed background tasks and inject proactive messages
             setTimeout(checkPendingTasks, 1500);
+            setTimeout(handleVoiceListFocusParam, 900);
+            setTimeout(handleVoiceCalendarPrefillParam, 950);
 
             // Listen for background task completions → update context panel
             document.addEventListener('zoe:background-task', (e) => {
@@ -2922,15 +3121,21 @@
                 const container = document.getElementById('messagesContainer');
                 container.innerHTML = '';
                 
-                // Display all messages (skip saving since they're already in DB)
+                // Display all messages (skip saving since they're already in DB).
+                // For each assistant message we also attach the message-actions
+                // (Copy / Good / Bad / Correct) so history is interactive — this
+                // was getting dropped when switching sessions.
                 messages.forEach(msg => {
                     if (msg.role === 'user') {
-                        addUserMessage(msg.content, true); // skipSave = true
+                        addUserMessage(msg.content, true);
                     } else {
-                        addAssistantMessage(msg.content);
+                        const group = addAssistantMessage(msg.content, msg.id || msg.interaction_id || null);
+                        if (group) {
+                            addMessageActions(group, group.dataset.messageId || null);
+                        }
                     }
                 });
-                
+
                 messageCount = messages.length;
             } catch (error) {
                 console.error('Failed to load session messages:', error);
@@ -3197,6 +3402,37 @@
             const toolTraceEl = document.createElement('div');
             toolTraceEl.className = 'tool-trace-panel';
             toolTraceEl.style.display = 'none';
+
+            // Long-run notice tile — surfaces when a request looks like it's
+            // going to take a couple of minutes (agentic builder work, tool-heavy
+            // OpenClaw calls). Hidden by default; showLongRunNotice() reveals it.
+            const longRunNotice = document.createElement('div');
+            longRunNotice.className = 'long-run-notice';
+            longRunNotice.innerHTML = `
+                <div class="long-run-notice-icon">⚙️</div>
+                <div class="long-run-notice-body">
+                    <div class="long-run-notice-title">
+                        <span class="long-run-notice-heading">Zoe is working on this</span>
+                        <span class="long-run-notice-elapsed" data-lrn-elapsed>0s</span>
+                    </div>
+                    <div class="long-run-notice-detail" data-lrn-detail>
+                        Complex requests like building widgets or pages can take a couple of minutes. You'll see the result here when it's ready.
+                    </div>
+                </div>
+                <button type="button" class="long-run-notice-cancel" data-lrn-cancel>Cancel</button>
+            `;
+            longRunNotice.querySelector('[data-lrn-cancel]').addEventListener('click', () => {
+                try {
+                    if (streamAbortController) streamAbortController.abort();
+                } catch (_) {}
+                const btn = longRunNotice.querySelector('[data-lrn-cancel]');
+                if (btn) { btn.textContent = 'Cancelling…'; btn.disabled = true; }
+                // Auto-hide the notice a moment later so it doesn't linger after
+                // the user has asked to cancel. RUN_ERROR/RUN_FINISHED would
+                // normally clear it, but client-side aborts don't fire those.
+                setTimeout(() => { hideLongRunNotice(streamCtx); }, 600);
+            });
+
             const reasoningPanel = document.createElement('details');
             reasoningPanel.className = 'reasoning-panel';
             reasoningPanel.style.display = 'none';
@@ -3205,12 +3441,24 @@
             const contentEl = document.createElement('div');
             contentEl.className = 'message-content';
             group.appendChild(header);
+            group.appendChild(longRunNotice);
             group.appendChild(toolTraceEl);
             group.appendChild(reasoningPanel);
             group.appendChild(contentEl);
             container.appendChild(group);
 
             const stream = { text: '' };
+            // Long-run notice state lives in the stream context so every SSE
+            // handler can show/update/hide it consistently.
+            const longRun = {
+                el: longRunNotice,
+                elapsedEl: longRunNotice.querySelector('[data-lrn-elapsed]'),
+                detailEl: longRunNotice.querySelector('[data-lrn-detail]'),
+                cancelBtn: longRunNotice.querySelector('[data-lrn-cancel]'),
+                started: false,
+                startedAt: 0,
+                timer: null,
+            };
             const streamCtx = {
                 group,
                 contentEl,
@@ -3219,6 +3467,7 @@
                 toolTraceEl,
                 reasoningPanel,
                 reasoningBody,
+                longRun,
                 originalMessage,
                 finalized: false
             };
@@ -3345,10 +3594,11 @@
         }
 
         // Helper Functions
-        function addAssistantMessage(text) {
+        function addAssistantMessage(text, interactionId = null) {
             const container = document.getElementById('messagesContainer');
             const group = document.createElement('div');
             group.className = 'message-group assistant';
+            if (interactionId) group.dataset.messageId = interactionId;
             group.innerHTML = `
                 <div class="message-header">
                     <div class="message-avatar">🤖</div>
@@ -3359,6 +3609,7 @@
             `;
             container.appendChild(group);
             scrollToBottom();
+            return group;
         }
 
         function addMessageActions(group, interactionId = null) {
@@ -3418,6 +3669,9 @@
                 case 'list_add_form':
                     renderListAddForm(container, data.props || {});
                     break;
+                case 'shopping_list_live':
+                    renderShoppingListLive(container, data.props || {});
+                    break;
                 case 'reminder_create_form':
                     renderReminderCreateForm(container, data.props || {});
                     break;
@@ -3444,6 +3698,9 @@
                     break;
                 case 'data_grid':
                     renderDataGrid(container, data.props || {});
+                    break;
+                case 'research_evidence':
+                    renderResearchEvidence(container, data.props || {});
                     break;
                 case 'openclaw_manager':
                     renderOpenClawManager(container, data.props || {});
@@ -3569,6 +3826,39 @@
                         ${fields}
                         <button type="submit" class="form-submit">${escapeHtml(props.submit_label || 'Submit')}</button>
                     </form>
+                </div>
+            `;
+        }
+
+        function renderResearchEvidence(container, props) {
+            const results = Array.isArray(props.results) ? props.results : [];
+            const screenshots = Array.isArray(props.screenshots) ? props.screenshots : [];
+            const sources = Array.isArray(props.sources) ? props.sources : [];
+            const resultRows = results.slice(0, 6).map((r) => `
+                <tr>
+                    <td>${escapeHtml(String(r.rank ?? ''))}</td>
+                    <td>${escapeHtml(String(r.name || ''))}</td>
+                    <td>${escapeHtml(String(r.value || ''))}</td>
+                    <td>${escapeHtml(String(r.location || ''))}</td>
+                </tr>
+            `).join('');
+            const screenshotsHtml = screenshots.slice(0, 3).map((s) => {
+                if (!s.image_base64) return '';
+                return `<img style="max-width:100%;border-radius:10px;margin-top:8px;" src="data:image/png;base64,${String(s.image_base64).replace(/^data:image\/\\w+;base64,/, '')}" alt="">`;
+            }).join('');
+            const sourceHtml = sources.slice(0, 5).map((u) => `<li>${escapeHtml(String(u))}</li>`).join('');
+            container.innerHTML = `
+                <div class="info-card">
+                    <div class="info-card-body" style="width:100%;">
+                        <div class="info-card-title">Research Evidence</div>
+                        <div class="info-card-desc">${escapeHtml(String(props.query || ''))}</div>
+                        <table class="data-grid-component" style="margin-top:10px;">
+                            <thead><tr><th>#</th><th>Option</th><th>Value</th><th>Location</th></tr></thead>
+                            <tbody>${resultRows || '<tr><td colspan="4">No ranked results.</td></tr>'}</tbody>
+                        </table>
+                        ${screenshotsHtml}
+                        <ul style="margin-top:10px;">${sourceHtml || '<li>No sources captured.</li>'}</ul>
+                    </div>
                 </div>
             `;
         }
@@ -3926,16 +4216,118 @@
                 await apiRequest(`/api/lists/${listType}/${listId}/items`, {
                     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(itemPayload)
                 });
-                wrap.innerHTML = `<div class="cef-wrap"><div class="cef-success">
-                    <div class="cef-success-icon" style="background:linear-gradient(135deg,#10b981,#34d399)">✓</div>
-                    <div class="cef-success-body">
-                        <div class="cef-success-title">${escapeHtml(itemText)}</div>
-                        <div class="cef-success-meta">Added to ${escapeHtml(listType)} list</div>
-                    </div></div></div>`;
+                const liveMount = document.createElement('div');
+                wrap.replaceWith(liveMount);
+                renderShoppingListLive(liveMount, {
+                    list_type: listType,
+                    highlight_item: itemText,
+                    summary: `Added ${itemText} to your ${listType} list.`,
+                });
             } catch(e) {
                 btn.disabled=false; btn.textContent='Add Item';
                 _cefShowError(form, 'Could not add item — please try again.');
             }
+        }
+
+        function _normalizeListTypeForLive(raw) {
+            const t = String(raw || 'shopping').trim().toLowerCase();
+            if (['shopping', 'personal', 'work', 'tasks', 'bucket'].includes(t)) return t;
+            return 'shopping';
+        }
+
+        async function _resolveListIdForType(listType) {
+            const listsResp = await apiRequest(`/api/lists/${listType}`);
+            if (listsResp?.lists?.length) return listsResp.lists[0].id;
+            const created = await apiRequest(`/api/lists/${listType}`, {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ name: listType.charAt(0).toUpperCase()+listType.slice(1), list_type: listType })
+            });
+            return created?.id || created?.list?.id;
+        }
+
+        async function _fetchItemsForListType(listType) {
+            try {
+                const listId = await _resolveListIdForType(listType);
+                if (!listId) return [];
+                const itemsResp = await apiRequest(`/api/lists/${listType}/${listId}/items`);
+                return Array.isArray(itemsResp?.items) ? itemsResp.items : [];
+            } catch (_) {
+                return [];
+            }
+        }
+
+        async function renderShoppingListLive(container, props) {
+            const listType = _normalizeListTypeForLive(props.list_type || 'shopping');
+            const highlightItem = String(props.highlight_item || props.item || '').trim().toLowerCase();
+            const summary = props.summary || `Here is your ${listType} list.`;
+            const mountId = `live-list-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+            container.innerHTML = `
+                <div class="cef-wrap" id="${mountId}">
+                    <div class="cef-header">
+                        <div class="cef-header-icon cef-icon-list">🛒</div>
+                        <div class="cef-header-text">
+                            <div class="cef-header-title">${escapeHtml(listType.charAt(0).toUpperCase()+listType.slice(1))} List</div>
+                            <div class="cef-header-subtitle">${escapeHtml(summary)}</div>
+                        </div>
+                    </div>
+                    <div class="cef-body" style="display:flex;flex-direction:column;gap:10px;">
+                        <form class="live-list-add-form" style="display:flex;gap:8px;">
+                            <input class="cef-input" type="text" name="item_text" placeholder="Add another item..." style="flex:1;">
+                            <button type="submit" class="cef-btn cef-btn-create" style="background:linear-gradient(135deg,#10b981,#34d399);padding:10px 14px;">Add</button>
+                        </form>
+                        <div class="live-list-items">Loading list...</div>
+                    </div>
+                </div>`;
+            const root = document.getElementById(mountId);
+            if (!root) return;
+            const listEl = root.querySelector('.live-list-items');
+            const formEl = root.querySelector('.live-list-add-form');
+
+            const refresh = async (newHighlight = highlightItem) => {
+                const items = await _fetchItemsForListType(listType);
+                if (!listEl) return;
+                if (!items.length) {
+                    listEl.innerHTML = `<div style="color:#94a3b8;font-size:13px;">Your ${escapeHtml(listType)} list is empty.</div>`;
+                    return;
+                }
+                const rows = items.slice(0, 20).map((it) => {
+                    const txt = String(it.text || '').trim();
+                    const match = newHighlight && txt.toLowerCase() === newHighlight.toLowerCase();
+                    const style = match
+                        ? 'background:rgba(16,185,129,0.18);border:1px solid rgba(16,185,129,0.45);'
+                        : 'background:rgba(148,163,184,0.08);border:1px solid rgba(148,163,184,0.2);';
+                    return `<li style="padding:8px 10px;border-radius:10px;${style}">${escapeHtml(txt || '(untitled item)')}</li>`;
+                }).join('');
+                listEl.innerHTML = `<ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:6px;">${rows}</ul>`;
+            };
+
+            if (formEl) {
+                formEl.addEventListener('submit', async (event) => {
+                    event.preventDefault();
+                    const input = formEl.querySelector('input[name="item_text"]');
+                    const btn = formEl.querySelector('button[type="submit"]');
+                    const itemText = String(input?.value || '').trim();
+                    if (!itemText) return;
+                    if (btn) { btn.disabled = true; btn.textContent = 'Adding...'; }
+                    try {
+                        const listId = await _resolveListIdForType(listType);
+                        await apiRequest(`/api/lists/${listType}/${listId}/items`, {
+                            method:'POST',
+                            headers:{'Content-Type':'application/json'},
+                            body: JSON.stringify({ text: itemText }),
+                        });
+                        if (input) input.value = '';
+                        await refresh(itemText);
+                    } catch (_) {
+                        if (listEl) listEl.innerHTML = `<div style="color:#f87171;font-size:13px;">Could not add item. Try again.</div>`;
+                    } finally {
+                        if (btn) { btn.disabled = false; btn.textContent = 'Add'; }
+                    }
+                });
+            }
+
+            await refresh();
         }
 
         // ── Reminder Create Form ──────────────────────────────────────────────
@@ -4737,6 +5129,78 @@
             }
         }
         
+        // ── zoe.ui_navigate ─────────────────────────────────────────────
+        // Used by zoe-verify + builder skills to auto-navigate to a preview
+        // or newly promoted surface. payload:
+        //   { action: "navigate", url: "/_preview/<id>/foo.html",
+        //     target: "main"|"iframe"|"new-tab", task_id?: "..." }
+        function handleZoeUiNavigate(payload, group) {
+            const url = payload && payload.url;
+            const target = payload.target || 'main';
+            if (!url || typeof url !== 'string') return;
+            // Whitelist: only allow same-origin, relative URLs to avoid a
+            // compromised OpenClaw response redirecting the user offsite.
+            const safe = url.startsWith('/') && !url.startsWith('//');
+            if (!safe) {
+                console.warn('[zoe.ui_navigate] refused non-relative URL:', url);
+                return;
+            }
+            if (target === 'iframe' && group) {
+                const wrap = document.createElement('div');
+                wrap.className = 'zoe-preview-frame';
+                wrap.style.cssText = 'margin-top:10px;border-radius:12px;overflow:hidden;background:rgba(0,0,0,0.04);';
+                const frame = document.createElement('iframe');
+                frame.src = url;
+                frame.style.cssText = 'width:100%;height:420px;border:0;display:block;';
+                frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms');
+                const label = document.createElement('div');
+                label.style.cssText = 'font-size:11px;padding:4px 10px;color:#666;background:rgba(0,0,0,0.04);';
+                label.textContent = 'Preview · ' + url;
+                wrap.appendChild(label);
+                wrap.appendChild(frame);
+                group.appendChild(wrap);
+                return;
+            }
+            if (target === 'new-tab') {
+                window.open(url, '_blank', 'noopener');
+                return;
+            }
+            // Default: full-page navigation
+            window.location.assign(url);
+        }
+
+        // ── zoe.ui_orb_prompt ────────────────────────────────────────────
+        // Expand the orb, speak a prompt, optionally auto-activate mic so the
+        // user can respond by voice. Dispatches a CustomEvent that the orb
+        // component (components/zoe-orb.html) listens for.
+        function handleZoeUiOrbPrompt(payload, group) {
+            if (!payload) return;
+            const detail = {
+                prompt: payload.prompt || '',
+                auto_mic: payload.auto_mic !== false,
+                task_id: payload.task_id || null,
+                choices: payload.choices || null,
+                timeout_s: payload.timeout_s || 30,
+            };
+            window.dispatchEvent(new CustomEvent('zoe:orb-prompt', { detail }));
+            // Also speak via TTS if available
+            try {
+                if (detail.prompt && window.speechSynthesis) {
+                    const u = new SpeechSynthesisUtterance(detail.prompt);
+                    u.rate = 1.0;
+                    window.speechSynthesis.speak(u);
+                }
+            } catch (_) {}
+            // Visual fallback in-chat so the user isn't left guessing if the orb is offscreen
+            if (group && detail.prompt) {
+                const note = document.createElement('div');
+                note.className = 'zoe-orb-prompt-note';
+                note.style.cssText = 'margin-top:8px;padding:8px 12px;border-radius:10px;background:rgba(123,97,255,0.12);color:#3b2c8a;font-size:13px;';
+                note.textContent = '🎙  ' + detail.prompt;
+                group.appendChild(note);
+            }
+        }
+
         async function executeDashboardCommand(data) {
             let cmd = data.command;
             if (cmd === 'add_widget') cmd = 'add_widgets';
@@ -5542,6 +6006,68 @@
                 window.history.replaceState({}, '', window.location.pathname);
             }
         }
+
+        function handleVoiceListFocusParam() {
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('list_focus') !== '1') return;
+            const listType = params.get('list_type') || 'shopping';
+            const listItem = params.get('list_item') || '';
+            const summary = listItem
+                ? `Added ${listItem}. You can add more items now.`
+                : 'Here is your shopping list. You can add more items now.';
+            const messagesContainer = document.getElementById('messagesContainer');
+            if (!messagesContainer) return;
+            const group = document.createElement('div');
+            group.className = 'message-group assistant';
+            group.innerHTML = `<div class="message-bubble assistant" style="margin-bottom:6px">${escapeHtml(summary)}</div>`;
+            renderChatComponent({
+                component: 'shopping_list_live',
+                props: {
+                    list_type: listType,
+                    highlight_item: listItem,
+                    summary,
+                },
+            }, null, group);
+            messagesContainer.appendChild(group);
+            scrollToBottom();
+
+            params.delete('list_focus');
+            params.delete('list_type');
+            params.delete('list_item');
+            const next = params.toString();
+            window.history.replaceState({}, '', next ? `${window.location.pathname}?${next}` : window.location.pathname);
+        }
+
+        function handleVoiceCalendarPrefillParam() {
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('calendar_focus') !== '1') return;
+            const title = params.get('title') || '';
+            const date = params.get('date') || '';
+            const time = params.get('time') || '';
+            const messagesContainer = document.getElementById('messagesContainer');
+            if (!messagesContainer) return;
+            const group = document.createElement('div');
+            group.className = 'message-group assistant';
+            group.innerHTML = `<div class="message-bubble assistant" style="margin-bottom:6px">I prefilled your calendar event. Review and confirm on screen.</div>`;
+            renderChatComponent({
+                component: 'calendar_event_form',
+                props: {
+                    title,
+                    date,
+                    time,
+                    category: 'general',
+                },
+            }, null, group);
+            messagesContainer.appendChild(group);
+            scrollToBottom();
+
+            params.delete('calendar_focus');
+            params.delete('title');
+            params.delete('date');
+            params.delete('time');
+            const next = params.toString();
+            window.history.replaceState({}, '', next ? `${window.location.pathname}?${next}` : window.location.pathname);
+        }
         
         async function handleOnboardingMode() {
             console.log('Starting onboarding conversation');
@@ -5602,6 +6128,121 @@
         checkDegraded();
         setInterval(checkDegraded, 60000);
     })();
+    
+
+        // Navigation helper functions
+        function openMoreOverlay() {
+            document.getElementById('moreOverlay').classList.add('active');
+        }
+        
+        function closeMoreOverlay() {
+            document.getElementById('moreOverlay').classList.remove('active');
+        }
+        
+        function navigateToPage(page) {
+            window.location.href = page;
+        }
+        
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+            const notificationBtn = document.querySelector('.notifications-btn');
+            if (notificationBtn) notificationBtn.classList.remove('has-notifications');
+        }
+        
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+        
+        async function loadNotifications() {
+            try {
+                const response = await apiRequest('/reminders/notifications/pending');
+                const notifications = response.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+        
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            if (notifications.length > 0 && notificationBtn) {
+                notificationBtn.classList.add('has-notifications');
+            } else if (notificationBtn) {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
+                     onclick="handleNotificationClick(${notification.id})">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${formatNotificationTime(notification.notification_time)}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        function formatNotificationTime(timeStr) {
+            const date = new Date(timeStr);
+            const now = new Date();
+            const diff = now - date;
+            const minutes = Math.floor(diff / 60000);
+            const hours = Math.floor(minutes / 60);
+            const days = Math.floor(hours / 24);
+            
+            if (minutes < 1) return 'Just now';
+            if (minutes < 60) return `${minutes}m ago`;
+            if (hours < 24) return `${hours}h ago`;
+            return `${days}d ago`;
+        }
+        
+        async function handleNotificationClick(notificationId) {
+            try {
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
+                    method: 'POST'
+                });
+                loadNotifications();
+            } catch (error) {
+                console.error('Failed to acknowledge notification:', error);
+            }
+            closeNotifications();
+        }
+        
+        // Update time/date display
+        function updateTimeDate() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            const timeElement = document.getElementById('currentTime');
+            const dateElement = document.getElementById('currentDate');
+            
+            if (timeElement) timeElement.textContent = timeString;
+            if (dateElement) dateElement.textContent = dateString;
+        }
+        
+        // Initialize time/date updates
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function() {
+                updateTimeDate();
+                setInterval(updateTimeDate, 60000);
+                loadNotifications();
+            });
+        } else {
+            updateTimeDate();
+            setInterval(updateTimeDate, 60000);
+            loadNotifications();
+        }
+
     </script>
 </body>
 </html><!-- Cache Bust: 1760009000 - v8.1 Fresh Start -->

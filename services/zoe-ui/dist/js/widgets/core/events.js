@@ -85,6 +85,11 @@ class EventsWidget extends WidgetModule {
     updateEvents(events) {
         const content = this.element.querySelector('#eventsContent');
         const count = this.element.querySelector('#eventsCount');
+        const isDark = document.documentElement.classList.contains('dark-mode');
+        const textPrimary = isDark ? 'rgba(255,255,255,0.92)' : '#1f2937';
+        const textSecondary = isDark ? 'rgba(255,255,255,0.68)' : '#666';
+        const cardBg = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.92)';
+        const cardBorder = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0, 0, 0, 0.08)';
         
         if (count) {
             count.textContent = events.length;
@@ -100,15 +105,15 @@ class EventsWidget extends WidgetModule {
             content.style.minHeight = '0';
             
             if (events.length === 0) {
-                content.innerHTML = '<div style="text-align: center; color: #666; font-style: italic; padding: 20px;">No events today</div>';
+                content.innerHTML = `<div style="text-align: center; color: ${textSecondary}; font-style: italic; padding: 20px;">No events today</div>`;
                 return;
             }
             
             // Create events list with proper spacing
             const eventsHTML = events.map(event => `
-                <div class="calendar-event-item ${event.category || 'personal'}" style="padding: 12px; border-radius: 8px; cursor: pointer; transition: all 0.3s; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); border-left: 4px solid; width: 100%; box-sizing: border-box; margin-bottom: 8px;">
-                    <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px;">${this.formatTime(event.start_time || event.time)}</div>
-                    <div style="font-size: 14px; font-weight: 500;">${event.title}</div>
+                <div class="calendar-event-item ${event.category || 'personal'}" style="padding: 12px; border-radius: 8px; cursor: pointer; transition: all 0.3s; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.10); border: 1px solid ${cardBorder}; background: ${cardBg}; border-left: 4px solid; width: 100%; box-sizing: border-box; margin-bottom: 8px; color: ${textPrimary};">
+                    <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px; color: ${textSecondary};">${this.formatTime(event.start_time || event.time)}</div>
+                    <div style="font-size: 14px; font-weight: 500; color: ${textPrimary};">${event.title}</div>
                 </div>
             `).join('');
             

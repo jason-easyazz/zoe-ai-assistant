@@ -17,8 +17,17 @@ _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("ZOE_DATA_DB", os.path.join(_BASE_DIR, "zoe.db"))
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 _BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
-# OpenClaw gateway for browser screenshot forwarding (screenshot-to-panel model)
 _OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW", "http://127.0.0.1:18789")
+# When true (rollout goal), tools/call without _user_id/user_id is rejected.
+# Until OpenClaw skills are caught up, default false logs a warning and falls
+# back to family-admin so existing workflows don't break silently.
+_MCP_STRICT_USER_ID = os.environ.get("ZOE_MCP_STRICT_USER_ID", "false").strip().lower() == "true"
+
+import logging as _mcp_logging
+_mcp_log = _mcp_logging.getLogger("mcp_server")
+from browser_broker import create_default_browser_broker
+
+_BROWSER_BROKER = create_default_browser_broker(_OPENCLAW_GW)
 
 
 async def _notify_ui(channel: str, event_type: str, data: dict):
@@ -32,6 +41,36 @@ async def _notify_ui(channel: str, event_type: str, data: dict):
             })
     except Exception:
         pass
+
+
+async def _get_weather_default_location(db) -> dict:
+    """System-level weather fallback location (admin-configured or env default)."""
+    try:
+        cursor = await db.execute(
+            "SELECT value FROM system_preferences WHERE key = ?",
+            ("weather_default_location",),
+        )
+        row = await cursor.fetchone()
+        if row and row["value"]:
+            payload = json.loads(row["value"])
+            if isinstance(payload, dict):
+                lat = payload.get("latitude")
+                lon = payload.get("longitude")
+                if lat is not None and lon is not None:
+                    return {
+                        "latitude": float(lat),
+                        "longitude": float(lon),
+                        "city": payload.get("city") or "Geraldton",
+                        "timezone": payload.get("timezone") or os.environ.get("ZOE_TIMEZONE", "Australia/Perth"),
+                    }
+    except Exception:
+        pass
+    return {
+        "latitude": float(os.environ.get("ZOE_LOCATION_LAT", "-28.7774")),
+        "longitude": float(os.environ.get("ZOE_LOCATION_LON", "114.6158")),
+        "city": os.environ.get("ZOE_LOCATION_CITY", "Geraldton"),
+        "timezone": os.environ.get("ZOE_TIMEZONE", "Australia/Perth"),
+    }
 
 TOOLS = [
     {
@@ -257,6 +296,17 @@ TOOLS = [
     {
         "name": "zoe_list_skills",
         "description": "List the Zoe skills and capabilities currently available.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "zoe_self_capabilities",
+        "description": (
+            "Authoritative live snapshot of what Zoe is and can do: running "
+            "services, active agents, installed widgets, available pages, "
+            "OpenClaw skills, and whether she can build new widgets/pages/"
+            "capabilities (can_build). Call this BEFORE telling a user Zoe "
+            "can't do something."
+        ),
         "inputSchema": {"type": "object", "properties": {}},
     },
     # --- Journal tools ---
@@ -544,6 +594,16 @@ TOOLS = [
         },
     },
     {
+        "name": "browser_get_capabilities",
+        "description": "Return browser backend capability matrix and availability.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_compare_backends",
+        "description": "Return side-by-side backend comparison and active recommendation.",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "panel_announce",
         "description": "Play a TTS announcement on a panel (or all panels).",
         "inputSchema": {
@@ -674,6 +734,102 @@ TOOLS = [
             "required": ["query"],
         },
     },
+    # === MEMORY TOOLS (MemPalace via MemoryService) ============================
+    {
+        "name": "memory_add",
+        "description": (
+            "Store a persistent fact about the user in MemPalace. Use for "
+            "preferences, identity, relationships, health, habits, plans, and "
+            "other facts that should survive across sessions. Automatically "
+            "scrubbed for PII (credit cards, SSN, 2FA codes, passwords)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "content": {"type": "string", "description": "Short third-person fact (≤300 chars)."},
+                "memory_type": {
+                    "type": "string",
+                    "description": "fact | preference | identity | relationship | habit | goal | health | plan | temporal",
+                },
+                "confidence": {"type": "number", "description": "0.0–1.0 confidence (default 0.85)"},
+                "entity_type": {"type": "string", "description": "Optional: self | person | place | thing"},
+                "entity_id": {"type": "string", "description": "Optional: person id, place id, …"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "expires_at": {"type": "string", "description": "Optional ISO-8601 expiry"},
+                "status": {
+                    "type": "string",
+                    "description": "approved | pending (default approved for MCP writes)",
+                },
+            },
+            "required": ["content"],
+        },
+    },
+    {
+        "name": "memory_search",
+        "description": (
+            "Semantic search across the calling user's MemPalace rows. Returns "
+            "the top-k matches ranked by relevance (and access recency)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Natural-language query."},
+                "limit": {"type": "integer", "description": "Max matches (default 8, cap 50)."},
+                "memory_type": {"type": "string", "description": "Optional type filter (applied client-side)."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "memory_list",
+        "description": (
+            "List memories by status for the calling user. Use to inspect the "
+            "review queue (status='pending'), or to audit approved rows."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "description": "pending | approved | rejected | superseded | archived (default pending)",
+                },
+                "limit": {"type": "integer", "description": "Max rows (default 25, cap 200)."},
+            },
+        },
+    },
+    {
+        "name": "memory_review",
+        "description": (
+            "Approve / reject / edit a single MemPalace row. Edits create a "
+            "new row that supersedes the original. All reviews are audited. "
+            "Requires ownership unless caller is an admin."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string"},
+                "decision": {"type": "string", "description": "approve | reject | edit"},
+                "edits": {"type": "string", "description": "Required when decision='edit'."},
+                "note": {"type": "string", "description": "Reason / audit note."},
+            },
+            "required": ["memory_id", "decision"],
+        },
+    },
+    {
+        "name": "memory_forget",
+        "description": (
+            "Soft-delete a specific memory by id (marks it archived and writes "
+            "an audit row). Owner or admin only."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string"},
+                "note": {"type": "string", "description": "Optional audit reason."},
+            },
+            "required": ["memory_id"],
+        },
+    },
 ]
 
 
@@ -767,8 +923,25 @@ async def _enqueue_panel_tool(db, *, user_id_fallback: str, panel_id, action_typ
     )
 
 
+class _MissingUserId(Exception):
+    """Raised when strict mode rejects a tool call with no identity."""
+
+
 async def _execute_tool(db, name: str, args: dict):
-    user_id = args.pop("_user_id", args.pop("user_id", "family-admin"))
+    _uid_raw = args.pop("_user_id", args.pop("user_id", None))
+    if _uid_raw is None:
+        if _MCP_STRICT_USER_ID:
+            raise _MissingUserId(
+                f"tool '{name}' requires explicit _user_id (strict mode enabled)"
+            )
+        _mcp_log.warning(
+            "mcp tool '%s' called without user_id — falling back to family-admin. "
+            "Set ZOE_MCP_STRICT_USER_ID=true once all callers pass _user_id.",
+            name,
+        )
+        user_id = "family-admin"
+    else:
+        user_id = _uid_raw
 
     if "list_type" in args:
         args["list_type"] = _LIST_TYPE_ALIASES.get(args["list_type"], args["list_type"])
@@ -818,13 +991,13 @@ async def _execute_tool(db, name: str, args: dict):
         ln = args.get("list_name")
         if ln:
             cursor = await db.execute(
-                "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category FROM lists l LEFT JOIN list_items li ON l.id = li.list_id AND li.deleted=0 WHERE l.list_type=? AND l.name LIKE ? AND l.deleted=0 ORDER BY li.sort_order",
-                (lt, f"%{ln}%"),
+                "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category FROM lists l LEFT JOIN list_items li ON l.id = li.list_id AND li.deleted=0 WHERE l.user_id=? AND l.list_type=? AND l.name LIKE ? AND l.deleted=0 ORDER BY li.sort_order",
+                (user_id, lt, f"%{ln}%"),
             )
         else:
             cursor = await db.execute(
-                "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category FROM lists l LEFT JOIN list_items li ON l.id = li.list_id AND li.deleted=0 WHERE l.list_type=? AND l.deleted=0 ORDER BY l.name, li.sort_order",
-                (lt,),
+                "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category FROM lists l LEFT JOIN list_items li ON l.id = li.list_id AND li.deleted=0 WHERE l.user_id=? AND l.list_type=? AND l.deleted=0 ORDER BY l.name, li.sort_order",
+                (user_id, lt),
             )
         rows = await cursor.fetchall()
         lists_map = {}
@@ -845,8 +1018,8 @@ async def _execute_tool(db, name: str, args: dict):
         lt = args["list_type"]
         ln = args.get("list_name", lt.capitalize())
         cursor = await db.execute(
-            "SELECT id FROM lists WHERE list_type=? AND name=? AND deleted=0 LIMIT 1",
-            (lt, ln),
+            "SELECT id FROM lists WHERE user_id=? AND list_type=? AND name=? AND deleted=0 LIMIT 1",
+            (user_id, lt, ln),
         )
         row = await cursor.fetchone()
         if row:
@@ -871,8 +1044,8 @@ async def _execute_tool(db, name: str, args: dict):
         lt = args["list_type"]
         text = args["item_text"]
         cursor = await db.execute(
-            "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id WHERE l.list_type=? AND li.text LIKE ? AND li.deleted=0 AND l.deleted=0 LIMIT 1",
-            (lt, f"%{text}%"),
+            "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id WHERE l.user_id=? AND l.list_type=? AND li.text LIKE ? AND li.deleted=0 AND l.deleted=0 LIMIT 1",
+            (user_id, lt, f"%{text}%"),
         )
         row = await cursor.fetchone()
         if not row:
@@ -930,6 +1103,18 @@ async def _execute_tool(db, name: str, args: dict):
         await db.commit()
         result = {"id": pid, "name": args["name"], "relationship": args.get("relationship")}
         await _notify_ui("all", "people:created", result)
+        # Mirror to MemPalace so OpenClaw-authored contacts show up in
+        # memory retrieval identically to HTTP-router-authored ones.
+        try:
+            from routers.people import _store_person_memory  # type: ignore
+            await _store_person_memory(
+                db, user_id,
+                {**result, "birthday": args.get("birthday"), "phone": args.get("phone"),
+                 "email": args.get("email"), "notes": args.get("notes")},
+                "created",
+            )
+        except Exception as exc:
+            _mcp_log.info("mcp people_create memory mirror skipped: %s", exc)
         return {**result, "status": "created"}
 
     elif name == "note_create":
@@ -941,6 +1126,15 @@ async def _execute_tool(db, name: str, args: dict):
         await db.commit()
         result = {"id": nid, "title": args.get("title"), "category": args.get("category", "general")}
         await _notify_ui("notes", "note_created", result)
+        try:
+            from routers.notes import _store_note_memory  # type: ignore
+            await _store_note_memory(
+                db, user_id,
+                {**result, "content": args["content"]},
+                "created",
+            )
+        except Exception as exc:
+            _mcp_log.info("mcp note_create memory mirror skipped: %s", exc)
         return {**result, "status": "created"}
 
     elif name == "note_search":
@@ -1062,12 +1256,16 @@ async def _execute_tool(db, name: str, args: dict):
             if row:
                 d = dict(row)
                 lat, lon, city = d.get("latitude"), d.get("longitude"), d.get("city")
-        # Fallback to environment variables (set in .env)
+        # Fallback to system-level default (admin setting), then env defaults.
         if not lat:
-            lat = float(os.environ.get("ZOE_LOCATION_LAT", "-31.9505"))
-            lon = float(os.environ.get("ZOE_LOCATION_LON", "115.8605"))
-            city = city or os.environ.get("ZOE_LOCATION_CITY", "Perth")
-        tz = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
+            default_loc = await _get_weather_default_location(db)
+            lat = default_loc["latitude"]
+            lon = default_loc["longitude"]
+            city = city or default_loc["city"]
+            tz = default_loc["timezone"]
+        else:
+            city = city or os.environ.get("ZOE_LOCATION_CITY", "Geraldton")
+            tz = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
         params = {
             "latitude": lat, "longitude": lon, "timezone": tz,
             "current": "temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m",
@@ -1107,10 +1305,14 @@ async def _execute_tool(db, name: str, args: dict):
                 d = dict(row)
                 lat, lon, city = d.get("latitude"), d.get("longitude"), d.get("city")
         if not lat:
-            lat = float(os.environ.get("ZOE_LOCATION_LAT", "-31.9505"))
-            lon = float(os.environ.get("ZOE_LOCATION_LON", "115.8605"))
-            city = city or os.environ.get("ZOE_LOCATION_CITY", "Perth")
-        tz = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
+            default_loc = await _get_weather_default_location(db)
+            lat = default_loc["latitude"]
+            lon = default_loc["longitude"]
+            city = city or default_loc["city"]
+            tz = default_loc["timezone"]
+        else:
+            city = city or os.environ.get("ZOE_LOCATION_CITY", "Geraldton")
+            tz = os.environ.get("ZOE_TIMEZONE", "Australia/Perth")
         params = {
             "latitude": lat, "longitude": lon, "timezone": tz,
             "daily": "temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum",
@@ -1189,19 +1391,119 @@ async def _execute_tool(db, name: str, args: dict):
         }
 
     elif name == "zoe_list_skills":
-        skills_dir = os.path.expanduser("~/.openclaw/skills")
-        skills = []
-        try:
-            if os.path.isdir(skills_dir):
-                for entry in os.scandir(skills_dir):
-                    if entry.is_dir():
-                        skills.append(entry.name)
-        except Exception:
-            pass
+        # Real OpenClaw workspace skills live under ~/.openclaw/workspace/skills.
+        # Keep the legacy ~/.openclaw/skills as a fallback.
+        skills_dirs = [
+            os.path.expanduser("~/.openclaw/workspace/skills"),
+            os.path.expanduser("~/.openclaw/skills"),
+        ]
+        skills: set[str] = set()
+        used_dir = None
+        for d in skills_dirs:
+            try:
+                if os.path.isdir(d):
+                    used_dir = used_dir or d
+                    for entry in os.scandir(d):
+                        if entry.is_dir():
+                            skills.add(entry.name)
+            except Exception:
+                continue
         return {
             "skills": sorted(skills),
             "count": len(skills),
-            "skills_dir": skills_dir,
+            "skills_dir": used_dir or skills_dirs[0],
+        }
+
+    elif name == "zoe_self_capabilities":
+        import datetime
+        import glob
+        import json as _json
+        import socket
+
+        # --- services (probe ports) ---
+        def _port_open(host: str, port: int, timeout: float = 0.25) -> bool:
+            try:
+                with socket.create_connection((host, port), timeout=timeout):
+                    return True
+            except Exception:
+                return False
+
+        services = [
+            {"name": "zoe-data",         "port": 8000,  "up": _port_open("127.0.0.1", 8000)},
+            {"name": "zoe-auth",         "port": 8001,  "up": _port_open("127.0.0.1", 8001)},
+            {"name": "hermes-agent",     "port": 8642,  "up": _port_open("127.0.0.1", 8642)},
+            {"name": "llama-cpp",        "port": 11435, "up": _port_open("127.0.0.1", 11435)},
+            {"name": "openclaw-gateway", "port": 18789, "up": _port_open("127.0.0.1", 18789)},
+            {"name": "nginx",            "port": 80,    "up": _port_open("127.0.0.1", 80)},
+        ]
+
+        # --- active agents (mirrors zoe_get_status) ---
+        agents = []
+        pi_mode = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
+        jetson_mode = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
+        if jetson_mode:
+            agents.append("Jetson Agent (Gemma 4 GPU)")
+        elif pi_mode:
+            agents.append("Pi Agent (Gemma 4 CPU)")
+        else:
+            agents.append("Bonsai Agent (via Hermes)")
+        agents.append("OpenClaw (on-demand)")
+
+        # --- widgets from widget-manifest.json ---
+        widgets: list[str] = []
+        manifest_path = "/home/zoe/assistant/services/zoe-ui/dist/js/widgets/widget-manifest.json"
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as fh:
+                manifest = _json.load(fh)
+            for entry in manifest.get("widgets", manifest if isinstance(manifest, list) else []):
+                wid = (entry.get("id") if isinstance(entry, dict) else None)
+                if wid:
+                    widgets.append(wid)
+        except Exception:
+            pass
+
+        # --- pages from dist/*.html + touch/*.html ---
+        dist_root = "/home/zoe/assistant/services/zoe-ui/dist"
+        pages_desktop = sorted(
+            os.path.basename(p) for p in glob.glob(os.path.join(dist_root, "*.html"))
+        )
+        pages_touch = sorted(
+            os.path.basename(p) for p in glob.glob(os.path.join(dist_root, "touch", "*.html"))
+        )
+
+        # --- skills (prefer workspace) ---
+        skills_list: list[str] = []
+        for d in (
+            os.path.expanduser("~/.openclaw/workspace/skills"),
+            os.path.expanduser("~/.openclaw/skills"),
+        ):
+            try:
+                if os.path.isdir(d):
+                    for entry in os.scandir(d):
+                        if entry.is_dir() and entry.name not in skills_list:
+                            skills_list.append(entry.name)
+                    break
+            except Exception:
+                continue
+
+        builder_skills_present = [
+            s for s in skills_list
+            if s in ("zoe-widget-builder", "zoe-page-builder", "zoe-capability-extender")
+        ]
+
+        return {
+            "datetime": datetime.datetime.now().isoformat(),
+            "services": services,
+            "active_agents": agents,
+            "widgets": sorted(widgets),
+            "pages": {"desktop": pages_desktop, "touch": pages_touch},
+            "skills": sorted(skills_list),
+            "builder_skills_installed": sorted(builder_skills_present),
+            "can_build": ["widget", "page", "capability"],
+            "notes": (
+                "Use the builder skills to extend Zoe. "
+                "Admin gate + plan-then-confirm + staged /_preview/ apply."
+            ),
         }
 
     # === JOURNAL TOOLS ===
@@ -1219,6 +1521,15 @@ async def _execute_tool(db, name: str, args: dict):
         await db.commit()
         result = {"id": eid, "title": args.get("title"), "mood": args.get("mood")}
         await _notify_ui("journal", "entry_created", result)
+        try:
+            from routers.journal import _store_journal_memory  # type: ignore
+            await _store_journal_memory(
+                db, user_id,
+                {**result, "content": args["content"], "mood_score": args.get("mood_score")},
+                "created",
+            )
+        except Exception as exc:
+            _mcp_log.info("mcp journal_create_entry memory mirror skipped: %s", exc)
         return {**result, "status": "created"}
 
     elif name == "journal_list_entries":
@@ -1584,29 +1895,53 @@ async def _execute_tool(db, name: str, args: dict):
         return {"ok": True, "action": "panel_show_fullscreen", "panel_id": panel_id, "queued": msg}
 
     elif name == "panel_browser_screenshot":
-        # Screenshot-to-panel: fetch screenshot from OpenClaw browser, display on panel.
+        # Screenshot-to-panel via broker-backed executor with normalized evidence.
         panel_id = args.get("panel_id") or None
         caption = args.get("caption") or ""
         navigate_to = args.get("navigate_to") or None
-        try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                if navigate_to:
-                    # Navigate first (fire-and-forget; screenshot taken after nav)
-                    try:
-                        await client.post(f"{_OPENCLAW_GW}/browser/navigate", json={"url": navigate_to}, timeout=15.0)
-                    except Exception:
-                        pass  # Best-effort; screenshot may still be useful
-                resp = await client.post(f"{_OPENCLAW_GW}/browser/screenshot", json={})
-            if resp.status_code != 200:
-                return {"error": f"OpenClaw screenshot returned HTTP {resp.status_code}"}
-            data = resp.json()
-            image_b64 = data.get("image") or data.get("screenshot") or data.get("data") or ""
-            if not image_b64:
-                return {"error": "No screenshot data in OpenClaw response", "response": data}
-        except httpx.ConnectError:
-            return {"error": "OpenClaw gateway unreachable — is it running?"}
-        except Exception as exc:
-            return {"error": f"Screenshot failed: {exc}"}
+        plan = _BROWSER_BROKER.plan_action(
+            action="capture_screenshot",
+            params={
+                "navigate_to": navigate_to or "",
+                "timeout_s": 15.0,
+                "screenshot_timeout_s": 20.0,
+            },
+            user_id=user_id,
+            session_id=f"mcp:{name}",
+            action_class="read_only_research",
+            requested_surface="openclawLocal",
+        )
+        broker_result = await _BROWSER_BROKER.execute(plan)
+        if not broker_result.get("ok"):
+            # Graceful fallback: still navigate panel if URL exists.
+            if navigate_to:
+                fallback_msg = await _enqueue_panel_tool(
+                    db,
+                    user_id_fallback=user_id,
+                    panel_id=panel_id,
+                    action_type="panel_navigate",
+                    payload={
+                        "url": navigate_to,
+                        "label": caption or "Browser screenshot unavailable — showing live page instead",
+                    },
+                )
+                return {
+                    "ok": False,
+                    "degraded_mode": True,
+                    "error": broker_result.get("error", "Screenshot failed"),
+                    "backend": broker_result.get("surface", "openclawLocal"),
+                    "plan_id": broker_result.get("plan_id"),
+                    "fallback_action": "panel_navigate",
+                    "queued": fallback_msg,
+                }
+            return {
+                "error": broker_result.get("error", "Screenshot failed"),
+                "backend": broker_result.get("surface", "openclawLocal"),
+                "plan_id": broker_result.get("plan_id"),
+            }
+        image_b64 = str(broker_result.get("image_base64") or "").strip()
+        if not image_b64:
+            return {"error": "No screenshot data in broker response", "backend": "openclawLocal"}
 
         msg = await _enqueue_panel_tool(
             db,
@@ -1615,7 +1950,26 @@ async def _execute_tool(db, name: str, args: dict):
             action_type="panel_show_fullscreen",
             payload={"image_base64": image_b64, "caption": caption or (f"Browser view: {navigate_to}" if navigate_to else "Browser view")},
         )
-        return {"ok": True, "action": "panel_browser_screenshot", "panel_id": panel_id, "queued": msg}
+        return {
+            "ok": True,
+            "action": "panel_browser_screenshot",
+            "panel_id": panel_id,
+            "queued": msg,
+            "backend": broker_result.get("surface", "openclawLocal"),
+            "plan_id": broker_result.get("plan_id"),
+            "evidence": broker_result.get("evidence", {}),
+        }
+
+    elif name == "browser_get_capabilities":
+        return {
+            "ok": True,
+            "default_backend": _BROWSER_BROKER.default_surface(),
+            "capabilities": _BROWSER_BROKER.capabilities(),
+        }
+
+    elif name == "browser_compare_backends":
+        report = _BROWSER_BROKER.compare_backends()
+        return {"ok": True, **report}
 
     elif name == "panel_announce":
         message = str(args.get("message") or "").strip()
@@ -1819,6 +2173,144 @@ async def _execute_tool(db, name: str, args: dict):
             return {"results": results, "count": len(results), "query": query}
         except Exception as exc:
             return {"error": f"ambient_search failed: {exc}"}
+
+    # === MEMORY TOOLS ================================================
+    elif name in {"memory_add", "memory_search", "memory_list", "memory_review", "memory_forget"}:
+        try:
+            from memory_service import MemoryServiceError, get_memory_service
+        except Exception as exc:
+            return {"error": f"memory service unavailable: {exc}"}
+        svc = get_memory_service()
+
+        if name == "memory_add":
+            content = (args.get("content") or "").strip()
+            if not content:
+                return {"error": "content required"}
+            try:
+                ref = await svc.ingest(
+                    content,
+                    user_id=user_id,
+                    source="mcp",
+                    memory_type=args.get("memory_type", "fact"),
+                    confidence=float(args.get("confidence", 0.85)),
+                    status=args.get("status", "approved"),
+                    tags=list(args.get("tags") or []),
+                    entity_type=args.get("entity_type"),
+                    entity_id=args.get("entity_id"),
+                    expires_at=args.get("expires_at"),
+                )
+            except MemoryServiceError as exc:
+                return {"error": str(exc)}
+            if ref is None:
+                return {"status": "skipped", "reason": "duplicate_or_filtered"}
+            return {
+                "id": ref.id,
+                "status": ref.metadata.get("status", "approved"),
+                "created": True,
+            }
+
+        if name == "memory_search":
+            query = (args.get("query") or "").strip()
+            if not query:
+                return {"error": "query required"}
+            limit = max(1, min(int(args.get("limit") or 8), 50))
+            try:
+                refs = await svc.search(query, user_id=user_id, limit=limit)
+            except MemoryServiceError as exc:
+                return {"error": str(exc)}
+            mtype_filter = (args.get("memory_type") or "").strip().lower()
+            results = []
+            for r in refs:
+                md = r.metadata or {}
+                if mtype_filter and (md.get("memory_type") or "").lower() != mtype_filter:
+                    continue
+                results.append({
+                    "id": r.id,
+                    "content": r.text,
+                    "memory_type": md.get("memory_type"),
+                    "confidence": md.get("confidence"),
+                    "status": md.get("status"),
+                    "score": getattr(r, "score", None),
+                })
+            return {"results": results, "count": len(results)}
+
+        if name == "memory_list":
+            status = (args.get("status") or "pending").lower()
+            limit = max(1, min(int(args.get("limit") or 25), 200))
+            try:
+                refs = await svc.list_by_status(user_id=user_id, status=status, limit=limit)
+            except MemoryServiceError as exc:
+                return {"error": str(exc)}
+            return {
+                "status": status,
+                "count": len(refs),
+                "items": [
+                    {
+                        "id": r.id,
+                        "content": r.text,
+                        "memory_type": (r.metadata or {}).get("memory_type"),
+                        "confidence": (r.metadata or {}).get("confidence"),
+                        "status": (r.metadata or {}).get("status"),
+                        "created_at": (r.metadata or {}).get("created_at"),
+                    }
+                    for r in refs
+                ],
+            }
+
+        if name == "memory_review":
+            mem_id = args.get("memory_id") or ""
+            decision = (args.get("decision") or "").lower()
+            if not mem_id or decision not in {"approve", "reject", "edit"}:
+                return {"error": "memory_id and decision=(approve|reject|edit) required"}
+            # Ownership check: svc.get resolves the row; MemoryService.review
+            # also audits, but we want a friendly error rather than a raise.
+            try:
+                existing = await svc.get(mem_id)
+            except MemoryServiceError as exc:
+                return {"error": str(exc)}
+            if existing is None:
+                return {"error": "memory not found"}
+            if (existing.metadata or {}).get("user_id") != user_id:
+                # No role info on the MCP path; strict mode → deny.
+                return {"error": "forbidden: memory belongs to another user"}
+            try:
+                ref = await svc.review(
+                    mem_id,
+                    decision=decision,
+                    actor=user_id,
+                    edits=args.get("edits"),
+                    note=args.get("note"),
+                )
+            except MemoryServiceError as exc:
+                return {"error": str(exc)}
+            return {
+                "id": ref.id,
+                "status": (ref.metadata or {}).get("status"),
+                "decision": decision,
+            }
+
+        if name == "memory_forget":
+            mem_id = args.get("memory_id") or ""
+            if not mem_id:
+                return {"error": "memory_id required"}
+            try:
+                existing = await svc.get(mem_id)
+            except MemoryServiceError as exc:
+                return {"error": str(exc)}
+            if existing is None:
+                return {"status": "not_found"}
+            if (existing.metadata or {}).get("user_id") != user_id:
+                return {"error": "forbidden: memory belongs to another user"}
+            try:
+                await svc.review(
+                    mem_id,
+                    decision="reject",
+                    actor=user_id,
+                    note=args.get("note") or "memory_forget",
+                )
+            except MemoryServiceError as exc:
+                return {"error": str(exc)}
+            return {"id": mem_id, "status": "rejected"}
 
     else:
         return {"error": f"Unknown tool: {name}"}

@@ -12,9 +12,11 @@ from typing import Any, Optional, Dict, Tuple
 logger = logging.getLogger(__name__)
 
 ZOE_AUTH_URL = os.environ.get("ZOE_AUTH_URL", "http://localhost:8002")
-# When set to "guest", requests without X-Session-ID get role guest (kiosk / public API safety).
-# Default empty: preserve legacy behaviour (no session → family-admin).
-_UNAUTH_ROLE = os.environ.get("ZOE_UNAUTHENTICATED_ROLE", "").strip().lower()
+# Default role for requests without X-Session-ID. Fail-closed default is "guest"
+# (read-only). Set ZOE_UNAUTHENTICATED_ROLE="family-admin" to restore legacy
+# behaviour on trusted LAN deployments — a warning is logged on every such request
+# so the relaxation is visible in the logs.
+_UNAUTH_ROLE = os.environ.get("ZOE_UNAUTHENTICATED_ROLE", "guest").strip().lower() or "guest"
 CACHE_TTL_SECONDS = 30
 DEFAULT_USER_ID = "family-admin"
 _DEGRADED_MARK = "__zoe_degraded__"
@@ -53,6 +55,18 @@ def _cache_set(session_id: str, user: dict):
 
 async def _validate_with_auth_service(session_id: str) -> Optional[dict]:
     """Call zoe-auth to validate session. Returns user dict, degraded-user dict, or None if invalid."""
+    def _normalize_auth_user(data: Any) -> dict:
+        # zoe-auth may return either a flat user object or {"user": {...}}.
+        user = data.get("user") if isinstance(data, dict) and isinstance(data.get("user"), dict) else data
+        if not isinstance(user, dict):
+            user = {}
+        return {
+            "user_id": user.get("user_id") or user.get("id", DEFAULT_USER_ID),
+            "role": user.get("role", "user"),
+            "username": user.get("username") or user.get("name", ""),
+            "permissions": user.get("permissions", []),
+        }
+
     try:
         timeout = httpx.Timeout(5.0, connect=3.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -61,13 +75,29 @@ async def _validate_with_auth_service(session_id: str) -> Optional[dict]:
                 headers={"X-Session-ID": session_id},
             )
             if resp.status_code == 200:
-                data = resp.json()
-                return {
-                    "user_id": data.get("user_id", DEFAULT_USER_ID),
-                    "role": data.get("role", "user"),
-                    "username": data.get("username", ""),
-                    "permissions": data.get("permissions", []),
-                }
+                return _normalize_auth_user(resp.json())
+            if resp.status_code == 404:
+                # Some deployments expose /api/auth/profile instead of /api/auth/user.
+                # Fallback avoids noisy degraded-user auth warnings in panel polling.
+                prof = await client.get(
+                    f"{ZOE_AUTH_URL}/api/auth/profile",
+                    headers={"X-Session-ID": session_id},
+                )
+                if prof.status_code == 200:
+                    return _normalize_auth_user(prof.json())
+                if prof.status_code in (401, 403):
+                    return None
+                if prof.status_code >= 500:
+                    logger.warning(
+                        "zoe-auth profile %s for session validation — using degraded user",
+                        prof.status_code,
+                    )
+                    return _degraded_user()
+                logger.warning(
+                    "zoe-auth profile returned %s for session validation — degraded user",
+                    prof.status_code,
+                )
+                return _degraded_user()
             if resp.status_code in (401, 403):
                 return None
             if resp.status_code >= 500:
@@ -126,14 +156,19 @@ async def get_current_user(request: Request) -> dict:
         # Invalid/unknown token → fall through to unauthenticated behaviour
 
     if not session_id:
-        if _UNAUTH_ROLE == "guest":
-            return {
-                "user_id": "guest",
-                "role": "guest",
-                "username": "guest",
-                "permissions": [],
-            }
-        return {"user_id": DEFAULT_USER_ID, "role": "admin"}
+        if _UNAUTH_ROLE == "family-admin":
+            logger.warning(
+                "unauthenticated request promoted to family-admin via ZOE_UNAUTHENTICATED_ROLE override "
+                "(path=%s method=%s) — flip back to 'guest' for fail-closed behaviour",
+                request.url.path, request.method,
+            )
+            return {"user_id": DEFAULT_USER_ID, "role": "admin"}
+        return {
+            "user_id": "guest",
+            "role": "guest",
+            "username": "guest",
+            "permissions": [],
+        }
 
     cached = _cache_get(session_id)
     if cached:

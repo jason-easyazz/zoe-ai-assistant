@@ -155,10 +155,14 @@ class EnhancedSessionManager:
             
             # Check concurrent session limits
             if not self._check_concurrent_limit(request.user_id, session_type):
-                return AuthenticationResult(
-                    success=False,
-                    error_message="Maximum concurrent sessions reached"
-                )
+                # If the user is at their cap, evict the oldest active session
+                # for this session type so a fresh login can proceed.
+                recovered = self._free_concurrent_slot(request.user_id, session_type)
+                if not recovered or not self._check_concurrent_limit(request.user_id, session_type):
+                    return AuthenticationResult(
+                        success=False,
+                        error_message="Maximum concurrent sessions reached"
+                    )
 
             # Create session
             session = self._create_session(request, session_type)
@@ -478,12 +482,68 @@ class EnhancedSessionManager:
         if config.max_concurrent is None:
             return True
 
-        current_count = len([
-            s for s in self.active_sessions.values()
-            if s.user_id == user_id and s.session_type == session_type
-        ])
+        with self.session_lock:
+            self._prune_invalid_user_sessions(user_id, session_type)
+            current_count = len([
+                s for s in self.active_sessions.values()
+                if (
+                    s.user_id == user_id and
+                    s.session_type == session_type and
+                    self._is_session_valid(s)
+                )
+            ])
 
         return current_count < config.max_concurrent
+
+    def _prune_invalid_user_sessions(self, user_id: str, session_type: SessionType) -> int:
+        """Remove invalid sessions for one user/type while holding session_lock."""
+        invalid_session_ids = [
+            sid for sid, session in self.active_sessions.items()
+            if (
+                session.user_id == user_id and
+                session.session_type == session_type and
+                not self._is_session_valid(session)
+            )
+        ]
+        for session_id in invalid_session_ids:
+            self._remove_session(session_id)
+        return len(invalid_session_ids)
+
+    def _free_concurrent_slot(self, user_id: str, session_type: SessionType) -> bool:
+        """
+        Free one concurrent slot by removing the oldest active session.
+
+        Returns True if a slot is available after cleanup/eviction.
+        """
+        config = SessionSecurityPolicy.get_config(session_type)
+        if config.max_concurrent is None:
+            return True
+
+        with self.session_lock:
+            self._prune_invalid_user_sessions(user_id, session_type)
+            active_sessions = [
+                (sid, session) for sid, session in self.active_sessions.items()
+                if (
+                    session.user_id == user_id and
+                    session.session_type == session_type and
+                    self._is_session_valid(session)
+                )
+            ]
+
+            if len(active_sessions) < config.max_concurrent:
+                return True
+
+            # Oldest activity first; created_at is a deterministic tie-breaker.
+            active_sessions.sort(key=lambda item: (item[1].last_activity, item[1].created_at))
+            session_id, session = active_sessions[0]
+            self._remove_session(session_id)
+            logger.info(
+                "Evicted oldest %s session for user %s to free login slot",
+                session_type.value,
+                user_id
+            )
+
+            return True
 
     def _is_session_valid(self, session: AuthSession) -> bool:
         """Check if session is still valid"""

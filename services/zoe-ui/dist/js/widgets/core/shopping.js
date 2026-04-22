@@ -136,27 +136,23 @@ class ShoppingWidget extends WidgetModule {
     
     async loadItems() {
         try {
-            console.log('🛒 Loading items from API...');
-            console.log(`🛒 Current listId BEFORE load: ${this.listId}`);
-            const response = await apiRequest(`/api/lists/shopping`);
-            const lists = response.lists || [];
-            
-            console.log(`🛒 API returned ${lists.length} list(s):`, lists.map(l => `ID ${l.id} with ${l.items?.length || 0} items`));
-            
-            if (lists.length > 0) {
-                const oldListId = this.listId;
-                this.listId = lists[0].id;
-                console.log(`🛒 Setting listId from ${oldListId} → ${this.listId}`);
-                // API now returns hierarchical structure with sub_items
-                this.items = lists[0].items || [];
-                // Flatten items for backward compatibility, but preserve hierarchy
-                this.flattenItems();
-            } else {
+            // GET /api/lists/shopping returns { lists: [...] } but does NOT
+            // include items inline. We must fetch the first list's detail
+            // (which includes items) via /api/lists/shopping/{id}.
+            const listsResponse = await apiRequest(`/api/lists/shopping`);
+            const lists = listsResponse.lists || [];
+
+            if (lists.length === 0) {
                 this.items = [];
                 this.listId = null;
+                this.render();
+                return;
             }
-            
-            console.log(`🛒 Loaded ${this.items.length} items, rendering...`);
+
+            this.listId = lists[0].id;
+            const detail = await apiRequest(`/api/lists/shopping/${this.listId}`);
+            this.items = detail.items || [];
+            this.flattenItems();
             this.render();
         } catch (error) {
             console.error('Failed to load shopping list:', error);
@@ -196,6 +192,9 @@ class ShoppingWidget extends WidgetModule {
         console.log('🛒 render() called');
         const container = this.element.querySelector('#shopping-items');
         const countBadge = this.element.querySelector('#shopping-count');
+        const isDark = document.documentElement.classList.contains('dark-mode');
+        const textPrimary = isDark ? 'rgba(255,255,255,0.92)' : '#333';
+        const textSecondary = isDark ? 'rgba(255,255,255,0.68)' : '#666';
         console.log('  - container:', container);
         console.log('  - countBadge:', countBadge);
         
@@ -225,7 +224,7 @@ class ShoppingWidget extends WidgetModule {
         }
         
         if (hierarchical.length === 0) {
-            container.innerHTML = '<div style="text-align: center; color: #666; font-size: 12px; padding: 20px;">No items yet</div>';
+            container.innerHTML = `<div style="text-align: center; color: ${textSecondary}; font-size: 12px; padding: 20px;">No items yet</div>`;
             return;
         }
         
@@ -296,8 +295,8 @@ class ShoppingWidget extends WidgetModule {
             text.style.cssText = `
                 flex: 1;
                 font-size: 13px;
-                color: #333;
-                ${item.completed ? 'text-decoration: line-through; opacity: 0.5;' : ''}
+                color: ${textPrimary};
+                ${item.completed ? 'text-decoration: line-through; opacity: 0.55;' : ''}
             `;
             itemEl.appendChild(text);
             
@@ -685,26 +684,25 @@ class ShoppingWidget extends WidgetModule {
     }
     
     async updateItemField(itemId, field, value) {
+        if (!this.listId) return;
         try {
-            const response = await apiRequest(`/lists/shopping/${this.listId}/items/${itemId}?${field}=${encodeURIComponent(value)}`, {
-                method: 'PUT'
+            await apiRequest(`/api/lists/shopping/${this.listId}/items/${itemId}`, {
+                method: 'PUT',
+                body: JSON.stringify({ [field]: value })
             });
-            
-            if (response) {
-                await this.loadItems();
-            }
+            await this.loadItems();
         } catch (error) {
             console.error(`Failed to update ${field}:`, error);
             alert(`Failed to update ${field}`);
         }
     }
-    
+
     async renameList(newName) {
         if (!this.listId) return;
         try {
+            // Backend exposes PUT /api/lists/{type}/{id} (no PATCH).
             await apiRequest(`/api/lists/shopping/${this.listId}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
+                method: 'PUT',
                 body: JSON.stringify({ name: newName })
             });
             const titleEl = this.element.querySelector('#shopping-title');
@@ -715,21 +713,19 @@ class ShoppingWidget extends WidgetModule {
             console.error('Failed to rename list:', error);
         }
     }
-    
+
     async addItem(text, parentId = null) {
         if (!text) return;
-        
+
         if (!this.listId) {
-            // Create list first
+            // Create list first. Backend ListCreate only accepts
+            // { name, list_type, description, visibility }.
             try {
                 const response = await apiRequest('/api/lists/shopping', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        list_type: 'shopping',
-                        category: 'personal',
                         name: 'Shopping List',
-                        items: []
+                        list_type: 'shopping'
                     })
                 });
                 this.listId = response.id;
@@ -738,22 +734,23 @@ class ShoppingWidget extends WidgetModule {
                 return;
             }
         }
-        
+
         try {
-            const response = await apiRequest(`/api/lists/shopping/${this.listId}/items?task_text=${encodeURIComponent(text)}${parentId ? `&parent_id=${parentId}` : ''}`, {
-                method: 'POST'
+            const body = { text };
+            if (parentId) body.parent_id = parentId;
+            await apiRequest(`/api/lists/shopping/${this.listId}/items`, {
+                method: 'POST',
+                body: JSON.stringify(body)
             });
-            
             await this.loadItems();
         } catch (error) {
             console.error('Failed to add item:', error);
         }
     }
-    
+
     async toggleItem(itemId) {
         if (!this.listId) return;
-        
-        // Find item to get current state
+
         const findItem = (items) => {
             for (const item of items) {
                 if (item.id === itemId) return item;
@@ -764,15 +761,15 @@ class ShoppingWidget extends WidgetModule {
             }
             return null;
         };
-        
+
         const item = findItem(this.hierarchicalItems || this.items);
         if (!item) return;
-        
+
         try {
-            await apiRequest(`/api/lists/shopping/${this.listId}/items/${itemId}?completed=${!item.completed}`, {
-                method: 'PUT'
+            await apiRequest(`/api/lists/shopping/${this.listId}/items/${itemId}`, {
+                method: 'PUT',
+                body: JSON.stringify({ completed: !item.completed })
             });
-            
             await this.loadItems();
         } catch (error) {
             console.error('Failed to toggle item:', error);
@@ -810,14 +807,26 @@ class ShoppingWidget extends WidgetModule {
         
         if (itemsToArchive.length > 0) {
             this.archivedItems = [...itemsToArchive, ...this.archivedItems];
-            
+
             if (this.archivedItems.length > 50) {
                 this.archivedItems = this.archivedItems.slice(0, 50);
             }
-            
+
             this.items = itemsToKeep;
             this.render();
-            await this.saveItems();
+            // The archive is client-side only; delete archived items from the
+            // backend so they don't come back on the next load.
+            if (this.listId) {
+                for (const item of itemsToArchive) {
+                    try {
+                        await apiRequest(`/api/lists/shopping/${this.listId}/items/${item.id}`, {
+                            method: 'DELETE'
+                        });
+                    } catch (err) {
+                        console.warn('Failed to delete archived item on server:', err);
+                    }
+                }
+            }
             await this.saveArchivedItems();
             console.log(`📦 Archived ${itemsToArchive.length} completed shopping items`);
         }
@@ -838,9 +847,14 @@ class ShoppingWidget extends WidgetModule {
     renderArchive() {
         const container = this.element.querySelector('#shopping-archive-items');
         if (!container) return;
+        const isDark = document.documentElement.classList.contains('dark-mode');
+        const textPrimary = isDark ? 'rgba(255,255,255,0.88)' : '#333';
+        const textSecondary = isDark ? 'rgba(255,255,255,0.62)' : '#999';
+        const archiveBg = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(123, 97, 255, 0.05)';
+        const archiveBorder = isDark ? 'rgba(123, 97, 255, 0.5)' : 'rgba(123, 97, 255, 0.3)';
         
         if (this.archivedItems.length === 0) {
-            container.innerHTML = '<div style="text-align: center; color: #666; font-size: 13px; padding: 40px;">No archived items</div>';
+            container.innerHTML = `<div style="text-align: center; color: ${textSecondary}; font-size: 13px; padding: 40px;">No archived items</div>`;
             return;
         }
         
@@ -848,10 +862,10 @@ class ShoppingWidget extends WidgetModule {
             const daysAgo = Math.floor((Date.now() - item.archivedAt) / (1000 * 60 * 60 * 24));
             
             return `
-                <div class="archive-item" data-id="${item.id}" style="display: flex; align-items: center; gap: 8px; padding: 12px; margin-bottom: 8px; background: rgba(123, 97, 255, 0.05); border-radius: 8px; border-left: 3px solid rgba(123, 97, 255, 0.3);">
+                <div class="archive-item" data-id="${item.id}" style="display: flex; align-items: center; gap: 8px; padding: 12px; margin-bottom: 8px; background: ${archiveBg}; border-radius: 8px; border-left: 3px solid ${archiveBorder};">
                     <div style="flex: 1;">
-                        <div style="font-size: 13px; color: #333; text-decoration: line-through; opacity: 0.7;">${item.text}</div>
-                        <div style="font-size: 11px; color: #999; margin-top: 4px;">Archived ${daysAgo} day${daysAgo !== 1 ? 's' : ''} ago</div>
+                        <div style="font-size: 13px; color: ${textPrimary}; text-decoration: line-through; opacity: 0.72;">${item.text}</div>
+                        <div style="font-size: 11px; color: ${textSecondary}; margin-top: 4px;">Archived ${daysAgo} day${daysAgo !== 1 ? 's' : ''} ago</div>
                     </div>
                     <button class="restore-btn" 
                             onclick="event.stopPropagation(); this.closest('.widget').widgetInstance.restoreItem(${item.id})"
@@ -868,20 +882,23 @@ class ShoppingWidget extends WidgetModule {
     
     async restoreItem(itemId) {
         const item = this.archivedItems.find(i => i.id === itemId);
-        if (item) {
-            this.archivedItems = this.archivedItems.filter(i => i.id !== itemId);
-            
+        if (!item) return;
+        this.archivedItems = this.archivedItems.filter(i => i.id !== itemId);
+        // Re-add as a fresh item server-side rather than trying to resurrect
+        // the deleted row. The original DB id is gone at this point.
+        try {
+            await this.addItem(item.text);
+        } catch (err) {
+            console.warn('Failed to restore item to server, keeping locally:', err);
             item.completed = false;
             delete item.completedAt;
             delete item.archivedAt;
             this.items.push(item);
-            
             this.render();
-            this.renderArchive();
-            await this.saveItems();
-            await this.saveArchivedItems();
-            console.log(`↩ Restored item: ${item.text}`);
         }
+        this.renderArchive();
+        await this.saveArchivedItems();
+        console.log(`↩ Restored item: ${item.text}`);
     }
     
     async deleteArchivedItem(itemId) {

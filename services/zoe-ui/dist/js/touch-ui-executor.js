@@ -26,6 +26,7 @@
         'panel_set_mode',
         'panel_show_smart_home',
         'panel_show_media',
+        'panel_show_research_report',
         'panel_open_form',
         'panel_stream_text',
         'panel_dismiss_ambient',
@@ -39,8 +40,56 @@
         pollTimer: null,
         syncTimer: null,
         seenActions: new Set(),
+        seenAuthChallenges: new Set(),
         pushWs: null,
+        autoHomeTimer: null,
+        autoHomeArmed: false,
     };
+    const AUTH_CHALLENGE_CACHE_KEY = 'zoe_seen_auth_challenges';
+    const AUTH_CHALLENGE_TTL_MS = 10 * 60 * 1000;
+
+    const AUTO_HOME_TIMEOUT_S = Number(window.ZOE_AUTO_HOME_TIMEOUT_S || 20);
+    const HOME_PATH = '/touch/dashboard.html';
+
+    function isHomePath(path) {
+        try {
+            const current = String(path || '').split('?')[0];
+            const home = String(HOME_PATH || '').split('?')[0];
+            return current === home;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function clearAutoHomeTimer(reason) {
+        if (state.autoHomeTimer) {
+            clearTimeout(state.autoHomeTimer);
+            state.autoHomeTimer = null;
+        }
+    }
+
+    function armAutoHomeTimer(reason) {
+        state.autoHomeArmed = true;
+        resetAutoHomeTimer(reason || 'voice-nav');
+    }
+
+    function disarmAutoHomeTimer(reason) {
+        state.autoHomeArmed = false;
+        clearAutoHomeTimer(reason || 'disarm');
+    }
+
+    function actionIsVoiceTriggered(action, payload) {
+        const raw = (
+            action?.requested_by
+            || action?.source
+            || payload?.requested_by
+            || payload?.source
+            || payload?.origin
+            || ''
+        );
+        const normalized = String(raw).toLowerCase();
+        return normalized === 'voice' || normalized.startsWith('voice:') || normalized.startsWith('voice_');
+    }
 
     function getSession() {
         try {
@@ -69,6 +118,47 @@
         return panelId;
     }
 
+    function hydrateSeenAuthChallenges() {
+        const now = Date.now();
+        const next = {};
+        try {
+            const raw = sessionStorage.getItem(AUTH_CHALLENGE_CACHE_KEY);
+            const parsed = raw ? JSON.parse(raw) : {};
+            if (parsed && typeof parsed === 'object') {
+                for (const [challengeId, ts] of Object.entries(parsed)) {
+                    const seenAt = Number(ts || 0);
+                    if (!challengeId || !Number.isFinite(seenAt)) continue;
+                    if ((now - seenAt) <= AUTH_CHALLENGE_TTL_MS) {
+                        state.seenAuthChallenges.add(String(challengeId));
+                        next[String(challengeId)] = seenAt;
+                    }
+                }
+            }
+        } catch (_) {
+            // Non-fatal.
+        }
+        try {
+            sessionStorage.setItem(AUTH_CHALLENGE_CACHE_KEY, JSON.stringify(next));
+        } catch (_) {
+            // Non-fatal.
+        }
+    }
+
+    function rememberAuthChallenge(challengeId) {
+        const id = String(challengeId || '').trim();
+        if (!id) return;
+        state.seenAuthChallenges.add(id);
+        try {
+            const raw = sessionStorage.getItem(AUTH_CHALLENGE_CACHE_KEY);
+            const parsed = raw ? JSON.parse(raw) : {};
+            const next = (parsed && typeof parsed === 'object') ? parsed : {};
+            next[id] = Date.now();
+            sessionStorage.setItem(AUTH_CHALLENGE_CACHE_KEY, JSON.stringify(next));
+        } catch (_) {
+            // Non-fatal.
+        }
+    }
+
     async function api(path, options) {
         const session = getSession();
         const headers = Object.assign({ 'Content-Type': 'application/json' }, options && options.headers ? options.headers : {});
@@ -86,6 +176,28 @@
             activeElement: document.activeElement ? document.activeElement.id || document.activeElement.name || document.activeElement.tagName : null,
             timestamp: new Date().toISOString(),
         };
+    }
+
+    function resetAutoHomeTimer(reason) {
+        if (!state.autoHomeArmed) return;
+        if (!AUTO_HOME_TIMEOUT_S || AUTO_HOME_TIMEOUT_S <= 0) return;
+        clearAutoHomeTimer(reason || 'reset');
+        state.autoHomeTimer = setTimeout(() => {
+            try {
+                const path = window.location.pathname || '';
+                if (path === '/touch/index.html' || path === '/index.html') return;
+                if (document.querySelector('[role="dialog"], .modal, #zoePanelPinPad')) return;
+                if (isHomePath(path)) {
+                    disarmAutoHomeTimer('already-home');
+                    return;
+                }
+                const panelSuffix = state.panelId ? `?panel_id=${encodeURIComponent(state.panelId)}` : '';
+                state.autoHomeArmed = false;
+                window.location.assign(`${HOME_PATH}${panelSuffix}`);
+            } catch (_) {
+                // Non-fatal.
+            }
+        }, AUTO_HOME_TIMEOUT_S * 1000);
     }
 
     async function bindPanel() {
@@ -206,9 +318,9 @@
             s.textContent = `
 #zoe-voice-overlay {
     position: fixed;
-    bottom: 120px;
-    right: 16px;
-    width: min(380px, calc(100vw - 32px));
+    bottom: 80px;
+    left: 50%;
+    width: min(600px, 90vw);
     max-height: 320px;
     background: rgba(12,12,28,0.92);
     border: 1px solid rgba(123,97,255,0.35);
@@ -220,14 +332,14 @@
     flex-direction: column;
     overflow: hidden;
     z-index: 5000;
-    transform: translateY(12px);
+    transform: translate(-50%, 12px);
     opacity: 0;
-    transition: transform .28s cubic-bezier(.34,1.56,.64,1), opacity .22s ease;
+    transition: transform .28s cubic-bezier(.34,1.56,.64,1), opacity .22s ease, left 0s;
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
 }
 #zoe-voice-overlay.zvo-visible {
     display: flex;
-    transform: translateY(0);
+    transform: translate(-50%, 0);
     opacity: 1;
 }
 #zvo-header {
@@ -416,7 +528,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         // State machine — also dispatches document events so the card overlay (dashboard.html) can react.
         function onListeningStarted() {
             if (!_el) _build();
-            clearMessages();
+            // Do NOT clear messages — preserve conversation history across wake words
             _setStatus('Listening…', 'listening');
             addMessage('status', '🎤 Listening…');
             show();
@@ -460,7 +572,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             _setStatus('Done', '');
             removeThinkingDots();
             clearTimeout(_dismissTimer);
-            _dismissTimer = setTimeout(() => dismiss(false), 5000);
+            // No auto-dismiss — user taps ✕ to close, or overlay stays as conversation record
             document.dispatchEvent(new CustomEvent('zoe:voice:done'));
         }
 
@@ -471,19 +583,66 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
     window.VoiceOverlay = VoiceOverlay;
 
     function setOrbMode(mode) {
+        // Drive the floating orb (orb-loader.js) if present
         const orb = document.getElementById('zoeOrb') || document.querySelector('.zoe-orb');
-        if (!orb) return;
-        orb.dataset.zoePanelMode = mode;
-        // Remove all state classes then apply the new one
-        orb.classList.remove('listening', 'thinking', 'responding', 'ambient');
-        if (mode === 'listening') {
-            orb.classList.add('listening');
-        } else if (mode === 'thinking') {
-            orb.classList.add('thinking');
-        } else if (mode === 'responding') {
-            orb.classList.add('responding');
+        if (orb) {
+            orb.dataset.zoePanelMode = mode;
+            orb.classList.remove('listening', 'thinking', 'responding', 'ambient');
+            if (mode !== 'ambient') orb.classList.add(mode);
         }
-        // 'ambient' = no extra class (default idle pulse)
+        // Also drive the nav bar orb dot — visible on every touch page
+        const navDot = document.getElementById('ztm-orb-dot');
+        if (navDot) {
+            navDot.classList.remove('orb-listening', 'orb-thinking', 'orb-responding');
+            if (mode !== 'ambient') navDot.classList.add('orb-' + mode);
+        }
+    }
+
+    // Navigation fallback: parse voice:responding text for navigation intent
+    // (until the backend sends proper panel_navigate ui_action events).
+    // Path-aware: use /touch/* when the current page is in the touch tree,
+    // otherwise use the root desktop paths. This prevents desktop users
+    // from being bounced to the touch UI via voice commands.
+    function _isTouchContext() {
+        try {
+            return (window.location.pathname || '').startsWith('/touch/');
+        } catch (_) { return false; }
+    }
+    function _page(name) {
+        return (_isTouchContext() ? '/touch/' : '/') + name;
+    }
+    function _buildPageMap() {
+        return {
+            'calendar':   _page('calendar.html'),
+            'chat':       _page('chat.html'),
+            'lists':      _page('lists.html'),
+            'notes':      _page('notes.html'),
+            'journal':    _page('journal.html'),
+            'weather':    _page('weather.html'),
+            'music':      _page('music.html'),
+            'settings':   _page('settings.html'),
+            'smart home': _page('smart-home.html'),
+            'smarthome':  _page('smart-home.html'),
+            'home':       _page('dashboard.html'),
+            'dashboard':  _page('dashboard.html'),
+            'people':     _page('people.html'),
+            'memories':   _page('memories.html'),
+            'cooking':    _page('cooking.html'),
+        };
+    }
+
+    function _attemptVoiceNavigation(text) {
+        if (!text) return;
+        const lower = text.toLowerCase();
+        // Only navigate if the response sounds like a navigation confirmation
+        if (!/navigat|going to|opening|taking you|here.{0,10}(the|your)\s/i.test(lower)) return;
+        const map = _buildPageMap();
+        for (const [keyword, url] of Object.entries(map)) {
+            if (lower.includes(keyword)) {
+                setTimeout(() => { window.location.assign(url); }, 1800);
+                return;
+            }
+        }
     }
 
     function hidePinPad() {
@@ -491,8 +650,33 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         if (el) el.remove();
     }
 
+    function redirectToTouchLogin(challenge) {
+        const panelId = state.panelId || getPanelId();
+        try {
+            if (challenge && challenge.challenge_id) {
+                sessionStorage.setItem('zoe_panel_auth_challenge', JSON.stringify({
+                    challenge_id: challenge.challenge_id,
+                    panel_id: panelId,
+                    action_context: challenge.action_context || challenge.reason || 'Enter PIN',
+                }));
+            }
+            sessionStorage.setItem('zoe_redirect_after_login', window.location.pathname + window.location.search);
+        } catch (_) {
+            // Non-fatal.
+        }
+        const suffix = panelId ? `?panel_id=${encodeURIComponent(panelId)}` : '';
+        window.location.assign(`/touch/index.html${suffix}`);
+    }
+
     function showPinPad(challenge) {
         hidePinPad();
+        // Inject shake keyframe once.
+        if (!document.getElementById('zoePinShakeStyle')) {
+            const s = document.createElement('style');
+            s.id = 'zoePinShakeStyle';
+            s.textContent = '@keyframes zoePinShake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}';
+            document.head.appendChild(s);
+        }
         const wrap = document.createElement('div');
         wrap.id = 'zoePanelPinPad';
         wrap.style.cssText = [
@@ -502,13 +686,67 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         ].join(';');
         const title = document.createElement('div');
         title.style.cssText = 'color:#fff;font-size:18px;margin-bottom:12px;text-align:center;max-width:360px;';
-        title.textContent = challenge.action_context || 'Enter PIN to authorise';
+        title.textContent = (challenge.action_context && challenge.action_context.kind === 'voice_turn')
+            ? 'Voice command needs your identity.\nEnter your PIN to continue.'
+            : (challenge.action_context || 'Enter PIN to authorise');
         wrap.appendChild(title);
         const display = document.createElement('div');
         display.style.cssText = 'color:#fff;font-size:28px;letter-spacing:8px;margin-bottom:16px;min-height:36px;';
         display.textContent = '';
         wrap.appendChild(display);
+        let selectedUserId = challenge.user_id || null;
+        const userHint = document.createElement('div');
+        userHint.style.cssText = 'color:#ddd;font-size:13px;margin:4px 0 10px 0;text-align:center;max-width:380px;';
+        userHint.textContent = selectedUserId ? `Authenticating as ${selectedUserId}` : 'Select profile, then enter PIN';
+        wrap.appendChild(userHint);
+        const userRow = document.createElement('div');
+        userRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:420px;margin-bottom:12px;';
+        wrap.appendChild(userRow);
         let buf = '';
+        function renderUserButtons(profiles, defaultUserId) {
+            if (!Array.isArray(profiles) || !profiles.length) return;
+            if (!selectedUserId) selectedUserId = defaultUserId || (profiles[0] && profiles[0].user_id) || null;
+            userHint.textContent = selectedUserId ? `Authenticating as ${selectedUserId}` : 'Select profile, then enter PIN';
+            userRow.innerHTML = '';
+            profiles.forEach((p) => {
+                const uid = String(p.user_id || '').trim();
+                if (!uid) return;
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.textContent = p.display_name || uid;
+                const active = uid === selectedUserId;
+                b.style.cssText = [
+                    'padding:8px 12px',
+                    'border-radius:999px',
+                    'border:none',
+                    `background:${active ? '#7B61FF' : '#3a3a3a'}`,
+                    'color:#fff',
+                    'font-size:13px',
+                    'cursor:pointer',
+                ].join(';');
+                b.onclick = () => {
+                    selectedUserId = uid;
+                    userHint.textContent = `Authenticating as ${selectedUserId}`;
+                    renderUserButtons(profiles, defaultUserId);
+                };
+                userRow.appendChild(b);
+            });
+        }
+        (async () => {
+            try {
+                const q = state.panelId ? `?panel_id=${encodeURIComponent(state.panelId)}` : '';
+                const r = await api(`/api/auth/profiles${q}`, { method: 'GET' });
+                if (!r.ok) return;
+                const data = await r.json();
+                if (Array.isArray(data)) {
+                    renderUserButtons(data, null);
+                    return;
+                }
+                renderUserButtons(data && data.profiles, data && data.default_user_id);
+            } catch (_) {
+                // Non-fatal: PIN can still be submitted without explicit user selection.
+            }
+        })();
         const grid = document.createElement('div');
         grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,72px);gap:10px;';
         function addDigit(d) {
@@ -551,9 +789,15 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             try {
                 const r = await api('/api/panels/auth/pin', {
                     method: 'POST',
-                    body: JSON.stringify({ challenge_id: challenge.challenge_id, pin: buf }),
+                    body: JSON.stringify({
+                        challenge_id: challenge.challenge_id,
+                        pin: buf,
+                        ...((selectedUserId || challenge.user_id) ? { user_id: (selectedUserId || challenge.user_id) } : {}),
+                    }),
                 });
                 if (!r.ok) {
+                    display.style.animation = 'zoePinShake 0.4s ease';
+                    setTimeout(() => { display.style.animation = ''; }, 400);
                     showToast('Incorrect PIN');
                     buf = '';
                     display.textContent = '';
@@ -570,8 +814,22 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         cancel.textContent = 'Cancel';
         cancel.style.cssText = 'padding:12px 20px;border-radius:10px;border:none;background:#444;color:#fff;';
         cancel.onclick = () => hidePinPad();
+        const fullLogin = document.createElement('button');
+        fullLogin.type = 'button';
+        fullLogin.textContent = 'Use login page';
+        fullLogin.style.cssText = 'padding:12px 16px;border-radius:10px;border:none;background:#2f2f2f;color:#fff;';
+        fullLogin.onclick = () => {
+            try {
+                sessionStorage.setItem('zoe_redirect_after_login', window.location.pathname + window.location.search);
+            } catch (_) {
+                // ignore
+            }
+            const pid = state.panelId ? `?panel_id=${encodeURIComponent(state.panelId)}` : '';
+            window.location.assign(`/touch/index.html${pid}`);
+        };
         row.appendChild(clear);
         row.appendChild(go);
+        row.appendChild(fullLogin);
         row.appendChild(cancel);
         wrap.appendChild(row);
         document.body.appendChild(wrap);
@@ -587,9 +845,23 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 try {
                     const msg = JSON.parse(event.data);
                     if (msg.type === 'panel_pin_request' && msg.data) {
-                        const d = msg.data;
-                        if (d.panel_id && d.panel_id === state.panelId) {
-                            showPinPad(d);
+                        const d = (msg.data && msg.data.data) ? msg.data.data : msg.data;
+                        const actionId = String((d && d.challenge_id) || '').trim() || ('push_pin_' + Date.now());
+                        if (!d.panel_id || d.panel_id === state.panelId) {
+                            executeAction({
+                                id: `push_pin_${actionId}`,
+                                action_type: 'panel_request_auth',
+                                payload: {
+                                    challenge_id: d.challenge_id,
+                                    panel_id: d.panel_id,
+                                    action_context: d.action_context || d.reason || 'Enter PIN',
+                                },
+                            }).then((result) => {
+                                if (result && result.status && !String(result.status).startsWith('failed')) return;
+                                redirectToTouchLogin(d);
+                            }).catch(() => {
+                                redirectToTouchLogin(d);
+                            });
                         }
                     }
                     if (msg.type === 'panel_pin_result' && msg.data) {
@@ -623,7 +895,9 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                                 VoiceOverlay.onListeningStarted();
                             }
                             if (msg.type === 'voice:transcript') {
-                                VoiceOverlay.onTranscript((msg.data && msg.data.text) ? msg.data.text : '');
+                                const _tText = (msg.data && msg.data.text) ? msg.data.text : '';
+                                VoiceOverlay.onTranscript(_tText);
+                                if (_tText) document.dispatchEvent(new CustomEvent('zoe:voice:transcript', { detail: { text: _tText } }));
                             }
                             if (msg.type === 'voice:thinking') {
                                 setOrbMode('thinking');
@@ -636,6 +910,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                                 if (text && typeof showAmbientStatus === 'function') {
                                     showAmbientStatus(text);
                                 }
+                                _attemptVoiceNavigation(text);
                             }
                             if (msg.type === 'voice:done') {
                                 setOrbMode('ambient');
@@ -675,6 +950,7 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
     async function executeAction(action) {
         const actionType = action.action_type;
         const payload = action.payload || {};
+        resetAutoHomeTimer(`action:${actionType}`);
 
         if (!ACTION_TYPES.has(actionType)) {
             return { status: 'blocked', error_code: 'unsupported_action', error_message: `Unsupported action: ${actionType}` };
@@ -684,6 +960,8 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             if (actionType === 'navigate') {
                 const page = payload.page || payload.path || payload.url;
                 if (!page) return { status: 'failed', error_code: 'missing_page', error_message: 'Missing page/path for navigate' };
+                if (actionIsVoiceTriggered(action, payload)) armAutoHomeTimer('voice:navigate');
+                else disarmAutoHomeTimer('non-voice:navigate');
                 showToast(`Navigating to ${page}`);
                 setTimeout(() => { window.location.href = page; }, 150);
                 return { status: 'success' };
@@ -735,6 +1013,15 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 if (cur.has('kiosk') && !dest.searchParams.has('kiosk')) dest.searchParams.set('kiosk', cur.get('kiosk'));
                 if (cur.has('panel_id') && !dest.searchParams.has('panel_id')) dest.searchParams.set('panel_id', cur.get('panel_id'));
                 url = dest.pathname + dest.search;
+                const current = new URL(window.location.href);
+                const samePath = current.pathname === dest.pathname;
+                const sameQuery = current.searchParams.toString() === dest.searchParams.toString();
+                // No-op when already on the target page to avoid unnecessary reload flicker.
+                if (samePath && sameQuery) {
+                    return { status: 'skipped', error_code: 'already_on_page' };
+                }
+                if (actionIsVoiceTriggered(action, payload)) armAutoHomeTimer(`voice:${actionType}`);
+                else disarmAutoHomeTimer(`non-voice:${actionType}`);
                 const label = payload.label || url;
                 showToast(String(label).slice(0, 120));
                 setTimeout(() => { window.location.assign(url); }, 200);
@@ -824,9 +1111,18 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
 
             if (actionType === 'panel_request_auth') {
                 if (payload.challenge_id) {
-                    showPinPad({
-                        challenge_id: payload.challenge_id,
-                        action_context: payload.action_context || payload.reason || 'Enter PIN',
+                    disarmAutoHomeTimer('auth-required');
+                    if (payload.panel_id && payload.panel_id !== state.panelId) {
+                        return { status: 'skipped', error_code: 'wrong_panel' };
+                    }
+                    const challengeId = String(payload.challenge_id);
+                    if (state.seenAuthChallenges.has(challengeId)) {
+                        return { status: 'skipped', error_code: 'duplicate_challenge' };
+                    }
+                    rememberAuthChallenge(challengeId);
+                    redirectToTouchLogin({
+                        challenge_id: challengeId,
+                        action_context: payload.action_context || payload.reason || 'Enter PIN'
                     });
                     return { status: 'success' };
                 }
@@ -842,6 +1138,11 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
             // ── Media now-playing overlay ──────────────────────────────────
             if (actionType === 'panel_show_media') {
                 showMediaOverlay(payload);
+                return { status: 'success' };
+            }
+
+            if (actionType === 'panel_show_research_report') {
+                showResearchReportOverlay(payload.package || {});
                 return { status: 'success' };
             }
 
@@ -996,8 +1297,17 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         navigator.serviceWorker.addEventListener('message', (event) => {
             const msg = event.data;
             if (msg && msg.type === 'SW_PANEL_ACTION' && msg.action) {
-                executeAction(msg.action).then((result) => {
-                    ackAction(msg.action.id, result);
+                const action = msg.action;
+                const actionId = action.id || action.action_id;
+                if (actionId) {
+                    const key = `${actionId}:${Number(action.retry_count || 0)}`;
+                    if (state.seenActions.has(key)) {
+                        return;
+                    }
+                    state.seenActions.add(key);
+                }
+                executeAction(action).then((result) => {
+                    if (actionId) ackAction(actionId, result);
                 }).catch(() => {});
             }
             // SW requests a hard reload
@@ -1130,38 +1440,100 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         if (dismissMs > 0) setTimeout(() => overlay.remove(), dismissMs);
     }
 
+    // ── Research Evidence Overlay ─────────────────────────────────────────────
+    function showResearchReportOverlay(pkg) {
+        document.getElementById('zoe-research-overlay')?.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'zoe-research-overlay';
+        overlay.style.cssText = `
+            position:fixed;inset:0;z-index:8100;background:rgba(10,10,26,0.96);
+            color:#fff;overflow:auto;padding:24px;font-family:inherit;
+        `;
+        const rows = Array.isArray(pkg.results) ? pkg.results : [];
+        const shots = Array.isArray(pkg.screenshots) ? pkg.screenshots : [];
+        const sources = Array.isArray(pkg.sources) ? pkg.sources : [];
+        const top = rows[0] || {};
+        const shotHtml = shots.map((s) => {
+            if (s.image_base64) {
+                return `<img style="max-width:100%;border-radius:10px;margin:10px 0;" src="data:image/png;base64,${String(s.image_base64).replace(/^data:image\/\w+;base64,/, '')}" alt="">`;
+            }
+            return '';
+        }).join('');
+        const rowHtml = rows.map((r) => `
+            <tr>
+                <td style="padding:8px;">${r.rank ?? ''}</td>
+                <td style="padding:8px;">${(r.name || '').toString()}</td>
+                <td style="padding:8px;">${(r.value || '').toString()}</td>
+                <td style="padding:8px;">${(r.location || '').toString()}</td>
+            </tr>
+        `).join('');
+        const sourceHtml = sources.slice(0, 6).map((u) => `<li style="margin:6px 0;word-break:break-all;">${u}</li>`).join('');
+        overlay.innerHTML = `
+            <div style="max-width:920px;margin:0 auto;">
+                <h2 style="font-size:30px;font-weight:400;margin:0 0 10px;">Research Results</h2>
+                <div style="font-size:17px;opacity:.9;margin-bottom:14px;">${pkg.query || ''}</div>
+                <div style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);border-radius:12px;padding:14px;margin-bottom:14px;">
+                    <div style="font-size:18px;">Top Pick: <strong>${top.name || 'N/A'}</strong> ${(top.value || '')}</div>
+                </div>
+                <table style="width:100%;border-collapse:collapse;background:rgba(255,255,255,0.05);border-radius:12px;overflow:hidden;">
+                    <thead><tr><th style="text-align:left;padding:8px;">#</th><th style="text-align:left;padding:8px;">Option</th><th style="text-align:left;padding:8px;">Value</th><th style="text-align:left;padding:8px;">Location</th></tr></thead>
+                    <tbody>${rowHtml || '<tr><td colspan="4" style="padding:8px;">No structured options available.</td></tr>'}</tbody>
+                </table>
+                <div style="margin-top:14px;">${shotHtml}</div>
+                <h3 style="font-size:22px;font-weight:400;margin:16px 0 8px;">Sources</h3>
+                <ul style="padding-left:20px;">${sourceHtml || '<li>No sources captured.</li>'}</ul>
+                <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;">
+                    <button id="zoe-research-close" style="padding:12px 20px;border:none;border-radius:10px;background:#7B61FF;color:#fff;">Close</button>
+                    <button id="zoe-research-save" style="padding:12px 20px;border:none;border-radius:10px;background:#2d8f6f;color:#fff;">Save</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+        overlay.querySelector('#zoe-research-close')?.addEventListener('click', () => overlay.remove());
+        overlay.querySelector('#zoe-research-save')?.addEventListener('click', () => showToast('Saved to Zoe'));
+    }
+
     function init() {
         state.panelId = getPanelId();
         const session = getSession();
         state.sessionId = session && session.session_id ? session.session_id : null;
+        hydrateSeenAuthChallenges();
 
         // Export key functions globally so websocket-sync.js can call them
         // for instant action delivery and voice state transitions.
         window._zoeExecuteAction = (action) => {
-            if (!action || !action.id) return;
-            const key = `${action.id}:${Number(action.retry_count || 0)}`;
+            if (!action) return;
+            const actionId = action.id || action.action_id;
+            if (!actionId) return;
+            const normalized = action.id ? action : { ...action, id: actionId };
+            const key = `${normalized.id}:${Number(normalized.retry_count || 0)}`;
             if (state.seenActions.has(key)) return;
             state.seenActions.add(key);
-            executeAction(action).then((result) => ackAction(action.id, result)).catch(() => {});
+            executeAction(normalized).then((result) => ackAction(normalized.id, result)).catch(() => {});
         };
         window._zoeSetOrbMode = setOrbMode;
-        window._zoeShowPinPad = showPinPad;
+        window._zoeResetAutoHomeTimer = resetAutoHomeTimer;
 
         bindPanel().catch(() => {});
         syncState().catch(() => {});
-        connectPushWebSocket();
-        registerWithServiceWorker();
-
-        // Init the push channel via ZoeWebSockets if available (instant delivery)
+        // Prefer the shared push channel from websocket-sync.js to avoid duplicate
+        // websocket connections and duplicate action handling.
         if (window.ZoeWebSockets && typeof window.ZoeWebSockets.initPush === 'function') {
             window.ZoeWebSockets.initPush(state.panelId, state.sessionId);
+        } else {
+            connectPushWebSocket();
         }
+        registerWithServiceWorker();
 
         state.pollTimer = setInterval(pollActions, 2000);
         state.syncTimer = setInterval(syncState, 5000);
+        ['pointerdown', 'touchstart', 'keydown'].forEach((evt) => {
+            window.addEventListener(evt, () => resetAutoHomeTimer(`user:${evt}`), { passive: true });
+        });
         window.addEventListener('beforeunload', () => {
             if (state.pollTimer) clearInterval(state.pollTimer);
             if (state.syncTimer) clearInterval(state.syncTimer);
+            clearAutoHomeTimer('beforeunload');
         });
     }
 

@@ -1,8 +1,35 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script>
+    // Apply saved theme before first paint to prevent flash (ported from touch).
+    (function () {
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name="theme-color"]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch (e) {}
+    })();
+    </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#fafbfc">
+    <!-- Zoe theme bootstrap (must run before UI scripts) -->
+    <script>
+    (function(){
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name=theme-color]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch(e) {}
+    })();
+    </script>
     <title>Zoe - Calendar</title>
     <style>
         * { 
@@ -1560,6 +1587,22 @@
         @media (min-width: 769px) {
             .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
         }
+
+        /* On narrow viewports the 1fr + 400px month-layout squishes the
+         * month grid to roughly half-width. Collapse to a single column and
+         * hide the day-detail panel there — the event modal still opens
+         * when tapping a date, which is the primary interaction. */
+        @media (max-width: 900px) {
+            .app-container {
+                display: block;
+                height: auto;
+            }
+            .app-container .sidebar { display: none; }
+            .month-layout { grid-template-columns: 1fr; }
+            .month-day-view { display: none; }
+            .month-grid-wrapper { padding: 12px; }
+            .day-cell { min-height: 72px; }
+        }
     </style>
         <!-- Zoe Orb Styles -->
         <style>
@@ -1680,6 +1723,7 @@
     
     <!-- Service Worker Registration -->
     <script src="/js/sw-registration.js" defer></script>
+    <link rel="stylesheet" href="css/dark-mode-shared.css">
 </head>
 <body>
     <!-- Navigation -->
@@ -1697,16 +1741,15 @@
         </div>
         <div class="nav-right">
             <div class="api-indicator connecting" id="apiStatus">Connecting</div>
-            
-            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
-            
-            <!-- Time/Date Display -->
+            <button class="refresh-btn notifications-btn" onclick="forceRefreshCache()" title="Refresh App (clears cache)">🔄</button>
+            <button class="theme-nav-btn notifications-btn" title="Toggle theme" onclick="window.cycleZoeTheme && window.cycleZoeTheme()">🌓</button>
+            <button class="notifications-btn" onclick="openNotificationsSafe()" title="Notifications">🔔</button>
             <div class="time-date-display">
                 <div class="current-time" id="navCurrentTime">--:--</div>
                 <div class="current-date" id="navCurrentDate">Loading...</div>
             </div>
         </div>
-    </div>
+        </div>
 
     <!-- More Overlay -->
     <div class="more-overlay" id="moreOverlay">
@@ -1728,9 +1771,21 @@
                     <div class="more-item-icon">🎵</div>
                     <div class="more-item-label">Music</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('games.html')">
-                    <div class="more-item-icon">🎮</div>
-                    <div class="more-item-label">Games</div>
+                <div class="more-item" onclick="navigateToPage('notes.html')">
+                    <div class="more-item-icon">📝</div>
+                    <div class="more-item-label">Notes</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('cooking.html')">
+                    <div class="more-item-icon">🍳</div>
+                    <div class="more-item-label">Cooking</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('smart-home.html')">
+                    <div class="more-item-icon">🏠</div>
+                    <div class="more-item-label">Smart Home</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('updates.html')">
+                    <div class="more-item-icon">⬇️</div>
+                    <div class="more-item-label">Updates</div>
                 </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
@@ -1757,8 +1812,15 @@
             <a href="calendar.html" class="mobile-nav-item active">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
             <a href="music.html" class="mobile-nav-item">🎵 Music</a>
-            <a href="games.html" class="mobile-nav-item">🎮 Games</a>
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
+            <a href="notes.html" class="mobile-nav-item">📝 Notes</a>
+
+            <a href="cooking.html" class="mobile-nav-item">🍳 Cooking</a>
+
+            <a href="smart-home.html" class="mobile-nav-item">🏠 Smart Home</a>
+
+            <a href="updates.html" class="mobile-nav-item">⬇️ Updates</a>
+
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
             <div class="mobile-nav-divider"></div>
             <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
@@ -4330,45 +4392,53 @@
                 return;
             }
             
-            // Prepare event data with enhanced fields
+            // Prepare event data.
+            // zoe-data's EventCreate/EventUpdate only accept:
+            //   title, start_date, start_time, end_date, end_time, duration,
+            //   category, location, all_day, recurring, metadata, visibility.
+            // Anything else (description, attendees, reminders, prep items,
+            // get-ready/travel times) goes in `metadata` so it survives the
+            // round-trip without being silently dropped.
             const eventData = {
                 title,
-                description,
                 start_date: date,
                 start_time: time,
                 duration,
                 category,
                 location,
-                get_ready_time: getReadyTime,
-                travel_time: travelTime,
-                prep_items: currentPrepItems,
-                attendee_ids: currentAttendees.map(a => a.person_id)
+                metadata: {
+                    description: description || '',
+                    get_ready_time: getReadyTime,
+                    travel_time: travelTime,
+                    prep_items: currentPrepItems || [],
+                    attendees: (currentAttendees || []).map(a => ({
+                        person_id: a.person_id,
+                        name: a.name || '',
+                        role: a.role || 'participant'
+                    })),
+                    reminders: (currentReminders || []).map(r => ({
+                        offset_minutes: r.offset_minutes,
+                        message: r.message || ''
+                    }))
+                }
             };
-            
+
             if (editingEventId) {
                 // Update existing event
                 const event = events.find(e => e.id === editingEventId);
                 if (!event) return;
-                
-                // Keep existing linked tasks
+
+                // Preserve existing linked tasks in metadata.
                 if (event.linkedTasks && event.linkedTasks.length > 0) {
-                    if (!eventData.metadata) eventData.metadata = {};
                     eventData.metadata.linked_tasks = JSON.stringify(event.linkedTasks);
                 }
-                
+
                 try {
-                    // Update event
                     await authedApiRequest(`/calendar/events/${event.id}`, {
                         method: 'PUT',
                         body: JSON.stringify(eventData)
                     });
-                    
-                    // Save attendees
-                    await saveEventAttendees(event.id);
-                    
-                    // Save reminders
-                    await saveEventReminders(event.id);
-                    
+
                     await loadEvents();
                     closeEventPanel();
                     showNotification('Event saved successfully');
@@ -4377,21 +4447,20 @@
                     showNotification('Failed to save event', 'error');
                 }
             } else {
-                // Create new event
                 try {
+                    // POST /calendar/events returns the event dict at the top
+                    // level (not wrapped in { event: ... }).
                     const result = await authedApiRequest('/calendar/events', {
                         method: 'POST',
                         body: JSON.stringify(eventData)
                     });
-                    
-                    const newEventId = result.event.id;
-                    
-                    // Save attendees
-                    await saveEventAttendees(newEventId);
-                    
-                    // Save reminders
-                    await saveEventReminders(newEventId);
-                    
+
+                    const newEventId = result?.id || result?.event?.id;
+                    if (newEventId) {
+                        // intentional: no separate attendee/reminder calls —
+                        // zoe-data does not expose those sub-endpoints.
+                    }
+
                     await loadEvents();
                     closeEventPanel();
                     showNotification('Event created successfully');
@@ -4402,58 +4471,10 @@
             }
         }
         
-        async function saveEventAttendees(eventId) {
-            // First, get existing attendees and remove those not in current list
-            try {
-                const data = await authedApiRequest(`/calendar/events/${eventId}/attendees`);
-                const existingAttendees = data.attendees || [];
-                
-                // Remove attendees that were removed
-                for (const existing of existingAttendees) {
-                    if (!currentAttendees.some(a => a.person_id === existing.person_id)) {
-                        await authedApiRequest(`/calendar/events/${eventId}/attendees/${existing.person_id}`, {
-                            method: 'DELETE'
-                        });
-                    }
-                }
-                
-                // Add new attendees
-                for (const attendee of currentAttendees) {
-                    if (!existingAttendees.some(e => e.person_id === attendee.person_id)) {
-                        await authedApiRequest(`/calendar/events/${eventId}/attendees`, {
-                            method: 'POST',
-                            body: JSON.stringify({
-                                person_id: attendee.person_id,
-                                role: attendee.role || 'participant'
-                            })
-                        });
-                    }
-                }
-            } catch (error) {
-                if (!String(error?.message || error).includes('404')) {
-                    console.error('Error saving attendees:', error);
-                }
-            }
-        }
-        
-        async function saveEventReminders(eventId) {
-            // Create reminders for the event
-            try {
-                for (const reminder of currentReminders) {
-                    await authedApiRequest(`/calendar/events/${eventId}/reminders`, {
-                        method: 'POST',
-                        body: JSON.stringify({
-                            offset_minutes: reminder.offset_minutes,
-                            message: reminder.message
-                        })
-                    });
-                }
-            } catch (error) {
-                if (!String(error?.message || error).includes('404')) {
-                    console.error('Error saving reminders:', error);
-                }
-            }
-        }
+        // saveEventAttendees / saveEventReminders removed: the backend has no
+        // /calendar/events/{id}/attendees or /reminders sub-endpoints on
+        // zoe-data. Attendees and reminders are persisted inline via the
+        // event's `metadata` field in saveEvent().
         
         async function deleteEvent() {
             const event = events.find(e => e.id === editingEventId);
@@ -4623,7 +4644,16 @@
             updateNavTime();
             setInterval(updateNavTime, 30000);
             
-            // Set initial view
+            // Set initial view. The app-container uses a 1fr 350px grid by
+            // default where the right column hosts the day-timeline sidebar.
+            // Our default `currentView` is 'month', which collapses the
+            // sidebar only when `.month-view-active` is present. Without
+            // this class the month grid and day column render side-by-side
+            // on first load.
+            const appContainer = document.querySelector('.app-container');
+            if (appContainer && currentView === 'month') {
+                appContainer.classList.add('month-view-active');
+            }
             updateView();
         });
     </script>

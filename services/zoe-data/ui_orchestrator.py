@@ -29,6 +29,11 @@ ALLOWED_ACTION_TYPES = {
     "panel_set_mode",
     "panel_show_smart_home",
     "panel_show_media",
+    "panel_show_research_report",
+    "panel_open_form",
+    "panel_stream_text",
+    "panel_dismiss_ambient",
+    "show_card",
 }
 DANGEROUS_ACTION_TYPES = {"delete_record"}
 

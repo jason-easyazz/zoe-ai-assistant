@@ -1,8 +1,35 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script>
+    // Apply saved theme before first paint to prevent flash (ported from touch).
+    (function () {
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name="theme-color"]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch (e) {}
+    })();
+    </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#fafbfc">
+    <!-- Zoe theme bootstrap (must run before UI scripts) -->
+    <script>
+    (function(){
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name=theme-color]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch(e) {}
+    })();
+    </script>
     <title>Zoe Lists</title>
     
     <!-- Gridstack.js - Professional Dashboard Grid System (Local for Offline Support) -->
@@ -101,6 +128,10 @@
             border: 2px solid white;
             animation: notificationDotPulse 1.5s ease-in-out infinite;
         }
+        /* The refresh button shares styling with the notifications button but
+           must never carry the has-notifications dot/pulse. */
+        .refresh-btn.has-notifications { animation: none; }
+        .refresh-btn.has-notifications::after { display: none; }
         
         @keyframes notificationPulse {
             0%, 100% { 
@@ -201,7 +232,10 @@
         }
 
         /* Floating Action Button for Edit Mode */
-        .fab-edit-btn {
+        /* Replaced by the .edit-nav-btn in the top nav-bar (ported from touch).
+         * Kept hidden rather than removed to preserve any code that toggles it. */
+        .fab-edit-btn { display: none !important; }
+        .fab-edit-btn-legacy {
             position: fixed;
             bottom: 32px;
             right: 32px;
@@ -219,6 +253,17 @@
             display: flex;
             align-items: center;
             justify-content: center;
+        }
+
+        /* Edit pencil in top nav (ported from touch) */
+        .edit-nav-btn { cursor: pointer; }
+        .edit-nav-btn.editing {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+            color: #fff !important;
+            box-shadow: 0 2px 8px rgba(16, 185, 129, 0.4);
+        }
+        .edit-nav-btn.editing:hover {
+            background: linear-gradient(135deg, #059669 0%, #047857 100%) !important;
         }
 
         .fab-edit-btn:hover {
@@ -1439,14 +1484,14 @@
         }
 
         /* Responsive Design */
-        @media (max-width: 900px) {
+        @media (max-width: 768px) {
             .nav-menu { display: none !important; }
             .mini-orb { display: flex !important; }
             .widget-grid { grid-template-columns: 1fr; }
         }
         
         /* Mini-orb visible on all screens */
-        @media (min-width: 901px) {
+        @media (min-width: 769px) {
             /* Mobile menu hidden on desktop */
             .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
         }
@@ -1804,6 +1849,7 @@
     
     <!-- Service Worker Registration -->
     <script src="/js/sw-registration.js" defer></script>
+    <link rel="stylesheet" href="css/dark-mode-shared.css">
 </head>
 <body>
     <!-- Pull-to-Refresh Indicator -->
@@ -1814,7 +1860,7 @@
     <!-- Navigation -->
     <div class="nav-bar">
         <div class="nav-left">
-            <div class="mini-orb" onclick="toggleMobileMenu()"></div>
+            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
             <div class="nav-menu">
                 <a href="chat.html" class="nav-item">Chat</a>
                 <a href="dashboard.html" class="nav-item">Dashboard</a>
@@ -1826,17 +1872,20 @@
         </div>
         <div class="nav-right">
             <div class="api-indicator connecting" id="apiStatus">Connecting</div>
-            
-            <button class="notifications-btn" onclick="forceRefreshCache()" title="Refresh App (clears cache)">🔄</button>
-            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
-            
-            <!-- Time/Date Display -->
+            <button class="edit-nav-btn notifications-btn" id="navEditBtn" onclick="toggleEditMode()" title="Edit Lists"><span id="navEditIcon">✏️</span></button>
+            <button class="refresh-btn notifications-btn" onclick="forceRefreshCache()" title="Refresh App (clears cache)">🔄</button>
+            <button class="theme-nav-btn notifications-btn" title="Toggle theme" onclick="window.cycleZoeTheme && window.cycleZoeTheme()">🌓</button>
+            <button class="notifications-btn" onclick="openNotificationsSafe()" title="Notifications">🔔</button>
             <div class="time-date-display">
                 <div class="current-time" id="navCurrentTime">--:--</div>
                 <div class="current-date" id="navCurrentDate">Loading...</div>
             </div>
         </div>
     </div>
+
+    
+
+    
 
     <!-- More Overlay -->
     <div class="more-overlay" id="moreOverlay">
@@ -1858,9 +1907,21 @@
                     <div class="more-item-icon">🎵</div>
                     <div class="more-item-label">Music</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('games.html')">
-                    <div class="more-item-icon">🎮</div>
-                    <div class="more-item-label">Games</div>
+                <div class="more-item" onclick="navigateToPage('notes.html')">
+                    <div class="more-item-icon">📝</div>
+                    <div class="more-item-label">Notes</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('cooking.html')">
+                    <div class="more-item-icon">🍳</div>
+                    <div class="more-item-label">Cooking</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('smart-home.html')">
+                    <div class="more-item-icon">🏠</div>
+                    <div class="more-item-label">Smart Home</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('updates.html')">
+                    <div class="more-item-icon">⬇️</div>
+                    <div class="more-item-label">Updates</div>
                 </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
@@ -1887,8 +1948,15 @@
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
             <a href="music.html" class="mobile-nav-item">🎵 Music</a>
-            <a href="games.html" class="mobile-nav-item">🎮 Games</a>
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
+            <a href="notes.html" class="mobile-nav-item">📝 Notes</a>
+
+            <a href="cooking.html" class="mobile-nav-item">🍳 Cooking</a>
+
+            <a href="smart-home.html" class="mobile-nav-item">🏠 Smart Home</a>
+
+            <a href="updates.html" class="mobile-nav-item">⬇️ Updates</a>
+
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
             <div class="mobile-nav-divider"></div>
             <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
@@ -2307,7 +2375,122 @@
     <!-- Mini Player for persistent music playback -->
     <script src="js/mini-player.js"></script>
     <!-- Touch panel action executor — allows Zoe to navigate/control this page remotely -->
-    <script src="/js/touch-ui-executor.js?v=20260405"></script>
+    <script src="/js/touch-ui-executor.js?v=20260405">
+
+        // Navigation helper functions
+        function openMoreOverlay() {
+            document.getElementById('moreOverlay').classList.add('active');
+        }
+        
+        function closeMoreOverlay() {
+            document.getElementById('moreOverlay').classList.remove('active');
+        }
+        
+        function navigateToPage(page) {
+            window.location.href = page;
+        }
+        
+        function openNotifications() {
+            document.getElementById('notificationsPanel').classList.add('open');
+            loadNotifications();
+            const notificationBtn = document.querySelector('.notifications-btn');
+            if (notificationBtn) notificationBtn.classList.remove('has-notifications');
+        }
+        
+        function closeNotifications() {
+            document.getElementById('notificationsPanel').classList.remove('open');
+        }
+        
+        async function loadNotifications() {
+            try {
+                const response = await apiRequest('/reminders/notifications/pending');
+                const notifications = response.notifications || [];
+                displayNotifications(notifications);
+            } catch (error) {
+                console.error('Failed to load notifications:', error);
+                displayNotifications([]);
+            }
+        }
+        
+        function displayNotifications(notifications) {
+            const notificationsContent = document.getElementById('notificationsContent');
+            const notificationBtn = document.querySelector('.notifications-btn');
+            
+            if (notifications.length > 0 && notificationBtn) {
+                notificationBtn.classList.add('has-notifications');
+            } else if (notificationBtn) {
+                notificationBtn.classList.remove('has-notifications');
+            }
+            
+            if (notifications.length === 0) {
+                notificationsContent.innerHTML = '<div class="no-notifications">No notifications</div>';
+                return;
+            }
+            
+            notificationsContent.innerHTML = notifications.map(notification => `
+                <div class="notification-item ${notification.is_delivered ? '' : 'unread'}" 
+                     onclick="handleNotificationClick(${notification.id})">
+                    <div class="notification-title">${notification.message}</div>
+                    <div class="notification-meta">
+                        <span class="notification-time">${formatNotificationTime(notification.notification_time)}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        function formatNotificationTime(timeStr) {
+            const date = new Date(timeStr);
+            const now = new Date();
+            const diff = now - date;
+            const minutes = Math.floor(diff / 60000);
+            const hours = Math.floor(minutes / 60);
+            const days = Math.floor(hours / 24);
+            
+            if (minutes < 1) return 'Just now';
+            if (minutes < 60) return `${minutes}m ago`;
+            if (hours < 24) return `${hours}h ago`;
+            return `${days}d ago`;
+        }
+        
+        async function handleNotificationClick(notificationId) {
+            try {
+                await apiRequest(`/reminders/notifications/${notificationId}/deliver`, {
+                    method: 'POST'
+                });
+                loadNotifications();
+            } catch (error) {
+                console.error('Failed to acknowledge notification:', error);
+            }
+            closeNotifications();
+        }
+        
+        // Update time/date display
+        function updateTimeDate() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            const dateString = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+            
+            const timeElement = document.getElementById('currentTime');
+            const dateElement = document.getElementById('currentDate');
+            
+            if (timeElement) timeElement.textContent = timeString;
+            if (dateElement) dateElement.textContent = dateString;
+        }
+        
+        // Initialize time/date updates
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function() {
+                updateTimeDate();
+                setInterval(updateTimeDate, 60000);
+                loadNotifications();
+            });
+        } else {
+            updateTimeDate();
+            setInterval(updateTimeDate, 60000);
+            loadNotifications();
+        }
+
+    </script>
 </body>
 </html>
 

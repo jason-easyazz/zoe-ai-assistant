@@ -1784,6 +1784,95 @@
             font-size: 10px;
             margin-left: 8px;
         }
+
+        /* Touch lists readability overrides (voice-first input) */
+        .main-container {
+            padding: 4px 8px 10px !important;
+        }
+
+        @media (max-width: 420px) {
+            .main-container {
+                padding: 4px 10px 20px !important;
+            }
+        }
+
+        .grid-stack .widget .add-item-input {
+            display: none !important;
+        }
+
+        .grid-stack .widget .widget-header {
+            margin-bottom: 10px !important;
+            align-items: center;
+        }
+
+        .grid-stack .widget .widget-title {
+            font-size: clamp(18px, 2.2vw, 24px) !important;
+            font-weight: 700 !important;
+            line-height: 1.2 !important;
+            letter-spacing: 0.01em;
+            color: #111 !important;
+            text-shadow: none !important;
+        }
+
+        html.dark-mode .grid-stack .widget .widget-title {
+            color: rgba(255, 255, 255, 0.96) !important;
+        }
+
+        .grid-stack .widget .widget-content {
+            gap: 2px;
+        }
+
+        .grid-stack .widget[data-widget-type*="list"],
+        .grid-stack .widget[data-widget-type*="tasks"],
+        .grid-stack .widget[data-widget-type*="shopping"] {
+            padding-left: 14px !important;
+            padding-right: 12px !important;
+        }
+
+        .grid-stack .widget .list-item {
+            padding-top: 5px !important;
+            padding-bottom: 5px !important;
+            gap: 6px !important;
+            min-height: 34px;
+            border-bottom-color: rgba(123, 97, 255, 0.12) !important;
+        }
+
+        .grid-stack .widget .item-text {
+            font-size: clamp(16px, 1.9vw, 22px) !important;
+            line-height: 1.2 !important;
+            font-weight: 600 !important;
+            color: #171717 !important;
+        }
+
+        html.dark-mode .grid-stack .widget .item-text {
+            color: rgba(255, 255, 255, 0.95) !important;
+        }
+
+        .grid-stack .widget[data-widget-type="shopping"] .list-item {
+            border-bottom: none !important;
+        }
+
+        .grid-stack .widget[data-widget-type="shopping"] .list-item > span:first-child {
+            width: 10px !important;
+            min-width: 10px !important;
+        }
+
+        .grid-stack .widget .item-checkbox {
+            width: 22px !important;
+            height: 22px !important;
+            flex: 0 0 22px !important;
+        }
+
+        /* While actively dragging, temporarily clear fixed controls that can
+           block drops in the last/bottom-right board spaces. */
+        body.widget-drag-active .fab-add-widget,
+        body.widget-drag-active #ztm-nav {
+            pointer-events: none !important;
+        }
+
+        body.widget-drag-active .fab-add-widget {
+            opacity: 0 !important;
+        }
     </style>
     <script src="/js/auth.js"></script>
     <script>
@@ -2339,14 +2428,16 @@
     <!-- TOUCH: lock gridstack to static (no drag) on kiosk -->
     <script>
     (function(){
-        // Wait for Gridstack to initialise, then lock it
+        // Wait for Gridstack to initialise, then lock it.
+        // IMPORTANT: do NOT call GridStack.init({}, el) here — re-initializing can
+        // overwrite runtime options/state and has caused layout persistence issues.
         function lockGrids(){
-            if(typeof GridStack !== 'undefined'){
-                document.querySelectorAll('.grid-stack').forEach(function(el){
-                    var g = GridStack.init({}, el);
-                    if(g && g.setStatic) g.setStatic(true);
-                });
-            }
+            document.querySelectorAll('.grid-stack').forEach(function(el){
+                var g = el && el.gridstack;
+                if(!g || !g.setStatic) return;
+                // Respect active edit mode; only force lock in view mode.
+                if(!document.body.classList.contains('edit-mode')) g.setStatic(true);
+            });
         }
         window.addEventListener('load', function(){ setTimeout(lockGrids, 1000); });
         window.addEventListener('widgets-registered', lockGrids);

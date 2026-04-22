@@ -1,8 +1,35 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script>
+    // Apply saved theme before first paint to prevent flash (ported from touch).
+    (function () {
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name="theme-color"]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch (e) {}
+    })();
+    </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#fafbfc">
+    <!-- Zoe theme bootstrap (must run before UI scripts) -->
+    <script>
+    (function(){
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name=theme-color]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch(e) {}
+    })();
+    </script>
     <title>Zoe - Settings</title>
     <style>
         * { 
@@ -529,8 +556,8 @@
         .more-item-label { font-size: 15px; font-weight: 500; }
 
         /* Mobile Responsive */
-        @media (max-width: 900px) {
-            .nav-menu { display: none; }
+        @media (max-width: 768px) {
+            .nav-menu { display: none !important; }
             .setting-item { flex-direction: column; align-items: flex-start; gap: 12px; }
             .setting-control { width: 100%; justify-content: flex-end; }
             .more-grid { grid-template-columns: 1fr; }
@@ -859,12 +886,13 @@
     
     <!-- Service Worker Registration -->
     <script src="/js/sw-registration.js" defer></script>
+    <link rel="stylesheet" href="css/dark-mode-shared.css">
 </head>
 <body>
     <!-- Navigation -->
     <div class="nav-bar">
         <div class="nav-left">
-            <div class="mini-orb" onclick="toggleMobileMenu()"></div>
+            <div class="mini-orb" onclick="window.location.href='index.html'"></div>
             <div class="nav-menu">
                 <a href="chat.html" class="nav-item">Chat</a>
                 <a href="dashboard.html" class="nav-item">Dashboard</a>
@@ -876,16 +904,19 @@
         </div>
         <div class="nav-right">
             <div class="api-indicator connecting" id="apiStatus">Connecting</div>
-            
-            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
-            
-            <!-- Time/Date Display -->
+            <button class="refresh-btn notifications-btn" onclick="forceRefreshCache()" title="Refresh App (clears cache)">🔄</button>
+            <button class="theme-nav-btn notifications-btn" title="Toggle theme" onclick="window.cycleZoeTheme && window.cycleZoeTheme()">🌓</button>
+            <button class="notifications-btn" onclick="openNotificationsSafe()" title="Notifications">🔔</button>
             <div class="time-date-display">
                 <div class="current-time" id="navCurrentTime">--:--</div>
                 <div class="current-date" id="navCurrentDate">Loading...</div>
             </div>
         </div>
     </div>
+
+    
+
+    
 
     <!-- More Overlay -->
     <div class="more-overlay" id="moreOverlay">
@@ -907,9 +938,21 @@
                     <div class="more-item-icon">🎵</div>
                     <div class="more-item-label">Music</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('games.html')">
-                    <div class="more-item-icon">🎮</div>
-                    <div class="more-item-label">Games</div>
+                <div class="more-item" onclick="navigateToPage('notes.html')">
+                    <div class="more-item-icon">📝</div>
+                    <div class="more-item-label">Notes</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('cooking.html')">
+                    <div class="more-item-icon">🍳</div>
+                    <div class="more-item-label">Cooking</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('smart-home.html')">
+                    <div class="more-item-icon">🏠</div>
+                    <div class="more-item-label">Smart Home</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('updates.html')">
+                    <div class="more-item-icon">⬇️</div>
+                    <div class="more-item-label">Updates</div>
                 </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
@@ -936,8 +979,15 @@
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
             <a href="music.html" class="mobile-nav-item">🎵 Music</a>
-            <a href="games.html" class="mobile-nav-item">🎮 Games</a>
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
+            <a href="notes.html" class="mobile-nav-item">📝 Notes</a>
+
+            <a href="cooking.html" class="mobile-nav-item">🍳 Cooking</a>
+
+            <a href="smart-home.html" class="mobile-nav-item">🏠 Smart Home</a>
+
+            <a href="updates.html" class="mobile-nav-item">⬇️ Updates</a>
+
             <a href="settings.html" class="mobile-nav-item active">⚙️ Settings</a>
             <div class="mobile-nav-divider"></div>
             <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
@@ -945,17 +995,6 @@
     </div>
     <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
 
-    <!-- Notifications Panel -->
-    <div class="notifications-panel" id="notificationsPanel">
-        <div class="notifications-header">
-            <h3 class="notifications-title">💬 Notifications</h3>
-            <button class="notifications-close" onclick="closeNotifications()">×</button>
-        </div>
-        <div class="notifications-content" id="notificationsContent">
-            <div class="no-notifications">No notifications</div>
-        </div>
-    </div>
-    </div>
 
     <!-- Notifications Panel -->
     <div class="notifications-panel" id="notificationsPanel">
@@ -1123,6 +1162,80 @@
                 </div>
             </div>
 
+            <!-- Touch Panels Section (Admin Only) — per-panel login bindings -->
+            <div class="settings-section" id="touchPanelsSection" style="display: none;">
+                <div class="section-header" onclick="toggleSection('touch-panels')">
+                    <div class="section-title">📱 Touch Panels</div>
+                    <div class="section-subtitle">Pick which users can log in on each panel and set a default user</div>
+                </div>
+                <div class="section-content" id="touch-panels">
+                    <div style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap;">
+                        <button class="btn" onclick="loadTouchPanels()">🔄 Refresh</button>
+                        <span style="color:#666; font-size:12px;">Panels register themselves from the touch Settings page. Changes take effect on the panel's next login.</span>
+                    </div>
+                    <div id="touchPanelsList">
+                        <em style="color:#888; font-size:13px;">Loading panels…</em>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Role Capability Matrix (Admin Only) -->
+            <div class="settings-section" id="capabilityMatrixSection" style="display: none;">
+                <div class="section-header" onclick="toggleSection('capability-matrix')">
+                    <div class="section-title">🛡️ Role Capability Matrix</div>
+                    <div class="section-subtitle">Control what admin, user, and guest can access</div>
+                </div>
+                <div class="section-content" id="capability-matrix">
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+                        <button class="btn" onclick="loadCapabilityMatrixSettings()">🔄 Refresh</button>
+                        <button class="btn" onclick="resetCapabilityMatrixDefaults()">♻️ Reset Defaults</button>
+                        <span style="font-size:12px; color:#666;">Changes apply to API routes, voice intents, and touch pages.</span>
+                    </div>
+                    <div id="capabilityMatrixEditor">
+                        <em style="color:#888; font-size:13px;">Loading matrix…</em>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Zoe Default Location (Admin Only) -->
+            <div class="settings-section" id="weatherDefaultSection" style="display: none;">
+                <div class="section-header" onclick="toggleSection('weather-default-location')">
+                    <div class="section-title">📍 Zoe Default Weather Location</div>
+                    <div class="section-subtitle">System fallback used when a user has no saved weather location</div>
+                </div>
+                <div class="section-content" id="weather-default-location">
+                    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px;">
+                        <button class="btn" onclick="loadWeatherDefaultSettings()">🔄 Refresh</button>
+                        <span style="font-size:12px; color:#666;">Admin-only system default for guest and new users.</span>
+                    </div>
+                    <div style="display:grid; gap:10px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+                        <div>
+                            <label style="display:block; font-size:12px; color:#666; margin-bottom:4px;">City</label>
+                            <input id="adminWeatherCity" class="form-input" placeholder="Geraldton">
+                        </div>
+                        <div>
+                            <label style="display:block; font-size:12px; color:#666; margin-bottom:4px;">Country (2-letter)</label>
+                            <input id="adminWeatherCountry" class="form-input" placeholder="AU">
+                        </div>
+                        <div>
+                            <label style="display:block; font-size:12px; color:#666; margin-bottom:4px;">Latitude</label>
+                            <input id="adminWeatherLat" class="form-input" placeholder="-28.7774">
+                        </div>
+                        <div>
+                            <label style="display:block; font-size:12px; color:#666; margin-bottom:4px;">Longitude</label>
+                            <input id="adminWeatherLon" class="form-input" placeholder="114.6158">
+                        </div>
+                        <div>
+                            <label style="display:block; font-size:12px; color:#666; margin-bottom:4px;">Timezone</label>
+                            <input id="adminWeatherTimezone" class="form-input" placeholder="Australia/Perth">
+                        </div>
+                    </div>
+                    <div style="margin-top:10px;">
+                        <button class="btn primary" onclick="saveWeatherDefaultSettings()">💾 Save Zoe Default Location</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- General Settings -->
             <div class="settings-section">
                 <div class="section-header" onclick="toggleSection('general')">
@@ -1136,20 +1249,21 @@
                             <div class="setting-description">Choose your preferred theme</div>
                         </div>
                         <div class="setting-control">
-                            <select class="form-select" id="themeSelect">
+                            <select class="form-select" id="themeSelect" onchange="updateTheme(this.value)">
                                 <option value="light">Light</option>
                                 <option value="dark">Dark</option>
                                 <option value="auto">Auto</option>
                             </select>
                         </div>
                     </div>
-                    <div class="setting-item">
+                    <!-- Language moved to Time & Location section to avoid duplicate IDs -->
+                    <div class="setting-item" style="display:none;">
                         <div class="setting-info">
                             <div class="setting-name">Language</div>
                             <div class="setting-description">Select your preferred language</div>
                         </div>
                         <div class="setting-control">
-                            <select class="form-select" id="languageSelect">
+                            <select class="form-select" id="languageSelectLegacy">
                                 <option value="en">English</option>
                                 <option value="es">Spanish</option>
                                 <option value="fr">French</option>
@@ -1171,8 +1285,8 @@
                 </div>
             </div>
 
-            <!-- API Settings -->
-            <div class="settings-section">
+            <!-- API Settings — endpoints unserved by zoe-data (zoe-core retired). Hidden until a working backend exists. -->
+            <div class="settings-section" style="display:none;" data-desktop-hidden="api-keys">
                 <div class="section-header" onclick="toggleSection('api')">
                     <div class="section-title">API Configuration</div>
                     <div class="section-subtitle">Manage external service connections</div>
@@ -1213,7 +1327,8 @@
             </div>
 
             <!-- Music Settings -->
-            <div class="settings-section">
+            <!-- Music Settings hidden on desktop: music control is delegated to Home Assistant; endpoints not served by zoe-data. -->
+            <div class="settings-section" style="display:none;" data-desktop-hidden="music">
                 <div class="section-header" onclick="toggleSection('music')">
                     <div class="section-title">🎵 Music Settings</div>
                     <div class="section-subtitle">Configure music providers, playback preferences, and output devices</div>
@@ -1346,7 +1461,8 @@
             </div>
 
             <!-- Calendar Settings -->
-            <div class="settings-section">
+            <!-- Calendar preference sections hidden on desktop: /settings/calendar/* endpoints are served by retired zoe-core. -->
+            <div class="settings-section" style="display:none;" data-desktop-hidden="calendar-prefs">
                 <div class="section-header" onclick="toggleSection('calendar')">
                     <div class="section-title">Calendar Settings</div>
                     <div class="section-subtitle">Configure your calendar preferences and sync</div>
@@ -1519,7 +1635,8 @@
             </div>
 
             <!-- Notification Settings -->
-            <div class="settings-section">
+            <!-- Detailed push-notification settings hidden on desktop: /api/push/* endpoints are served by retired zoe-core. Basic notifications toggle remains in General. -->
+            <div class="settings-section" style="display:none;" data-desktop-hidden="notifications-push">
                 <div class="section-header" onclick="toggleSection('notifications')">
                     <div class="section-title">🔔 Notification Settings</div>
                     <div class="section-subtitle">Configure push notifications and reminders</div>
@@ -1749,7 +1866,8 @@
             </div>
 
             <!-- Productivity Settings -->
-            <div class="settings-section">
+            <!-- Productivity Settings hidden on desktop: focus-session/productivity-analytics endpoints served by retired zoe-core. -->
+            <div class="settings-section" style="display:none;" data-desktop-hidden="productivity">
                 <div class="section-header" onclick="toggleSection('productivity')">
                     <div class="section-title">Productivity Settings</div>
                     <div class="section-subtitle">Focus timer, break reminders, and productivity tracking</div>
@@ -2330,8 +2448,8 @@
                 }
             </style>
 
-            <!-- Data Management -->
-            <div class="settings-section">
+            <!-- Data Management — /settings/export|import|clear endpoints unserved by zoe-data. Hidden on desktop. -->
+            <div class="settings-section" style="display:none;" data-desktop-hidden="data-mgmt">
                 <div class="section-header" onclick="toggleSection('data')">
                     <div class="section-title">Data Management</div>
                     <div class="section-subtitle">Backup and export your data</div>
@@ -2387,20 +2505,51 @@
                     </div>
                     <div class="setting-item">
                         <div class="setting-info">
-                            <div class="setting-name">Version</div>
-                            <div class="setting-description">Current Zoe version</div>
+                            <div class="setting-name">Database</div>
+                            <div class="setting-description">zoe-data SQLite connection</div>
                         </div>
                         <div class="setting-control">
-                            <span id="versionText">1.0.0</span>
+                            <span class="status-indicator" id="dbStatusIndicator"></span>
+                            <span id="dbStatusText">Checking...</span>
                         </div>
                     </div>
                     <div class="setting-item">
                         <div class="setting-info">
-                            <div class="setting-name">Uptime</div>
-                            <div class="setting-description">System uptime</div>
+                            <div class="setting-name">OpenClaw Gateway</div>
+                            <div class="setting-description">Agent gateway on :18789</div>
                         </div>
                         <div class="setting-control">
-                            <span id="uptimeText">Loading...</span>
+                            <span class="status-indicator" id="gatewayStatusIndicator"></span>
+                            <span id="gatewayStatusText">Checking...</span>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Local LLM (llama-server)</div>
+                            <div class="setting-description">Local language model host</div>
+                        </div>
+                        <div class="setting-control">
+                            <span class="status-indicator" id="llamaStatusIndicator"></span>
+                            <span id="llamaStatusText">Checking...</span>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Home Assistant Bridge</div>
+                            <div class="setting-description">MCP bridge on :8007</div>
+                        </div>
+                        <div class="setting-control">
+                            <span class="status-indicator" id="haBridgeStatusIndicator"></span>
+                            <span id="haBridgeStatusText">Checking...</span>
+                        </div>
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <div class="setting-name">Version</div>
+                            <div class="setting-description">Current Zoe version</div>
+                        </div>
+                        <div class="setting-control">
+                            <span id="versionText">—</span>
                         </div>
                     </div>
                 </div>
@@ -2418,7 +2567,8 @@
             </div>
 
             <!-- AI Training & Learning -->
-            <div class="settings-section">
+            <!-- AI Training hidden on desktop: /api/training/*, /api/chat/training-stats served by retired zoe-core. -->
+            <div class="settings-section" style="display:none;" data-desktop-hidden="ai-training">
                 <div class="section-header" onclick="toggleSection('ai-training')">
                     <div class="section-title">🎓 AI Training & Learning</div>
                     <div class="section-subtitle">Manage overnight training and continuous learning</div>
@@ -2527,7 +2677,8 @@
             </div>
 
             <!-- Intelligence & Proactivity -->
-            <div class="settings-section">
+            <!-- Intelligence & Proactivity hidden on desktop: /api/settings/intelligence, /api/proactive/* served by retired zoe-core. -->
+            <div class="settings-section" style="display:none;" data-desktop-hidden="intelligence">
                 <div class="section-header" onclick="toggleSection('intelligence')">
                     <div class="section-title">🧠 Intelligence & Proactivity</div>
                     <div class="section-subtitle">Control proactive suggestions and intelligent features</div>
@@ -2707,17 +2858,80 @@
             </div>
 
             <script>
-            /* ---- Admin section visibility (show for admin users) ---- */
+            /* ---- Admin section visibility (show for admin users ONLY) ----
+               NOTE: On desktop, Trust Gate / Skills / Learnings / Scheduler /
+               Self-Creation / Channels are NOT served by zoe-data (they live in
+               retired zoe-core). They stay permanently hidden here regardless
+               of admin role. The list below is intentionally empty; User
+               Management is gated separately via checkAdminAccess(). */
             (function(){
-                const adminSections = ['trustGateSection','skillsSection','learningsSection','schedulerSection','selfCreationSection','channelsSection'];
+                // Admin-only sections served by active services (zoe-data + zoe-auth).
+                const adminSections = ['touchPanelsSection', 'capabilityMatrixSection', 'weatherDefaultSection'];
+                const zoeCoreOnlySections = ['trustGateSection','skillsSection','learningsSection','schedulerSection','selfCreationSection','channelsSection'];
+
+                function hideAdminSections(){
+                    adminSections.forEach(id => {
+                        const el = document.getElementById(id);
+                        if(el) el.style.display = 'none';
+                    });
+                }
                 function showAdminSections(){
                     adminSections.forEach(id => {
                         const el = document.getElementById(id);
                         if(el) el.style.display = '';
                     });
                 }
-                // Show admin sections after a short delay (session must be loaded)
-                setTimeout(showAdminSections, 500);
+
+                // Permanently hide zoe-core-only sections on desktop.
+                zoeCoreOnlySections.forEach(id => {
+                    const el = document.getElementById(id);
+                    if(el) el.style.display = 'none';
+                });
+
+                // Default: hidden. Only reveal after confirming the logged-in user has admin role.
+                hideAdminSections();
+
+                async function resolveIsAdmin(){
+                    try{
+                        if(window.zoeAuth && typeof window.zoeAuth.getCurrentUser === 'function'){
+                            const u = await window.zoeAuth.getCurrentUser();
+                            if(u && u.role) return u.role === 'admin';
+                        }
+                    }catch(_){}
+                    try{
+                        const sess = (window.zoeAuth && window.zoeAuth.getCurrentSession && window.zoeAuth.getCurrentSession()) || null;
+                        const headers = {};
+                        if(sess && sess.session_id) headers['X-Session-ID'] = sess.session_id;
+                        const r = await fetch('/api/auth/profile', { headers, credentials: 'include' });
+                        if(r.ok){
+                            const data = await r.json();
+                            const user = data.user || data;
+                            return !!(user && user.role === 'admin');
+                        }
+                    }catch(_){}
+                    return false;
+                }
+                // expose for User Management gate (and other admin-gated controls)
+                window.zoeResolveIsAdmin = resolveIsAdmin;
+
+                async function applyAdminGate(){
+                    const isAdmin = await resolveIsAdmin();
+                    if(isAdmin){
+                        showAdminSections();
+                        if(typeof loadTouchPanels === 'function') loadTouchPanels();
+                        if(typeof loadCapabilityMatrixSettings === 'function') loadCapabilityMatrixSettings();
+                        if(typeof loadWeatherDefaultSettings === 'function') loadWeatherDefaultSettings();
+                    } else {
+                        hideAdminSections();
+                    }
+                }
+
+                if(document.readyState === 'complete' || document.readyState === 'interactive'){
+                    applyAdminGate();
+                } else {
+                    document.addEventListener('DOMContentLoaded', applyAdminGate);
+                }
+                setTimeout(applyAdminGate, 1500);
 
                 // Lazy-load data when section is expanded
                 const observer = new MutationObserver(mutations => {
@@ -3274,34 +3488,47 @@
         }
 
         // Save setting
+        //
+        // Tries the server (/settings PUT) first; if that endpoint isn't served
+        // (zoe-core is retired), falls back to localStorage so toggles still
+        // persist across reloads on the desktop.
         async function saveSetting(key, value) {
+            let serverOK = false;
             try {
                 await apiRequest('/settings', {
                     method: 'PUT',
                     body: JSON.stringify({ [key]: value })
                 });
-                showNotification('Setting saved', 'success');
-            } catch (error) {
-                console.error('Failed to save setting:', error);
-                showNotification('Failed to save setting', 'error');
+                serverOK = true;
+            } catch (_) {
+                serverOK = false;
             }
+            try {
+                localStorage.setItem('zoe_' + key + '_enabled', String(!!value));
+            } catch (_) {}
+            showNotification(serverOK ? 'Setting saved' : 'Setting saved locally', 'success');
         }
 
         // Save API key
-        async function saveApiKey(key) {
-            const input = document.getElementById(key === 'openai' ? 'openaiKey' : 
-                          key === 'homeassistant' ? 'haUrl' : 'haToken');
+        async function saveApiKey(service) {
+            const input = document.getElementById(service === 'openai' ? 'openaiKey' :
+                          service === 'homeassistant' ? 'haUrl' : 'haToken');
+            if (!input) {
+                showNotification('Unknown API key field', 'error');
+                return;
+            }
             const value = input.value.trim();
-            
+
             if (!value) {
                 showNotification('Please enter a value', 'error');
                 return;
             }
-            
+
             try {
+                // Backend (zoe-core contract) expects { service, key }.
                 await apiRequest('/settings/apikeys', {
                     method: 'POST',
-                    body: JSON.stringify({ [key]: value })
+                    body: JSON.stringify({ service: service, key: value })
                 });
                 showNotification('API key saved', 'success');
                 input.value = '';
@@ -3375,59 +3602,158 @@
             }
         }
 
+        // Theme selector — persist + apply immediately
+        function applyTheme(mode) {
+            const root = document.documentElement;
+            const body = document.body;
+            const setDark = (on) => {
+                root.classList.toggle('dark-mode', on);
+                if (body) body.classList.toggle('dark-mode', on);
+                root.classList.toggle('dark', on);
+                if (body) body.classList.toggle('dark', on);
+                root.setAttribute('data-theme', on ? 'dark' : 'light');
+                const mc = document.querySelector('meta[name=theme-color]');
+                if (mc) mc.content = on ? '#060610' : '#fafbfc';
+            };
+            if (mode === 'dark') { setDark(true); }
+            else if (mode === 'light') { setDark(false); }
+            else {
+                const h = new Date().getHours();
+                setDark(h < 7 || h >= 19);
+            }
+        }
+        async function updateTheme(value) {
+            try {
+                localStorage.setItem('zoe_theme', value);
+                applyTheme(value);
+                if (typeof apiRequest === 'function') {
+                    await apiRequest('/settings/', {
+                        method: 'PUT',
+                        body: JSON.stringify({ theme: value })
+                    }).catch(e => console.warn('Theme save failed', e));
+                }
+                if (typeof showNotification === 'function') showNotification('Theme updated', 'success');
+            } catch (e) {
+                console.warn('Theme update failed', e);
+            }
+        }
+        (function initTheme(){
+            try {
+                const stored = localStorage.getItem('zoe_theme') || 'auto';
+                const sel = document.getElementById('themeSelect');
+                if (sel) sel.value = stored;
+                applyTheme(stored);
+            } catch(_) {}
+        })();
+
         // Load settings
+        //
+        // NOTE: `/api/settings` lives in retired zoe-core and is not mounted in
+        // zoe-data. We preserve the call for forward-compat but only log at
+        // debug level so the desktop console stays clean. Theme + language +
+        // notifications toggle fall back to localStorage (see initTheme() and
+        // the toggle handler below).
         async function loadSettings() {
             try {
                 const response = await apiRequest('/settings/');
-                const settings = response.settings || {};
-                
-                // Apply settings to UI
+                const settings = (response && response.settings) || {};
+
                 if (settings.theme) {
-                    document.getElementById('themeSelect').value = settings.theme;
+                    const themeSel = document.getElementById('themeSelect');
+                    if (themeSel) themeSel.value = settings.theme;
+                    applyTheme(settings.theme);
                 }
                 if (settings.language) {
-                    document.getElementById('languageSelect').value = settings.language;
+                    const langSel = document.getElementById('languageSelect');
+                    if (langSel) langSel.value = settings.language;
                 }
                 if (settings.notifications !== undefined) {
                     const toggle = document.getElementById('notificationsToggle');
-                    if (settings.notifications) {
+                    if (toggle && settings.notifications) {
                         toggle.classList.add('active');
                     }
                 }
             } catch (error) {
-                console.error('Failed to load settings:', error);
+                // Endpoint not served by zoe-data — fall back to localStorage.
+                console.debug('/settings/ not available, using local fallback');
+                try {
+                    const notifPref = localStorage.getItem('zoe_notifications_enabled');
+                    const toggle = document.getElementById('notificationsToggle');
+                    if (toggle && notifPref === 'true') toggle.classList.add('active');
+                } catch (_) {}
             }
         }
 
-        // Update system status
+        // Update system status.
+        //
+        // `/api/system/status` returns a flat object:
+        //   { database, openclaw_gateway, llama_server, ha_bridge, ... }
+        // and `/api/system/platform` returns { version, platform, engine }.
+        // The previous implementation assumed a legacy { status: { api_online, version, uptime } }
+        // shape, which meant every row above always fell into the catch branch
+        // and showed "Offline".
         async function updateSystemStatus() {
+            const setRow = (indId, textId, state, label) => {
+                const ind = document.getElementById(indId);
+                const txt = document.getElementById(textId);
+                if (ind) ind.className = 'status-indicator status-' + state;
+                if (txt) txt.textContent = label;
+            };
+            const normalise = (raw) => {
+                if (!raw) return { state: 'offline', label: 'Offline' };
+                const s = String(raw).toLowerCase();
+                if (s === 'ok' || s === 'connected' || s.startsWith('ok:')) {
+                    return { state: 'online', label: s.startsWith('ok:') ? raw : 'Online' };
+                }
+                if (s === 'offline' || s.startsWith('error')) {
+                    return { state: 'offline', label: 'Offline' };
+                }
+                if (s === 'unconfigured' || s === 'unknown') {
+                    return { state: 'warning', label: raw };
+                }
+                return { state: 'warning', label: raw };
+            };
+
+            let apiReachable = false;
             try {
-                const response = await apiRequest('/system/status');
-                const status = response.status;
-                
-                const indicator = document.getElementById('apiStatusIndicator');
-                const text = document.getElementById('apiStatusText');
-                
-                if (status.api_online) {
-                    indicator.className = 'status-indicator status-online';
-                    text.textContent = 'Online';
-                } else {
-                    indicator.className = 'status-indicator status-offline';
-                    text.textContent = 'Offline';
-                }
-                
-                if (status.version) {
-                    document.getElementById('versionText').textContent = status.version;
-                }
-                if (status.uptime) {
-                    document.getElementById('uptimeText').textContent = status.uptime;
+                const status = await apiRequest('/api/system/status');
+                apiReachable = !!status;
+
+                setRow('apiStatusIndicator', 'apiStatusText', 'online', 'Online');
+
+                const db = normalise(status && status.database);
+                setRow('dbStatusIndicator', 'dbStatusText', db.state, db.label);
+
+                const gw = normalise(status && status.openclaw_gateway);
+                const gwLabel = status && status.openclaw_model
+                    ? gw.label + ' · ' + status.openclaw_model
+                    : gw.label;
+                setRow('gatewayStatusIndicator', 'gatewayStatusText', gw.state, gwLabel);
+
+                const llm = normalise(status && status.llama_server);
+                const llmLabel = status && status.llama_model
+                    ? llm.label + ' · ' + status.llama_model
+                    : llm.label;
+                setRow('llamaStatusIndicator', 'llamaStatusText', llm.state, llmLabel);
+
+                const ha = normalise(status && status.ha_bridge);
+                setRow('haBridgeStatusIndicator', 'haBridgeStatusText', ha.state, ha.label);
+            } catch (error) {
+                console.error('Failed to load /api/system/status:', error);
+                setRow('apiStatusIndicator', 'apiStatusText', 'offline', 'Offline');
+                ['db','gateway','llama','haBridge'].forEach(p => {
+                    setRow(p + 'StatusIndicator', p + 'StatusText', 'offline', 'Unavailable');
+                });
+            }
+
+            try {
+                const platform = await apiRequest('/api/system/platform');
+                if (platform && platform.version) {
+                    const v = document.getElementById('versionText');
+                    if (v) v.textContent = platform.version;
                 }
             } catch (error) {
-                console.error('Failed to load system status:', error);
-                const indicator = document.getElementById('apiStatusIndicator');
-                const text = document.getElementById('apiStatusText');
-                indicator.className = 'status-indicator status-offline';
-                text.textContent = 'Offline';
+                if (apiReachable) console.warn('platform info unavailable', error);
             }
         }
 
@@ -3670,16 +3996,19 @@
             }
         }
 
-        // Location management
+        // Location management (uses /api/weather/preferences — /weather/location is not served)
         async function loadCurrentLocation() {
             try {
-                const response = await apiRequest('/weather/location');
-                const location = response;
-                document.getElementById('currentLocationDesc').textContent = 
-                    `${location.city}, ${location.country}`;
+                const response = await apiRequest('/weather/preferences');
+                const location = response || {};
+                const el = document.getElementById('currentLocationDesc');
+                if (el) el.textContent = (location.city && location.country)
+                    ? `${location.city}, ${location.country}`
+                    : 'Location not set';
             } catch (error) {
                 console.error('Failed to load location:', error);
-                document.getElementById('currentLocationDesc').textContent = 'Location not set';
+                const el = document.getElementById('currentLocationDesc');
+                if (el) el.textContent = 'Location not set';
             }
         }
 
@@ -3717,16 +4046,29 @@
 
         async function updateLocation(lat, lon, city, country) {
             try {
-                await apiRequest('/weather/location', {
+                // POST to /api/weather/preferences (WeatherPreferences model).
+                // Preserve temperature_unit + use_current_location if the server knows them.
+                let tempUnit = 'celsius', useCurrent = false;
+                try {
+                    const prefs = await apiRequest('/weather/preferences');
+                    if (prefs) {
+                        if (prefs.temperature_unit) tempUnit = prefs.temperature_unit;
+                        if (typeof prefs.use_current_location === 'boolean') useCurrent = prefs.use_current_location;
+                    }
+                } catch (_) { /* fall back to defaults */ }
+
+                await apiRequest('/weather/preferences', {
                     method: 'POST',
                     body: JSON.stringify({
                         latitude: lat,
                         longitude: lon,
                         city: city,
-                        country: country
+                        country: country,
+                        temperature_unit: tempUnit,
+                        use_current_location: useCurrent
                     })
                 });
-                
+
                 showNotification('Location updated successfully', 'success');
                 loadCurrentLocation();
             } catch (error) {
@@ -4045,7 +4387,9 @@
                 applyTimeLanguageSettingsToUI();
                 loadAvailableTimezones();
             } catch (error) {
-                console.error('Failed to load time language settings:', error);
+                // /settings/time-location is not served by zoe-data — fall back
+                // to browser-derived defaults (timezone, language, date format).
+                console.debug('/settings/time-location not available, using browser defaults');
                 applySmartDefaults();
                 applyTimeLanguageSettingsToUI();
                 loadAvailableTimezones();
@@ -4513,20 +4857,26 @@
 
 
         // Initialize
+        //
+        // Only run init for sections that are actually visible on desktop.
+        // Sections like Music, Calendar Settings, Productivity Settings,
+        // API Configuration and Data Management are hidden on desktop because
+        // their endpoints are not served by zoe-data (zoe-core retired).
         document.addEventListener('DOMContentLoaded', () => {
-            loadSettings();
-            loadCalendarSettings();
-            loadCalendarAccounts();
-            loadCalendarSyncHealth();
-            loadProductivitySettings();
-            loadTimeLanguageSettings();
-            addProductivityEventListeners();
+            const sectionVisible = (id) => {
+                const el = document.getElementById(id);
+                return !!(el && el.closest('.settings-section') && el.closest('.settings-section').style.display !== 'none');
+            };
+
+            loadSettings();                  // general toggles (localStorage fallback)
+            if (sectionVisible('calendar'))  { loadCalendarSettings(); loadCalendarAccounts(); loadCalendarSyncHealth(); }
+            if (sectionVisible('productivity')) { loadProductivitySettings(); addProductivityEventListeners(); }
+            loadTimeLanguageSettings();      // hosts the language <select>; safe to noop on 404
             updateSystemStatus();
-            loadCurrentLocation();
+            loadCurrentLocation();           // now uses /api/weather/preferences
             loadUserProfile();
             loadSecurityInfo();
-            
-            // Update system status every 30 seconds
+
             setInterval(updateSystemStatus, 30000);
         });
 
@@ -4567,22 +4917,29 @@
         // Security Functions
         async function loadSecurityInfo() {
             try {
+                const session = (window.zoeAuth && typeof window.zoeAuth.getCurrentSession === 'function')
+                    ? window.zoeAuth.getCurrentSession() : null;
+                if (!session || !session.session_id) return;
                 // Load PIN status
                 const pinResponse = await fetch('/api/auth/passcode/status', {
-                    headers: { 'X-Session-ID': window.zoeAuth.getCurrentSession().session_id }
+                    headers: { 'X-Session-ID': session.session_id }
                 });
                 if (pinResponse.ok) {
                     const pinData = await pinResponse.json();
-                    document.getElementById('pinStatus').textContent = pinData.has_passcode ? 'Configured' : 'Not Set';
+                    const pinStatusEl = document.getElementById('pinStatus');
+                    if (pinStatusEl) pinStatusEl.textContent = pinData.has_passcode ? 'Configured' : 'Not Set';
                 }
 
                 // Load session count
                 const sessionsResponse = await fetch('/api/auth/sessions', {
-                    headers: { 'X-Session-ID': window.zoeAuth.getCurrentSession().session_id }
+                    headers: { 'X-Session-ID': session.session_id }
                 });
                 if (sessionsResponse.ok) {
                     const sessionsData = await sessionsResponse.json();
-                    document.getElementById('sessionCount').textContent = sessionsData.sessions.length + ' active';
+                    const sessionCountEl = document.getElementById('sessionCount');
+                    if (sessionCountEl && sessionsData.sessions) {
+                        sessionCountEl.textContent = sessionsData.sessions.length + ' active';
+                    }
                 }
             } catch (error) {
                 console.warn('Could not load security info:', error);
@@ -4628,7 +4985,8 @@
         }
 
         function managePinCode() {
-            const pinStatus = document.getElementById('pinStatus').textContent;
+            const pinStatusEl = document.getElementById('pinStatus');
+            const pinStatus = pinStatusEl ? pinStatusEl.textContent : 'Not Set';
             if (pinStatus === 'Configured') {
                 if (confirm('Do you want to remove your PIN code?')) {
                     removePinCode();
@@ -4652,42 +5010,58 @@
 
         async function updatePinCode(newPin) {
             try {
-                const response = await fetch('/api/auth/passcode', {
+                const session = (window.zoeAuth && typeof window.zoeAuth.getCurrentSession === 'function')
+                    ? window.zoeAuth.getCurrentSession() : null;
+                if (!session || !session.session_id) {
+                    showUserNotification('Not signed in', 'error');
+                    return;
+                }
+                const response = await fetch('/api/auth/passcode/setup', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'X-Session-ID': window.zoeAuth.getCurrentSession().session_id
+                        'X-Session-ID': session.session_id
                     },
-                    body: JSON.stringify({ new_passcode: newPin })
+                    body: JSON.stringify({ passcode: newPin })
                 });
 
                 if (response.ok) {
                     showUserNotification('PIN code updated successfully!', 'success');
-                    loadSecurityInfo();
+                    loadSecurityInfo().catch(err => console.warn('Reload security info failed:', err));
                 } else {
-                    const error = await response.json();
-                    showUserNotification(error.detail || 'Failed to update PIN', 'error');
+                    let detail = 'Failed to update PIN';
+                    try { const err = await response.json(); detail = err.detail || detail; } catch(_) {}
+                    showUserNotification(detail, 'error');
                 }
             } catch (error) {
+                console.error('updatePinCode error:', error);
                 showUserNotification('Connection error', 'error');
             }
         }
 
         async function removePinCode() {
             try {
+                const session = (window.zoeAuth && typeof window.zoeAuth.getCurrentSession === 'function')
+                    ? window.zoeAuth.getCurrentSession() : null;
+                if (!session || !session.session_id) {
+                    showUserNotification('Not signed in', 'error');
+                    return;
+                }
                 const response = await fetch('/api/auth/passcode', {
                     method: 'DELETE',
-                    headers: { 'X-Session-ID': window.zoeAuth.getCurrentSession().session_id }
+                    headers: { 'X-Session-ID': session.session_id }
                 });
 
                 if (response.ok) {
                     showUserNotification('PIN code removed successfully!', 'success');
-                    loadSecurityInfo();
+                    loadSecurityInfo().catch(err => console.warn('Reload security info failed:', err));
                 } else {
-                    const error = await response.json();
-                    showUserNotification(error.detail || 'Failed to remove PIN', 'error');
+                    let detail = 'Failed to remove PIN';
+                    try { const err = await response.json(); detail = err.detail || detail; } catch(_) {}
+                    showUserNotification(detail, 'error');
                 }
             } catch (error) {
+                console.error('removePinCode error:', error);
                 showUserNotification('Connection error', 'error');
             }
         }
@@ -4746,19 +5120,7 @@
 
 
 
-        // Notifications system
-        function openNotifications() {
-            document.getElementById('notificationsPanel').classList.add('open');
-            loadNotifications();
-            
-            // Clear notification indicator when panel is opened
-            const notificationBtn = document.querySelector('.notifications-btn');
-            notificationBtn.classList.remove('has-notifications');
-        }
-
-        function closeNotifications() {
-            document.getElementById('notificationsPanel').classList.remove('open');
-        }
+        // (Notifications open/close defined once below, deduplicated)
 
         // Mobile menu toggle
         function toggleMobileMenu() {
@@ -4866,19 +5228,308 @@
 
         // Authentication functions now handled by auth.js
 
+        // ------------------------------------------------------------------
+        // Touch Panels (Admin Only) — lists registered kiosks and edits per-panel
+        // login bindings (default user, allowed users, guest toggle). Relies on
+        // /api/panels endpoints served by zoe-data.
+        // ------------------------------------------------------------------
+        let touchPanelUsers = [];   // user profile pool, loaded once
+        let touchPanelRows = [];    // last-loaded panels
+
+        async function loadTouchPanels() {
+            const listEl = document.getElementById('touchPanelsList');
+            if (!listEl) return;
+            listEl.innerHTML = '<em style="color:#888; font-size:13px;">Loading panels…</em>';
+
+            // Load profile pool for default/allowed pickers (public endpoint).
+            try {
+                const r = await fetch('/api/auth/profiles');
+                const data = await r.json();
+                touchPanelUsers = Array.isArray(data) ? data : (data.profiles || []);
+            } catch (_) { touchPanelUsers = []; }
+
+            // Load panel list (admin endpoint).
+            try {
+                const resp = await apiRequest('/panels');
+                touchPanelRows = resp.panels || [];
+            } catch (e) {
+                listEl.innerHTML = `<div style="color:#a33; font-size:13px;">Could not load panels: ${e.message || e}</div>`;
+                return;
+            }
+
+            if (!touchPanelRows.length) {
+                listEl.innerHTML = '<em style="color:#888; font-size:13px;">No panels registered yet. Open Settings on a touch panel (as admin) to register it.</em>';
+                return;
+            }
+
+            listEl.innerHTML = touchPanelRows.map(p => renderPanelRow(p)).join('');
+            touchPanelRows.forEach(p => hydratePanelBindings(p.panel_id));
+        }
+
+        function renderPanelRow(p) {
+            const pid = p.panel_id;
+            const userOptions = touchPanelUsers.map(u =>
+                `<option value="${u.user_id}">${u.username} (${u.role || 'user'})</option>`
+            ).join('');
+            const allowedChecks = touchPanelUsers.map(u => `
+                <label style="display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border:1px solid #e0e0e0; border-radius:999px; background:#fff; font-size:12px;">
+                    <input type="checkbox" data-panel="${pid}" data-user="${u.user_id}" class="tp-allowed"> ${u.username}
+                </label>`).join('');
+            return `
+            <div class="touch-panel-card" data-panel="${pid}" style="border:1px solid #e0e0e0; border-radius:10px; padding:12px; margin-bottom:12px; background:#fff;">
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">
+                    <strong>${p.name || pid}</strong>
+                    <code style="font-size:12px; color:#666;">${pid}</code>
+                    ${p.location ? `<span style="font-size:12px; color:#666;">· ${p.location}</span>` : ''}
+                    <span style="margin-left:auto; font-size:12px; color:${p.is_active ? '#2a7' : '#a33'};">
+                        ${p.is_active ? 'active' : 'inactive'}
+                    </span>
+                </div>
+                <div style="display:grid; grid-template-columns: 180px 1fr; gap:8px 12px; align-items:center; font-size:13px;">
+                    <label>Default user</label>
+                    <select class="form-select tp-default" data-panel="${pid}" style="min-height:34px;">
+                        <option value="">No default — show picker</option>
+                        ${userOptions}
+                    </select>
+
+                    <label>Allowed users</label>
+                    <div class="tp-allowed-group" style="display:flex; flex-wrap:wrap; gap:6px;">${allowedChecks || '<em style="color:#888;">No users configured yet.</em>'}</div>
+
+                    <label>Allow guest</label>
+                    <label class="toggle-switch" style="justify-self:start;">
+                        <input type="checkbox" class="tp-allow-guest" data-panel="${pid}" checked>
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+                    <button class="btn primary" onclick="saveTouchPanel('${pid}')">💾 Save</button>
+                    <button class="btn" onclick="hydratePanelBindings('${pid}')">↻ Reload</button>
+                </div>
+            </div>`;
+        }
+
+        async function hydratePanelBindings(pid) {
+            try {
+                const data = await apiRequest(`/panels/${encodeURIComponent(pid)}/bindings`);
+                const card = document.querySelector(`.touch-panel-card[data-panel="${pid}"]`);
+                if (!card) return;
+                const def = card.querySelector('.tp-default');
+                const guest = card.querySelector('.tp-allow-guest');
+                if (def) def.value = data.default_user_id || '';
+                if (guest) guest.checked = data.allow_guest !== false;
+                const allowed = new Set(data.allowed_user_ids || []);
+                card.querySelectorAll('.tp-allowed').forEach(cb => {
+                    cb.checked = allowed.has(cb.dataset.user);
+                });
+            } catch (e) {
+                console.debug('hydratePanelBindings failed for', pid, e);
+            }
+        }
+
+        async function saveTouchPanel(pid) {
+            const card = document.querySelector(`.touch-panel-card[data-panel="${pid}"]`);
+            if (!card) return;
+            const defaultUserId = card.querySelector('.tp-default').value || null;
+            const allowGuest = !!card.querySelector('.tp-allow-guest').checked;
+            const allowedUserIds = Array.from(card.querySelectorAll('.tp-allowed'))
+                .filter(cb => cb.checked).map(cb => cb.dataset.user);
+            try {
+                await apiRequest(`/panels/${encodeURIComponent(pid)}/bindings`, {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        default_user_id: defaultUserId,
+                        allowed_user_ids: allowedUserIds,
+                        allow_guest: allowGuest,
+                    }),
+                });
+                if (typeof showNotification === 'function') showNotification(`Saved ${pid}`, 'success');
+            } catch (e) {
+                console.error('saveTouchPanel failed', e);
+                if (typeof showNotification === 'function') showNotification(`Save failed for ${pid}`, 'error');
+            }
+        }
+
+        let _capabilityRows = [];
+
+        function _renderCapabilitySection(role, sectionTitle, sectionKey, sectionData) {
+            if (!sectionData || typeof sectionData !== 'object') return '';
+            const rows = Object.entries(sectionData).map(([key, value]) => {
+                if (value && typeof value === 'object') {
+                    const nested = Object.entries(value).map(([subKey, subVal]) => `
+                        <label style="display:inline-flex; align-items:center; gap:6px; margin-right:10px; margin-bottom:6px; font-size:12px;">
+                            <input type="checkbox" data-role="${role}" data-section="${sectionKey}" data-key="${key}" data-subkey="${subKey}" ${subVal ? 'checked' : ''}>
+                            ${subKey}
+                        </label>
+                    `).join('');
+                    return `<div style="margin-bottom:8px;"><div style="font-weight:600; margin-bottom:4px;">${key}</div>${nested}</div>`;
+                }
+                return `
+                    <label style="display:inline-flex; align-items:center; gap:6px; margin-right:10px; margin-bottom:6px; font-size:12px;">
+                        <input type="checkbox" data-role="${role}" data-section="${sectionKey}" data-key="${key}" ${value ? 'checked' : ''}>
+                        ${key}
+                    </label>
+                `;
+            }).join('');
+            return `
+                <div style="border:1px solid #e6e6e6; border-radius:10px; padding:10px; margin-bottom:10px; background:#fff;">
+                    <div style="font-weight:700; margin-bottom:8px;">${sectionTitle}</div>
+                    ${rows || '<em style="color:#888;">No entries</em>'}
+                </div>
+            `;
+        }
+
+        function _renderCapabilityRoleCard(row) {
+            const role = row.role;
+            const matrix = row.matrix || {};
+            const updated = row.updated_at ? `Last updated: ${row.updated_at}` : 'Using defaults';
+            return `
+                <div class="cap-role-card" data-role="${role}" style="border:1px solid #ddd; border-radius:12px; padding:12px; margin-bottom:12px; background:#fafafa;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                        <div style="font-size:16px; font-weight:700; text-transform:capitalize;">${role}</div>
+                        <div style="font-size:12px; color:#666;">${updated}</div>
+                    </div>
+                    ${_renderCapabilitySection(role, 'Pages', 'pages', matrix.pages)}
+                    ${_renderCapabilitySection(role, 'Features', 'features', matrix.features)}
+                    ${_renderCapabilitySection(role, 'Voice Intents', 'voice_intents', matrix.voice_intents)}
+                    ${_renderCapabilitySection(role, 'UI Action Classes', 'ui_action_classes', matrix.ui_action_classes)}
+                    <div style="margin-top:10px;">
+                        <button class="btn primary" onclick="saveCapabilityRole('${role}')">💾 Save ${role}</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function loadCapabilityMatrixSettings() {
+            const editor = document.getElementById('capabilityMatrixEditor');
+            if (!editor) return;
+            editor.innerHTML = '<em style="color:#888; font-size:13px;">Loading matrix…</em>';
+            try {
+                const data = await apiRequest('/system/capability-matrix');
+                _capabilityRows = Array.isArray(data.roles) ? data.roles : [];
+                editor.innerHTML = _capabilityRows.map(_renderCapabilityRoleCard).join('') || '<em style="color:#888;">No roles found.</em>';
+            } catch (e) {
+                editor.innerHTML = `<div style="color:#a33;">Failed to load matrix: ${e.message || e}</div>`;
+            }
+        }
+
+        function _collectRoleMatrixFromUi(role) {
+            const row = _capabilityRows.find(r => r.role === role);
+            const matrix = JSON.parse(JSON.stringify((row && row.matrix) || {}));
+            const container = document.querySelector(`.cap-role-card[data-role="${role}"]`);
+            if (!container) return matrix;
+            container.querySelectorAll('input[type="checkbox"][data-role]').forEach((el) => {
+                const section = el.dataset.section;
+                const key = el.dataset.key;
+                const subKey = el.dataset.subkey;
+                if (!section || !key) return;
+                if (subKey) {
+                    matrix[section] = matrix[section] || {};
+                    matrix[section][key] = matrix[section][key] || {};
+                    matrix[section][key][subKey] = !!el.checked;
+                } else {
+                    matrix[section] = matrix[section] || {};
+                    matrix[section][key] = !!el.checked;
+                }
+            });
+            return matrix;
+        }
+
+        async function saveCapabilityRole(role) {
+            const matrix = _collectRoleMatrixFromUi(role);
+            try {
+                await apiRequest(`/system/capability-matrix/${encodeURIComponent(role)}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ matrix }),
+                });
+                if (typeof showNotification === 'function') showNotification(`Saved ${role} capabilities`, 'success');
+                await loadCapabilityMatrixSettings();
+            } catch (e) {
+                if (typeof showNotification === 'function') showNotification(`Failed to save ${role}: ${e.message || e}`, 'error');
+            }
+        }
+
+        async function resetCapabilityMatrixDefaults() {
+            if (!confirm('Reset role capabilities to defaults?')) return;
+            try {
+                await apiRequest('/system/capability-matrix/reset-defaults', { method: 'POST' });
+                if (typeof showNotification === 'function') showNotification('Role matrix reset to defaults', 'success');
+                await loadCapabilityMatrixSettings();
+            } catch (e) {
+                if (typeof showNotification === 'function') showNotification(`Reset failed: ${e.message || e}`, 'error');
+            }
+        }
+
+        async function loadWeatherDefaultSettings() {
+            try {
+                const data = await apiRequest('/weather/default-location');
+                const cityEl = document.getElementById('adminWeatherCity');
+                const countryEl = document.getElementById('adminWeatherCountry');
+                const latEl = document.getElementById('adminWeatherLat');
+                const lonEl = document.getElementById('adminWeatherLon');
+                const tzEl = document.getElementById('adminWeatherTimezone');
+                if (cityEl) cityEl.value = data.city || '';
+                if (countryEl) countryEl.value = data.country || '';
+                if (latEl) latEl.value = data.latitude ?? '';
+                if (lonEl) lonEl.value = data.longitude ?? '';
+                if (tzEl) tzEl.value = data.timezone || 'Australia/Perth';
+            } catch (e) {
+                if (typeof showNotification === 'function') showNotification(`Failed to load Zoe default location: ${e.message || e}`, 'error');
+            }
+        }
+
+        async function saveWeatherDefaultSettings() {
+            const city = (document.getElementById('adminWeatherCity')?.value || '').trim();
+            const country = (document.getElementById('adminWeatherCountry')?.value || '').trim().toUpperCase();
+            const lat = Number(document.getElementById('adminWeatherLat')?.value);
+            const lon = Number(document.getElementById('adminWeatherLon')?.value);
+            const timezone = (document.getElementById('adminWeatherTimezone')?.value || '').trim() || 'Australia/Perth';
+
+            if (!city) {
+                if (typeof showNotification === 'function') showNotification('City is required', 'error');
+                return;
+            }
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+                if (typeof showNotification === 'function') showNotification('Latitude and longitude must be valid numbers', 'error');
+                return;
+            }
+
+            try {
+                await apiRequest('/weather/default-location', {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        city,
+                        country: country || 'AU',
+                        latitude: lat,
+                        longitude: lon,
+                        timezone,
+                    }),
+                });
+                if (typeof showNotification === 'function') showNotification('Saved Zoe default weather location', 'success');
+                await loadWeatherDefaultSettings();
+            } catch (e) {
+                if (typeof showNotification === 'function') showNotification(`Failed to save Zoe default location: ${e.message || e}`, 'error');
+            }
+        }
+
         // User Management Functions (Admin Only)
         let allUsers = []; // Store all users for filtering
 
         async function checkAdminAccess() {
             try {
-                const user = await window.zoeAuth.getCurrentUser();
-                console.log('Current user:', user);
-                if (user && user.role === 'admin') {
-                    console.log('Admin access granted - showing user management section');
-                    document.getElementById('userManagementSection').style.display = 'block';
+                let isAdmin = false;
+                if (typeof window.zoeResolveIsAdmin === 'function') {
+                    isAdmin = await window.zoeResolveIsAdmin();
+                } else if (window.zoeAuth && typeof window.zoeAuth.getCurrentUser === 'function') {
+                    const user = await window.zoeAuth.getCurrentUser();
+                    const role = (user && (user.role || (user.user_info && user.user_info.role))) || '';
+                    isAdmin = String(role).toLowerCase() === 'admin';
+                }
+                const section = document.getElementById('userManagementSection');
+                if (isAdmin) {
+                    if (section) section.style.display = 'block';
                     loadUserList();
                 } else {
-                    console.log('Not admin or no user:', user);
+                    if (section) section.style.display = 'none';
                 }
             } catch (error) {
                 console.error('Error checking admin access:', error);
@@ -5657,14 +6308,16 @@
         }
         
         function openNotifications() {
-            document.getElementById('notificationsPanel').classList.add('open');
-            loadNotifications();
+            const panel = document.getElementById('notificationsPanel');
+            if (panel) panel.classList.add('open');
+            if (typeof loadNotifications === 'function') loadNotifications();
             const notificationBtn = document.querySelector('.notifications-btn');
             if (notificationBtn) notificationBtn.classList.remove('has-notifications');
         }
-        
+
         function closeNotifications() {
-            document.getElementById('notificationsPanel').classList.remove('open');
+            const panel = document.getElementById('notificationsPanel');
+            if (panel) panel.classList.remove('open');
         }
         
         async function loadNotifications() {
@@ -6020,41 +6673,37 @@
         }
         
         // Load weather settings
+        //
+        // Backend: GET /api/weather/preferences (auth via X-Session-ID; no
+        // user_id query param). Response is flat: { city, country, latitude,
+        // longitude, temperature_unit, use_current_location }.
         async function loadWeatherSettings() {
+            const locEl = document.getElementById('current-weather-location');
             try {
-                const session = window.zoeAuth?.getCurrentSession?.();
-                const userId = session?.user_info?.user_id || session?.user_id;
-                const response = await fetch(`/api/weather/preferences?user_id=${userId}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    
-                    // Update use current location toggle
-                    const useCurrentLocation = data.use_current_location || false;
-                    document.getElementById('use-current-location').checked = useCurrentLocation;
-                    
-                    // Show/hide manual location section
-                    toggleLocationMode(useCurrentLocation);
-                    
-                    // Update location display
-                    if (!useCurrentLocation) {
-                        document.getElementById('current-weather-location').textContent = 
-                            `${data.location.city}, ${data.location.country}`;
+                const data = await apiRequest('/weather/preferences');
+                if (!data) throw new Error('empty response');
+
+                const useCurrentLocation = !!data.use_current_location;
+                const useEl = document.getElementById('use-current-location');
+                if (useEl) useEl.checked = useCurrentLocation;
+                toggleLocationMode(useCurrentLocation);
+
+                if (locEl) {
+                    if (useCurrentLocation) {
+                        locEl.textContent = 'Using device location';
+                    } else if (data.city && data.country) {
+                        locEl.textContent = `${data.city}, ${data.country}`;
                     } else {
-                        document.getElementById('current-weather-location').textContent = 
-                            'Using device location';
+                        locEl.textContent = 'Location not set';
                     }
-                    
-                    // Update temperature unit buttons
-                    const tempUnit = data.temperature_unit || 'celsius';
-                    document.querySelectorAll('.temp-unit-btn').forEach(btn => {
-                        btn.classList.remove('active');
-                    });
-                    document.querySelector(`[data-unit="${tempUnit}"]`)?.classList.add('active');
                 }
+
+                const tempUnit = data.temperature_unit || 'celsius';
+                document.querySelectorAll('.temp-unit-btn').forEach(btn => btn.classList.remove('active'));
+                document.querySelector(`[data-unit="${tempUnit}"]`)?.classList.add('active');
             } catch (error) {
-                console.error('Failed to load weather settings:', error);
-                document.getElementById('current-weather-location').textContent = 
-                    'San Francisco, US (default)';
+                console.debug('Failed to load weather settings:', error);
+                if (locEl) locEl.textContent = 'San Francisco, US (default)';
             }
         }
         
@@ -6278,10 +6927,14 @@
 
         // Initialize notification settings when page loads
         document.addEventListener('DOMContentLoaded', function() {
-            // Wait a bit for push notifications script to load
-            setTimeout(initNotificationSettings, 1000);
-            
-            // Load weather settings
+            // Notification Settings section is hidden on desktop (push prefs
+            // endpoints live in retired zoe-core). Only init if the section
+            // is actually visible — avoids noisy 404s during page load.
+            const notifSec = document.querySelector('[data-desktop-hidden="notifications-push"]');
+            if (!notifSec || notifSec.style.display !== 'none') {
+                setTimeout(initNotificationSettings, 1000);
+            }
+
             loadWeatherSettings();
         });
 

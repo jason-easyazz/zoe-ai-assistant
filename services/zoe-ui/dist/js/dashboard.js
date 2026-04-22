@@ -140,15 +140,24 @@ class Dashboard {
         const fabBtn = document.getElementById('fabEditBtn');
         const fabIcon = document.getElementById('fabEditIcon');
         
+        const navBtn = document.getElementById('navEditBtn');
+        const navIcon = document.getElementById('navEditIcon');
+
         if (this.isEditMode) {
             fabBtn?.classList.add('active');
+            navBtn?.classList.add('editing');
             if (fabIcon) fabIcon.textContent = '✓';
+            if (navIcon) navIcon.textContent = '✓';
             if (fabBtn) fabBtn.title = 'Done Editing';
+            if (navBtn) navBtn.title = 'Done Editing';
             console.log('✏️ Edit mode: drag, resize & remove enabled');
         } else {
             fabBtn?.classList.remove('active');
+            navBtn?.classList.remove('editing');
             if (fabIcon) fabIcon.textContent = '✏️';
+            if (navIcon) navIcon.textContent = '✏️';
             if (fabBtn) fabBtn.title = 'Edit Dashboard';
+            if (navBtn) navBtn.title = 'Edit Dashboard';
             this.saveLayout();
             console.log('💾 View mode: layout saved');
         }
@@ -244,6 +253,27 @@ class Dashboard {
         };
         
         gridItem.appendChild(removeBtn);
+
+        this.addGearButton(gridItem);
+    }
+
+    addGearButton(gridItem) {
+        if (gridItem.querySelector('.widget-gear-btn')) return;
+        const gearBtn = document.createElement('button');
+        gearBtn.className = 'widget-gear-btn';
+        gearBtn.innerHTML = '⚙';
+        gearBtn.title = 'Widget Settings';
+        gearBtn.onclick = (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            const widget = gridItem.querySelector('.widget');
+            const type = widget && widget.dataset.widgetType;
+            if (!type) return;
+            if (window.WidgetSettingsSheet) {
+                window.WidgetSettingsSheet.open(type, widget, gridItem, this);
+            }
+        };
+        gridItem.appendChild(gearBtn);
     }
     
     removeWidget(widget) {
@@ -377,17 +407,29 @@ class Dashboard {
     
     createDefaultLayout() {
         console.log('📐 Creating default layout');
-        
-        // Default layout: clock, weather, events, notes, home, reminders
-        const defaults = [
-            { type: 'time',      x: 0, y: 0, w: 4, h: 3 },
-            { type: 'weather',   x: 4, y: 0, w: 4, h: 3 },
-            { type: 'events',    x: 0, y: 3, w: 4, h: 4 },
-            { type: 'notes',     x: 4, y: 3, w: 4, h: 4 },
-            { type: 'home',      x: 0, y: 7, w: 4, h: 3 },
-            { type: 'reminders', x: 4, y: 7, w: 4, h: 3 },
+
+        // Touch kiosk: compact 4-widget layout that fits a 600px viewport
+        // (home + reminders removed — they push the grid too tall for kiosk).
+        const touchDefaults = [
+            { type: 'time',    x: 0, y: 0, w: 4, h: 3 },
+            { type: 'weather', x: 4, y: 0, w: 4, h: 3 },
+            { type: 'events',  x: 0, y: 3, w: 4, h: 4 },
+            { type: 'notes',   x: 4, y: 3, w: 4, h: 4 },
         ];
-        
+
+        // Desktop: richer 6-widget default. Plenty of room for Home and Tasks.
+        const desktopDefaults = [
+            { type: 'time',    x: 0, y: 0, w: 4, h: 3 },
+            { type: 'weather', x: 4, y: 0, w: 4, h: 3 },
+            { type: 'home',    x: 8, y: 0, w: 4, h: 3 },
+            { type: 'events',  x: 0, y: 3, w: 4, h: 4 },
+            { type: 'tasks',   x: 4, y: 3, w: 4, h: 4 },
+            { type: 'notes',   x: 8, y: 3, w: 4, h: 4 },
+        ];
+
+        const isTouch = document.body && document.body.classList.contains('touch-dashboard');
+        const defaults = isTouch ? touchDefaults : desktopDefaults;
+
         this.loadFromData(defaults);
         this.saveLayout();
     }
@@ -589,8 +631,16 @@ function initPullToRefresh() {
     }, { passive: true });
 }
 
-// Initialize pull-to-refresh
-if (window.matchMedia('(max-width: 768px)').matches) {
+// Initialize pull-to-refresh on mobile, but disable in kiosk mode to avoid
+// accidental full-page reloads from touch drags near the top edge.
+const _isKioskMode = (() => {
+    try {
+        return new URLSearchParams(window.location.search).get('kiosk') === '1';
+    } catch (_) {
+        return false;
+    }
+})();
+if (window.matchMedia('(max-width: 768px)').matches && !_isKioskMode) {
     initPullToRefresh();
 }
 

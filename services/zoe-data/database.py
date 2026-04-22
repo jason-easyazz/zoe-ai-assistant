@@ -1,4 +1,5 @@
 import aiosqlite
+import json
 import os
 import uuid
 from contextlib import asynccontextmanager
@@ -22,10 +23,26 @@ async def init_db():
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA foreign_keys=ON")
         await db.executescript(SCHEMA)
+        # Idempotent column add for deployments predating panels.allow_guest.
+        try:
+            await db.execute("ALTER TABLE panels ADD COLUMN allow_guest INTEGER NOT NULL DEFAULT 1")
+        except Exception:
+            pass  # column already exists
         await db.execute(
             "INSERT OR IGNORE INTO users (id, name, role) VALUES (?, ?, ?)",
             ("family-admin", "Admin", "admin"),
         )
+        try:
+            from guest_policy import default_capability_matrix
+            for _role, _matrix in default_capability_matrix().items():
+                await db.execute(
+                    """INSERT OR IGNORE INTO role_capability_matrix (role, matrix_json)
+                       VALUES (?, ?)""",
+                    (_role, json.dumps(_matrix)),
+                )
+        except Exception:
+            # Non-fatal on startup: table and API handlers still exist.
+            pass
         default_fields = [
             ("nickname", "Nickname", "text", 0, None, "person", 10, "family"),
             ("pronouns", "Pronouns", "text", 0, None, "person", 20, "family"),
@@ -237,6 +254,41 @@ CREATE TABLE IF NOT EXISTS weather_preferences (
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
+CREATE TABLE IF NOT EXISTS system_preferences (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_by TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS display_preferences (
+    device_id TEXT PRIMARY KEY,
+    enabled INTEGER DEFAULT 1,
+    day_brightness INTEGER DEFAULT 100,
+    night_enabled INTEGER DEFAULT 1,
+    night_start TEXT DEFAULT '22:00',
+    night_end TEXT DEFAULT '06:30',
+    night_brightness INTEGER DEFAULT 15,
+    idle_enabled INTEGER DEFAULT 1,
+    idle_seconds INTEGER DEFAULT 120,
+    idle_brightness INTEGER DEFAULT 30,
+    off_enabled INTEGER DEFAULT 1,
+    off_seconds INTEGER DEFAULT 900,
+    pi_host TEXT,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS update_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    component TEXT NOT NULL,
+    version_before TEXT,
+    version_after TEXT,
+    ok INTEGER NOT NULL DEFAULT 0,
+    log_excerpt TEXT,
+    initiated_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS trust_allowlist (
     id TEXT PRIMARY KEY,
     tool_pattern TEXT NOT NULL,
@@ -335,52 +387,14 @@ CREATE TABLE IF NOT EXISTS openclaw_approvals (
     resolved_at TEXT
 );
 
-CREATE TABLE IF NOT EXISTS memory_items (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    memory_type TEXT NOT NULL DEFAULT 'fact',
-    title TEXT,
-    content TEXT NOT NULL,
-    entity_type TEXT,
-    entity_id TEXT,
-    confidence REAL NOT NULL DEFAULT 0.5,
-    source_type TEXT NOT NULL DEFAULT 'manual',
-    source_id TEXT,
-    source_excerpt TEXT,
-    provenance_json TEXT,
-    visibility TEXT NOT NULL DEFAULT 'personal',
-    status TEXT NOT NULL DEFAULT 'pending_review',
-    observed_at TEXT NOT NULL DEFAULT (datetime('now')),
-    last_verified_at TEXT,
-    reviewed_by TEXT,
-    reviewed_at TEXT,
-    review_note TEXT,
-    deleted INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS memory_links (
-    id TEXT PRIMARY KEY,
-    memory_id TEXT NOT NULL,
-    linked_type TEXT NOT NULL,
-    linked_id TEXT NOT NULL,
-    link_reason TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (memory_id) REFERENCES memory_items(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS memory_audit (
-    id TEXT PRIMARY KEY,
-    memory_id TEXT,
-    user_id TEXT NOT NULL,
-    action TEXT NOT NULL,
-    old_value TEXT,
-    new_value TEXT,
-    reason TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
+-- memory_items / memory_links / memory_audit tables retired.
+--
+-- These tables backed the old SQLite mirror of the semantic memory store.
+-- Phase-1 of the memory rollout moved every writer and reader onto MemPalace
+-- via memory_service.MemoryService, so the tables are no longer created on
+-- fresh deployments. Existing production databases may still have empty
+-- rows; a maintenance migration will drop them after the Phase-1 soak period.
+-- See docs/architecture/memory.md for the replacement design.
 
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
@@ -398,8 +412,7 @@ CREATE INDEX IF NOT EXISTS idx_journal_user ON journal_entries(user_id);
 CREATE INDEX IF NOT EXISTS idx_journal_date ON journal_entries(created_at);
 CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(transaction_date);
 CREATE INDEX IF NOT EXISTS idx_people_field_values_person ON people_field_values(person_id);
-CREATE INDEX IF NOT EXISTS idx_memory_items_user_status ON memory_items(user_id, status);
-CREATE INDEX IF NOT EXISTS idx_memory_items_entity ON memory_items(entity_type, entity_id);
+-- memory_items indexes removed alongside the retired tables above.
 
 CREATE TABLE IF NOT EXISTS push_subscriptions (
     user_id TEXT NOT NULL,
@@ -481,10 +494,27 @@ CREATE TABLE IF NOT EXISTS panels (
     os TEXT,
     notes TEXT,
     is_active INTEGER DEFAULT 1,
+    allow_guest INTEGER NOT NULL DEFAULT 1,
     last_seen_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Per-panel user binding: lets a touch panel show only selected users on its
+-- login screen, optionally auto-selecting a default user (skips the picker).
+--   binding_type 'default' → auto-select (at most one row per panel_id)
+--   binding_type 'allowed' → included in the picker
+CREATE TABLE IF NOT EXISTS panel_user_bindings (
+    panel_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    binding_type TEXT NOT NULL DEFAULT 'allowed',
+    priority INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (panel_id, user_id),
+    FOREIGN KEY (panel_id) REFERENCES panels(panel_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_panel_user_bindings_panel ON panel_user_bindings(panel_id);
+CREATE INDEX IF NOT EXISTS idx_panel_user_bindings_type ON panel_user_bindings(panel_id, binding_type);
 
 -- Device tokens for Pi daemons (voice, presence sensors).
 -- Tokens are hashed before storage (SHA-256); the raw token is issued once.
@@ -529,6 +559,15 @@ CREATE TABLE IF NOT EXISTS panel_auth_challenges (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_challenges_panel ON panel_auth_challenges(panel_id, status);
+
+-- Fixed-role capability matrix edited via settings (admin/user/guest).
+CREATE TABLE IF NOT EXISTS role_capability_matrix (
+    role TEXT PRIMARY KEY,
+    matrix_json TEXT NOT NULL,
+    updated_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 -- Ambient memory: always-on VAD captures room speech even without wake word.
 -- Raw audio is never stored — only the Whisper transcript text.

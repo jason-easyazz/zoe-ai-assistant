@@ -1,6 +1,19 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script>
+    // Apply saved theme before first paint to prevent flash (ported from touch).
+    (function () {
+        try {
+            var s = localStorage.getItem('zoe_theme') || 'auto';
+            var h = new Date().getHours();
+            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
+            if (dark) document.documentElement.classList.add('dark-mode');
+            var mc = document.querySelector('meta[name="theme-color"]');
+            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+        } catch (e) {}
+    })();
+    </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Zoe AI Dashboard</title>
@@ -124,7 +137,18 @@
                 opacity: 0.7;
             }
         }
-        
+
+        /* Edit pencil in top nav (ported from touch) */
+        .edit-nav-btn { cursor: pointer; }
+        .edit-nav-btn.editing {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+            color: #fff !important;
+            box-shadow: 0 2px 8px rgba(16, 185, 129, 0.4);
+        }
+        .edit-nav-btn.editing:hover {
+            background: linear-gradient(135deg, #059669 0%, #047857 100%) !important;
+        }
+
         /* Notifications Panel */
         .notifications-panel {
             position: fixed; top: 0; right: -400px; width: 400px; height: 100vh;
@@ -202,7 +226,11 @@
         }
 
         /* Floating Action Button for Edit Mode */
-        .fab-edit-btn {
+        /* Replaced by the .edit-nav-btn in the top nav-bar. FAB kept in the
+         * DOM for backward-compatibility with any JS that toggles it, but
+         * hidden from view so it no longer conflicts with the voice orb. */
+        .fab-edit-btn { display: none !important; }
+        .fab-edit-btn-legacy {
             position: fixed;
             bottom: 32px;
             right: 32px;
@@ -1265,14 +1293,14 @@
         }
 
         /* Responsive Design */
-        @media (max-width: 900px) {
+        @media (max-width: 768px) {
             .nav-menu { display: none !important; }
             .mini-orb { display: flex !important; }
             .widget-grid { grid-template-columns: 1fr; }
         }
         
         /* Mini-orb visible on all screens */
-        @media (min-width: 901px) {
+        @media (min-width: 769px) {
             /* Mobile menu hidden on desktop */
             .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
         }
@@ -1708,6 +1736,7 @@
     
     <!-- Service Worker Registration -->
     <script src="/js/sw-registration.js" defer></script>
+    <link rel="stylesheet" href="css/dark-mode-shared.css">
 </head>
 <body>
     <!-- Pull-to-Refresh Indicator -->
@@ -1730,11 +1759,10 @@
         </div>
         <div class="nav-right">
             <div class="api-indicator connecting" id="apiStatus">Connecting</div>
-            
-            <button class="notifications-btn" onclick="forceRefreshCache()" title="Refresh App (clears cache)">🔄</button>
-            <button class="notifications-btn" onclick="openNotifications()" title="Notifications">💬</button>
-            
-            <!-- Time/Date Display -->
+            <button class="edit-nav-btn notifications-btn" id="navEditBtn" onclick="toggleEditMode()" title="Edit Dashboard"><span id="navEditIcon">✏️</span></button>
+            <button class="refresh-btn notifications-btn" onclick="forceRefreshCache()" title="Refresh App (clears cache)">🔄</button>
+            <button class="theme-nav-btn notifications-btn" title="Toggle theme" onclick="window.cycleZoeTheme && window.cycleZoeTheme()">🌓</button>
+            <button class="notifications-btn" onclick="openNotificationsSafe()" title="Notifications">🔔</button>
             <div class="time-date-display">
                 <div class="current-time" id="navCurrentTime">--:--</div>
                 <div class="current-date" id="navCurrentDate">Loading...</div>
@@ -1762,9 +1790,21 @@
                     <div class="more-item-icon">🎵</div>
                     <div class="more-item-label">Music</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('games.html')">
-                    <div class="more-item-icon">🎮</div>
-                    <div class="more-item-label">Games</div>
+                <div class="more-item" onclick="navigateToPage('notes.html')">
+                    <div class="more-item-icon">📝</div>
+                    <div class="more-item-label">Notes</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('cooking.html')">
+                    <div class="more-item-icon">🍳</div>
+                    <div class="more-item-label">Cooking</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('smart-home.html')">
+                    <div class="more-item-icon">🏠</div>
+                    <div class="more-item-label">Smart Home</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('updates.html')">
+                    <div class="more-item-icon">⬇️</div>
+                    <div class="more-item-label">Updates</div>
                 </div>
                 <div class="more-item" onclick="navigateToPage('settings.html')">
                     <div class="more-item-icon">⚙️</div>
@@ -1791,8 +1831,15 @@
             <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
             <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
             <a href="music.html" class="mobile-nav-item">🎵 Music</a>
-            <a href="games.html" class="mobile-nav-item">🎮 Games</a>
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
+            <a href="notes.html" class="mobile-nav-item">📝 Notes</a>
+
+            <a href="cooking.html" class="mobile-nav-item">🍳 Cooking</a>
+
+            <a href="smart-home.html" class="mobile-nav-item">🏠 Smart Home</a>
+
+            <a href="updates.html" class="mobile-nav-item">⬇️ Updates</a>
+
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
             <div class="mobile-nav-divider"></div>
             <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>

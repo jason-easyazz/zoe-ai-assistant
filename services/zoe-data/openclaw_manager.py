@@ -34,10 +34,9 @@ _OPENCLAW_DIR = Path(os.environ.get("OPENCLAW_DIR", Path.home() / ".openclaw"))
 # ── Static plugin catalogue ───────────────────────────────────────────────────
 
 _PLUGIN_META: dict[str, dict[str, str]] = {
-    "memory-memu": {
-        "icon": "🧠",
-        "description": "Persistent memory store — lets OpenClaw remember facts across sessions.",
-    },
+    # memory-memu was retired 2026-04-18. MemPalace (via MemoryService) is now
+    # the sole persistent memory backend; it's mounted via MCP tools, not as
+    # an OpenClaw plugin, so there is no plugin entry for it.
     "browser": {
         "icon": "🌐",
         "description": "Headless browser for web scraping, screenshots, and automation.",

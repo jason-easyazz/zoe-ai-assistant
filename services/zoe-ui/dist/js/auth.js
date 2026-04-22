@@ -10,6 +10,24 @@
         sessionKey: 'zoe_session',
         authBaseUrl: '/api/auth'  // Use relative URL for nginx proxy
     };
+    const TOUCH_PATH_TO_PAGE_ID = {
+        '/touch/dashboard.html': 'dashboard',
+        '/touch/calendar.html': 'calendar',
+        '/touch/lists.html': 'lists',
+        '/touch/chat.html': 'chat',
+        '/touch/weather.html': 'weather',
+        '/touch/smarthome.html': 'smarthome',
+        '/touch/smart-home.html': 'smarthome',
+        '/touch/timers.html': 'timers',
+        '/touch/music.html': 'music',
+        '/touch/notes.html': 'notes',
+        '/touch/journal.html': 'journal',
+        '/touch/people.html': 'people',
+        '/touch/memories.html': 'memories',
+        '/touch/settings.html': 'settings',
+        '/touch/updates.html': 'updates',
+    };
+    let _capabilityMatrix = null;
 
     // Get session ID from localStorage
     function getSession() {
@@ -72,6 +90,73 @@
         return !!session.session_id;
     }
 
+    function isGuestSession() {
+        const session = getSessionObject();
+        if (!session) return false;
+        const role = String(session.role || session.user_info?.role || '').toLowerCase();
+        const userId = String(session.user_id || session.user_info?.user_id || '').toLowerCase();
+        return role === 'guest' || userId === 'guest';
+    }
+
+    function isAuthenticatedNonGuestSession() {
+        const session = getSessionObject();
+        if (!session || !session.session_id) return false;
+        const role = String(session.role || session.user_info?.role || '').toLowerCase();
+        const userId = String(session.user_id || session.user_info?.user_id || '').toLowerCase();
+        if (role) return role !== 'guest';
+        // Some session payloads omit role; in that case trust non-guest user_id.
+        return !!userId && userId !== 'guest';
+    }
+
+    async function bootstrapTouchGuestSession() {
+        const currentPath = window.location.pathname;
+        if (!currentPath.startsWith('/touch/')) return;
+        if (currentPath === '/touch/index.html') return;
+        if (isAuthenticated()) return;
+        try {
+            const response = await originalFetch('/api/auth/guest', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ device_info: { source: 'touch-auth-bootstrap' } }),
+            });
+            if (!response.ok) return;
+            const data = await response.json();
+            if (data && data.session_id) {
+                setSession(data);
+                try { localStorage.setItem('zoe_guest_mode', 'active'); } catch (_) {}
+            }
+        } catch (_) {
+            try { localStorage.setItem('zoe_guest_mode', 'degraded'); } catch (_) {}
+        }
+    }
+
+    function getPageIdFromPath(pathname) {
+        return TOUCH_PATH_TO_PAGE_ID[pathname] || null;
+    }
+
+    async function loadCapabilityMatrix() {
+        if (_capabilityMatrix) return _capabilityMatrix;
+        try {
+            const response = await originalFetch('/api/system/capability-matrix/me');
+            if (response.ok) {
+                const data = await response.json();
+                if (data && data.matrix) {
+                    _capabilityMatrix = data;
+                    try { localStorage.setItem('zoe_capability_matrix', JSON.stringify(data)); } catch (_) {}
+                    return _capabilityMatrix;
+                }
+            }
+        } catch (_) {}
+        try {
+            const cached = localStorage.getItem('zoe_capability_matrix');
+            if (cached) {
+                _capabilityMatrix = JSON.parse(cached);
+                return _capabilityMatrix;
+            }
+        } catch (_) {}
+        return null;
+    }
+
     // Get current user info from session
     async function getCurrentUser() {
         const sessionId = getSession();
@@ -103,16 +188,35 @@
     // Logout
     function logout(delay = 0) {
         console.warn('🚪 Logout called');
+
+        // Capture the session id BEFORE we clear local state so we can tell
+        // the server to invalidate it. This is fire-and-forget: even if the
+        // server is unreachable, we still want to wipe the client session.
+        const current = getSessionObject();
+        const sid = current && current.session_id;
+        if (sid) {
+            try {
+                fetch('/api/auth/logout', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Session-ID': sid
+                    },
+                    keepalive: true
+                }).catch((err) => console.warn('Logout request failed:', err));
+            } catch (err) {
+                console.warn('Logout request threw:', err);
+            }
+        }
+
         setSession(null);
-        // Redirect to appropriate login page
+
         const currentPath = window.location.pathname;
         const redirectUrl = currentPath.startsWith('/touch/') ? '/touch/index.html' : '/index.html';
-        
+
         if (delay > 0) {
             console.warn(`⏳ Redirecting to ${redirectUrl} in ${delay}ms`);
-            setTimeout(() => {
-                window.location.href = redirectUrl;
-            }, delay);
+            setTimeout(() => { window.location.href = redirectUrl; }, delay);
         } else {
             console.warn(`⚡ Redirecting to ${redirectUrl} immediately`);
             window.location.href = redirectUrl;
@@ -120,7 +224,7 @@
     }
 
     // Check if user should be on a protected page
-    function enforceAuth() {
+    async function enforceAuth() {
         const currentPath = window.location.pathname;
         const search = window.location.search || '';
         // Persist kiosk mode in localStorage so navigations within the touch UI
@@ -143,8 +247,8 @@
                            currentPath === '/touch/index.html';
         const isAuthPage = currentPath === '/auth.html';
         
-        // Skip auth check for login and auth pages only
-        if (isLoginPage || isAuthPage || isKioskMode || isPublicGameModule) {
+        // Skip auth check for login/auth and public game modules only.
+        if (isLoginPage || isAuthPage || isPublicGameModule) {
             console.log('✅ Auth check skipped - on login/auth page');
             return;
         }
@@ -156,6 +260,12 @@
         
         // Check if user has valid session using isAuthenticated
         if (!isAuthenticated()) {
+            // Kiosk degraded mode: keep touch surface available for household-safe
+            // operations even if guest token bootstrap failed.
+            if (isKioskMode && currentPath.startsWith('/touch/')) {
+                console.warn('⚠️ No session in kiosk mode; allowing degraded guest surface');
+                return;
+            }
             console.warn('⚠️ No valid session - redirecting to login');
             
             // Show user-friendly message
@@ -180,7 +290,7 @@
                 const _fromTouch = window.location.pathname.startsWith('/touch/');
                 const _loginDest = _fromTouch ? '/touch/index.html' : '/index.html';
                 // Store the page we were trying to visit so login can redirect back
-                try { sessionStorage.setItem('zoe_redirect_after_login', window.location.pathname); } catch(_){}
+                try { sessionStorage.setItem('zoe_redirect_after_login', window.location.pathname + window.location.search); } catch(_){}
                 errorDiv.innerHTML = `
                     <div style="text-align: center; max-width: 500px;">
                         <div style="font-size: 64px; margin-bottom: 20px;">🔐</div>
@@ -206,6 +316,28 @@
                 document.addEventListener('DOMContentLoaded', showError);
             }
         } else {
+            if (currentPath.startsWith('/touch/')) {
+                // Admin/family users should not get bounced by stale/mismatched
+                // capability matrix cache on touch pages.
+                if (isAuthenticatedNonGuestSession()) {
+                    console.log('✅ Non-guest touch session - skipping matrix page gating');
+                    return;
+                }
+                const cap = await loadCapabilityMatrix();
+                const pageId = getPageIdFromPath(currentPath);
+                const allowed = !pageId || !cap || !cap.matrix || !cap.matrix.pages
+                    ? true
+                    : !!cap.matrix.pages[pageId];
+                if (!allowed) {
+                    try {
+                        if (typeof showNotification === 'function') {
+                            showNotification('Please sign in with an allowed profile for this page.', 'error');
+                        }
+                    } catch (_) {}
+                    window.location.href = '/touch/dashboard.html';
+                    return;
+                }
+            }
             console.log('✅ Session valid - access granted');
         }
     }
@@ -280,9 +412,10 @@
                     const u = typeof urlString === 'string' ? urlString : '';
                     if (u) pathname = new URL(u, window.location.origin).pathname;
                 } catch (_e) {}
-                const skipClear = /\/api\/auth\/(login|register|password|refresh)/i.test(pathname);
+                const skipClear = /\/api\/auth\/(login|register|password|refresh|guest)/i.test(pathname);
+                const allowSessionClear = /\/api\/auth\/(profile|me|session|logout)/i.test(pathname);
                 const sidBefore = getSession();
-                if (sidBefore && !skipClear && !options.__zoe401Retried) {
+                if (sidBefore && allowSessionClear && !skipClear && !options.__zoe401Retried) {
                     console.warn('⚠️ 401 — clearing stale session and retrying once without X-Session-ID:', url);
                     setSession(null);
                     if (typeof showNotification === 'function') {
@@ -349,14 +482,16 @@
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', async () => {
-            enforceAuth();
+            await bootstrapTouchGuestSession();
+            await enforceAuth();
             await populateUserProfile();
             console.log('✅ Zoe Auth initialized (DOMContentLoaded)');
         });
     } else {
         // DOM already loaded
         (async () => {
-            enforceAuth();
+            await bootstrapTouchGuestSession();
+            await enforceAuth();
             await populateUserProfile();
             console.log('✅ Zoe Auth initialized (immediate)');
         })();

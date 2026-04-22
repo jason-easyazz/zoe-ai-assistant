@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import get_current_user
 from database import get_db
+from guest_policy import require_feature_access
 from models import (
     PersonCreate,
     PersonUpdate,
@@ -81,30 +82,31 @@ async def _upsert_custom_fields(db, person_id: str, custom_fields: Optional[dict
 
 
 async def _store_person_memory(db, user_id: str, person: dict, action: str):
-    import asyncio
+    """Write a person-related fact to MemPalace through MemoryService.
+
+    `db` remains in the signature for compatibility; the SQLite
+    `memory_items` mirror has been retired.
+    """
     summary = f"{person.get('name')} ({person.get('relationship') or 'contact'})"
-    await db.execute(
-        """INSERT INTO memory_items
-           (id, user_id, memory_type, title, content, entity_type, entity_id, confidence,
-            source_type, source_id, source_excerpt, visibility, status)
-           VALUES (?, ?, 'person', ?, ?, 'person', ?, 0.85, 'people', ?, ?, ?, 'approved')""",
-        (
-            str(uuid.uuid4()),
-            user_id,
-            f"{action.title()} person profile",
-            summary,
-            person.get("id"),
-            person.get("id"),
-            summary[:180],
-            person.get("visibility") or "family",
-        ),
-    )
-    # Mirror to MemPalace so agent memory stays current
+    notes = person.get("notes") or ""
+    fact = f"Person in contacts: {summary}. {notes[:200]}".strip().rstrip(".")
     try:
-        from pi_agent import _mempalace_add  # type: ignore[import]
-        notes = person.get("notes") or ""
-        fact = f"Person in contacts: {summary}. {notes[:200]}".strip().rstrip(".")
-        asyncio.ensure_future(_mempalace_add(fact, user_id=user_id, tags=["person", action]))
+        from memory_service import MemoryServiceError, get_memory_service
+        try:
+            await get_memory_service().ingest(
+                fact,
+                user_id=user_id,
+                source=f"person_{action}",
+                memory_type="person",
+                confidence=0.85,
+                status="approved",
+                tags=["person", action],
+                entity_type="person",
+                entity_id=person.get("id"),
+            )
+        except MemoryServiceError as exc:
+            import logging as _lg
+            _lg.getLogger(__name__).info("people: memory ingest skipped: %s", exc)
     except Exception:
         pass
 
@@ -123,6 +125,7 @@ async def list_people(
     db=Depends(get_db),
 ):
     """List people with optional search, limit, offset."""
+    await require_feature_access(db, user, feature="people", action="read")
     user_id = user["user_id"]
     vis = _visibility_filter_sql()
     params = [user_id]
@@ -173,6 +176,7 @@ async def create_person(
     db=Depends(get_db),
 ):
     """Create a person."""
+    await require_feature_access(db, user, feature="people", action="create")
     user_id = user["user_id"]
     person_id = str(uuid.uuid4())
     pref = json.dumps(body.preferences) if body.preferences is not None else None
@@ -220,6 +224,7 @@ async def search_people(
     db=Depends(get_db),
 ):
     """Search people by q param."""
+    await require_feature_access(db, user, feature="people", action="read")
     user_id = user["user_id"]
     vis = _visibility_filter_sql()
     pattern = f"%{q}%"
@@ -246,6 +251,7 @@ async def get_person(
     db=Depends(get_db),
 ):
     """Get a single person by ID."""
+    await require_feature_access(db, user, feature="people", action="read")
     user_id = user["user_id"]
     vis = _visibility_filter_sql()
     async with db.execute(
@@ -269,6 +275,7 @@ async def update_person(
     db=Depends(get_db),
 ):
     """Update a person."""
+    await require_feature_access(db, user, feature="people", action="update")
     user_id = user["user_id"]
     vis = _visibility_filter_sql()
     async with db.execute(
@@ -336,6 +343,7 @@ async def delete_person(
     db=Depends(get_db),
 ):
     """Soft delete a person."""
+    await require_feature_access(db, user, feature="people", action="delete")
     user_id = user["user_id"]
     vis = _visibility_filter_sql()
     async with db.execute(
@@ -359,8 +367,10 @@ async def delete_person(
 @router.get("/fields")
 async def list_people_fields(
     active_only: bool = Query(True),
+    user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
+    await require_feature_access(db, user, feature="people", action="manage_fields")
     sql = """SELECT * FROM people_field_definitions
              WHERE (? = 0 OR is_active = 1)
              ORDER BY sort_order, label"""
@@ -397,8 +407,7 @@ async def create_people_field(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    if user.get("role") not in {"admin", "owner"} and user.get("user_id") != "family-admin":
-        raise HTTPException(status_code=403, detail="Only admins can create field definitions")
+    await require_feature_access(db, user, feature="people", action="manage_fields")
     field_id = str(uuid.uuid4())
     await db.execute(
         """INSERT INTO people_field_definitions
@@ -428,8 +437,7 @@ async def update_people_field(
     user: dict = Depends(get_current_user),
     db=Depends(get_db),
 ):
-    if user.get("role") not in {"admin", "owner"} and user.get("user_id") != "family-admin":
-        raise HTTPException(status_code=403, detail="Only admins can update field definitions")
+    await require_feature_access(db, user, feature="people", action="manage_fields")
     updates = []
     params = []
     data = body.model_dump(exclude_unset=True)

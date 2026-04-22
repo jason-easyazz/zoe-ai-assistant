@@ -10,7 +10,7 @@ Tiered architecture (Jetson + Pi):
   Pi: CPU, 7 TPS, port 11435.  Jetson: GPU, 40+ TPS, port 11434.
 - Tier 2: OpenClaw — multi-step agentic tasks, browser, sub-agents, cloud.
   Activated via escalation from Tier 1, or force_openclaw flag.
-  Still available as direct path when _USE_PI_AGENT=False (legacy Bonsai path).
+  Also used as direct path when Pi Agent is bypassed.
 """
 import asyncio
 import json
@@ -22,6 +22,7 @@ import os
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
 from intent_router import detect_intent, execute_intent, openclaw_user_message
+from browser_broker import create_default_browser_broker
 
 # Intent → touch panel navigation map (page + optional form to open).
 _INTENT_PANEL_NAV = {
@@ -145,6 +146,14 @@ from auth import get_current_user
 from database import get_db
 from ui_orchestrator import enqueue_ui_action
 from zoe_ui_components import auto_extract_components
+from research_evidence import (
+    build_package,
+    classify_query,
+    default_source_for_query,
+    fetch_web_fallback_results,
+    missing_brief_fields,
+    package_needs_web_fallback,
+)
 from risk_policy import classify_request, is_whatsapp_connect_request
 from chat_session_title import derive_session_title, title_is_weak
 from ag_ui_stream import AgRunRecorder, iter_openclaw_text_chunks, iter_text_message_chunks, new_run_ids
@@ -179,6 +188,17 @@ _FORM_INTENTS: frozenset[str] = frozenset({
     "list_add",
     "reminder_create",
     "timer_create",
+})
+
+# Intents that deliberately do not have a direct `execute_intent` handler
+# because they're designed to be expanded via openclaw_user_message() and
+# routed to OpenClaw.  For these, a None result from execute_intent is not a
+# failure — it's a delegation.  Tagging them here keeps the UI from showing a
+# red "tool failed" tile.
+_OPENCLAW_DELEGATION_INTENTS: frozenset[str] = frozenset({
+    "build_widget",
+    "build_page",
+    "extend_capability",
 })
 
 
@@ -266,10 +286,11 @@ _GUARDED_AUTO = (
 _ALL_TOOLS_ENABLED = os.environ.get("OPENCLAW_ALL_TOOLS_ENABLED", "true").lower() == "true"
 _WHATSAPP_FLOW_ENABLED = os.environ.get("WHATSAPP_FLOW_ENABLED", "true").lower() == "true"
 
-# Bonsai-8B fast path: enabled by default, bypasses OpenClaw for conversational turns.
-# Set BONSAI_FAST_PATH=false to disable and always use OpenClaw.
-_BONSAI_FAST_PATH = os.environ.get("BONSAI_FAST_PATH", "true").lower() == "true"
+# Bonsai fast path is retired. Keep the symbol for compatibility, but force off.
+_BONSAI_FAST_PATH = False
 _BONSAI_URL = os.environ.get("BONSAI_URL", "http://127.0.0.1:11435")
+_OPENCLAW_GW = os.environ.get("OPENCLAW_GATEWAY_URL", "http://127.0.0.1:8787")
+_BROWSER_BROKER = create_default_browser_broker(_OPENCLAW_GW)
 
 # Keywords in Bonsai's response that signal it needs OpenClaw for this task.
 # Bonsai is instructed to say ESCALATE_TO_OPENCLAW when it can't handle something.
@@ -338,126 +359,54 @@ async def _persist_ag_ui_run(session_id: str, run_id: str, events: list) -> None
 
 
 def _extract_memory_candidates(user_message: str, assistant_response: str):
-    """
-    Extract memory-worthy signals from a chat turn.
+    """Back-compat shim: legacy dict shape over the unified extractor.
 
-    Catches preferences, personal facts, relationships, habits, and goals.
-    All extracted items go through the auto-ingest/review gate in the caller.
+    Kept so in-tree tests and any external callers that still expect the
+    pre-consolidation dict contract keep working. New code should call
+    ``memory_extractor.extract_candidates`` directly, which returns typed
+    ``MemoryCandidate`` dataclasses.
     """
-    candidates = []
-    # Only extract from declarative user statements, not questions.
-    # Questions typically end with ? or start with question words.
-    user_stripped = user_message.strip()
-    if user_stripped.endswith("?") or re.match(r"^(what|who|where|when|why|how|do |does |did |is |are |can |could |would |have |has )", user_stripped.lower()):
-        return candidates
-    text = f"{user_message}\n{assistant_response}".lower()
+    from memory_extractor import extract_candidates
 
-    # Each tuple: (memory_type, regex pattern, title)
-    patterns = [
-        ("preference",   r"\bi (like|love|prefer|enjoy|adore)\b",                          "Preference"),
-        ("dislike",      r"\bi (don't like|dislike|hate|can't stand|avoid)\b",             "Dislike"),
-        ("profile",      r"\bmy (birthday|name|age|job|work|profession)\b",                "Personal fact"),
-        ("profile",      r"\bi (am|'m) (a |an )?(developer|doctor|teacher|nurse|student|engineer|designer|chef|manager|writer|artist)", "Profession"),
-        ("profile",      r"\bmy (timezone|location|city|town|suburb|address)\b",           "Location"),
-        ("profile",      r"\bi('m| am) (from|based in|living in)\b",                       "Location"),
-        ("relationship", r"\bmy (mom|dad|mother|father|wife|husband|partner|son|daughter|brother|sister|friend|boss)\b", "Relationship"),
-        ("habit",        r"\bi (usually|always|never|often|every day|every morning|every night)\b", "Habit"),
-        ("habit",        r"\bi (wake up|go to bed|eat|exercise|work|commute)\b",            "Routine"),
-        ("goal",         r"\bi (want to|would like to|need to|hope to|plan to|am trying to)\b", "Goal"),
-        ("preference",   r"\bmy (favourite|favorite|go-to|preferred)\b",                   "Favourite"),
-        ("preference",   r"\bi (eat|drink|cook|watch|read|listen to|play)\b",              "Activity preference"),
+    return [
+        {
+            "memory_type": c.memory_type,
+            "title": c.title or c.memory_type.title(),
+            "content": c.text,
+            "entity_type": c.entity_type,
+            "entity_id": c.entity_id,
+            "confidence": c.confidence,
+            "source_type": "chat",
+            "source_excerpt": c.source_excerpt,
+            "visibility": "personal",
+            "provenance": {"session_id": None},
+        }
+        for c in extract_candidates(user_message, assistant_response)
     ]
-    seen_types: set[str] = set()
-    for memory_type, pattern, title in patterns:
-        key = f"{memory_type}:{pattern}"
-        if key in seen_types:
-            continue
-        if re.search(pattern, text):
-            seen_types.add(key)
-            candidates.append(
-                {
-                    "memory_type": memory_type,
-                    "title": title,
-                    "content": user_message.strip()[:500],
-                    "entity_type": "self",
-                    "entity_id": None,
-                    "confidence": 0.88,
-                    "source_type": "chat",
-                    "source_excerpt": user_message.strip()[:280],
-                    "visibility": "personal",
-                    "provenance": {"session_id": None},
-                }
-            )
-    return candidates
 
 
 async def _persist_memory_candidates(user_id: str, session_id: str, user_message: str, assistant_response: str):
-    candidates = _extract_memory_candidates(user_message, assistant_response)
-    if not candidates:
-        return
-    status = "approved" if _MEMORY_AUTO_INGEST else "pending_review"
-    try:
-        async for db in get_db():
-            for item in candidates:
-                item["provenance"] = {"session_id": session_id}
-                await db.execute(
-                    """INSERT INTO memory_items
-                       (id, user_id, memory_type, title, content, entity_type, entity_id, confidence,
-                        source_type, source_id, source_excerpt, provenance_json, visibility, status)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        uuid.uuid4().hex,
-                        user_id,
-                        item["memory_type"],
-                        item["title"],
-                        item["content"],
-                        item["entity_type"],
-                        item["entity_id"],
-                        item["confidence"],
-                        "chat",
-                        session_id,
-                        item["source_excerpt"],
-                        json.dumps(item["provenance"]),
-                        item["visibility"],
-                        status,
-                    ),
-                )
-                # Mirror to MemPalace so it becomes the single source of truth
-                asyncio.ensure_future(
-                    _mempalace_add(item["content"], user_id=user_id, tags=["regex_capture"])
-                )
-            await db.commit()
-            break
-    except Exception as e:
-        logger.warning("Memory candidate persistence failed: %s", e)
+    """Single post-turn memory hook.
 
-
-async def _load_user_memories(user_id: str, limit: int = 15) -> str:
-    """Load approved memory facts for user and return as a system-prompt block.
-
-    Fast: single indexed DB query, no ML inference.  Called on every Pi / Bonsai /
-    OpenClaw turn so Zoe always knows what she has learned about the user.
+    Delegates to ``memory_extractor.extract_and_ingest`` which enforces the
+    one-extractor-one-writer contract. Previously we ran two regex passes
+    (this router's and ``pi_agent._fast_memory_extract``) with overlapping
+    pattern sets, dual-writing to SQLite ``memory_items`` and MemPalace.
+    Both old paths now funnel through this single call.
     """
     try:
-        async for db in get_db():
-            rows = await db.execute(
-                "SELECT content, title FROM memory_items "
-                "WHERE user_id = ? AND status = 'approved' "
-                "ORDER BY updated_at DESC LIMIT ?",
-                (user_id, limit),
-            )
-            rows = await rows.fetchall()
-            break
-        if not rows:
-            return ""
-        lines = ["## What I know about you:"]
-        for content, title in rows:
-            prefix = f"[{title}] " if title else ""
-            lines.append(f"- {prefix}{(content or '')[:200]}")
-        return "\n".join(lines)
-    except Exception as exc:
-        logger.debug("_load_user_memories failed (non-fatal): %s", exc)
-        return ""
+        from memory_extractor import extract_and_ingest
+
+        await extract_and_ingest(
+            user_message,
+            assistant_response,
+            user_id=user_id,
+            session_id=session_id,
+            source="chat_regex",
+            auto_approve=_MEMORY_AUTO_INGEST,
+        )
+    except Exception as e:
+        logger.warning("Memory candidate persistence failed: %s", e)
 
 
 async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
@@ -562,11 +511,12 @@ async def run_bonsai_agent(
     max_tokens_override: int = 0,
 ) -> tuple[str, bool]:
     """
-    Call Bonsai-8B for a fast conversational response.
+    Legacy shim: Bonsai path is retired.
 
-    Returns (response_text, needs_escalation).
-    needs_escalation=True means Bonsai is busy or signalled the task requires OpenClaw.
+    Returns ("", True) so callers continue through Pi Agent/OpenClaw.
     """
+    return "", True
+
     import httpx
 
     # Skip if Bonsai is already busy — another request (e.g. Hermes API) is running.
@@ -679,6 +629,190 @@ async def chat_inject_background(user_message: str, assistant_response: str, int
 
 _UI_MARKER_RE = re.compile(r":::zoe-ui\s*\n(.*?)\n:::", re.DOTALL)
 _APPROVE_RE = re.compile(r"^/approve\s+([a-zA-Z0-9_-]{8,})\s*(.*)$")
+
+# ── Server-side builder safety net ────────────────────────────────────────────
+# OpenClaw's SKILL.md files instruct the agent to emit `:::zoe-ui` navigate +
+# orb_prompt blocks after staging a widget/page, but the bonsai-8b model is
+# unreliable — it frequently dumps the staged JS into a markdown code fence
+# instead of respecting the contract. These regexes let the server detect a
+# successful stage (preview URL mentioned in the response) and synthesize the
+# missing navigate/orb_prompt events so the user always sees the live preview.
+_PREVIEW_WIDGET_URL_RE = re.compile(
+    r"(/_preview_harness/widget-harness\.html\?[^\s)\"'`<>]+)"
+)
+_PREVIEW_PAGE_URL_RE = re.compile(
+    r"(/_preview/[a-z0-9_\-]+/[a-z0-9_\-]+\.html(?![a-z0-9_\-]))",
+    re.IGNORECASE,
+)
+# Matches fenced code blocks of any language — stripped from the chat bubble
+# for delegation intents so raw JS/HTML never reaches the user.
+_FENCED_CODE_BLOCK_RE = re.compile(r"```[\w-]*\n.*?\n```", re.DOTALL)
+
+# Builder intents that we apply the "no code in chat, auto-preview" policy to.
+_BUILDER_INTENTS: frozenset[str] = frozenset({"build_widget", "build_page"})
+
+
+def _research_followup_prompt(missing: list[str]) -> str:
+    questions = {
+        "location": "What location should I search in?",
+        "budget": "What budget or price range should I use?",
+        "timeframe": "What date or timeframe should I target?",
+    }
+    prompts = [questions[m] for m in missing if m in questions]
+    if not prompts:
+        return ""
+    return "Before I start research, I need a bit more detail: " + " ".join(prompts)
+
+
+async def _capture_research_screenshot(
+    *,
+    query: str,
+    candidate_source: str,
+    user_id: str,
+    session_id: str,
+) -> tuple[str, str]:
+    """Capture a screenshot for research evidence using broker-backed browser control."""
+    navigate_to = (candidate_source or "").strip() or default_source_for_query(query)
+    try:
+        plan = _BROWSER_BROKER.plan_action(
+            action="capture_screenshot",
+            params={
+                "navigate_to": navigate_to,
+                "timeout_s": 15.0,
+                "screenshot_timeout_s": 20.0,
+            },
+            user_id=user_id,
+            session_id=f"chat:{session_id}",
+            action_class="read_only_research",
+            requested_surface="openclawLocal",
+        )
+        result = await _BROWSER_BROKER.execute(plan)
+        image_b64 = str(result.get("image_base64") or "").strip()
+        if result.get("ok") and image_b64:
+            return image_b64, navigate_to
+    except Exception as exc:
+        logger.debug("research screenshot capture failed (non-fatal): %s", exc)
+    return "", navigate_to
+
+
+async def _build_research_package(
+    *,
+    query: str,
+    response_text: str,
+    backend: str,
+    user_id: str,
+    session_id: str,
+) -> dict:
+    """Build research package and attach screenshot evidence when possible."""
+    fallback_rows: list[dict] = []
+    pkg = build_package(query=query, response_text=response_text, backend=backend)
+    if package_needs_web_fallback(pkg):
+        fallback_rows = await asyncio.to_thread(fetch_web_fallback_results, query)
+        if fallback_rows:
+            pkg = build_package(
+                query=query,
+                response_text=response_text,
+                backend=backend,
+                web_fallback_results=fallback_rows,
+            )
+    source = (pkg.get("sources") or [""])[0]
+    image_b64, screenshot_url = await _capture_research_screenshot(
+        query=query,
+        candidate_source=str(source or ""),
+        user_id=user_id,
+        session_id=session_id,
+    )
+    if image_b64:
+        pkg = build_package(
+            query=query,
+            response_text=response_text,
+            backend=backend,
+            screenshot_b64=image_b64,
+            screenshot_url=screenshot_url,
+            web_fallback_results=fallback_rows,
+        )
+    return pkg
+
+
+def _detect_preview_urls(text: str) -> tuple[str | None, str | None]:
+    """Return (widget_preview_url, page_preview_url) if found in text."""
+    widget_m = _PREVIEW_WIDGET_URL_RE.search(text or "")
+    page_m = _PREVIEW_PAGE_URL_RE.search(text or "")
+    return (
+        widget_m.group(1) if widget_m else None,
+        page_m.group(1) if page_m else None,
+    )
+
+
+def _synthesize_builder_actions(
+    response_text: str,
+    explicit_actions: list,
+    intent_name: str | None,
+) -> list:
+    """If a builder run staged a preview but forgot to emit navigate/orb_prompt,
+    synthesize those actions here so the user always sees the live preview.
+
+    Returns a list of *additional* actions to emit (never modifies the explicit
+    ones). Idempotent — skips emission if the LLM already got it right.
+    """
+    if intent_name not in _BUILDER_INTENTS:
+        return []
+    has_navigate = any(
+        (a.get("action") or a.get("type")) == "navigate" for a in explicit_actions
+    )
+    has_orb = any(
+        (a.get("action") or a.get("type")) == "orb_prompt" for a in explicit_actions
+    )
+    widget_url, page_url = _detect_preview_urls(response_text)
+    preview_url = widget_url or page_url
+    if not preview_url:
+        return []  # stage probably didn't happen; nothing to preview
+    synth: list = []
+    if not has_navigate:
+        synth.append({
+            "action": "navigate",
+            "url": preview_url,
+            "target": "iframe",
+            "source": "zoe-data.safety_net",
+        })
+    if not has_orb:
+        thing = "this widget" if widget_url else "this page"
+        synth.append({
+            "action": "orb_prompt",
+            "prompt": f"Here's {thing}. Does it look right, or want me to tweak it?",
+            "auto_mic": True,
+            "source": "zoe-data.safety_net",
+        })
+    return synth
+
+
+def _sanitize_builder_reply(clean_text: str, intent_name: str | None,
+                            did_auto_preview: bool) -> str:
+    """For builder intents, strip code fences from the chat bubble and
+    shorten the text if the agent emitted a wall of prose alongside the preview.
+
+    The live preview iframe is the evidence — the user asked for the file to be
+    made and shown working, not for a code review in the bubble.
+    """
+    if intent_name not in _BUILDER_INTENTS:
+        return clean_text
+    # Strip fenced code blocks entirely.
+    stripped = _FENCED_CODE_BLOCK_RE.sub("", clean_text or "").strip()
+    # Collapse 3+ blank lines left behind by stripping.
+    stripped = re.sub(r"\n{3,}", "\n\n", stripped)
+    if did_auto_preview:
+        # If the agent rambled, replace with a short confirmation line — the
+        # preview iframe + orb prompt are the real UX. Keep at most ~240 chars.
+        if len(stripped) > 240:
+            stripped = (
+                "Here it is — take a look at the preview and let me know if "
+                "it's what you wanted, or tell me what to change."
+            )
+        elif not stripped:
+            stripped = (
+                "Done — preview below. Does it look right?"
+            )
+    return stripped
 
 
 def _extract_approval_token(message: str):
@@ -810,14 +944,39 @@ async def _stream_openclaw_assistant_ag(
     recorder: AgRunRecorder,
     assistant_message_id: str,
     response_text: str,
+    intent_name: str | None = None,
 ):
-    """TEXT_MESSAGE_* for assistant reply, then CUSTOM zoe.ui_* for generative UI."""
+    """TEXT_MESSAGE_* for assistant reply, then CUSTOM zoe.ui_* for generative UI.
+
+    `intent_name` lets the builder safety net kick in: for `build_widget` /
+    `build_page` intents, we strip fenced code from the bubble and synthesize
+    `navigate` + `orb_prompt` events when the LLM forgets to emit them, so the
+    user always sees the live preview instead of a wall of code.
+    """
     clean_text, actions = _extract_ui_actions(response_text)
+
+    # Builder-intent safety net: synthesize navigate + orb_prompt if the LLM
+    # staged a preview but forgot to wire up the UI actions.
+    synth_actions = _synthesize_builder_actions(response_text, actions, intent_name)
+    did_auto_preview = bool(synth_actions) or any(
+        (a.get("action") or a.get("type")) == "navigate" for a in actions
+    )
+    # Strip fenced code blocks and/or replace rambling text with a short
+    # confirmation for builder intents — the preview iframe is the evidence.
+    clean_text = _sanitize_builder_reply(clean_text, intent_name, did_auto_preview)
+    all_actions = list(actions) + synth_actions
+
     yield recorder.emit(
         enc,
         CustomEvent(
             name="zoe.run_log",
-            value={"level": "info", "message": "OpenClaw response received", "chars": len(clean_text)},
+            value={
+                "level": "info",
+                "message": "OpenClaw response received",
+                "chars": len(clean_text),
+                "actions": len(all_actions),
+                "synthesized": len(synth_actions),
+            },
         ),
     )
     yield recorder.emit(
@@ -834,14 +993,20 @@ async def _stream_openclaw_assistant_ag(
         enc,
         TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id),
     )
-    for action in actions:
+    for action in all_actions:
+        act_type = action.get("action") or action.get("type")
         if "component" in action:
             yield recorder.emit(enc, CustomEvent(name="zoe.ui_component", value=action))
+        elif act_type == "navigate":
+            yield recorder.emit(enc, CustomEvent(name="zoe.ui_navigate", value=action))
+        elif act_type == "orb_prompt":
+            yield recorder.emit(enc, CustomEvent(name="zoe.ui_orb_prompt", value=action))
         elif "command" in action:
             yield recorder.emit(enc, CustomEvent(name="zoe.ui_command", value=action))
     # Auto-extract rich components from plain text (price tables, maps, menus)
-    # only when no explicit :::zoe-ui::: blocks were present
-    if not actions:
+    # only when no explicit :::zoe-ui::: blocks were present AND this isn't a
+    # builder intent (for builders, preview iframe is the only component we want).
+    if not all_actions and intent_name not in _BUILDER_INTENTS:
         try:
             extracted = await auto_extract_components(clean_text)
             for comp in extracted:
@@ -955,6 +1120,41 @@ async def chat_stream_generator(
                 return
 
         lc = message_for_processing.lower().strip()
+        task_class = classify_query(message_for_processing)
+        response_text = ""
+        if task_class == "research":
+            missing = missing_brief_fields(message_for_processing)
+            if missing:
+                followup = _research_followup_prompt(missing)
+                yield emit(
+                    TextMessageStartEvent(
+                        type=EventType.TEXT_MESSAGE_START,
+                        message_id=assistant_message_id,
+                        role="assistant",
+                    )
+                )
+                async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, followup):
+                    yield line
+                yield emit(
+                    TextMessageEndEvent(
+                        type=EventType.TEXT_MESSAGE_END,
+                        message_id=assistant_message_id,
+                    )
+                )
+                yield emit(
+                    RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id)
+                )
+                await _record_run_state(
+                    run_id,
+                    session_id,
+                    user_id,
+                    mode="chat",
+                    status="completed",
+                    request_text=message,
+                    response_text=followup,
+                    metadata={"task_class": task_class, "missing_constraints": missing},
+                )
+                return
         if "what can you do right now" in lc or lc in {"/capabilities", "capabilities", "tools"}:
             caps = await discover_openclaw_capabilities()
             caps_text = json.dumps(caps.get("payload", caps), indent=2)[:12000]
@@ -998,6 +1198,9 @@ async def chat_stream_generator(
             )
 
         use_intent_fast_path = (not force_openclaw) and _ALL_TOOLS_ENABLED
+        if task_class == "research":
+            # Research requests must flow through the evidence path, not terse intent handlers.
+            use_intent_fast_path = False
         if message_for_processing.startswith("/openclaw "):
             message_for_processing = message_for_processing[len("/openclaw ") :].strip()
             use_intent_fast_path = False
@@ -1005,6 +1208,7 @@ async def chat_stream_generator(
         intent = detect_intent(message_for_processing) if use_intent_fast_path else None
         if intent:
             logger.info("Intent matched: %s slots=%s", intent.name, getattr(intent, "slots", None))
+            logger.info("intent_outcome=matched intent=%s", intent.name)
             # Panel navigation is intentionally NOT fired from the web chat path.
             # _broadcast_intent_nav is preserved for voice and touch-panel request paths.
 
@@ -1033,6 +1237,7 @@ async def chat_stream_generator(
 
             # ── Form-based intents: show a generative UI tile instead of silently executing ──
             if intent.name in _FORM_INTENTS:
+                logger.info("intent_outcome=matched_form intent=%s", intent.name)
                 _comp_name, _prop_builder = _FORM_COMPONENT_MAP[intent.name]
                 _form_props = _prop_builder(slots)
                 yield emit(
@@ -1063,6 +1268,7 @@ async def chat_stream_generator(
             result = await execute_intent(intent, user_id)
 
             if result:
+                logger.info("intent_outcome=matched_exec_ok intent=%s", intent.name)
                 body = result if len(result) <= 12000 else result[:12000] + "…"
                 yield emit(
                     ToolCallResultEvent(
@@ -1093,18 +1299,29 @@ async def chat_stream_generator(
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, result))
                 asyncio.ensure_future(_save_chat_message(session_id, "assistant", result))
             else:
-                logger.warning("Intent %s execution failed, falling back to LLM", intent.name)
+                if intent.name in _OPENCLAW_DELEGATION_INTENTS:
+                    logger.info("Intent %s delegating to OpenClaw", intent.name)
+                    logger.info("intent_outcome=matched_delegated intent=%s", intent.name)
+                    _tc_status = {"status": "delegated_to_openclaw", "tool": tool_name}
+                else:
+                    logger.warning("Intent %s execution failed, falling back to LLM", intent.name)
+                    logger.info("intent_outcome=matched_exec_failed intent=%s fallback=%s", intent.name, "pi_agent" if _USE_PI_AGENT else "openclaw")
+                    _tc_status = {"status": "failed", "tool": tool_name}
                 yield emit(
                     ToolCallResultEvent(
                         type=EventType.TOOL_CALL_RESULT,
                         message_id=assistant_message_id,
                         tool_call_id=tool_call_id,
-                        content=json.dumps({"status": "failed", "tool": tool_name}),
+                        content=json.dumps(_tc_status),
                         role="tool",
                     )
                 )
                 yield emit(StepFinishedEvent(type=EventType.STEP_FINISHED, step_name=label))
-                if _USE_PI_AGENT:
+                # Delegation intents always go straight to OpenClaw — Pi Agent
+                # can't run the builder skills.  For all other fallbacks, prefer
+                # Pi Agent when enabled (it will self-escalate if needed).
+                _force_openclaw_here = intent.name in _OPENCLAW_DELEGATION_INTENTS
+                if _USE_PI_AGENT and not _force_openclaw_here:
                     yield emit(
                         StateSnapshotEvent(
                             type=EventType.STATE_SNAPSHOT,
@@ -1162,11 +1379,15 @@ async def chat_stream_generator(
                 if actions:
                     asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
+                if response_text:
+                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
                 async for line in _stream_openclaw_assistant_ag(
-                    enc, recorder, assistant_message_id, response_text
+                    enc, recorder, assistant_message_id, response_text,
+                    intent_name=intent.name if intent else None,
                 ):
                     yield line
         else:
+            logger.info("intent_outcome=no_match fast_path=%s", bool(use_intent_fast_path))
             if _USE_PI_AGENT:
                 # ── Pi/Jetson Agent: Gemma 4 E2B with MemPalace + tools — true SSE streaming ──
                 tier_label = "Jetson" if _JETSON_AGENT_MODE else "Pi"
@@ -1378,8 +1599,10 @@ async def chat_stream_generator(
                         used_bonsai = True
 
                 if used_bonsai:
+                    response_text = bonsai_response
                     asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, bonsai_response))
-                    _fire_memory_capture(message_for_processing, bonsai_response, user_id=user_id)
+                    if bonsai_response:
+                        asyncio.ensure_future(_save_chat_message(session_id, "assistant", bonsai_response))
                     async for line in _stream_openclaw_assistant_ag(
                         enc, recorder, assistant_message_id, bonsai_response
                     ):
@@ -1425,10 +1648,28 @@ async def chat_stream_generator(
                     if actions:
                         asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
                     asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
+                    if response_text:
+                        asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
                     async for line in _stream_openclaw_assistant_ag(
                         enc, recorder, assistant_message_id, response_text
                     ):
                         yield line
+
+        if task_class == "research":
+            backend = "openclawLocal" if force_openclaw or not _USE_PI_AGENT else "piAgent"
+            pkg = await _build_research_package(
+                query=message_for_processing,
+                response_text=response_text,
+                backend=backend,
+                user_id=user_id,
+                session_id=session_id,
+            )
+            yield emit(
+                CustomEvent(
+                    name="zoe.ui_component",
+                    value={"component": "research_evidence", "props": pkg},
+                )
+            )
 
         yield emit(
             RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id)
@@ -1496,6 +1737,12 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
         )
     else:
         approval_token, message_for_processing = _extract_approval_token(message)
+        # Persist the user turn on the non-stream path as well. The stream
+        # path does this inside chat_stream_generator; without this the
+        # nightly digest would see an empty chat_messages table for any
+        # voice / CLI clients that opt out of SSE.
+        if message:
+            await _save_chat_message(session_id, "user", message)
         if approval_token:
             approved = await _resolve_approval(user_id, approval_token)
             if not approved:
@@ -1530,11 +1777,32 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                 }
 
         lc = message_for_processing.lower().strip()
+        task_class = classify_query(message_for_processing)
+        if task_class == "research":
+            missing = missing_brief_fields(message_for_processing)
+            if missing:
+                followup = _research_followup_prompt(missing)
+                return {
+                    "response": followup,
+                    "session_id": session_id,
+                    "ui_components": [
+                        {
+                            "component": "status",
+                            "props": {
+                                "level": "info",
+                                "message": "Research brief incomplete - waiting for constraints.",
+                            },
+                        }
+                    ],
+                }
         if "what can you do right now" in lc or lc in {"/capabilities", "capabilities", "tools"}:
             caps = await discover_openclaw_capabilities()
             return {"response": "OpenClaw capabilities:\n" + json.dumps(caps.get("payload", caps), indent=2), "session_id": session_id}
 
         use_intent_fast_path = (not force_openclaw) and _ALL_TOOLS_ENABLED
+        if task_class == "research":
+            # Keep research prompts on the evidence-producing flow.
+            use_intent_fast_path = False
         if message_for_processing.startswith("/openclaw "):
             message_for_processing = message_for_processing[len("/openclaw ") :].strip()
             use_intent_fast_path = False
@@ -1559,6 +1827,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                     chat_inject_background(message_for_processing, result, intent.name, user_id, session_id)
                 )
                 asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, result))
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", result))
                 return {"response": result, "session_id": session_id}
         if _WHATSAPP_FLOW_ENABLED and is_whatsapp_connect_request(message_for_processing):
             message_for_processing = (
@@ -1566,47 +1835,57 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                 "credential/session validation, qr/session setup, webhook test, remediation."
             )
 
-        # Pi Agent loads MemPalace facts directly; non-streaming path passes None
-        ns_db_memory = await _mempalace_load_user_facts(user_id)
-        if _USE_PI_AGENT:
-            expanded_msg = openclaw_user_message(intent, message_for_processing) if intent else message_for_processing
-            response_text = await run_pi_agent(
-                expanded_msg, session_id, user_id, db_memory_context=None,
-                max_tokens_override=voice_max_tokens,
-            )
-            # If Pi Agent signals escalation, route to OpenClaw
-            if response_text.startswith("__ESCALATE__:"):
-                _, escalate_body = response_text.split(":", 1)
-                _, _, oc_task = escalate_body.partition("|")
+        response_text = ""
+        try:
+            # Pi Agent loads MemPalace facts directly; non-streaming path passes None
+            ns_db_memory = await _mempalace_load_user_facts(user_id)
+            if _USE_PI_AGENT:
+                expanded_msg = openclaw_user_message(intent, message_for_processing) if intent else message_for_processing
+                response_text = await run_pi_agent(
+                    expanded_msg, session_id, user_id, db_memory_context=None,
+                    max_tokens_override=voice_max_tokens,
+                )
+                # If Pi Agent signals escalation, route to OpenClaw
+                if response_text.startswith("__ESCALATE__:"):
+                    _, escalate_body = response_text.split(":", 1)
+                    _, _, oc_task = escalate_body.partition("|")
+                    response_text = await run_openclaw_agent(
+                        oc_task or message_for_processing,
+                        session_id,
+                        user_id,
+                        user_role=user.get("role"),
+                        username=user.get("username"),
+                        memories=ns_db_memory or None,
+                    )
+            else:
+                # Try Bonsai fast path first for conversational messages
+                if _BONSAI_FAST_PATH and not force_openclaw:
+                    bonsai_text, needs_escalation = await run_bonsai_agent(
+                        message_for_processing, session_id, user_id,
+                        username=user.get("username") or "",
+                        max_tokens_override=voice_max_tokens,
+                    )
+                    if not needs_escalation and bonsai_text:
+                        asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, bonsai_text))
+                        asyncio.ensure_future(_save_chat_message(session_id, "assistant", bonsai_text))
+                        return {"response": bonsai_text, "session_id": session_id}
+
+                oc_message = openclaw_user_message(intent, message_for_processing)
                 response_text = await run_openclaw_agent(
-                    oc_task or message_for_processing,
+                    oc_message,
                     session_id,
                     user_id,
                     user_role=user.get("role"),
                     username=user.get("username"),
                     memories=ns_db_memory or None,
                 )
-        else:
-            # Try Bonsai fast path first for conversational messages
-            if _BONSAI_FAST_PATH and not force_openclaw:
-                bonsai_text, needs_escalation = await run_bonsai_agent(
-                    message_for_processing, session_id, user_id,
-                    username=user.get("username") or "",
-                    max_tokens_override=voice_max_tokens,
-                )
-                if not needs_escalation and bonsai_text:
-                    asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, bonsai_text))
-                    _fire_memory_capture(message_for_processing, bonsai_text, user_id=user_id)
-                    return {"response": bonsai_text, "session_id": session_id}
-
-            oc_message = openclaw_user_message(intent, message_for_processing)
-            response_text = await run_openclaw_agent(
-                oc_message,
-                session_id,
-                user_id,
-                user_role=user.get("role"),
-                username=user.get("username"),
-                memories=ns_db_memory or None,
+        except Exception as exc:
+            if task_class != "research":
+                raise
+            logger.exception("research execution failed; using deterministic fallback: %s", exc)
+            response_text = (
+                "I could not complete live browsing just now, so I prepared a deterministic "
+                "research brief with source links and evidence placeholders."
             )
         clean_text, actions = _extract_ui_actions(response_text)
         resp = {"response": clean_text, "session_id": session_id}
@@ -1616,9 +1895,41 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             resp["ui_commands"] = ui_commands
         if ui_components:
             resp["ui_components"] = ui_components
+        if task_class == "research":
+            pkg = await _build_research_package(
+                query=message_for_processing,
+                response_text=response_text,
+                backend="openclawLocal" if force_openclaw or not _USE_PI_AGENT else "piAgent",
+                user_id=user_id,
+                session_id=session_id,
+            )
+            resp.setdefault("ui_components", [])
+            resp["ui_components"].append({"component": "research_evidence", "props": pkg})
+            if req_panel_id:
+                # Push a touch-optimized report card automatically for research tasks.
+                async for db in get_db():
+                    try:
+                        await enqueue_ui_action(
+                            db,
+                            user_id=user_id,
+                            action_type="panel_show_research_report",
+                            payload={"package": pkg, "panel_id": req_panel_id},
+                            requested_by="chat",
+                            panel_id=req_panel_id,
+                            chat_session_id=session_id,
+                            idempotency_key=f"{session_id}:research:{uuid.uuid4().hex[:8]}",
+                        )
+                        await db.commit()
+                    except Exception as exc:
+                        # Non-fatal: research response should still return in chat
+                        # even if panel action delivery fails.
+                        logger.warning("research panel push skipped: %s", exc)
+                    break
         if actions:
             asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
         asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
+        if response_text:
+            asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
         return resp
 
 

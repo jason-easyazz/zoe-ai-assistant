@@ -6,6 +6,7 @@ Optimized for fast user switching and offline operation
 import asyncio
 import aiohttp
 import json
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
@@ -46,7 +47,9 @@ class QuickAuthManager:
     def __init__(self, config: TouchPanelConfig):
         self.config = config
         self.cache = cache_manager.get_cache(config.device_id)
-        self.server_url = "http://zoe-core:8000"  # Central auth server
+        # Use zoe-auth as the source of truth for passcode auth.
+        # The previous default (zoe-core:8000) forces offline fallback in this stack.
+        self.server_url = os.getenv("ZOE_AUTH_URL", "http://localhost:8002")
         self.offline_mode = False
         self.last_server_contact = datetime.now()
         

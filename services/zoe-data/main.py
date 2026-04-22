@@ -25,11 +25,16 @@ from routers import (
     voice_tts_router,
     user_profile_router,
     panel_auth_router,
+    capability_matrix_router,
 )
 from routers.dashboard import router as dashboard_router
 from routers.stubs import router as stubs_router
 from routers.push import router as push_router
-from routers.system import start_openclaw_background_tasks, start_memory_digest_background
+from routers.system import (
+    start_openclaw_background_tasks,
+    start_memory_digest_background,
+    start_memory_consolidation_background,
+)
 from routers.openclaw import router as openclaw_router
 import logging
 
@@ -43,6 +48,7 @@ _REQUEST_ID_CTX_VAR = None  # set after app creation to avoid import cycles
 _openclaw_bg_task = None
 _digest_bg_task = None
 _keepwarm_task = None
+_memory_capture_health: dict[str, str] = {"status": "unknown", "detail": "startup pending"}
 
 # --- Keep-warm constants --------------------------------------------------
 # Session ID used for keep-warm pings. A fixed ID means Hermes reuses the
@@ -64,6 +70,8 @@ class RequestIdFilter(logging.Filter):
 
 # Apply the filter to root logger so all modules get it.
 logging.root.addFilter(RequestIdFilter())
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(RequestIdFilter())
 
 
 async def _keepwarm_loop():
@@ -137,6 +145,38 @@ async def _keepwarm_loop():
         await asyncio.sleep(_KEEPWARM_INTERVAL_S)
 
 
+async def _run_memory_capture_startup_probe() -> None:
+    """Validate memory capture plumbing at startup.
+
+    This is a non-invasive probe: it verifies extractor import/patterns and
+    MemoryService read paths without writing synthetic rows.
+    """
+    global _memory_capture_health
+    try:
+        from memory_extractor import extract_candidates
+        from memory_service import get_memory_service
+
+        probe = "remember that i met startup-probe person"
+        candidates = extract_candidates(probe, "")
+        if not candidates:
+            raise RuntimeError("memory_extractor produced no candidates for probe")
+
+        svc = get_memory_service()
+        await asyncio.wait_for(svc.load_for_prompt("family-admin", limit=1), timeout=3.0)
+        await asyncio.wait_for(
+            svc.search("startup probe", user_id="family-admin", limit=1, timeout_s=1.5),
+            timeout=3.0,
+        )
+        _memory_capture_health = {"status": "ok", "detail": "extractor+service ready"}
+        logger.info("Memory capture startup probe: OK")
+    except Exception as exc:
+        detail = str(exc)[:240]
+        _memory_capture_health = {"status": "degraded", "detail": detail}
+        logger.error("Memory capture startup probe FAILED: %s", detail)
+        if os.environ.get("ZOE_MEMORY_STARTUP_STRICT", "false").strip().lower() == "true":
+            raise
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _openclaw_bg_task, _digest_bg_task, _keepwarm_task
@@ -159,8 +199,10 @@ async def lifespan(app: FastAPI):
             await load_device_tokens(_db)
     except Exception as _exc:
         logger.warning("Could not pre-load device tokens: %s", _exc)
+    await _run_memory_capture_startup_probe()
     _openclaw_bg_task = start_openclaw_background_tasks()
     _digest_bg_task = start_memory_digest_background()
+    _consolidation_bg_task = start_memory_consolidation_background()
     _keepwarm_task = asyncio.create_task(_keepwarm_loop(), name="keepwarm")
     logger.info("Keep-warm task started (Hermes every %ds, session=%s)", _KEEPWARM_INTERVAL_S, _HERMES_WARMUP_SESSION)
 
@@ -176,6 +218,19 @@ async def lifespan(app: FastAPI):
             logger.info("%s Agent: Gemma KV cache warmup scheduled (fires in 8s)", tier)
         except Exception as _wup_exc:
             logger.warning("Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
+
+    # Warm wyoming-piper TTS: one dummy request so Piper's ONNX model is loaded
+    # before the first real voice command. Avoids ~1.5s cold-start on first request.
+    async def _warmup_piper():
+        await asyncio.sleep(10)  # let service fully start first
+        try:
+            from routers.voice_tts import _synthesize_wyoming_piper
+            await _synthesize_wyoming_piper("Zoe is ready.")
+            logger.info("wyoming-piper TTS warmup complete")
+        except Exception as _exc:
+            logger.debug("wyoming-piper warmup failed (non-fatal): %s", _exc)
+
+    asyncio.create_task(_warmup_piper(), name="piper_tts_warmup")
 
     yield
     for task in (_openclaw_bg_task, _digest_bg_task, _keepwarm_task):
@@ -262,6 +317,7 @@ app.include_router(dashboard_router)
 app.include_router(stubs_router)
 app.include_router(push_router)
 app.include_router(panel_auth_router)
+app.include_router(capability_matrix_router)
 
 from routers.ha_control import router as ha_control_router
 app.include_router(ha_control_router)
@@ -269,7 +325,33 @@ app.include_router(ha_control_router)
 
 @app.get("/health")
 async def root_health():
-    return {"status": "ok", "service": "zoe-data", "version": "1.0.0"}
+    return {
+        "status": "ok",
+        "service": "zoe-data",
+        "version": "1.0.0",
+        "memory_capture": _memory_capture_health,
+    }
+
+
+@app.get("/metrics")
+async def prometheus_metrics():
+    """Prometheus scrape endpoint.
+
+    Exposes counters/gauges from `memory_metrics.REGISTRY` (MemPalace ingest,
+    search latency, PII rejects, feedback, training, routing). Refreshes the
+    per-user collection-size gauge inline so dashboards always see current
+    values. Uses `prometheus_client.generate_latest` with our dedicated
+    registry to avoid leaking default Python/process metrics.
+    """
+    from fastapi.responses import Response
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    from memory_metrics import REGISTRY, snapshot_collection_sizes
+
+    snapshot_collection_sizes()
+    return Response(
+        content=generate_latest(REGISTRY),
+        media_type=CONTENT_TYPE_LATEST,
+    )
 
 
 @app.post("/api/internal/broadcast")
