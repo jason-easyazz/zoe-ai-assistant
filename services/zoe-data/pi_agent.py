@@ -87,7 +87,8 @@ def _spoken_day_ordinal(day: int) -> str:
 # Safe Bash allowlist (commands Pi Agent can self-extend with)
 _BASH_ALLOWED_PREFIXES = (
     "pip install", "python3 -c", "cat ", "ls ", "echo ", "date",
-    "systemctl --user status", "df -h", "free -h", "uptime",
+    "systemctl --user status", "systemctl status",
+    "df ", "free ", "ps ", "uname ", "top -bn1", "uptime",
 )
 
 # Escape hatch: set FORCE_FULL_CONTEXT=true to bypass skill selection and revert to
@@ -129,7 +130,12 @@ VISUAL TOOLS — call these instead of describing the result in text:
 
 SELF-BUILDING:
 - If the user asks for a NEW widget, page, or capability that doesn't exist yet, do NOT say you can't — call list_openclaw_skills with the relevant builder highlight: "zoe-widget-builder" for widgets, "zoe-page-builder" for pages, "zoe-capability-extender" for new abilities. Then offer to escalate to OpenClaw to build it.
-- Before saying "I can't do X", consult the shared ZOE_SELF.md context below to see what Zoe actually has. If still unsure, escalate_to_openclaw."""
+- Before saying "I can't do X", consult the shared ZOE_SELF.md context below to see what Zoe actually has. If a capability gap is confirmed, escalate_to_openclaw.
+
+ESCALATION RULES — read carefully:
+- DO NOT call escalate_to_openclaw for: geography, capitals, countries, history, science, maths, recipes, definitions, general knowledge, or any question you can answer from training data.
+- DO call escalate_to_openclaw for: current news, live prices/stocks, recent events (after your training cutoff), or multi-step web automation tasks.
+- When unsure whether to escalate: answer from knowledge first. Only escalate if the answer genuinely requires live internet data you cannot know."""
 
 
 def _load_zoe_self_summary(max_chars: int = 5500) -> str:
@@ -484,7 +490,7 @@ _TOOLS = [
         "type": "function",
         "function": {
             "name": "escalate_to_openclaw",
-            "description": "Hand off to OpenClaw for tasks requiring web search, browser access, multi-step automation, financial queries, or anything needing internet access.",
+            "description": "Hand off to OpenClaw for tasks that REQUIRE live internet access: current news, live prices/stocks, recent events, or multi-step web automation. Do NOT use for general knowledge, geography, history, science, maths, or any question answerable from training data.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1315,6 +1321,84 @@ async def _voice_capability_shortcut(message: str, user_id: str) -> str | None:
     return None
 
 
+# ── Chat capability recovery shortcut ────────────────────────────────────────
+
+async def _chat_capability_shortcut(message: str, user_id: str) -> str | None:
+    """Deterministic shortcut for chat-mode queries that sometimes bypass intent_router.
+
+    Covers two failure modes of Gemma 4 E2B at temperature=0.6:
+
+    1. Memory-recall questions ("do you remember X") where the model occasionally
+       hallucinates "I don't have access to your memories" even when facts are loaded.
+       If no memories are found we return a direct negative so the LLM never gets the
+       chance to confabulate; if memories exist we return None and let the main path
+       inject them into the user message as usual.
+
+    2. Extended weather phrasings not caught by intent_router keyword matching in chat
+       mode, e.g. "is it going to rain?" or "should I bring a jacket?". We call the
+       weather tool directly and return a formatted answer.
+
+    Returns a string answer to short-circuit the LLM path, or None to fall through.
+    """
+    msg = (message or "").lower()
+
+    # ── Memory recall ─────────────────────────────────────────────────────────
+    memory_recall_cues = (
+        "do you remember", "what did i tell you", "recall when",
+        "what do you know about me", "what have i told you", "what's in my memory",
+        "what do you remember", "remind me what i said", "what did we discuss",
+    )
+    if any(c in msg for c in memory_recall_cues):
+        facts = await _mempalace_load_user_facts(user_id)
+        mem_ctx = await _build_memory_context(message, user_id=user_id)
+        if facts.strip() or mem_ctx.strip():
+            # Memories exist — return None so the main path injects them as context
+            # and the LLM can interpret them in relation to the specific question.
+            return None
+        return "I don't have anything stored about that yet."
+
+    # ── Extended weather phrasings ────────────────────────────────────────────
+    chat_weather_cues = (
+        "is it going to rain", "will it rain", "going to be hot", "going to be cold",
+        "is it hot outside", "is it cold outside", "how hot is it", "how cold is it",
+        "bring a jacket", "need a jacket", "bring an umbrella", "need an umbrella",
+        "nice outside", "nice out today", "weather like today", "weather like outside",
+        "is it sunny", "is it cloudy", "is it windy",
+    )
+    if not any(c in msg for c in chat_weather_cues):
+        return None
+
+    wants_forecast = any(c in msg for c in ("tomorrow", "week", "forecast", "later"))
+    tool_name = "weather_forecast" if wants_forecast else "weather_current"
+    raw = await _dispatch_tool(tool_name, {"days": 3} if wants_forecast else {}, user_id=user_id)
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(data, dict) or data.get("error"):
+        return None
+
+    if wants_forecast and isinstance(data.get("forecast"), list) and data["forecast"]:
+        first = data["forecast"][0]
+        rain = float(first.get("precipitation_mm") or 0.0)
+        desc = str(first.get("description") or "conditions")
+        city = str(data.get("city") or "your area")
+        if rain >= 0.5 or "rain" in desc.lower():
+            return f"Forecast for {city}: {desc.lower()}, with about {rain:.1f} mm of rain expected. Bring an umbrella."
+        return f"Forecast for {city}: {desc.lower()}, with around {rain:.1f} mm of rain expected."
+
+    if data.get("temp") is not None:
+        temp = float(data.get("temp"))
+        feels = float(data.get("feels_like") or temp)
+        desc = str(data.get("description") or "conditions")
+        city = str(data.get("city") or "your area")
+        if "jacket" in msg or "umbrella" in msg:
+            advice = "A light jacket is a good idea." if feels <= 19 else "You should be fine without one."
+            return f"It's {temp:.1f}°C in {city} (feels like {feels:.1f}°C), {desc.lower()}. {advice}"
+        return f"It's {temp:.1f}°C in {city} (feels like {feels:.1f}°C), {desc.lower()}."
+    return None
+
+
 # ── LLM call / KV warmup ─────────────────────────────────────────────────────
 
 async def warmup_kv_cache() -> None:
@@ -1389,6 +1473,7 @@ async def _llm_call(
     temperature: float = 0.6,
     use_tools: bool = True,
     tools_override: list[dict] | None = None,
+    tool_choice: str = "auto",
     timeout_s: float | None = None,
 ) -> tuple[str, str | None, dict | None]:
     """Make a non-streaming chat completion request to the local model.
@@ -1409,7 +1494,7 @@ async def _llm_call(
     }
     if use_tools:
         payload["tools"] = tools_override if tools_override is not None else _TOOLS
-        payload["tool_choice"] = "auto"
+        payload["tool_choice"] = tool_choice
 
     effective_timeout = timeout_s if timeout_s is not None else _llm_timeout_s(voice_mode=False)
     async with httpx.AsyncClient(timeout=effective_timeout) as client:
@@ -1470,6 +1555,11 @@ async def run_pi_agent(
         if recovered:
             logger.info("pi_agent: capability shortcut hit session=%s", session_id)
             return recovered
+    else:
+        chat_recovered = await _chat_capability_shortcut(message, user_id)
+        if chat_recovered:
+            logger.info("pi_agent: chat shortcut hit session=%s", session_id)
+            return chat_recovered
 
     logger.info("pi_agent: session=%s jetson=%s msg_len=%d voice=%s", session_id, _JETSON_MODE, len(message), voice_mode)
 
@@ -1492,6 +1582,7 @@ async def run_pi_agent(
             else [t for t in _TOOLS if t["function"]["name"] in _VOICE_ALWAYS_TOOLS]
         )
         user_message = message
+        _first_turn_choice = "auto"
     else:
         # Chat: stable system prompt (KV-cache friendly) + dynamic context in user prefix.
         # The system prompt is byte-identical every turn so llama.cpp can reuse the cache.
@@ -1506,6 +1597,14 @@ async def run_pi_agent(
         logger.info(
             "pi_agent: skills=%s tools=%d/%d",
             sorted(skills), len(active_tools), len(_TOOLS),
+        )
+        # Use tool_choice="required" on the first turn when a real (non-discovery) skill
+        # matched and the tool list is small: forces Gemma 4 E2B to call the tool rather
+        # than answering in text when tool_choice="auto" lets it skip.
+        _first_turn_choice = (
+            "required"
+            if (skills - {"discovery"} and len(active_tools) <= 6)
+            else "auto"
         )
 
     # Build initial messages list
@@ -1524,10 +1623,13 @@ async def run_pi_agent(
             )
             # Always pass active_tools explicitly — prevents falling back to the full
             # _TOOLS list (bug fix: previously non-voice passed tools_override=None).
+            # On iteration 0 with a real matched skill, use "required" to force the tool
+            # call; subsequent iterations always use "auto" so the model can produce text.
             response_text, tool_name, tool_args = await _llm_call(
                 messages,
                 max_tokens=budget,
                 tools_override=active_tools,
+                tool_choice=_first_turn_choice if iteration == 0 else "auto",
                 timeout_s=_llm_timeout_s(voice_mode=voice_mode),
             )
         except httpx.ConnectError:
@@ -1776,6 +1878,12 @@ async def run_pi_agent_streaming(
             logger.info("pi_agent streaming: capability shortcut hit session=%s", session_id)
             yield recovered
             return
+    else:
+        chat_recovered = await _chat_capability_shortcut(message, user_id)
+        if chat_recovered:
+            logger.info("pi_agent streaming: chat shortcut hit session=%s", session_id)
+            yield chat_recovered
+            return
 
     t0 = time.monotonic()
     logger.info("pi_agent streaming: session=%s jetson=%s voice=%s", session_id, _JETSON_MODE, voice_mode)
@@ -1798,6 +1906,7 @@ async def run_pi_agent_streaming(
             else [t for t in _TOOLS if t["function"]["name"] in _VOICE_ALWAYS_TOOLS]
         )
         user_message = message
+        _first_turn_choice = "auto"
     else:
         # Chat: stable system prompt (KV-cache friendly) + dynamic context in user prefix.
         system_prompt = _PI_SOUL_STATIC
@@ -1812,6 +1921,12 @@ async def run_pi_agent_streaming(
             "pi_agent streaming: skills=%s tools=%d/%d",
             sorted(skills), len(active_tools), len(_TOOLS),
         )
+        # Force tool call on iteration 0 when a real skill matched and tool list is small.
+        _first_turn_choice = (
+            "required"
+            if (skills - {"discovery"} and len(active_tools) <= 6)
+            else "auto"
+        )
 
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
@@ -1822,7 +1937,7 @@ async def run_pi_agent_streaming(
     url = f"{_model_url()}/chat/completions"
     token_budget = _voice_token_budget() if voice_mode else _token_budget(message)
 
-    def _make_payload(msgs: list[dict]) -> dict:
+    def _make_payload(msgs: list[dict], tool_choice: str = "auto") -> dict:
         return {
             "model": _model_name(),
             "messages": msgs,
@@ -1830,11 +1945,11 @@ async def run_pi_agent_streaming(
             "temperature": 0.6,
             "stream": True,
             "tools": active_tools,
-            "tool_choice": "auto",
+            "tool_choice": tool_choice,
             "thinking_budget": 0,
         }
 
-    payload = _make_payload(messages)
+    payload = _make_payload(messages, tool_choice=_first_turn_choice)
 
     _max_iters = _VOICE_MAX_TOOL_ITERS if voice_mode else _MAX_TOOL_ITERS
     for iteration in range(_max_iters + 1):
@@ -1944,7 +2059,8 @@ async def run_pi_agent_streaming(
                 "tool_call_id": f"call_{iteration}",
                 "content": tool_result,
             })
-            payload = _make_payload(messages)
+            # Subsequent iterations always use "auto" — model should now produce text
+            payload = _make_payload(messages, tool_choice="auto")
         else:
             # Done — no tool call in this iteration
             elapsed = time.monotonic() - t0
