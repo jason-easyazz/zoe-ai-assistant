@@ -21,3 +21,6 @@ faster-whisper>=1.0.3
 pyannote.audio>=3.3.2
 # VAD for barge-in and ambient capture (server-side copy; Pi uses same package)
 silero-vad>=5.1
+# Proactive engine scheduler
+APScheduler==3.10.4
+SQLAlchemy>=2.0,<3.0

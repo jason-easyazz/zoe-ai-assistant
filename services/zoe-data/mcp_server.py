@@ -830,6 +830,35 @@ TOOLS = [
             "required": ["memory_id"],
         },
     },
+    # === PROACTIVE ENGINE ===
+    {
+        "name": "proactive_schedule",
+        "description": (
+            "Schedule a one-shot proactive notification to be sent to the user "
+            "at a specific future time.  Use this when the user asks Zoe to "
+            "remind them about something at a particular time.  The message is "
+            "what Zoe will say in the push notification and the opening of the "
+            "chat session that is created when the user taps it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "The notification message text (≤120 chars).",
+                },
+                "send_at": {
+                    "type": "string",
+                    "description": "ISO-8601 UTC datetime, e.g. '2026-05-04T14:00:00Z'.",
+                },
+                "user_id": {
+                    "type": "string",
+                    "description": "Target user id. Defaults to the calling user.",
+                },
+            },
+            "required": ["message", "send_at"],
+        },
+    },
 ]
 
 
@@ -1067,6 +1096,22 @@ async def _execute_tool(db, name: str, args: dict):
         result = {"id": rid, "title": args["title"], "due_date": args.get("due_date"),
                   "due_time": args.get("due_time"), "priority": args.get("priority", "normal")}
         await _notify_ui("reminders", "reminder_created", result)
+        # Also register a proactive push if a due datetime is provided.
+        if args.get("due_date") and args.get("due_time"):
+            try:
+                from datetime import timezone as _tz
+                send_at_str = f"{args['due_date']}T{args['due_time']}:00"
+                send_at_dt = datetime.fromisoformat(send_at_str).replace(tzinfo=_tz.utc)
+                if send_at_dt > datetime.now(_tz.utc):
+                    from proactive.triggers.reminders import schedule_reminder
+                    await schedule_reminder(
+                        user_id=user_id,
+                        message=args["title"],
+                        send_at=send_at_dt,
+                        item_id=rid,
+                    )
+            except Exception as _sched_exc:
+                pass  # non-fatal: reminder is in DB even if push scheduling fails
         return {**result, "status": "created"}
 
     elif name == "reminder_list":
@@ -1755,6 +1800,12 @@ async def _execute_tool(db, name: str, args: dict):
         await db.execute("UPDATE reminders SET deleted=1, is_active=0, updated_at=datetime('now') WHERE id=?", (rid,))
         await db.commit()
         await _notify_ui("reminders", "reminder_deleted", {"id": rid})
+        # Cancel any associated proactive scheduled job.
+        try:
+            from proactive.scheduler import cancel_job as _cancel_job
+            _cancel_job(f"reminder-{rid}")
+        except Exception:
+            pass
         return {"id": rid, "status": "deleted"}
 
     elif name == "reminder_snooze":
@@ -1775,6 +1826,17 @@ async def _execute_tool(db, name: str, args: dict):
         await db.commit()
         result = {"id": rid, "snoozed_until": f"{new_date} {new_time_str}"}
         await _notify_ui("reminders", "reminder_snoozed", result)
+        # Reschedule proactive push to new snooze time.
+        try:
+            from datetime import timezone as _tz
+            from proactive.triggers.reminders import schedule_reminder as _sched_reminder
+            from proactive.scheduler import cancel_job as _cancel_job
+            _cancel_job(f"reminder-{rid}")
+            snooze_dt = new_time.replace(tzinfo=_tz.utc)
+            await _sched_reminder(user_id=user_id, message=row[1] if len(row) > 1 else rid,
+                                   send_at=snooze_dt, item_id=rid)
+        except Exception:
+            pass
         return {**result, "status": "snoozed"}
 
     # === NOTE CRUD ===
@@ -2173,6 +2235,33 @@ async def _execute_tool(db, name: str, args: dict):
             return {"results": results, "count": len(results), "query": query}
         except Exception as exc:
             return {"error": f"ambient_search failed: {exc}"}
+
+    # === PROACTIVE ENGINE ============================================
+    elif name == "proactive_schedule":
+        from datetime import timezone as _tz
+        msg_text = (args.get("message") or "").strip()
+        send_at_str = (args.get("send_at") or "").strip()
+        target_uid = args.get("user_id") or user_id
+        if not msg_text:
+            return json.dumps({"error": "message is required"})
+        if not send_at_str:
+            return json.dumps({"error": "send_at is required"})
+        try:
+            send_at_dt = datetime.fromisoformat(send_at_str.replace("Z", "+00:00"))
+        except ValueError:
+            return json.dumps({"error": "send_at must be ISO-8601 UTC"})
+        if send_at_dt <= datetime.now(_tz.utc):
+            return json.dumps({"error": "send_at must be in the future"})
+        try:
+            from proactive.triggers.reminders import schedule_reminder
+            scheduled_id = await schedule_reminder(
+                user_id=target_uid,
+                message=msg_text,
+                send_at=send_at_dt,
+            )
+            return json.dumps({"id": scheduled_id, "send_at": send_at_str, "status": "scheduled"})
+        except Exception as _pe:
+            return json.dumps({"error": f"proactive_schedule failed: {_pe}"})
 
     # === MEMORY TOOLS ================================================
     elif name in {"memory_add", "memory_search", "memory_list", "memory_review", "memory_forget"}:

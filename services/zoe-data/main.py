@@ -30,6 +30,7 @@ from routers import (
 from routers.dashboard import router as dashboard_router
 from routers.stubs import router as stubs_router
 from routers.push import router as push_router
+from routers.proactive import router as proactive_router
 from routers.system import (
     start_openclaw_background_tasks,
     start_memory_digest_background,
@@ -232,7 +233,21 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(_warmup_piper(), name="piper_tts_warmup")
 
+    # Proactive engine: APScheduler (Tier 1) + slow-loop (Tier 2).
+    try:
+        from proactive.engine import start_proactive_engine
+        start_proactive_engine()
+        logger.info("Proactive engine started")
+    except Exception as _pe_exc:
+        logger.warning("Proactive engine failed to start (non-fatal): %s", _pe_exc)
+
     yield
+
+    try:
+        from proactive.engine import stop_proactive_engine
+        stop_proactive_engine()
+    except Exception:
+        pass
     for task in (_openclaw_bg_task, _digest_bg_task, _keepwarm_task):
         if task:
             task.cancel()
@@ -316,6 +331,7 @@ app.include_router(user_profile_router)
 app.include_router(dashboard_router)
 app.include_router(stubs_router)
 app.include_router(push_router)
+app.include_router(proactive_router)
 app.include_router(panel_auth_router)
 app.include_router(capability_matrix_router)
 

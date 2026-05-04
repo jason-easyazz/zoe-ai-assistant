@@ -145,6 +145,7 @@ TOOL ROUTING — call these tools proactively, do not ask for clarification firs
 - list_get_items / list_add_item: any mention of shopping list, grocery list, todo list, "what's on my list", "add X to my list". Call the tool first.
 - mempalace_search: any mention of "what do you know about me", "my preferences", "what do you remember". Call the tool first.
 - ha_control: any request to turn on/off/toggle/dim a device, light, fan, or switch. Call the tool immediately — do not say you cannot without trying first.
+- proactive_schedule: when the user asks to be notified/reminded at a specific future time (e.g. "remind me at 3pm", "notify me in 2 hours", "send me a message tomorrow morning"). Always include send_at as an ISO-8601 UTC datetime.
 - bash: when asked about disk space, RAM, system status, or given a shell command. Always call it and report the actual output.
 
 VISUAL TOOLS — call these instead of describing the result in text:
@@ -653,6 +654,31 @@ _TOOLS = [
             "name": "setup_telegram",
             "description": "Show the Telegram setup wizard in chat so the user can connect their Telegram bot to Zoe. Use when the user asks to set up, connect, or configure Telegram.",
             "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "proactive_schedule",
+            "description": (
+                "Schedule a proactive push notification to be sent to the user at a specific future time. "
+                "Use when the user asks Zoe to notify them, remind them, or send them a message at a later time. "
+                "The message is what Zoe will say in the notification and the opening of the chat session."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The notification text (≤120 chars).",
+                    },
+                    "send_at": {
+                        "type": "string",
+                        "description": "ISO-8601 UTC datetime, e.g. '2026-05-04T14:00:00Z'.",
+                    },
+                },
+                "required": ["message", "send_at"],
+            },
         },
     },
 ]
@@ -1243,6 +1269,26 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "family-admi
             "props": {**skill_data, "highlight": highlight},
         }
         return f"__UI__:{json.dumps(payload)}"
+
+    if tool_name == "proactive_schedule":
+        import datetime as _dt
+        msg_text = (args.get("message") or "").strip()
+        send_at_str = (args.get("send_at") or "").strip()
+        if not msg_text or not send_at_str:
+            return json.dumps({"error": "message and send_at are required"})
+        try:
+            from proactive.triggers.reminders import schedule_reminder
+            send_at_dt = _dt.datetime.fromisoformat(send_at_str.replace("Z", "+00:00"))
+            if send_at_dt <= _dt.datetime.now(_dt.timezone.utc):
+                return json.dumps({"error": "send_at must be in the future"})
+            scheduled_id = await schedule_reminder(
+                user_id=user_id,
+                message=msg_text,
+                send_at=send_at_dt,
+            )
+            return json.dumps({"id": scheduled_id, "send_at": send_at_str, "status": "scheduled"})
+        except Exception as _pe:
+            return json.dumps({"error": f"proactive_schedule failed: {_pe}"})
 
     return f"[unknown tool: {tool_name}]"
 

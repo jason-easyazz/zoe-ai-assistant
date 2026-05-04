@@ -6,6 +6,7 @@ import json
 import os
 import logging
 from pathlib import Path
+import aiosqlite
 from fastapi import APIRouter, Depends, Request
 from auth import get_current_user
 from database import get_db
@@ -94,8 +95,26 @@ async def unsubscribe(request: Request, user: dict = Depends(get_current_user)):
     return {"status": "unsubscribed"}
 
 
-async def send_push_to_user(user_id: str, title: str, body: str, url: str = "/"):
-    """Send a push notification to all of a user's subscriptions."""
+async def send_push_to_user(
+    user_id: str,
+    message: str = "",
+    title: str = "Zoe",
+    body: str = "",
+    url: str = "/",
+    extra: dict | None = None,
+):
+    """
+    Send a push notification to all of a user's subscriptions.
+
+    ``message`` is a convenience arg: if supplied and ``body`` is empty, it
+    becomes the notification body.  ``extra`` dict is merged into the payload
+    (e.g. ``{"url": "/chat.html?p=<id>"}`` for proactive deep-linking).
+    """
+    if message and not body:
+        body = message
+    if extra and "url" in extra:
+        url = extra["url"]
+
     keys = _get_vapid_keys()
     if not keys:
         return
@@ -106,17 +125,23 @@ async def send_push_to_user(user_id: str, title: str, body: str, url: str = "/")
         logger.warning("pywebpush not installed")
         return
 
+    payload_data: dict = {"title": title, "body": body, "url": url}
+    if extra:
+        payload_data.update({k: v for k, v in extra.items() if k != "url"})
+
     async for db in get_db():
-        rows = await db.execute_fetchall(
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
             "SELECT endpoint, keys_p256dh, keys_auth FROM push_subscriptions WHERE user_id = ?",
             (user_id,),
-        )
+        ) as cur:
+            rows = await cur.fetchall()
         for row in rows:
             sub_info = {
                 "endpoint": row["endpoint"],
                 "keys": {"p256dh": row["keys_p256dh"], "auth": row["keys_auth"]},
             }
-            payload = json.dumps({"title": title, "body": body, "url": url})
+            payload = json.dumps(payload_data)
             try:
                 webpush(
                     subscription_info=sub_info,

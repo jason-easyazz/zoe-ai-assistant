@@ -6244,5 +6244,48 @@
         }
 
     </script>
+    <script>
+    // === Proactive notification deep-link handling ===
+    // If opened via push-tap (?p=<pending_id>), claim server-side so a chat
+    // session is created, then navigate into that session.
+    (function () {
+        async function claimPending(pendingId) {
+            try {
+                const res = await fetch('/api/proactive/pending/' + encodeURIComponent(pendingId), {
+                    method: 'POST',
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.session_id) {
+                    const newUrl = new URL(window.location.href);
+                    newUrl.searchParams.delete('p');
+                    newUrl.searchParams.set('session', data.session_id);
+                    window.history.replaceState({}, '', newUrl.toString());
+                    window.dispatchEvent(new CustomEvent('proactive_session', { detail: data }));
+                }
+            } catch (e) {
+                console.warn('Proactive claim failed:', e);
+            }
+        }
+
+        // Handle cold-start tap.
+        const params = new URLSearchParams(window.location.search);
+        const pendingId = params.get('p');
+        if (pendingId) claimPending(pendingId);
+
+        // Handle tap when a chat tab is already open (service worker postMessage).
+        if (navigator.serviceWorker) {
+            navigator.serviceWorker.addEventListener('message', function (event) {
+                if (event.data && event.data.type === 'proactive_tap') {
+                    try {
+                        const tapUrl = new URL(event.data.url);
+                        const pid = tapUrl.searchParams.get('p');
+                        if (pid) claimPending(pid);
+                    } catch (e) { /* ignore */ }
+                }
+            });
+        }
+    })();
+    </script>
 </body>
 </html><!-- Cache Bust: 1760009000 - v8.1 Fresh Start -->

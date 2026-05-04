@@ -37,6 +37,9 @@ _ZOE_SELF_COMPACT = (
     "zoe-capability-extender (search ClawHub or compose a new skill). "
     "All three are admin-gated and always plan-then-confirm into a /_preview/ "
     "staging area before touching real files. "
+    "Zoe also has a Proactive Engine: use POST /api/proactive/schedule or the "
+    "proactive_schedule MCP tool to send a push notification to a user at a "
+    "future UTC datetime; notifications deep-link into a fresh chat session. "
     "Before saying \"I can't do X\", call the zoe_self_capabilities MCP tool to "
     "check live state. See ZOE_SELF.md in this workspace for full architecture."
 )

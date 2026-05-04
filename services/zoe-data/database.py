@@ -23,9 +23,13 @@ async def init_db():
         await db.execute("PRAGMA journal_mode=WAL")
         await db.execute("PRAGMA foreign_keys=ON")
         await db.executescript(SCHEMA)
-        # Idempotent column add for deployments predating panels.allow_guest.
+        # Idempotent column adds for older deployments.
         try:
             await db.execute("ALTER TABLE panels ADD COLUMN allow_guest INTEGER NOT NULL DEFAULT 1")
+        except Exception:
+            pass  # column already exists
+        try:
+            await db.execute("ALTER TABLE chat_sessions ADD COLUMN metadata TEXT")
         except Exception:
             pass  # column already exists
         await db.execute(
@@ -616,4 +620,35 @@ CREATE TABLE IF NOT EXISTS speaker_profiles (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_speaker_profiles_user ON speaker_profiles(user_id);
+
+-- Proactive engine: pending notifications waiting for user to tap (4hr TTL).
+-- Session is created lazily on tap via /api/proactive/pending/{id}.
+CREATE TABLE IF NOT EXISTS proactive_pending (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    message TEXT NOT NULL,
+    trigger_type TEXT NOT NULL,
+    item_id TEXT DEFAULT '',
+    trigger_context TEXT DEFAULT '{}',
+    expires_at TEXT NOT NULL,
+    claimed INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_proactive_pending_user ON proactive_pending(user_id, claimed);
+CREATE INDEX IF NOT EXISTS idx_proactive_pending_expires ON proactive_pending(expires_at);
+
+-- Agent-scheduled one-shot nudges (Pi Agent, Hermes, OpenClaw via REST).
+CREATE TABLE IF NOT EXISTS proactive_scheduled (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    message TEXT NOT NULL,
+    trigger_type TEXT DEFAULT 'scheduled',
+    send_at TEXT NOT NULL,
+    apscheduler_job_id TEXT,
+    fired INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_proactive_scheduled_user ON proactive_scheduled(user_id, fired);
 """

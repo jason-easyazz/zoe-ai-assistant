@@ -301,26 +301,31 @@ self.addEventListener('push', (event) => {
     );
 });
 
-// Handle notification clicks
+// Handle notification clicks — supports proactive deep-linking via ?p= parameter.
 self.addEventListener('notificationclick', (event) => {
     console.log('🖱️ Notification clicked:', event.notification.tag);
-    
+
     event.notification.close();
-    
-    const urlToOpen = event.notification.data?.url || '/';
-    
+
+    const rawUrl = event.notification.data?.url || '/';
+    // Resolve to an absolute URL so pathname comparison works cross-origin.
+    const targetUrl = new URL(rawUrl, self.location.origin);
+
     event.waitUntil(
         clients.matchAll({ type: 'window', includeUncontrolled: true })
             .then((clientList) => {
-                // Check if there's already a window open
+                // If a chat tab is already open, postMessage so it can handle
+                // the pending claim without a full reload.
                 for (const client of clientList) {
-                    if (client.url === urlToOpen && 'focus' in client) {
+                    const clientUrl = new URL(client.url);
+                    if (clientUrl.pathname === targetUrl.pathname && 'focus' in client) {
+                        client.postMessage({ type: 'proactive_tap', url: targetUrl.href });
                         return client.focus();
                     }
                 }
-                // Open new window if none exists
+                // No matching tab — open the deep-link directly.
                 if (clients.openWindow) {
-                    return clients.openWindow(urlToOpen);
+                    return clients.openWindow(targetUrl.href);
                 }
             })
     );
