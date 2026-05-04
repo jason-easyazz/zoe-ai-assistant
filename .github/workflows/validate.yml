@@ -39,17 +39,20 @@ jobs:
             | sort | xargs python3 -m py_compile
           echo "All Python files: syntax OK"
 
-      # Excludes tests that start the full FastAPI lifespan (require .env, DB, services).
-      # test_voice_transcribe.py uses TestClient(app) which runs init_db + proactive engine.
-      # test_mempalace_integration.py imports internal memory modules that need MemPalace.
-      - name: Unit tests (no app lifespan, no external services)
+      # Run only the pure unit tests that have no local-service or heavy-dep imports.
+      # The remaining tests require Jetson-specific packages (whisper, torch, MemPalace)
+      # or start the full FastAPI lifespan — they run on the Jetson in deploy.yml.
+      - name: Unit tests (pure logic, no services)
         run: |
           pip install --quiet pytest pytest-asyncio
-          pytest services/zoe-data/tests/ \
-            --ignore=services/zoe-data/tests/test_voice_transcribe.py \
-            --ignore=services/zoe-data/tests/test_mempalace_integration.py \
+          pytest \
+            services/zoe-data/tests/test_guest_policy.py \
+            services/zoe-data/tests/test_voice_scope.py \
+            services/zoe-data/tests/test_chat_session_title.py \
+            services/zoe-data/tests/test_ui_orchestrator_types.py \
             -x -q \
             --override-ini="asyncio_mode=auto"
         env:
+          PYTHONPATH: ${{ github.workspace }}/services/zoe-data
           ZOE_DATA_DB: ":memory:"
           ZOE_MEMORY_STARTUP_STRICT: "false"
