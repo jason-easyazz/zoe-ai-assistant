@@ -23,7 +23,7 @@ jobs:
             aiosqlite fastapi httpx "apscheduler==3.10.4" "sqlalchemy>=2.0,<3.0" \
             pydantic pywebpush py-vapid cryptography \
             "ag-ui-protocol==0.1.14" websockets python-jose passlib \
-            python-multipart uvicorn
+            python-multipart uvicorn prometheus-client
 
       - name: Validate project structure
         run: python3 tools/audit/validate_structure.py
