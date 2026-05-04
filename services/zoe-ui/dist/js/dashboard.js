@@ -9,20 +9,85 @@
 const DASHBOARD_VERSION = '1.0.0';
 console.log(`🎯 Zoe Dashboard v${DASHBOARD_VERSION} - Initializing...`);
 
+// Touch dashboard-specific defaults so each widget opens at a practical size
+// for kiosk interaction and placement.
+const TOUCH_WIDGET_DEFAULTS = {
+    time:        { defaultW: 4, defaultH: 3, minW: 3, minH: 2 },
+    weather:     { defaultW: 4, defaultH: 3, minW: 3, minH: 2 },
+    events:      { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
+    tasks:       { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
+    notes:       { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
+    journal:     { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
+    home:        { defaultW: 4, defaultH: 3, minW: 3, minH: 2 },
+    system:      { defaultW: 4, defaultH: 3, minW: 3, minH: 2 },
+    reminders:   { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
+    shopping:    { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
+    work:        { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
+    personal:    { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
+    bucket:      { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
+    'dynamic-list': { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
+    project:     { defaultW: 6, defaultH: 5, minW: 4, minH: 4 },
+    'week-planner': { defaultW: 8, defaultH: 4, minW: 6, minH: 3 },
+    music:       { defaultW: 6, defaultH: 4, minW: 4, minH: 3 },
+    'music-player': { defaultW: 6, defaultH: 5, minW: 4, minH: 4 },
+    'music-library': { defaultW: 8, defaultH: 5, minW: 6, minH: 4 },
+    'music-search': { defaultW: 8, defaultH: 5, minW: 6, minH: 4 },
+    'music-queue': { defaultW: 6, defaultH: 5, minW: 4, minH: 4 },
+    'music-playlists': { defaultW: 6, defaultH: 5, minW: 4, minH: 4 },
+    'music-suggestions': { defaultW: 8, defaultH: 5, minW: 6, minH: 4 }
+};
+
 /**
  * Get widget configuration from manifest
  * Falls back to defaults if manifest not loaded
  */
 function getWidgetConfig(widgetId) {
-    const config = WidgetManager.getWidgetConfig(widgetId);
-    if (config && config.config) {
-        return config.config;
+    const manifestEntry = WidgetManager.getWidgetConfig(widgetId);
+    if (manifestEntry) {
+        // Backward compatibility: older manifests exposed a nested `config` object.
+        if (manifestEntry.config) {
+            const legacy = manifestEntry.config;
+            return {
+                minW: legacy.minW || 2,
+                maxW: legacy.maxW || 12,
+                minH: legacy.minH || 2,
+                maxH: legacy.maxH || 12,
+                defaultW: legacy.defaultW || 3,
+                defaultH: legacy.defaultH || 3
+            };
+        }
+
+        // Current manifest schema stores sizing fields at the top level.
+        const defaultSize = manifestEntry.defaultSize || {};
+        const minSize = manifestEntry.minSize || {};
+        const maxSize = manifestEntry.maxSize || {};
+        return {
+            minW: minSize.w || 2,
+            maxW: maxSize.w || 12,
+            minH: minSize.h || 2,
+            maxH: maxSize.h || 12,
+            defaultW: defaultSize.w || 3,
+            defaultH: defaultSize.h || 3
+        };
     }
     
     // Fallback defaults - allow narrow widgets
     return {
         minW: 2, maxW: 12, minH: 2, maxH: 12,
         defaultW: 3, defaultH: 3
+    };
+}
+
+function applyTouchWidgetDefaults(widgetId, config) {
+    if (!document.body.classList.contains('touch-dashboard')) return config;
+    const override = TOUCH_WIDGET_DEFAULTS[widgetId];
+    if (!override) return config;
+    return {
+        ...config,
+        defaultW: override.defaultW ?? config.defaultW,
+        defaultH: override.defaultH ?? config.defaultH,
+        minW: override.minW ?? config.minW,
+        minH: override.minH ?? config.minH
     };
 }
 
@@ -42,24 +107,26 @@ class Dashboard {
             return;
         }
         
+        const isTouchDashboard = document.body.classList.contains('touch-dashboard');
         // Detect if mobile for compact mode
         const isMobile = window.matchMedia('(max-width: 768px)').matches;
+        const isTouchSurface = isTouchDashboard || isMobile;
         
         // Initialize Gridstack with NATIVE features - no custom hacks!
         this.grid = GridStack.init({
             column: 12,
             cellHeight: 70,
             margin: 16,
-            float: !isMobile,  // Mobile: compact mode (false = widgets stack), Desktop: free-form (true)
+            float: isTouchDashboard ? true : !isMobile,  // Keep touch dashboard free-form
             animate: true,
             // Enable NATIVE resize with handles (like the official demo)
             // On mobile: only bottom resize (height), Desktop: all sides
             resizable: {
-                handles: isMobile ? 's' : 'e, se, s, sw, w'
+                handles: 'e, se, s, sw, w'
             },
-            // Mobile-friendly responsive columns
-            disableOneColumnMode: false,
-            columnOpts: {
+            // Keep touch dashboard on a stable 12-col coordinate system.
+            disableOneColumnMode: isTouchDashboard,
+            columnOpts: isTouchDashboard ? undefined : {
                 breakpoints: [
                     {w: 768, c: 6},   // Tablet: 6 columns
                     {w: 480, c: 4}    // Mobile: 4 columns
@@ -69,14 +136,14 @@ class Dashboard {
             staticGrid: true,
             // Enhanced drag settings for better mobile touch
             draggable: {
-                scroll: true,
+                scroll: isTouchDashboard ? false : true,
                 appendTo: 'body',
                 cancel: 'button, input, select, textarea, a',
                 // Better touch handling
                 handle: '.grid-stack-item-content',
-                // Increase touch tolerance for easier dragging
-                distance: 5,  // Pixels to move before drag starts
-                delay: 300,   // Milliseconds to hold before drag (helps distinguish from scroll)
+                // Start drag sooner on touch surfaces to reduce "stuck" feel.
+                distance: isTouchSurface ? 2 : 5,
+                delay: isTouchSurface ? 100 : 300,
                 // Smooth scrolling during drag
                 scrollSensitivity: 20,
                 scrollSpeed: 10
@@ -99,10 +166,26 @@ class Dashboard {
             if (widget) {
                 this.updateListColumns(widget);
             }
+            if (this.isEditMode) this.saveLayout();
+        });
+
+        this.grid.on('dragstart', () => {
+            document.body.classList.add('widget-drag-active');
+        });
+
+        this.grid.on('dragstop', () => {
+            document.body.classList.remove('widget-drag-active');
+            if (this.isEditMode) this.saveLayout();
         });
         
         // Expose globally for other functions
         window.grid = this.grid;
+        window.touchDash = this;
+        if (isTouchDashboard) {
+            // Hard-force stable placement math on touch dashboard.
+            this.grid.float(true);
+            this.grid.column(12, 'none');
+        }
         
         // Handle screen rotation / resize for mobile compact mode
         let resizeTimer;
@@ -110,9 +193,14 @@ class Dashboard {
             clearTimeout(resizeTimer);
             resizeTimer = setTimeout(() => {
                 const nowMobile = window.matchMedia('(max-width: 768px)').matches;
-                // Update float mode based on screen size
-                this.grid.float(!nowMobile);
-                console.log(`📱 Screen resize: ${nowMobile ? 'Mobile compact mode' : 'Desktop free-form mode'}`);
+                if (isTouchDashboard) {
+                    this.grid.float(true);
+                    console.log('📱 Screen resize: touch dashboard free-form mode');
+                } else {
+                    // Update float mode based on screen size
+                    this.grid.float(!nowMobile);
+                    console.log(`📱 Screen resize: ${nowMobile ? 'Mobile compact mode' : 'Desktop free-form mode'}`);
+                }
             }, 250);
         });
         
@@ -125,9 +213,16 @@ class Dashboard {
     toggleEditMode() {
         this.isEditMode = !this.isEditMode;
         document.body.classList.toggle('edit-mode', this.isEditMode);
+        window.dispatchEvent(new CustomEvent('dashboard-edit-mode-changed', {
+            detail: { isEditMode: this.isEditMode }
+        }));
         
         // Enable/disable Gridstack dragging & resizing
         this.grid.setStatic(!this.isEditMode);
+        if (this.isEditMode && document.body.classList.contains('touch-dashboard')) {
+            this.grid.float(true);
+            this.grid.column(12, 'none');
+        }
         
         // Show/hide widget library button
         const addBtn = document.querySelector('.fab-add-widget');
@@ -188,7 +283,7 @@ class Dashboard {
         
         console.log('✅ Widget type found:', type);
         
-        const config = getWidgetConfig(type);
+        const config = applyTouchWidgetDefaults(type, getWidgetConfig(type));
         
         const module = WidgetManager.modules[type];
         
@@ -358,7 +453,7 @@ class Dashboard {
         this.grid.removeAll();
         
         layout.forEach(item => {
-            const config = getWidgetConfig(item.type);
+            const config = applyTouchWidgetDefaults(item.type, getWidgetConfig(item.type));
             const module = WidgetManager.modules[item.type];
             
             if (!module) {

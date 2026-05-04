@@ -90,6 +90,10 @@ _BASH_ALLOWED_PREFIXES = (
     "systemctl --user status", "df -h", "free -h", "uptime",
 )
 
+# Escape hatch: set FORCE_FULL_CONTEXT=true to bypass skill selection and revert to
+# loading all tools unconditionally. Use if skill classifier causes missed tool calls.
+_FORCE_FULL_CONTEXT = os.environ.get("FORCE_FULL_CONTEXT", "false").lower() == "true"
+
 
 # ── SOUL.md system prompt for Pi Agent ───────────────────────────────────────
 
@@ -607,6 +611,142 @@ _TOOLS = [
 ]
 
 # After Gemma LoRA fine-tuning on Zoe's voice, _PI_SOUL shrinks to ~10 tokens.
+
+# ── Skills registry ───────────────────────────────────────────────────────────
+#
+# Tools are grouped into skill areas. The classifier loads only the groups
+# relevant to the current message, keeping the tool schema compact and saving
+# significant prefill latency on Jetson (~300–600ms per unused skill group).
+#
+# Tools in _ALWAYS_ON_TOOLS are always sent regardless of skill selection.
+
+_SKILL_TOOLS: dict[str, list[str]] = {
+    "memory":     ["mempalace_search", "mempalace_add"],
+    "smart-home": ["ha_control"],
+    "calendar":   ["calendar_today", "calendar_list_events", "calendar_create_event"],
+    "reminders":  ["reminder_create", "reminder_list"],
+    "lists":      ["list_add_item", "list_get_items"],
+    "weather":    ["weather_current", "weather_forecast"],
+    "touch":      ["open_touch_page"],
+    "bash":       ["bash"],
+    "visual":     ["show_map", "show_chart"],
+    "discovery":  ["list_openclaw_plugins", "list_openclaw_skills", "setup_telegram"],
+}
+
+# Always included regardless of query — escalation + action menu are universal.
+_ALWAYS_ON_TOOLS: list[str] = ["escalate_to_openclaw", "show_action_menu"]
+
+_SKILL_KEYWORDS: dict[str, list[str]] = {
+    "memory": [
+        "remember", "forgot", "recall", "memory", "know about", "do you know",
+        "did i tell", "have i told", "store", "save", "what do you know",
+        "my name", "my favourite", "my favorite", "my preference", "my details",
+        "my wife", "my husband", "my partner", "my kid", "my dog", "my cat",
+        "my birthday", "i am allergic", "i live in", "i work",
+    ],
+    "smart-home": [
+        "light", "lights", "fan", "switch", "heater", "aircon", "air con",
+        "tv", "television", "camera", "lock", "unlock", "door", "turn on",
+        "turn off", "toggle", "dim", "brightness", "volume", "media player",
+        "plug", "socket", "alarm", "garage", "blind", "curtain",
+    ],
+    "calendar": [
+        "calendar", "event", "schedule", "appointment", "agenda", "meeting",
+        "booking", "when is", "what's on", "what is on", "add event",
+        "create event", "book", "today", "tomorrow", "this week", "next week",
+    ],
+    "reminders": [
+        "remind", "reminder", "don't forget", "dont forget", "alert me",
+        "notify me", "set a reminder", "reminders",
+    ],
+    "lists": [
+        "shopping list", "grocery", "groceries", "shopping", "todo", "to do",
+        "tasks", "add to", "add milk", "add eggs", "add bread", "buy ",
+        "list", "wish list", "wishlist", "work list",
+    ],
+    "weather": [
+        "weather", "rain", "sunny", "temperature", "forecast", "umbrella",
+        "jacket", "hot today", "cold today", "wind", "storm", "humidity",
+        "climate", "degrees", "raining", "cloudy",
+    ],
+    "touch": [
+        "open the", "show the", "display the", "bring up", "pull up",
+        "open calendar", "open reminders", "open weather", "open lists",
+    ],
+    "bash": [
+        "run ", "execute", "install ", "check system", "disk space",
+        "memory usage", "python3 ", "pip install", "ls ", "cat ",
+        "systemctl", "uptime", "how much disk", "how much ram",
+    ],
+    "visual": [
+        "map", "show on map", "directions", "where is", "chart", "graph",
+        "plot", "visualise", "visualize", "data", "show me a chart",
+        "bar chart", "line chart", "pie chart",
+    ],
+    "discovery": [
+        "plugin", "skill", "capability", "what can you do", "what can zoe do",
+        "capabilities", "install skill", "telegram", "discord", "notification",
+        "openclaw", "open claw", "what can", "can you ", "is there a",
+        "how do i", "can zoe",
+    ],
+}
+
+
+def _select_skills(message: str) -> set[str]:
+    """Keyword-based classifier: returns skill names needed for this message.
+
+    Falls back to loading all skills when FORCE_FULL_CONTEXT=true (rollback escape hatch).
+    Returns 'discovery' as a minimal fallback when no specific skill matches, so the
+    model always has list_openclaw_skills available to communicate capability gaps.
+    """
+    if _FORCE_FULL_CONTEXT:
+        return set(_SKILL_TOOLS.keys())
+    msg = message.lower()
+    skills: set[str] = set()
+    for skill, keywords in _SKILL_KEYWORDS.items():
+        if any(kw in msg for kw in keywords):
+            skills.add(skill)
+    if not skills:
+        skills.add("discovery")
+    return skills
+
+
+def _build_tools(skills: set[str]) -> list[dict]:
+    """Build filtered tool list: always-on tools + tools for selected skill groups."""
+    tool_names: set[str] = set(_ALWAYS_ON_TOOLS)
+    for skill in skills:
+        tool_names.update(_SKILL_TOOLS.get(skill, []))
+    return [t for t in _TOOLS if t["function"]["name"] in tool_names]
+
+
+def _build_prompt(
+    message: str,
+    *,
+    username: str = "",
+    user_id: str = "",
+    memory_context: str = "",
+) -> str:
+    """Build the user message with a dynamic context prefix.
+
+    Injecting datetime, user identity, and memory into the user message (rather than
+    the system prompt) keeps the system prompt byte-identical across turns, allowing
+    llama.cpp to reuse its KV cache for the prompt prefix — saving ~300ms of prefill.
+    """
+    import datetime as _dt
+    now = _dt.datetime.now()
+    dt_line = now.strftime("%A, %d %B %Y — %I:%M %p")
+    user_line = (
+        f"Logged in: {username} ({user_id})" if username
+        else (f"Logged in: {user_id}" if user_id else "")
+    )
+    parts = [f"[{dt_line}]"]
+    if user_line:
+        parts.append(user_line)
+    if memory_context:
+        parts.append(f"Context:\n{memory_context}")
+    parts.append(message)
+    return "\n".join(parts)
+
 
 # ── Hard query detection ──────────────────────────────────────────────────────
 
@@ -1178,11 +1318,15 @@ async def warmup_kv_cache() -> None:
     Called from the zoe-data startup lifespan event.
     """
     await asyncio.sleep(8)  # Give Gemma time to finish loading the 3.5GB model (~6s)
+    # Use the stable system prompt (no datetime/user) so the KV cache prefix is
+    # byte-identical to what real chat turns will see. This is the key fix —
+    # previously the warmup used _PI_SOUL (with dynamic datetime) which invalidated
+    # the cache on every real turn.
     for attempt in range(3):
         try:
             await _llm_call(
                 [
-                    {"role": "system", "content": _PI_SOUL},
+                    {"role": "system", "content": _PI_SOUL_STATIC},
                     {"role": "user", "content": "ready"},
                 ],
                 max_tokens=3,
@@ -1323,26 +1467,44 @@ async def run_pi_agent(
     # Load user facts from MemPalace (fast metadata filter — no ONNX) + optional semantic hit
     mp_facts = await _mempalace_load_user_facts(user_id)
     memory_ctx = await _build_memory_context(message, user_id=user_id)
-    extras = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx]))
-    system_prompt = f"{_pi_soul(user_id=user_id, voice_mode=voice_mode)}\n\n{extras}" if extras else _pi_soul(user_id=user_id, voice_mode=voice_mode)
+    memory_combined = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx]))
 
-    # In voice mode, skip tool schema for conversational queries (saves ~614 tokens = ~730ms).
-    # Action-keyword gate: only send tools when the query actually needs them.
     if voice_mode:
+        # Voice: keep datetime+user in system prompt (voice has no history window, latency
+        # budget is already tight — unchanged behaviour from before this refactor).
+        extras = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx]))
+        system_prompt = (
+            f"{_pi_soul(user_id=user_id, voice_mode=True)}\n\n{extras}"
+            if extras else _pi_soul(user_id=user_id, voice_mode=True)
+        )
         active_tools = (
             [t for t in _TOOLS if t["function"]["name"] in _VOICE_TOOLS]
             if _voice_needs_tools(message)
             else [t for t in _TOOLS if t["function"]["name"] in _VOICE_ALWAYS_TOOLS]
         )
+        user_message = message
     else:
-        active_tools = _TOOLS
+        # Chat: stable system prompt (KV-cache friendly) + dynamic context in user prefix.
+        # The system prompt is byte-identical every turn so llama.cpp can reuse the cache.
+        system_prompt = _PI_SOUL_STATIC
+        skills = _select_skills(message)
+        active_tools = _build_tools(skills)
+        user_message = _build_prompt(
+            message,
+            user_id=user_id,
+            memory_context=memory_combined,
+        )
+        logger.info(
+            "pi_agent: skills=%s tools=%d/%d",
+            sorted(skills), len(active_tools), len(_TOOLS),
+        )
 
     # Build initial messages list
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
         # Use full window loaded from DB (matches Hermes full-session approach)
         messages.extend(history[-12:])
-    messages.append({"role": "user", "content": message})
+    messages.append({"role": "user", "content": user_message})
 
     # Tool loop — tool calls come through the API's tool_calls channel (never text)
     _max_iters = _VOICE_MAX_TOOL_ITERS if voice_mode else _MAX_TOOL_ITERS
@@ -1351,10 +1513,12 @@ async def run_pi_agent(
             budget = max_tokens_override if max_tokens_override > 0 else (
                 _voice_token_budget() if voice_mode else _token_budget(message)
             )
+            # Always pass active_tools explicitly — prevents falling back to the full
+            # _TOOLS list (bug fix: previously non-voice passed tools_override=None).
             response_text, tool_name, tool_args = await _llm_call(
                 messages,
                 max_tokens=budget,
-                tools_override=active_tools if voice_mode else None,
+                tools_override=active_tools,
                 timeout_s=_llm_timeout_s(voice_mode=voice_mode),
             )
         except httpx.ConnectError:
@@ -1375,9 +1539,10 @@ async def run_pi_agent(
             tool_result = await _dispatch_tool(tool_name, tool_args or {}, user_id=user_id)
             logger.debug("pi_agent: tool_result=%s", tool_result[:200])
 
-            # Escalation signal — return immediately for chat.py to handle
-            if tool_result.startswith("__ESCALATE__:"):
-                logger.info("pi_agent: escalation triggered — %s", tool_result[13:80])
+            # Escalation signal — return immediately for chat.py to handle.
+            # Catches both __ESCALATE__: (foreground) and __ESCALATE_BG__: (background).
+            if tool_result.startswith(("__ESCALATE__:", "__ESCALATE_BG__:")):
+                logger.info("pi_agent: escalation triggered — %s", tool_result[:80])
                 _fire_memory_capture(message, response_text, user_id=user_id)
                 return tool_result
 
@@ -1609,24 +1774,41 @@ async def run_pi_agent_streaming(
     # Load user facts (fast metadata filter) + optional semantic search hit
     mp_facts = await _mempalace_load_user_facts(user_id)
     memory_ctx = await _build_memory_context(message, user_id=user_id)
-    extras = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx]))
-    system_prompt = f"{_pi_soul(user_id=user_id, voice_mode=voice_mode)}\n\n{extras}" if extras else _pi_soul(user_id=user_id, voice_mode=voice_mode)
+    memory_combined = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx]))
 
-    # In voice mode, skip tool schema for conversational queries (saves ~614 tokens = ~730ms).
     if voice_mode:
+        # Voice: keep datetime+user in system prompt (unchanged from before this refactor).
+        extras = memory_combined
+        system_prompt = (
+            f"{_pi_soul(user_id=user_id, voice_mode=True)}\n\n{extras}"
+            if extras else _pi_soul(user_id=user_id, voice_mode=True)
+        )
         active_tools = (
             [t for t in _TOOLS if t["function"]["name"] in _VOICE_TOOLS]
             if _voice_needs_tools(message)
             else [t for t in _TOOLS if t["function"]["name"] in _VOICE_ALWAYS_TOOLS]
         )
+        user_message = message
     else:
-        active_tools = _TOOLS
+        # Chat: stable system prompt (KV-cache friendly) + dynamic context in user prefix.
+        system_prompt = _PI_SOUL_STATIC
+        skills = _select_skills(message)
+        active_tools = _build_tools(skills)
+        user_message = _build_prompt(
+            message,
+            user_id=user_id,
+            memory_context=memory_combined,
+        )
+        logger.info(
+            "pi_agent streaming: skills=%s tools=%d/%d",
+            sorted(skills), len(active_tools), len(_TOOLS),
+        )
 
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
         # Use the full window loaded from DB (matches Hermes full-session approach)
         messages.extend(history[-12:])
-    messages.append({"role": "user", "content": message})
+    messages.append({"role": "user", "content": user_message})
 
     url = f"{_model_url()}/chat/completions"
     token_budget = _voice_token_budget() if voice_mode else _token_budget(message)
@@ -1720,9 +1902,10 @@ async def run_pi_agent_streaming(
                         iteration, tool_name, json.dumps(tool_args)[:120])
             tool_result = await _dispatch_tool(tool_name, tool_args or {}, user_id=user_id)
 
-            # Escalation signal — yield marker and stop; chat.py handles routing
-            if tool_result.startswith("__ESCALATE__:"):
-                logger.info("pi_agent streaming: escalation triggered — %s", tool_result[13:80])
+            # Escalation signal — yield marker and stop; chat.py handles routing.
+            # Catches both __ESCALATE__: (foreground) and __ESCALATE_BG__: (background).
+            if tool_result.startswith(("__ESCALATE__:", "__ESCALATE_BG__:")):
+                logger.info("pi_agent streaming: escalation triggered — %s", tool_result[:80])
                 _fire_memory_capture(message, collected, user_id=user_id)
                 yield tool_result
                 return

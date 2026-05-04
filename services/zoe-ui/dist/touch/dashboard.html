@@ -317,7 +317,7 @@
         }
 
         .grid-stack-item {
-            transition: all 0.3s ease !important;
+            transition: transform 0.2s ease, opacity 0.2s ease !important;
         }
 
         .grid-stack-item-content {
@@ -1447,11 +1447,11 @@
             
             .grid-stack-item > .ui-resizable-e,
             .grid-stack-item > .ui-resizable-w {
-                width: 20px !important;
+                width: 28px !important;
             }
             
             .grid-stack-item > .ui-resizable-s {
-                height: 20px !important;
+                height: 44px !important;
             }
         }
         
@@ -1496,25 +1496,34 @@
             display: none !important;
         }
         
-        /* On mobile: only show bottom resize handle (doesn't overlap delete button) */
+        /* On mobile: keep bottom + bottom-right resize handles for touch usability */
         @media (max-width: 768px) {
-            /* Hide all handles except bottom */
+            /* Hide side and bottom-left handles to avoid accidental grabs */
             .ui-resizable-e,
             .ui-resizable-w,
-            .ui-resizable-se,
             .ui-resizable-sw {
                 display: none !important;
             }
             
-            /* Keep bottom handle and make it larger for easier touch */
+            /* Keep bottom handle large for easy touch resize */
             .ui-resizable-s {
-                height: 20px !important;
+                height: 44px !important;
                 background: rgba(123, 97, 255, 0.3) !important;
+            }
+
+            /* Keep a visible corner handle for width + height resize */
+            .ui-resizable-se {
+                display: block !important;
+                width: 44px !important;
+                height: 44px !important;
             }
             
             /* Always visible in edit mode on mobile */
             body.edit-mode .ui-resizable-s {
                 background: rgba(123, 97, 255, 0.5) !important;
+            }
+            body.edit-mode .ui-resizable-se::after {
+                border-color: transparent transparent rgba(123, 97, 255, 0.85) transparent !important;
             }
         }
         
@@ -1529,11 +1538,19 @@
         body.edit-mode .grid-stack-item:hover .ui-resizable-s {
             background: rgba(123, 97, 255, 0.2) !important;
         }
+
+        /* Keep handles discoverable on touch where hover may not exist */
+        body.edit-mode .ui-resizable-e,
+        body.edit-mode .ui-resizable-w,
+        body.edit-mode .ui-resizable-s {
+            background: rgba(123, 97, 255, 0.22) !important;
+        }
         
         /* Smooth resize transition */
         .grid-stack-item.ui-resizable-resizing {
             opacity: 0.9;
             transition: none;
+            z-index: 2500 !important;
         }
         
         .grid-stack-item.ui-resizable-resizing .widget {
@@ -1578,7 +1595,7 @@
         /* Dragging visual feedback */
         .grid-stack-item.ui-draggable-dragging {
             opacity: 0.7;
-            z-index: 1000 !important;
+            z-index: 2500 !important;
         }
         
         .grid-stack-item.ui-draggable-dragging .widget {
@@ -2957,7 +2974,7 @@
     <script src="/js/touch-ui-executor.js"></script>
     <!-- TOUCH: floating orb chat overlay -->
     <script src="/js/orb-loader.js"></script>
-    <!-- TOUCH: lock gridstack to static + fit cell height to viewport on kiosk -->
+    <!-- TOUCH: fit cell height and keep static mode synced with edit state -->
     <script>
     (function(){
         function fitCellHeight() {
@@ -2981,18 +2998,22 @@
             if (gs && gs.cellHeight) gs.cellHeight(Math.max(cellH, 40), true);
         }
 
-        function lockGrids(){
-            if(typeof GridStack !== 'undefined'){
-                document.querySelectorAll('.grid-stack').forEach(function(el){
-                    // Use existing instance if available, otherwise init
-                    var gs = el.gridstack || GridStack.init({}, el);
-                    if(gs && gs.setStatic) gs.setStatic(true);
-                });
-            }
+        function syncGridStaticMode() {
+            var isEditMode = document.body.classList.contains('edit-mode');
+            document.querySelectorAll('.grid-stack').forEach(function(el){
+                var gs = el.gridstack || (window.touchDash && window.touchDash.grid);
+                if (gs && gs.setStatic) gs.setStatic(!isEditMode);
+            });
+        }
+
+        function applyTouchGridLayout(){
+            syncGridStaticMode();
             fitCellHeight();
         }
-        window.addEventListener('load', function(){ setTimeout(lockGrids, 1200); });
-        window.addEventListener('widgets-registered', function(){ setTimeout(lockGrids, 400); });
+
+        window.addEventListener('load', function(){ setTimeout(applyTouchGridLayout, 1200); });
+        window.addEventListener('widgets-registered', function(){ setTimeout(applyTouchGridLayout, 400); });
+        window.addEventListener('dashboard-edit-mode-changed', function(){ setTimeout(syncGridStaticMode, 0); });
         window.addEventListener('resize', fitCellHeight);
     })();
     </script>

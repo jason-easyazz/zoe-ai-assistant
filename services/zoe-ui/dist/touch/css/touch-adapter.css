@@ -408,10 +408,12 @@ body {
 .widget-drag-handle      { display: none !important; }
 
 .grid-stack-item         { cursor: default !important; }
+body.edit-mode .grid-stack-item { cursor: move !important; }
+body.edit-mode .grid-stack-item:active { cursor: grabbing !important; }
 
-/* Disable Gridstack touch-move dragging via pointer-events on the
-   placeholder (JS lock: dashboard calls grid.setStatic(true) on load) */
-.grid-stack-placeholder  { display: none !important; }
+/* Hide placeholder only in view mode. Keep it visible while editing so
+   drag/drop placement feedback remains clear on touch. */
+body:not(.edit-mode) .grid-stack-placeholder  { display: none !important; }
 
 
 /* ═══════════════════════════════════════════════
