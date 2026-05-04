@@ -2258,15 +2258,56 @@
             if (panel) panel.classList.add('open');
         }
 
-        // Safe version: also triggers push permission on first tap (iOS requires user gesture)
+        // Safe version: also triggers push permission on first tap (iOS requires user gesture).
+        // Self-contained — does not depend on push-notifications.js being loaded.
         async function openNotificationsSafe() {
             openNotifications();
-            if (window.zoePushNotifications && typeof window.zoePushNotifications.subscribe === 'function') {
-                if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
-                    try { await window.zoePushNotifications.subscribe(); } catch(e) {}
-                } else if (Notification.permission === 'granted') {
-                    try { await window.zoePushNotifications.subscribe(); } catch(e) {}
+            try {
+                if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+                if (Notification.permission === 'denied') return;
+
+                // Request permission if not yet granted (must be inside user gesture on iOS).
+                if (Notification.permission !== 'granted') {
+                    const result = await Notification.requestPermission();
+                    if (result !== 'granted') return;
                 }
+
+                const reg = await navigator.serviceWorker.ready;
+                if (!reg.pushManager) return;
+
+                // Fetch VAPID key.
+                const keyRes = await fetch('/api/push/vapid-public-key');
+                if (!keyRes.ok) return;
+                const { public_key } = await keyRes.json();
+                if (!public_key) return;
+                const raw = Uint8Array.from(
+                    atob(public_key.replace(/-/g, '+').replace(/_/g, '/')),
+                    c => c.charCodeAt(0)
+                );
+
+                // Unsubscribe stale, then subscribe fresh.
+                const existing = await reg.pushManager.getSubscription();
+                if (existing) await existing.unsubscribe();
+
+                const sub = await reg.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: raw
+                });
+
+                // Save to backend with auth token.
+                const token = document.cookie.match(/access_token=([^;]+)/)?.[1]
+                            || localStorage.getItem('access_token') || '';
+                const res = await fetch('/api/push/subscribe', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(token ? { 'Authorization': 'Bearer ' + token } : {})
+                    },
+                    body: JSON.stringify({ subscription: sub.toJSON() })
+                });
+                if (res.ok) console.log('✅ Push subscription registered via bell button');
+            } catch (e) {
+                console.warn('Push setup failed (non-fatal):', e);
             }
         }
 
