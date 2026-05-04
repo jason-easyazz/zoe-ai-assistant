@@ -116,12 +116,12 @@
             // Get service worker registration
             const registration = await navigator.serviceWorker.ready;
             
-            // Check if already subscribed
-            let subscription = await registration.pushManager.getSubscription();
-            
-            if (subscription) {
-                console.log('✅ Already subscribed to push notifications');
-                return subscription;
+            // Always unsubscribe any existing (possibly stale/expired) subscription
+            // before creating a fresh one to guarantee a valid FCM endpoint.
+            const existing = await registration.pushManager.getSubscription();
+            if (existing) {
+                await existing.unsubscribe();
+                console.log('🔄 Unsubscribed stale push subscription');
             }
             
             // Get VAPID public key
@@ -303,29 +303,20 @@
     }
     
     /**
-     * Auto-subscribe on page load if permission granted
+     * Auto-subscribe on page load — prompts if permission not yet decided.
      */
     async function autoSubscribe() {
-        // Only auto-subscribe if:
-        // 1. Push is supported
-        // 2. Permission is already granted
-        // 3. Not already subscribed
-        
         if (!isPushSupported()) {
             return;
         }
-        
-        if (Notification.permission !== 'granted') {
+
+        // Denied = nothing we can do.
+        if (Notification.permission === 'denied') {
             return;
         }
-        
-        const subscribed = await isSubscribed();
-        if (subscribed) {
-            console.log('✅ Already subscribed to push notifications');
-            return;
-        }
-        
-        // Auto-subscribe
+
+        // Always attempt subscribe (handles both 'default' and 'granted').
+        // subscribeToPush() will request permission if needed.
         try {
             await subscribeToPush();
             console.log('✅ Auto-subscribed to push notifications');
