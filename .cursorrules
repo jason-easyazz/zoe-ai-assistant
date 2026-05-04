@@ -319,6 +319,47 @@ These apply to humans and AI assistants editing this repo. Detail and source in 
 
 Bias toward caution on non-trivial work; use judgment on one-liners.
 
+## 🌐 SERVICE WORKER & WEB PUSH RULES
+
+### Service Worker cache busting (MANDATORY)
+- **ALWAYS bump `SW_VERSION`** in `services/zoe-ui/dist/sw.js` whenever you edit any file
+  listed in the `workbox.precaching.precacheAndRoute([...])` array — currently:
+  `chat.html`, `/`, and any other precached HTML/JS/CSS.
+- Failure to bump `SW_VERSION` means users keep getting the old cached file from the SW
+  precache, regardless of what nginx serves. This is the #1 cause of "my changes aren't
+  showing up" on mobile.
+- Pattern: `const SW_VERSION = 'X.Y.Z';` — increment the patch version on every relevant edit.
+
+### Web Push subscriptions
+- **Never blindly re-save an existing browser subscription** — FCM endpoints expire (HTTP 410
+  Gone). Always `existing.unsubscribe()` before re-subscribing to guarantee a fresh endpoint.
+- **Push subscriptions in the DB can go stale** — after VAPID key rotation or long idle periods,
+  all endpoints may be expired. If pushes stop working, check for 410 responses and clear the
+  `push_subscriptions` table, then force a fresh browser subscription.
+- **pywebpush and py-vapid must be in requirements.txt** — they are lazy-imported in push.py
+  so the service starts without them, but pushes fail silently at runtime.
+
+### Manifest sync (CI will break otherwise)
+- **When adding new directories** (skills/, .github/, training/, etc.), add a glob pattern to
+  `.zoe/manifest.json` `approved_patterns` immediately.
+- Run `python3 tools/audit/validate_structure.py` before every commit — it exits 1 with
+  "orphan files" if anything is missing from the manifest. This blocks CI.
+
+### systemctl for zoe-data
+- `zoe-data.service` is a **user** service: `~/.config/systemd/user/zoe-data.service`
+- Correct: `systemctl --user restart zoe-data.service`
+- Incorrect: `sudo systemctl restart zoe-data.service` (wrong unit tree)
+- In scripts/CI that lack a login session, prefix: `XDG_RUNTIME_DIR=/run/user/$(id -u)`
+
+### GitHub Actions — CI dep install
+- **Never `pip install -r requirements.txt`** on ubuntu-latest GitHub runners.
+  `requirements.txt` includes Jetson-specific packages (`pyannote.audio`, `faster-whisper`,
+  `silero-vad`, `kokoro-onnx`) that pull in PyTorch (~3 GB) and will timeout or fail on x86_64.
+- Use a slim explicit install list covering only what the CI steps actually need.
+- Tests that import local service modules (`routers`, `pi_agent`, `mcp_server`, etc.) or start
+  the full FastAPI lifespan (`TestClient(app)`) cannot run on GitHub runners — run them on the
+  self-hosted Jetson runner only.
+
 ## 📖 REFERENCE DOCUMENTATION
 
 - docs/governance/ZOE_DESIGN_PRINCIPLES.md - **DESIGN CHARTER** (vision + enforceable rules, this file mirrors the subset)
