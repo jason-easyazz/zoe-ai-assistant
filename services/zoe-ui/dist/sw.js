@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.62.31';
+const SW_VERSION = '4.62.32';
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -54,7 +54,8 @@ if (workbox) {
         { url: '/calendar.html', revision: SW_VERSION },
         { url: '/lists.html', revision: SW_VERSION },
         { url: '/manifest.json', revision: SW_VERSION },
-        { url: '/offline.html', revision: SW_VERSION }
+        { url: '/offline.html', revision: SW_VERSION },
+        { url: '/js/push-notifications.js', revision: SW_VERSION }
     ]);
     
     // ===== CACHING STRATEGIES =====
