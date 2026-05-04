@@ -2916,6 +2916,9 @@
             setTimeout(handleVoiceListFocusParam, 900);
             setTimeout(handleVoiceCalendarPrefillParam, 950);
 
+            // Set up web push subscription in background (needed for proactive notifications).
+            setTimeout(setupPushSubscription, 3000);
+
             // Listen for background task completions → update context panel
             document.addEventListener('zoe:background-task', (e) => {
                 const tilesEl = document.getElementById('contextTiles');
@@ -2932,6 +2935,74 @@
                 if (!existing) tilesEl.prepend(tile);
             });
         }
+
+        // ── Push Notification Setup ────────────────────────────────────────────
+        // Called once per page load (3s delay so SW has time to activate).
+        // Silently skipped if push is unsupported, already granted, or denied.
+        async function setupPushSubscription() {
+            try {
+                if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+                const reg = await navigator.serviceWorker.ready;
+                if (!reg.pushManager) return;
+
+                // Check existing subscription first — no need to re-subscribe.
+                const existing = await reg.pushManager.getSubscription();
+                if (existing) {
+                    // Refresh server-side record in case it was cleared.
+                    await _savePushSubscription(existing);
+                    return;
+                }
+
+                // Only ask if permission is default (not denied).
+                const perm = Notification.permission;
+                if (perm === 'denied') return;
+
+                // Request permission if not yet granted.
+                let granted = perm === 'granted';
+                if (!granted) {
+                    const result = await Notification.requestPermission();
+                    granted = result === 'granted';
+                }
+                if (!granted) return;
+
+                // Fetch VAPID public key and subscribe.
+                const keyRes = await fetch('/api/push/vapid-public-key');
+                if (!keyRes.ok) return;
+                const { public_key } = await keyRes.json();
+                if (!public_key) return;
+
+                // Convert base64url VAPID key to Uint8Array.
+                const base64 = public_key.replace(/-/g, '+').replace(/_/g, '/');
+                const raw = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+
+                const sub = await reg.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: raw,
+                });
+                await _savePushSubscription(sub);
+                console.log('✅ Push subscription registered');
+            } catch (e) {
+                console.warn('Push subscription setup failed (non-fatal):', e);
+            }
+        }
+
+        async function _savePushSubscription(sub) {
+            try {
+                const token = document.cookie.match(/access_token=([^;]+)/)?.[1]
+                           || localStorage.getItem('access_token') || '';
+                await fetch('/api/push/subscribe', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...(token ? { 'Authorization': 'Bearer ' + token } : {}),
+                    },
+                    body: JSON.stringify({ subscription: sub.toJSON() }),
+                });
+            } catch (e) {
+                console.warn('_savePushSubscription failed:', e);
+            }
+        }
+        // ── End Push Setup ────────────────────────────────────────────────────
 
         async function checkPendingTasks() {
             try {
