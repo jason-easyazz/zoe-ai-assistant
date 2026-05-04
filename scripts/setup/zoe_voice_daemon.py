@@ -750,11 +750,12 @@ def _do_single_turn(pa: pyaudio.PyAudio, wav: bytes, *, prompt_on_empty: bool = 
             return False
         log.info("Transcript: %r", transcript)
     elif not resp.get("audio_base64"):
-        # Avoid silent UX on wake->record with no transcript and no TTS payload.
+        # Avoid robot fallback speech on no-transcript turns; use a short earcon
+        # and return to wake mode instead.
         if prompt_on_empty:
-            log.info("Empty transcript with no audio response — prompting retry.")
+            log.info("Empty transcript with no audio response — playing retry chime.")
             _recording_active.clear()
-            _espeak_local("Sorry, I didn't catch that. Please try again.")
+            play_follow_up_beep()
         else:
             log.info("Empty follow-up transcript with no audio response — returning to wake mode.")
         return False
