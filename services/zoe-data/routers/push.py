@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/push", tags=["push"])
 
 VAPID_KEY_PATH = Path(__file__).parent.parent / "data" / "vapid_keys.json"
-VAPID_CLAIMS = {"sub": "mailto:admin@zoe.local"}
+VAPID_CLAIMS = {"sub": "mailto:zoe@zoe-assistant.io"}
 
 _vapid_keys = None
 
@@ -147,7 +147,8 @@ async def send_push_to_user(
                     subscription_info=sub_info,
                     data=payload,
                     vapid_private_key=keys["private_key"],
-                    vapid_claims=VAPID_CLAIMS,
+                    vapid_claims=VAPID_CLAIMS.copy(),
+                    content_encoding="aes128gcm",
                 )
             except WebPushException as e:
                 logger.warning(f"Push failed for {row['endpoint'][:40]}...: {e}")
