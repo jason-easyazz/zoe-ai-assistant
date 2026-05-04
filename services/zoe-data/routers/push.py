@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/push", tags=["push"])
 
 VAPID_KEY_PATH = Path(__file__).parent.parent / "data" / "vapid_keys.json"
-VAPID_CLAIMS = {"sub": "mailto:zoe@zoe-assistant.io"}
+VAPID_CLAIMS = {"sub": "https://zoe.the411.life"}
 
 _vapid_keys = None
 

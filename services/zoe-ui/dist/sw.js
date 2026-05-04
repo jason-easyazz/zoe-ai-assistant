@@ -8,7 +8,7 @@
 importScripts('https://storage.googleapis.com/workbox-cdn/releases/7.0.0/workbox-sw.js');
 
 // Zoe UI Version 4.17.3 - public modules (with or without trailing path segment)
-const SW_VERSION = '4.62.36';
+const SW_VERSION = '4.62.37';
 const CACHE_NAME = `zoe-ui-v${SW_VERSION}`;
 
 // Verify Workbox loaded
@@ -281,21 +281,16 @@ self.addEventListener('push', (event) => {
     }
     
     const title = data.title || 'Zoe';
+    // Keep options minimal and iOS-safe: no undefined values, no unsupported fields
     const options = {
         body: data.body || 'You have a new notification',
-        icon: data.icon || '/icons/icon-192.png',
-        badge: data.badge || '/icons/icon-72.png',
-        image: data.image,
-        vibrate: data.vibrate || [200, 100, 200],
+        icon: '/icons/icon-192.png',
+        badge: '/icons/icon-72.png',
         tag: data.tag || 'zoe-notification',
         data: {
             url: data.url || '/',
-            action: data.action,
             timestamp: Date.now()
         },
-        actions: data.actions || [],
-        requireInteraction: data.requireInteraction || false,
-        silent: data.silent || false
     };
     
     event.waitUntil(
