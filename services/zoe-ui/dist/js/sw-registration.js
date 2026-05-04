@@ -377,10 +377,10 @@
     
 })();
 
-// Load push notifications handler
+// Load push notifications handler with cache-bypass version param
 (function() {
     const script = document.createElement('script');
-    script.src = '/js/push-notifications.js';
+    script.src = '/js/push-notifications.js?v=4.62.32';
     script.defer = true;
     document.head.appendChild(script);
 })();
