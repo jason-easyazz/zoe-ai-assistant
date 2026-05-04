@@ -234,3 +234,6 @@ modules/jag-board/
 modules/questionable-decisions/
 modules/questionable-decisions-v1-backup/
 tests/unit/test_jag_board_game_store.py
+
+# Runtime SQLite caches
+data/touch_cache/
