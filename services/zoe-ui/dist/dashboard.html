@@ -2257,7 +2257,19 @@
             const panel = document.getElementById('notificationsPanel');
             if (panel) panel.classList.add('open');
         }
-        
+
+        // Safe version: also triggers push permission on first tap (iOS requires user gesture)
+        async function openNotificationsSafe() {
+            openNotifications();
+            if (window.zoePushNotifications && typeof window.zoePushNotifications.subscribe === 'function') {
+                if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+                    try { await window.zoePushNotifications.subscribe(); } catch(e) {}
+                } else if (Notification.permission === 'granted') {
+                    try { await window.zoePushNotifications.subscribe(); } catch(e) {}
+                }
+            }
+        }
+
         // Close notifications
         function closeNotifications() {
             const panel = document.getElementById('notificationsPanel');
