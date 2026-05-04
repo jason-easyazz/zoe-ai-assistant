@@ -168,11 +168,15 @@
             device_type: deviceType
         };
         
+        // Pass session token so the subscription is saved against the correct user.
+        const sessionToken = document.cookie.match(/access_token=([^;]+)/)?.[1]
+                          || localStorage.getItem('access_token') || '';
         try {
             const response = await fetch(`${API_BASE}/subscribe`, {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    ...(sessionToken ? { 'Authorization': 'Bearer ' + sessionToken } : {}),
                 },
                 body: JSON.stringify(payload)
             });
