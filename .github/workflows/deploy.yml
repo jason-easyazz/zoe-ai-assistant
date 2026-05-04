@@ -1,0 +1,49 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    # Runs on the self-hosted runner installed on the Jetson.
+    # No SSH, no public IP, no tunnel needed — the runner connects outbound to GitHub.
+    runs-on: self-hosted
+    environment: production
+    concurrency:
+      group: production
+      cancel-in-progress: false
+
+    steps:
+      - name: Pull latest main
+        run: |
+          cd /home/zoe/assistant
+          git remote set-url origin \
+            https://x-access-token:${{ secrets.GH_PAT }}@github.com/jason-easyazz/zoe-ai-assistant.git
+          git fetch origin main
+          git reset --hard origin/main
+
+      - name: Install / refresh Python deps
+        run: |
+          pip3 install --quiet --user \
+            "apscheduler==3.10.4" "sqlalchemy>=2.0,<3.0" \
+            pywebpush py-vapid
+
+      # zoe-data is a user service — no sudo needed.
+      # XDG_RUNTIME_DIR is required so systemctl --user can reach the user session bus.
+      - name: Restart zoe-data (user service)
+        run: |
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          systemctl --user restart zoe-data.service
+
+      - name: Health check
+        run: |
+          sleep 6
+          # Verify VAPID key endpoint (push subsystem healthy)
+          curl -sf http://localhost:8000/api/push/vapid-public-key > /dev/null
+          # Verify proactive router is registered (auth returns guest, expects 200 or 401)
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            http://localhost:8000/api/proactive/schedule)
+          ( [ "$STATUS" = "200" ] || [ "$STATUS" = "401" ] ) \
+            && echo "Deploy OK at $(date)" \
+            || (echo "Unexpected status $STATUS from /api/proactive/schedule"; exit 1)

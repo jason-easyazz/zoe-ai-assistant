@@ -152,9 +152,22 @@ async def _cleanup_expired_pending() -> None:
             log.warning("cleanup_expired_pending: %s", exc)
 
 
+def _suppress_scheduler_not_running(loop: asyncio.AbstractEventLoop, context: dict) -> None:
+    """Swallow APScheduler's double-shutdown error that occurs on rapid restarts."""
+    exc = context.get("exception")
+    if exc is not None and exc.__class__.__name__ == "SchedulerNotRunningError":
+        return
+    loop.default_exception_handler(context)
+
+
 def start_proactive_engine() -> None:
     """Start APScheduler (Tier 1) and the slow loop (Tier 2)."""
     global _slow_loop_task
+    try:
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(_suppress_scheduler_not_running)
+    except RuntimeError:
+        pass
     start_scheduler()
     _slow_loop_task = asyncio.ensure_future(_slow_loop())
     asyncio.ensure_future(_cleanup_expired_pending())

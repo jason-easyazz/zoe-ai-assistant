@@ -1,0 +1,55 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # Slim install — avoids Jetson-specific packages (torch/onnx/whisper stacks)
+      # that would timeout or fail on x86_64 GitHub runners.
+      - name: Install slim CI deps
+        run: |
+          pip install --quiet \
+            aiosqlite fastapi httpx "apscheduler==3.10.4" "sqlalchemy>=2.0,<3.0" \
+            pydantic pywebpush py-vapid cryptography \
+            "ag-ui-protocol==0.1.14" websockets python-jose passlib \
+            python-multipart uvicorn
+
+      - name: Validate project structure
+        run: python3 tools/audit/validate_structure.py
+
+      - name: Validate critical files
+        run: python3 tools/audit/validate_critical_files.py
+
+      - name: Python syntax check (all zoe-data modules)
+        run: |
+          find services/zoe-data -name "*.py" \
+            -not -path "*/__pycache__/*" \
+            -not -path "*/.pytest_cache/*" \
+            | sort | xargs python3 -m py_compile
+          echo "All Python files: syntax OK"
+
+      # Excludes tests that start the full FastAPI lifespan (require .env, DB, services).
+      # test_voice_transcribe.py uses TestClient(app) which runs init_db + proactive engine.
+      # test_mempalace_integration.py imports internal memory modules that need MemPalace.
+      - name: Unit tests (no app lifespan, no external services)
+        run: |
+          pip install --quiet pytest pytest-asyncio
+          pytest services/zoe-data/tests/ \
+            --ignore=services/zoe-data/tests/test_voice_transcribe.py \
+            --ignore=services/zoe-data/tests/test_mempalace_integration.py \
+            -x -q \
+            --override-ini="asyncio_mode=auto"
+        env:
+          ZOE_DATA_DB: ":memory:"
+          ZOE_MEMORY_STARTUP_STRICT: "false"

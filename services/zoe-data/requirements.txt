@@ -24,3 +24,6 @@ silero-vad>=5.1
 # Proactive engine scheduler
 APScheduler==3.10.4
 SQLAlchemy>=2.0,<3.0
+# Push notifications
+pywebpush>=2.0
+py-vapid>=1.8

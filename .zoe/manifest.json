@@ -84,7 +84,10 @@
     "models": "models/**/*",
     "zoe_config": ".zoe/**/*",
     "backups": "backups/**/*",
-    "demos": "demos/**/*"
+    "demos": "demos/**/*",
+    "skills": "skills/**/*",
+    "github": ".github/**/*",
+    "training": "training/**/*"
   },
   
   "approved_root_files": [
@@ -113,7 +116,8 @@
     ".env.example",
     ".cursorrules",
     "RESTART_SERVICES.sh",
-    "warmup_models.py"
+    "warmup_models.py",
+    "home-profile.json"
   ],
   
   "safe_to_delete_patterns": [
@@ -127,7 +131,8 @@
     "**/*_old.*",
     "**/*_v2.*",
     "**/*_new.*",
-    "**/*_fixed.*"
+    "**/*_fixed.*",
+    "**/.pytest_cache/**"
   ],
   
   "prohibited_in_root": [
