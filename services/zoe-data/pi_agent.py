@@ -40,6 +40,38 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# ── Optional OTEL / Arize Phoenix instrumentation ────────────────────────────
+# Set OTEL_EXPORTER_OTLP_ENDPOINT to enable tracing.
+# Default: http://localhost:6006/v1/traces (local Arize Phoenix).
+# No-op if the packages are not installed or endpoint is unreachable.
+_OTEL_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:6006/v1/traces")
+_OTEL_ENABLED = os.environ.get("ZOE_OTEL_ENABLED", "").lower() in ("1", "true", "yes")
+
+
+def _setup_otel() -> bool:
+    """Register OpenInference OTEL instrumentation for llama.cpp HTTP calls."""
+    if not _OTEL_ENABLED:
+        return False
+    try:
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from openinference.instrumentation.openai import OpenAIInstrumentor
+
+        provider = TracerProvider()
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=_OTEL_ENDPOINT)))
+        trace.set_tracer_provider(provider)
+        OpenAIInstrumentor().instrument()
+        logger.info("OTEL tracing enabled → %s", _OTEL_ENDPOINT)
+        return True
+    except Exception as exc:
+        logger.debug("OTEL setup skipped: %s", exc)
+        return False
+
+
+_setup_otel()
+
 # ── Config (all overrideable via env / systemd unit) ─────────────────────────
 
 _GEMMA_URL      = os.environ.get("GEMMA_SERVER_URL",   "http://127.0.0.1:11435/v1")
@@ -1300,25 +1332,91 @@ async def _voice_capability_shortcut(message: str, user_id: str) -> str | None:
     if not isinstance(data, dict) or data.get("error"):
         return None
 
+    response: str | None = None
     if wants_forecast and isinstance(data.get("forecast"), list) and data["forecast"]:
         first = data["forecast"][0]
         rain = float(first.get("precipitation_mm") or 0.0)
         desc = str(first.get("description") or "conditions")
         city = str(data.get("city") or "your area")
         if rain >= 0.5 or "rain" in desc.lower():
-            return f"Forecast for {city}: {desc.lower()}, with about {rain:.1f} millimetres of rain expected. Take an umbrella."
-        return f"Forecast for {city}: {desc.lower()}, with around {rain:.1f} millimetres of rain expected."
-
-    if data.get("temp") is not None:
+            response = f"Forecast for {city}: {desc.lower()}, with about {rain:.1f} millimetres of rain expected. Take an umbrella."
+        else:
+            response = f"Forecast for {city}: {desc.lower()}, with around {rain:.1f} millimetres of rain expected."
+    elif data.get("temp") is not None:
         temp = float(data.get("temp"))
         feels = float(data.get("feels_like") or temp)
         desc = str(data.get("description") or "conditions")
         city = str(data.get("city") or "your area")
         if "jacket" in msg or "umbrella" in msg:
             advice = "A light jacket is a good idea." if feels <= 19 else "You should be fine without a jacket."
-            return f"It's {temp:.1f} degrees in {city}, feels like {feels:.1f}, with {desc.lower()}. {advice}"
-        return f"It's {temp:.1f} degrees in {city}, feels like {feels:.1f}, with {desc.lower()}."
-    return None
+            response = f"It's {temp:.1f} degrees in {city}, feels like {feels:.1f}, with {desc.lower()}. {advice}"
+        else:
+            response = f"It's {temp:.1f} degrees in {city}, feels like {feels:.1f}, with {desc.lower()}."
+
+    if response:
+        asyncio.ensure_future(_log_feedback_triple(message, tool_name, raw, response, source="voice_shortcut"))
+    return response
+
+
+# ── Production feedback capture ─────────────────────────────────────────────
+
+_FEEDBACK_PATH = os.path.expanduser("~/training/data/production-feedback.jsonl")
+_FEEDBACK_LOCK = asyncio.Lock()
+
+
+async def _log_feedback_triple(
+    user_message: str,
+    tool_name: str,
+    tool_result: str,
+    final_response: str,
+    source: str = "shortcut",
+) -> None:
+    """Append an oracle-labeled (query → tool_call → result → response) triple.
+
+    These are the highest-quality training examples because the shortcut provides
+    a certain label — we KNOW the correct tool call. Logged in OpenAI function-calling
+    format so they can be used directly in Phase 2 training without conversion.
+
+    Non-blocking: failures are silently ignored so the user response is unaffected.
+    """
+    try:
+        import datetime as _dt
+        record = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are Zoe, a warm home assistant. Be concise and natural. "
+                        "Call tools when you need live data or to take an action."
+                    ),
+                },
+                {"role": "user", "content": user_message},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call_0",
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": "{}",
+                        },
+                    }],
+                },
+                {"role": "tool", "tool_call_id": "call_0", "content": tool_result[:500]},
+                {"role": "assistant", "content": final_response},
+            ],
+            "_format": "function_calling",
+            "_tool": tool_name,
+            "_source": source,
+            "_ts": _dt.datetime.now().isoformat(),
+        }
+        async with _FEEDBACK_LOCK:
+            os.makedirs(os.path.dirname(_FEEDBACK_PATH), exist_ok=True)
+            with open(_FEEDBACK_PATH, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass  # never block the user response
 
 
 # ── Chat capability recovery shortcut ────────────────────────────────────────
@@ -1378,25 +1476,30 @@ async def _chat_capability_shortcut(message: str, user_id: str) -> str | None:
     if not isinstance(data, dict) or data.get("error"):
         return None
 
+    response: str | None = None
     if wants_forecast and isinstance(data.get("forecast"), list) and data["forecast"]:
         first = data["forecast"][0]
         rain = float(first.get("precipitation_mm") or 0.0)
         desc = str(first.get("description") or "conditions")
         city = str(data.get("city") or "your area")
         if rain >= 0.5 or "rain" in desc.lower():
-            return f"Forecast for {city}: {desc.lower()}, with about {rain:.1f} mm of rain expected. Bring an umbrella."
-        return f"Forecast for {city}: {desc.lower()}, with around {rain:.1f} mm of rain expected."
-
-    if data.get("temp") is not None:
+            response = f"Forecast for {city}: {desc.lower()}, with about {rain:.1f} mm of rain expected. Bring an umbrella."
+        else:
+            response = f"Forecast for {city}: {desc.lower()}, with around {rain:.1f} mm of rain expected."
+    elif data.get("temp") is not None:
         temp = float(data.get("temp"))
         feels = float(data.get("feels_like") or temp)
         desc = str(data.get("description") or "conditions")
         city = str(data.get("city") or "your area")
         if "jacket" in msg or "umbrella" in msg:
             advice = "A light jacket is a good idea." if feels <= 19 else "You should be fine without one."
-            return f"It's {temp:.1f}°C in {city} (feels like {feels:.1f}°C), {desc.lower()}. {advice}"
-        return f"It's {temp:.1f}°C in {city} (feels like {feels:.1f}°C), {desc.lower()}."
-    return None
+            response = f"It's {temp:.1f}°C in {city} (feels like {feels:.1f}°C), {desc.lower()}. {advice}"
+        else:
+            response = f"It's {temp:.1f}°C in {city} (feels like {feels:.1f}°C), {desc.lower()}."
+
+    if response:
+        asyncio.ensure_future(_log_feedback_triple(message, tool_name, raw, response, source="chat_shortcut"))
+    return response
 
 
 # ── LLM call / KV warmup ─────────────────────────────────────────────────────
