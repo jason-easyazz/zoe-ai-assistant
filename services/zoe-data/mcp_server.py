@@ -1099,10 +1099,10 @@ async def _execute_tool(db, name: str, args: dict):
         # Also register a proactive push if a due datetime is provided.
         if args.get("due_date") and args.get("due_time"):
             try:
-                from datetime import timezone as _tz
+                from datetime import datetime as _dt_cls, timezone as _tz
                 send_at_str = f"{args['due_date']}T{args['due_time']}:00"
-                send_at_dt = datetime.fromisoformat(send_at_str).replace(tzinfo=_tz.utc)
-                if send_at_dt > datetime.now(_tz.utc):
+                send_at_dt = _dt_cls.fromisoformat(send_at_str).replace(tzinfo=_tz.utc)
+                if send_at_dt > _dt_cls.now(_tz.utc):
                     from proactive.triggers.reminders import schedule_reminder
                     await schedule_reminder(
                         user_id=user_id,
@@ -2238,20 +2238,20 @@ async def _execute_tool(db, name: str, args: dict):
 
     # === PROACTIVE ENGINE ============================================
     elif name == "proactive_schedule":
-        from datetime import timezone as _tz
+        from datetime import datetime as _dt_cls, timezone as _tz
         msg_text = (args.get("message") or "").strip()
         send_at_str = (args.get("send_at") or "").strip()
         target_uid = args.get("user_id") or user_id
         if not msg_text:
-            return json.dumps({"error": "message is required"})
+            return {"error": "message is required"}
         if not send_at_str:
-            return json.dumps({"error": "send_at is required"})
+            return {"error": "send_at is required"}
         try:
-            send_at_dt = datetime.fromisoformat(send_at_str.replace("Z", "+00:00"))
+            send_at_dt = _dt_cls.fromisoformat(send_at_str.replace("Z", "+00:00"))
         except ValueError:
-            return json.dumps({"error": "send_at must be ISO-8601 UTC"})
-        if send_at_dt <= datetime.now(_tz.utc):
-            return json.dumps({"error": "send_at must be in the future"})
+            return {"error": "send_at must be ISO-8601 UTC"}
+        if send_at_dt <= _dt_cls.now(_tz.utc):
+            return {"error": "send_at must be in the future"}
         try:
             from proactive.triggers.reminders import schedule_reminder
             scheduled_id = await schedule_reminder(
@@ -2259,9 +2259,9 @@ async def _execute_tool(db, name: str, args: dict):
                 message=msg_text,
                 send_at=send_at_dt,
             )
-            return json.dumps({"id": scheduled_id, "send_at": send_at_str, "status": "scheduled"})
+            return {"id": scheduled_id, "send_at": send_at_str, "status": "scheduled"}
         except Exception as _pe:
-            return json.dumps({"error": f"proactive_schedule failed: {_pe}"})
+            return {"error": f"proactive_schedule failed: {_pe}"}
 
     # === MEMORY TOOLS ================================================
     elif name in {"memory_add", "memory_search", "memory_list", "memory_review", "memory_forget"}:

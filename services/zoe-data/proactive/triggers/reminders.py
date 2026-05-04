@@ -94,7 +94,7 @@ async def cancel_reminder(scheduled_id: str) -> bool:
 
 async def reschedule_reminder(scheduled_id: str, new_send_at: datetime) -> bool:
     """Snooze / reschedule a reminder. Returns True on success."""
-    await cancel_reminder(scheduled_id)
+    # Read BEFORE cancelling (cancel deletes the DB row).
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -107,6 +107,7 @@ async def reschedule_reminder(scheduled_id: str, new_send_at: datetime) -> bool:
         log.warning("reschedule_reminder: %s not found", scheduled_id)
         return False
 
+    await cancel_reminder(scheduled_id)
     await schedule_reminder(
         user_id=row["user_id"],
         message=row["message"],

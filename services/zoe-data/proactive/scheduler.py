@@ -47,6 +47,14 @@ def start_scheduler() -> AsyncIOScheduler:
 def stop_scheduler() -> None:
     global _scheduler
     if _scheduler is not None:
+        # Force state to stopped BEFORE calling shutdown so that any
+        # deferred APScheduler callback that fires after we return doesn't
+        # raise SchedulerNotRunningError (it's already marked stopped).
+        try:
+            from apscheduler.schedulers.base import STATE_STOPPED
+            _scheduler.state = STATE_STOPPED
+        except Exception:
+            pass
         try:
             _scheduler.shutdown(wait=False)
         except Exception:
