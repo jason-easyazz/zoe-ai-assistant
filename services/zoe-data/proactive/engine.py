@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiosqlite
@@ -74,14 +74,38 @@ async def fire_notification(
 
     if not force and _is_in_quiet_hours():
         log.info("Quiet hours active — deferring notification for user %s", user_id)
+        # Mark the scheduled row as fired so reminder_scan can reschedule it.
+        if pending_id:
+            async with aiosqlite.connect(DB_PATH) as db:
+                await db.execute(
+                    "UPDATE proactive_scheduled SET fired = 1 WHERE id = ?", (pending_id,)
+                )
+                await db.commit()
+        # Reschedule for the start of the next quiet-end window.
+        now_local = datetime.now()
+        next_ok = now_local.replace(hour=_QUIET_END, minute=0, second=0, microsecond=0)
+        if next_ok <= now_local:
+            next_ok += timedelta(days=1)
+        try:
+            from proactive.triggers.reminders import schedule_reminder
+            await schedule_reminder(
+                user_id=user_id,
+                message=message,
+                send_at=next_ok.astimezone(timezone.utc),
+                item_id=item_id,
+            )
+        except Exception as _qe:
+            log.warning("quiet-hours reschedule failed: %s", _qe)
         return
 
     # LLM-compose only for non-reminder types (reminders already have a good message).
     if trigger_type not in ("reminder", "scheduled") and ctx:
         message = await compose_message(trigger_type, ctx, fallback=message)
 
-    # Create a pending row so tap → session works.
-    pid = pending_id or await create_pending(
+    # Always create a proactive_pending row — this is the id used by claim_pending()
+    # for tap-to-session.  The pending_id parameter is the proactive_scheduled.id and
+    # is only used below to mark that row as fired; it must NOT be used as the URL id.
+    pid = await create_pending(
         user_id=user_id,
         message=message,
         trigger_type=trigger_type,
@@ -92,7 +116,7 @@ async def fire_notification(
     deep_link = f"/chat.html?p={pid}"
     await _send_push(user_id=user_id, message=message, extra={"url": deep_link})
 
-    # Mark scheduled row as fired.
+    # Mark the proactive_scheduled row as fired (Tier 1 jobs only).
     if pending_id:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(

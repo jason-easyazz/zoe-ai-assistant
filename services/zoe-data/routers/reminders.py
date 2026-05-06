@@ -229,6 +229,23 @@ async def delete_reminder(
     )
     await db.commit()
 
+    # Cancel any unfired APScheduler jobs for this reminder.
+    try:
+        from proactive.triggers.reminders import cancel_reminder as _cancel_reminder
+        from database import DB_PATH as _DB_PATH
+        import aiosqlite as _aiosqlite
+        async with _aiosqlite.connect(_DB_PATH) as _pdb:
+            _pdb.row_factory = _aiosqlite.Row
+            async with _pdb.execute(
+                "SELECT id FROM proactive_scheduled WHERE item_id=? AND fired=0",
+                (reminder_id,),
+            ) as _cur:
+                _sched_rows = await _cur.fetchall()
+        for _sr in _sched_rows:
+            await _cancel_reminder(_sr["id"])
+    except Exception:
+        pass
+
     await broadcaster.broadcast("reminders", "reminder_deleted", {"id": reminder_id})
     return {"ok": True, "id": reminder_id}
 

@@ -60,7 +60,7 @@ def _parse_due_time(due_time_raw: str) -> tuple[int, int] | None:
     return None
 
 
-def _build_run_at(
+def build_run_at(
     due_date_str: str | None,
     hour: int,
     minute: int,
@@ -109,16 +109,20 @@ class ReminderScanTrigger(ProactiveTrigger):
         now_utc = datetime.now(timezone.utc)
         lookahead_cutoff = now_utc + timedelta(hours=_LOOKAHEAD_HOURS)
 
-        # Fetch active, unacknowledged, non-deleted reminders that have a due_time.
+        # Fetch active, unacknowledged, non-deleted reminders that have a due_time
+        # and are not currently snoozed.
+        now_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            """SELECT id, user_id, title, due_date, due_time
+            """SELECT id, user_id, title, due_date, due_time, snoozed_until
                FROM reminders
                WHERE is_active = 1
                  AND acknowledged = 0
                  AND deleted = 0
                  AND due_time IS NOT NULL
-                 AND due_time != ''"""
+                 AND due_time != ''
+                 AND (snoozed_until IS NULL OR snoozed_until <= ?)""",
+            (now_iso,),
         ) as cur:
             reminders = await cur.fetchall()
 
@@ -143,7 +147,7 @@ class ReminderScanTrigger(ProactiveTrigger):
                 log.debug("reminder_scan: unparseable due_time %r for %s", row["due_time"], rid)
                 continue
 
-            run_at = _build_run_at(row["due_date"], hm[0], hm[1], now_utc)
+            run_at = build_run_at(row["due_date"], hm[0], hm[1], now_utc)
             if run_at is None:
                 continue
 

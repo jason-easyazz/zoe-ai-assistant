@@ -98,7 +98,7 @@ async def reschedule_reminder(scheduled_id: str, new_send_at: datetime) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT user_id, message FROM proactive_scheduled WHERE id = ?",
+            "SELECT user_id, message, item_id FROM proactive_scheduled WHERE id = ?",
             (scheduled_id,),
         ) as cur:
             row = await cur.fetchone()
@@ -112,5 +112,6 @@ async def reschedule_reminder(scheduled_id: str, new_send_at: datetime) -> bool:
         user_id=row["user_id"],
         message=row["message"],
         send_at=new_send_at,
+        item_id=row["item_id"] or "",
     )
     return True

@@ -1096,22 +1096,8 @@ async def _execute_tool(db, name: str, args: dict):
         result = {"id": rid, "title": args["title"], "due_date": args.get("due_date"),
                   "due_time": args.get("due_time"), "priority": args.get("priority", "normal")}
         await _notify_ui("reminders", "reminder_created", result)
-        # Also register a proactive push if a due datetime is provided.
-        if args.get("due_date") and args.get("due_time"):
-            try:
-                from datetime import datetime as _dt_cls, timezone as _tz
-                send_at_str = f"{args['due_date']}T{args['due_time']}:00"
-                send_at_dt = _dt_cls.fromisoformat(send_at_str).replace(tzinfo=_tz.utc)
-                if send_at_dt > _dt_cls.now(_tz.utc):
-                    from proactive.triggers.reminders import schedule_reminder
-                    await schedule_reminder(
-                        user_id=user_id,
-                        message=args["title"],
-                        send_at=send_at_dt,
-                        item_id=rid,
-                    )
-            except Exception as _sched_exc:
-                pass  # non-fatal: reminder is in DB even if push scheduling fails
+        # Proactive scheduling is handled by ReminderScanTrigger (runs every 5 min),
+        # which correctly converts due_time from AWST local time to UTC.
         return {**result, "status": "created"}
 
     elif name == "reminder_list":
@@ -1800,10 +1786,17 @@ async def _execute_tool(db, name: str, args: dict):
         await db.execute("UPDATE reminders SET deleted=1, is_active=0, updated_at=datetime('now') WHERE id=?", (rid,))
         await db.commit()
         await _notify_ui("reminders", "reminder_deleted", {"id": rid})
-        # Cancel any associated proactive scheduled job.
+        # Cancel any unfired proactive_scheduled job linked to this reminder.
         try:
-            from proactive.scheduler import cancel_job as _cancel_job
-            _cancel_job(f"reminder-{rid}")
+            from proactive.triggers.reminders import cancel_reminder as _cancel_reminder
+            async with aiosqlite.connect(DB_PATH) as _pdb:
+                _pdb.row_factory = aiosqlite.Row
+                async with _pdb.execute(
+                    "SELECT id FROM proactive_scheduled WHERE item_id=? AND fired=0", (rid,)
+                ) as _cur:
+                    _sched_rows = await _cur.fetchall()
+            for _sr in _sched_rows:
+                await _cancel_reminder(_sr["id"])
         except Exception:
             pass
         return {"id": rid, "status": "deleted"}
@@ -1815,26 +1808,35 @@ async def _execute_tool(db, name: str, args: dict):
         row = await cursor.fetchone()
         if not row:
             return {"error": f"Reminder {rid} not found"}
-        now = datetime.now()
-        new_time = now + timedelta(minutes=minutes)
-        new_date = new_time.strftime("%Y-%m-%d")
-        new_time_str = new_time.strftime("%H:%M")
+        from datetime import timezone as _tz
+        now_utc = datetime.now(_tz.utc)
+        new_time_utc = now_utc + timedelta(minutes=minutes)
+        # Store the snooze time as a local (AWST = UTC+8) wall-clock string so the
+        # reminder scanner and UI show the expected local time.
+        _awst_offset = timedelta(hours=8)
+        new_time_local = new_time_utc + _awst_offset
+        new_date = new_time_local.strftime("%Y-%m-%d")
+        new_time_str = new_time_local.strftime("%H:%M")
+        snoozed_until_iso = new_time_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
         await db.execute(
-            "UPDATE reminders SET due_date=?, due_time=?, acknowledged=0, updated_at=datetime('now') WHERE id=?",
-            (new_date, new_time_str, rid),
+            "UPDATE reminders SET due_date=?, due_time=?, snoozed_until=?, acknowledged=0, updated_at=datetime('now') WHERE id=?",
+            (new_date, new_time_str, snoozed_until_iso, rid),
         )
         await db.commit()
-        result = {"id": rid, "snoozed_until": f"{new_date} {new_time_str}"}
+        result = {"id": rid, "snoozed_until": snoozed_until_iso}
         await _notify_ui("reminders", "reminder_snoozed", result)
-        # Reschedule proactive push to new snooze time.
+        # Cancel existing scheduled job(s) for this reminder; ReminderScanTrigger
+        # will pick it up again after snoozed_until passes.
         try:
-            from datetime import timezone as _tz
-            from proactive.triggers.reminders import schedule_reminder as _sched_reminder
-            from proactive.scheduler import cancel_job as _cancel_job
-            _cancel_job(f"reminder-{rid}")
-            snooze_dt = new_time.replace(tzinfo=_tz.utc)
-            await _sched_reminder(user_id=user_id, message=row[1] if len(row) > 1 else rid,
-                                   send_at=snooze_dt, item_id=rid)
+            from proactive.triggers.reminders import cancel_reminder as _cancel_reminder
+            async with aiosqlite.connect(DB_PATH) as _pdb:
+                _pdb.row_factory = aiosqlite.Row
+                async with _pdb.execute(
+                    "SELECT id FROM proactive_scheduled WHERE item_id=? AND fired=0", (rid,)
+                ) as _cur:
+                    _sched_rows = await _cur.fetchall()
+            for _sr in _sched_rows:
+                await _cancel_reminder(_sr["id"])
         except Exception:
             pass
         return {**result, "status": "snoozed"}
