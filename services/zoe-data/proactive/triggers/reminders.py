@@ -56,9 +56,9 @@ async def schedule_reminder(
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """INSERT INTO proactive_scheduled
-               (id, user_id, message, trigger_type, send_at, apscheduler_job_id, fired)
-               VALUES (?, ?, ?, 'reminder', ?, ?, 0)""",
-            (row_id, user_id, message, send_str, job_id),
+               (id, user_id, message, trigger_type, send_at, apscheduler_job_id, fired, item_id)
+               VALUES (?, ?, ?, 'reminder', ?, ?, 0, ?)""",
+            (row_id, user_id, message, send_str, job_id, item_id),
         )
         await db.commit()
 

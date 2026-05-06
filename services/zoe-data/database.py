@@ -32,6 +32,10 @@ async def init_db():
             await db.execute("ALTER TABLE chat_sessions ADD COLUMN metadata TEXT")
         except Exception:
             pass  # column already exists
+        try:
+            await db.execute("ALTER TABLE proactive_scheduled ADD COLUMN item_id TEXT DEFAULT ''")
+        except Exception:
+            pass  # column already exists
         await db.execute(
             "INSERT OR IGNORE INTO users (id, name, role) VALUES (?, ?, ?)",
             ("family-admin", "Admin", "admin"),
@@ -647,6 +651,7 @@ CREATE TABLE IF NOT EXISTS proactive_scheduled (
     send_at TEXT NOT NULL,
     apscheduler_job_id TEXT,
     fired INTEGER DEFAULT 0,
+    item_id TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (user_id) REFERENCES users(id)
 );

@@ -235,9 +235,11 @@ async def lifespan(app: FastAPI):
 
     # Proactive engine: APScheduler (Tier 1) + slow-loop (Tier 2).
     try:
-        from proactive.engine import start_proactive_engine
+        from proactive.engine import start_proactive_engine, register_trigger
+        from proactive.triggers.reminder_scan import ReminderScanTrigger
+        register_trigger(ReminderScanTrigger())
         start_proactive_engine()
-        logger.info("Proactive engine started")
+        logger.info("Proactive engine started (ReminderScanTrigger registered)")
     except Exception as _pe_exc:
         logger.warning("Proactive engine failed to start (non-fatal): %s", _pe_exc)
 
