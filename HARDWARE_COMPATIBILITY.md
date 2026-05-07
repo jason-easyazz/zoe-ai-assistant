@@ -266,8 +266,7 @@ vcgencmd measure_temp
 - 8000: Core API (zoe-data, host-native FastAPI + OpenClaw bridge)
 - 8002: Auth API (zoe-auth)
 - 8003: MCP Server
-- 11434: LLM Inference (zoe-llamacpp)
-- 11435: Memory Agent
+- 11434: LLM Inference (llama-server, host-native)
 - 7880-7882: LiveKit (WebRTC)
 - 8123: Home Assistant
 - 5678: N8N
@@ -357,3 +356,71 @@ If you successfully run Zoe on a platform not listed here, please open an issue 
 ---
 
 **Questions?** See [docs/guides/](docs/guides/) for platform-specific setup instructions.
+
+---
+
+## TTS Voice Stack (Jetson Orin NX)
+
+Zoe uses a waterfall of TTS providers, attempted in order until one succeeds:
+
+```
+1. Kokoro PyTorch sidecar  :10201  af_sky  GPU  ~150–400ms warm  ← primary / natural voice
+2. wyoming-piper           :10200  en_GB-cori  CPU  ~111ms       ← fast fallback (British accent)
+3. Kokoro ONNX             in-process  af_sky  CPU  ~900ms       ← slow fallback
+4. Edge TTS (cloud)        internet    en-AU-NatashaNeural       ← cloud fallback
+5. espeak-ng               in-process  robotic                   ← last resort
+```
+
+### Primary voice: Kokoro PyTorch sidecar
+
+- **Voice**: `af_sky` (American English family — perceived as natural Australian by users)
+- **Package**: `kokoro==0.9.4` (PyTorch-based, uses GPU via CUDA)
+- **Service**: `~/.config/systemd/user/kokoro-tts.service`
+- **Script**: `scripts/setup/kokoro_sidecar.py`
+- **Port**: `127.0.0.1:10201`
+- **Env (systemd)**: `KOKORO_VOICE=af_sky`, `KOKORO_SIDECAR_PORT=10201`
+- **Env (zoe-data)**: `ZOE_KOKORO_SIDECAR_URL=http://127.0.0.1:10201`, `ZOE_KOKORO_VOICE=af_sky`
+
+### Jetson-specific CUDA fixes (both documented in `kokoro_sidecar.py`)
+
+| Problem | Symptom | Fix |
+|---|---|---|
+| Jetson nvgpu incomplete NVML support | `NVML_SUCCESS == r INTERNAL ASSERT FAILED` at `CUDACachingAllocator.cpp:1131` | `PYTORCH_CUDA_ALLOC_CONF=backend:cudaMallocAsync` set before `torch` import — bypasses NVML memory queries |
+| NumPy version mismatch | `RuntimeError: Numpy is not available` during WAV conversion | WAV built with `struct.pack` from `tensor.tolist()` — no `tensor.numpy()` call |
+
+### Verifying the voice is working
+
+```bash
+# Check service state
+systemctl --user status kokoro-tts.service
+
+# Check health (should show device: cuda)
+curl -s http://127.0.0.1:10201/health | python3 -m json.tool
+
+# Live synthesis test (should return a RIFF WAV in ~0.4s warm)
+time curl -s -X POST http://127.0.0.1:10201/synthesize \
+  -H "Content-Type: application/json" \
+  -d '{"text":"This is Zoe. How can I help you?","voice":"af_sky"}' \
+  -o /tmp/test.wav && python3 -c "
+with open('/tmp/test.wav','rb') as f: h=f.read(4)
+print('OK' if h==b'RIFF' else f'BAD header: {h}')
+"
+```
+
+### If the voice sounds wrong (British accent instead of natural)
+
+The British accent means wyoming-piper is being used instead of the Kokoro sidecar.
+
+```bash
+# Restart the sidecar
+systemctl --user restart kokoro-tts.service
+
+# Watch for the warmup line in the logs (takes ~15s on cold start)
+journalctl --user -u kokoro-tts -f | grep -E "ready|CUDA|error|Error"
+
+# If the service won't start, check the script exists
+ls -la ~/assistant/scripts/setup/kokoro_sidecar.py
+```
+
+The script **must be committed to git** — it will be lost on cleanup if not tracked.
+Confirm with: `git -C ~/assistant log --oneline scripts/setup/kokoro_sidecar.py`
