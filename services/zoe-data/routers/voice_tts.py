@@ -1393,19 +1393,38 @@ async def _run_faster_whisper(wav_path: str) -> str:
     speech_pad_ms = int(os.environ.get("ZOE_WHISPER_SPEECH_PAD_MS", "220"))
     timeout = float(os.environ.get("ZOE_WHISPER_TIMEOUT_S", "20"))
 
+    _MAX_STT_OOM_RETRIES = 2
+
     def _transcribe_sync():
-        segments, _info = model.transcribe(
-            wav_path,
-            language=lang,
-            vad_filter=True,
-            vad_parameters={
-                "threshold": vad_threshold,
-                "min_speech_duration_ms": min_speech_ms,
-                "min_silence_duration_ms": min_silence_ms,
-                "speech_pad_ms": speech_pad_ms,
-            },
-        )
-        return " ".join(seg.text.strip() for seg in segments).strip()
+        for attempt in range(_MAX_STT_OOM_RETRIES + 1):
+            try:
+                # Release any cached CUDA blocks before inference to reduce peak pressure.
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                segments, _info = model.transcribe(
+                    wav_path,
+                    language=lang,
+                    vad_filter=True,
+                    vad_parameters={
+                        "threshold": vad_threshold,
+                        "min_speech_duration_ms": min_speech_ms,
+                        "min_silence_duration_ms": min_silence_ms,
+                        "speech_pad_ms": speech_pad_ms,
+                    },
+                )
+                return " ".join(seg.text.strip() for seg in segments).strip()
+            except RuntimeError as exc:
+                msg = str(exc)
+                if ("memory" in msg.lower() or "allocation" in msg.lower()) and attempt < _MAX_STT_OOM_RETRIES:
+                    logger.warning("STT CUDA OOM attempt %d/%d — retrying in 500ms: %s", attempt + 1, _MAX_STT_OOM_RETRIES, msg[:120])
+                    import time as _time
+                    _time.sleep(0.5)
+                    continue
+                raise
 
     loop = asyncio.get_event_loop()
     text = await asyncio.wait_for(
@@ -1657,9 +1676,9 @@ async def voice_command(
     # Detect intent locally and if it's a write intent, speak back parsed data and
     # wait for 'yes/confirm' from the user before actually executing.
     try:
-        from intent_router import detect_intent as _detect
+        from intent_router import detect_and_extract_intent as _detect_async
         _t_scope_start = time.monotonic()
-        _quick_intent = _detect(text)
+        _quick_intent = await _detect_async(text, effective_user)
         _quick_intent_name = _quick_intent.name if _quick_intent else None
         try:
             from voice_metrics import voice_stage_seconds, voice_intent_hit_count

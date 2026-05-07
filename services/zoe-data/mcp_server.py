@@ -1020,12 +1020,18 @@ async def _execute_tool(db, name: str, args: dict):
         ln = args.get("list_name")
         if ln:
             cursor = await db.execute(
-                "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category FROM lists l LEFT JOIN list_items li ON l.id = li.list_id AND li.deleted=0 WHERE l.user_id=? AND l.list_type=? AND l.name LIKE ? AND l.deleted=0 ORDER BY li.sort_order",
+                "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category"
+                " FROM lists l LEFT JOIN list_items li ON l.id = li.list_id AND li.deleted=0"
+                " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND l.name LIKE ? AND l.deleted=0"
+                " ORDER BY li.sort_order",
                 (user_id, lt, f"%{ln}%"),
             )
         else:
             cursor = await db.execute(
-                "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category FROM lists l LEFT JOIN list_items li ON l.id = li.list_id AND li.deleted=0 WHERE l.user_id=? AND l.list_type=? AND l.deleted=0 ORDER BY l.name, li.sort_order",
+                "SELECT l.id, l.name, li.id as item_id, li.text, li.completed, li.quantity, li.category"
+                " FROM lists l LEFT JOIN list_items li ON l.id = li.list_id AND li.deleted=0"
+                " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND l.deleted=0"
+                " ORDER BY l.name, li.sort_order",
                 (user_id, lt),
             )
         rows = await cursor.fetchall()
@@ -1047,8 +1053,10 @@ async def _execute_tool(db, name: str, args: dict):
         lt = args["list_type"]
         ln = args.get("list_name", lt.capitalize())
         cursor = await db.execute(
-            "SELECT id FROM lists WHERE user_id=? AND list_type=? AND name=? AND deleted=0 LIMIT 1",
-            (user_id, lt, ln),
+            "SELECT id FROM lists WHERE list_type=? AND name=? AND deleted=0"
+            " AND (user_id=? OR visibility='family')"
+            " ORDER BY CASE WHEN visibility='family' THEN 0 ELSE 1 END LIMIT 1",
+            (lt, ln, user_id),
         )
         row = await cursor.fetchone()
         if row:
@@ -1073,7 +1081,8 @@ async def _execute_tool(db, name: str, args: dict):
         lt = args["list_type"]
         text = args["item_text"]
         cursor = await db.execute(
-            "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id WHERE l.user_id=? AND l.list_type=? AND li.text LIKE ? AND li.deleted=0 AND l.deleted=0 LIMIT 1",
+            "SELECT li.id, li.list_id FROM list_items li JOIN lists l ON li.list_id = l.id"
+            " WHERE (l.user_id=? OR l.visibility='family') AND l.list_type=? AND li.text LIKE ? AND li.deleted=0 AND l.deleted=0 LIMIT 1",
             (user_id, lt, f"%{text}%"),
         )
         row = await cursor.fetchone()
@@ -1409,7 +1418,7 @@ async def _execute_tool(db, name: str, args: dict):
         elif pi_mode:
             agents.append("Pi Agent (Gemma 4 CPU)")
         else:
-            agents.append("Bonsai Agent")
+            agents.append("Gemma Agent (local)")
         agents.append("OpenClaw (on-demand)")
         return {
             "active_agents": agents,
@@ -1463,7 +1472,7 @@ async def _execute_tool(db, name: str, args: dict):
             {"name": "zoe-data",         "port": 8000,  "up": _port_open("127.0.0.1", 8000)},
             {"name": "zoe-auth",         "port": 8001,  "up": _port_open("127.0.0.1", 8001)},
             {"name": "hermes-agent",     "port": 8642,  "up": _port_open("127.0.0.1", 8642)},
-            {"name": "llama-cpp",        "port": 11435, "up": _port_open("127.0.0.1", 11435)},
+            {"name": "llama-server",     "port": 11434, "up": _port_open("127.0.0.1", 11434)},
             {"name": "openclaw-gateway", "port": 18789, "up": _port_open("127.0.0.1", 18789)},
             {"name": "nginx",            "port": 80,    "up": _port_open("127.0.0.1", 80)},
         ]
@@ -1477,7 +1486,7 @@ async def _execute_tool(db, name: str, args: dict):
         elif pi_mode:
             agents.append("Pi Agent (Gemma 4 CPU)")
         else:
-            agents.append("Bonsai Agent (via Hermes)")
+            agents.append("Gemma Agent (local)")
         agents.append("OpenClaw (on-demand)")
 
         # --- widgets from widget-manifest.json ---

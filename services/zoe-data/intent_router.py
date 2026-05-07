@@ -130,9 +130,22 @@ def _infer_event_category(text: str) -> str:
 
 
 def _normalize_chat_intent_text(raw: str) -> str:
-    """Lowercase, Unicode-normalize, collapse whitespace (UI often adds hidden chars)."""
+    """Lowercase, Unicode-normalize, collapse whitespace, strip STT filler artifacts."""
     s = unicodedata.normalize("NFKC", (raw or "").strip()).lower()
-    return re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"\s+", " ", s).strip()
+    # Replace "^and" → "add" ONLY when followed by a list-add phrasing ("X to [list-type] list").
+    # STT frequently mishears "add" as "and" for Australian accents (e.g. "add bread" → "and bread").
+    # The lookahead prevents regressions: "and turn on the lights" is NOT affected.
+    s = re.sub(
+        r"^and\s+(?=\S.+?\s+to\s+(?:the\s+|my\s+)?(?:shopping|grocery|groceries|personal|work|bucket|todo|tasks)\b)",
+        "add ",
+        s,
+    )
+    # Strip other common STT preamble artifacts at the start of transcripts.
+    s = re.sub(r"^(?:uh+|um+|oh|so|yeah|okay|ok|right|well)\s+", "", s)
+    # Strip trailing punctuation so $-anchored patterns match STT transcripts ending with ".".
+    s = re.sub(r"[.!?…]+$", "", s).strip()
+    return s
 
 
 # Matches short setup commands; whole message must be this request (no extra clauses).
@@ -299,82 +312,18 @@ def detect_intent(text: str) -> Optional[Intent]:
 
     # === DOMAIN-SPECIFIC PATTERNS FIRST (to avoid list collisions) ===
 
-    # --- CALENDAR CREATE ---
-    # "add X to my calendar on DATE at TIME"
-    m = re.match(
-        r"^(?:add|put) (.+?) (?:to|on|in) (?:the |my )?(?:calendar|schedule)"
-        r"(?:(?: on| for) (.+?))?(?:(?: at) (.+))?$", t
-    )
-    if m:
-        title = m.group(1).strip()
-        date_str = (m.group(2) or "").strip()
-        time_str = (m.group(3) or "").strip()
-        category = _infer_event_category(title)
-        return Intent("calendar_create", {"title": title, "date": date_str, "time": time_str, "category": category})
-
-    # "please add an event in my calendar beach at 230 today"
-    m = re.match(
-        r"^(?:please\s+)?(?:add|create|schedule|put|make)\s+(?:an?\s+)?(?:event|appointment|meeting)"
-        r"\s+(?:to|in|on)\s+(?:the\s+|my\s+)?(?:calendar|schedule)\s+(.+?)(?:\s+at\s+(.+))?$",
-        t,
-    )
-    if m:
-        title = m.group(1).strip()
-        tail = (m.group(2) or "").strip()
-        date_str = ""
-        time_str = tail
-        tm = re.match(r"^([0-9]{1,4}(?::[0-9]{2})?\s*(?:am|pm)?)(?:\s+(.+))?$", tail)
-        if tm:
-            time_str = (tm.group(1) or "").strip()
-            date_str = (tm.group(2) or "").strip()
-        category = _infer_event_category(title)
-        return Intent("calendar_create", {"title": title, "date": date_str, "time": time_str, "category": category})
-
-    # "create/schedule a [keyword] called/titled/named X on DATE at TIME" (most specific first)
-    m = re.match(
-        r"^(?:create|add|schedule|set up|make) (?:a |an )?(?:event|appointment|meeting)"
-        r" (?:called|titled|named) (.+?)(?:\s+(?:on|for)\s+(.+?))?(?:\s+at\s+(.+))?$", t
-    )
-    if m:
-        title = m.group(1).strip()
-        date_str = (m.group(2) or "").strip()
-        time_str = (m.group(3) or "").strip()
-        category = _infer_event_category(title)
-        return Intent("calendar_create", {"title": title, "date": date_str, "time": time_str, "category": category})
-
-    # "add an appointment at 2.30 today for the dentist"
-    m = re.match(
-        r"^(?:add|create|schedule|set up|make)\s+(?:an?\s+)?(?:appointment|event|meeting)"
-        r"(?:\s+at\s+(.+?))?(?:\s+for\s+(.+))?$",
-        t,
-    )
-    if m:
-        at_clause = (m.group(1) or "").strip()
-        title = (m.group(2) or "appointment").strip()
-        date_str = ""
-        time_str = ""
-        if at_clause:
-            tm = re.match(r"^([0-9]{1,4}(?::[0-9]{2})?(?:\.[0-9]{2})?\s*(?:am|pm)?)(?:\s+(.+))?$", at_clause)
-            if tm:
-                time_str = (tm.group(1) or "").strip()
-                date_str = (tm.group(2) or "").strip()
-            else:
-                date_str = at_clause
-        category = _infer_event_category(title)
-        return Intent("calendar_create", {"title": title, "date": date_str, "time": time_str, "category": category})
-
-    # Contains appointment/event/meeting keyword -- extract title, date, time
-    if any(kw in t for kw in ("appointment", "event", "meeting")):
-        m = re.match(
-            r"^(?:create|add|schedule|set up|make|book) (?:a |an |me (?:a |an )?)?(.+?)(?:\s+(?:on|for)\s+(.+?))?(?:\s+at\s+(.+))?$", t
-        )
-        if m:
-            title = m.group(1).strip()
-            date_str = (m.group(2) or "").strip()
-            time_str = (m.group(3) or "").strip()
-            if title:
-                category = _infer_event_category(title)
-                return Intent("calendar_create", {"title": title, "date": date_str, "time": time_str, "category": category})
+    # --- CALENDAR CREATE (keyword classifier → LLM fills slots via detect_and_extract_intent) ---
+    # Hard nouns: always calendar. Soft nouns: calendar unless note/journal/list/reminder present.
+    _CAL_CREATE_VERB = re.compile(r"\b(?:add|put|create|schedule|set\s*up|make|book)\b")
+    _CAL_HARD_NOUNS = {"calendar", "appointment"}
+    _CAL_SOFT_NOUNS = {"event", "meeting"}
+    _CAL_BLOCKERS = {"note", "notes", "journal", "diary", "list", "reminder", "shopping"}
+    if _CAL_CREATE_VERB.search(t):
+        _has_hard = any(kw in t for kw in _CAL_HARD_NOUNS)
+        _has_soft = any(kw in t for kw in _CAL_SOFT_NOUNS)
+        _blocked = any(kw in t for kw in _CAL_BLOCKERS)
+        if _has_hard or (_has_soft and not _blocked):
+            return Intent("calendar_create", {"raw": text})
 
     # --- CALENDAR SHOW ---
     for pattern in [
@@ -399,21 +348,13 @@ def detect_intent(text: str) -> Optional[Intent]:
             qualifier = (m.group(1) if m.lastindex else "").strip()
             return Intent("calendar_show", {"qualifier": qualifier})
 
-    # --- REMINDERS CREATE ---
-    m = re.match(
-        r"^(?:remind me to|set a reminder (?:to|for)|reminder to|remember to) (.+?)(?:(?: on| by| for| at) (.+))?$", t
-    )
-    if m:
-        task = m.group(1).strip()
-        date_or_time = (m.group(2) or "").strip()
-        slots = {"title": task}
-        if date_or_time:
-            parsed_time = _parse_time(date_or_time)
-            if parsed_time:
-                slots["time"] = parsed_time
-            else:
-                slots["date"] = date_or_time
-        return Intent("reminder_create", slots)
+    # --- REMINDERS CREATE (keyword classifier → LLM fills slots via detect_and_extract_intent) ---
+    # Pattern 1: "remind me to X", "set a reminder for X", "reminder to X", "remember to X"
+    if re.match(r"^(?:remind me to|set a reminder (?:to|for)|reminder to|remember to) .+", t):
+        return Intent("reminder_create", {"raw": text})
+    # Pattern 2: "add/create/make a reminder for X"
+    if re.match(r"^(?:add|create|make|schedule)\s+(?:a |an )?reminder\b.*", t):
+        return Intent("reminder_create", {"raw": text})
 
     # --- REMINDERS LIST ---
     for pattern in [
@@ -455,7 +396,7 @@ def detect_intent(text: str) -> Optional[Intent]:
 
     # --- NOTES CREATE ---
     m = re.match(
-        r"^(?:make|create|write|save) (?:a )?note(?: (?:titled|called|about))? (.+)$", t
+        r"^(?:make|create|write|save|add|take) (?:a )?note(?:s)?(?: (?:titled|called|about|on))? (.+)$", t
     )
     if m:
         body = m.group(1).strip()
@@ -654,7 +595,49 @@ def detect_intent(text: str) -> Optional[Intent]:
             lst = m.group(2).strip() if m.lastindex >= 2 else "shopping"
             return Intent("list_remove", {"item": item, "list_type": _normalize_list(lst)})
 
+    logger.info("intent_miss: %s", text)
     return None
+
+
+async def detect_and_extract_intent(
+    text: str, user_id: str = "family-admin"
+) -> Optional["Intent"]:
+    """
+    Async wrapper around detect_intent that populates structured slots for create
+    intents via the local LLM (nlu_extractor).
+
+    For query/compute intents (time_query, weather, calendar_show, etc.) that
+    already carry structured slots, the intent is returned immediately with no
+    LLM call.
+
+    For create intents that the simplified keyword classifier tagged with
+    {"raw": text}, the LLM extracts proper slots (title, date, time, …) and
+    the returned Intent carries those structured values — all downstream
+    consumers (_build_command, form builders, intent_card_data, broadcast
+    functions) receive the same slot shape as before.
+
+    Returns None when no intent matched OR when LLM extraction failed (caller
+    should fall through to Pi Agent).
+    """
+    intent = detect_intent(text)
+    if intent is None:
+        return None
+    if intent.slots and "raw" in intent.slots:
+        try:
+            from nlu_extractor import extract_slots_for_intent  # lazy — avoids circular at load
+            structured = await extract_slots_for_intent(intent.name, intent.slots["raw"])
+            if structured:
+                intent.slots = structured
+                return intent
+        except Exception as _exc:
+            logger.warning(
+                "detect_and_extract_intent: nlu_extractor failed intent=%s err=%s",
+                intent.name,
+                _exc,
+            )
+        # Extraction failed — let caller fall through to Pi Agent
+        return None
+    return intent
 
 
 def _normalize_list(raw: str) -> str:
@@ -667,10 +650,17 @@ def _normalize_list(raw: str) -> str:
     return mapping.get(raw, "shopping")
 
 
+_TASK_KEYWORDS = {
+    "call", "email", "message", "buy ticket", "book", "pay", "bill",
+    "task", "todo", "work", "project", "report", "review", "fix",
+    "appointment", "meeting", "dentist", "doctor",
+}
+
+
 def _infer_list(item: str) -> str:
     lower = item.lower()
-    if any(kw in lower for kw in SHOPPING_KEYWORDS):
-        return "shopping"
+    if any(kw in lower for kw in _TASK_KEYWORDS):
+        return "personal"
     return "shopping"
 
 

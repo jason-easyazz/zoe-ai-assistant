@@ -2,7 +2,7 @@
 Pi/Jetson Agent — fast, minimal agent loop for Zoe.
 
 Model: Gemma 4 E2B (llama.cpp)
-  Pi:     CPU, --reasoning off, 7 TPS, port 11435
+  Pi:     CPU, --reasoning off, 7 TPS, port 11434 (override via GEMMA_SERVER_URL)
   Jetson: GPU, --reasoning auto, 40+ TPS, port 11434
 
   - Fast path: time/date/status answered in <100ms (no LLM)
@@ -74,7 +74,7 @@ _setup_otel()
 
 # ── Config (all overrideable via env / systemd unit) ─────────────────────────
 
-_GEMMA_URL      = os.environ.get("GEMMA_SERVER_URL",   "http://127.0.0.1:11435/v1")
+_GEMMA_URL      = os.environ.get("GEMMA_SERVER_URL",   "http://127.0.0.1:11434/v1")
 _HA_BRIDGE      = os.environ.get("ZOE_HA_BRIDGE_URL",  "http://127.0.0.1:8007")
 _MEMPALACE_DATA = os.environ.get("MEMPALACE_DATA_DIR", os.path.expanduser("~/.mempalace"))
 _JETSON_MODE    = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
@@ -1332,12 +1332,22 @@ async def _voice_capability_shortcut(message: str, user_id: str) -> str | None:
     weather_cues = ("weather", "rain", "forecast", "jacket", "umbrella", "temperature")
     if not any(c in msg for c in weather_cues):
         # List-add recovery for "buy/add/put" phrasing that missed intent routing.
+        # "and X to the shopping list" is a common STT artifact for "add X to the shopping list".
         buy_match = re.search(
+            r"(?:^|\b)(?:buy|get|add|put|stick|and)\s+(.+?)(?:\s+(?:to|on)\s+(?:the\s+|my\s+)?(?:shopping|grocery|groceries)?\s*list)?$",
+            msg,
+        ) if any(w in msg for w in ("shopping", "grocery", "groceries", "list")) else re.search(
             r"(?:^|\b)(?:buy|get|add|put|stick)\s+(.+?)(?:\s+(?:to|on)\s+(?:the\s+|my\s+)?(?:shopping|grocery|groceries)?\s*list)?$",
             msg,
         )
         if buy_match:
             item = buy_match.group(1).strip(" .,!?:;")
+            # Strip "to the shopping list" suffix that gets captured when the trailing period
+            # prevents the optional group in the regex from matching.
+            item = re.sub(
+                r"\s+(?:to|on)\s+(?:the\s+|my\s+)?(?:shopping|grocery|groceries)?\s*list$",
+                "", item, flags=re.IGNORECASE,
+            ).strip(" .,!?:;")
             if item and len(item) <= 120 and item not in {"it", "this", "that"}:
                 raw_add = await _dispatch_tool(
                     "list_add_item",
