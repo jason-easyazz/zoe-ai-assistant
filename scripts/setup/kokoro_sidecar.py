@@ -136,16 +136,52 @@ def _pcm_to_wav(audio_tensor, sample_rate: int = _SAMPLE_RATE) -> bytes:
     return buf.getvalue()
 
 
+_MAX_OOM_RETRIES = 2  # 2 retries × 500ms sleep = max ~1.5s extra; HTTP conn stays open
+
+
 def _blocking_synthesize(text: str, voice: str, speed: float) -> bytes:
-    """Run Kokoro inference synchronously (called inside run_in_executor)."""
+    """Run Kokoro inference synchronously (called inside run_in_executor).
+
+    Calls torch.cuda.empty_cache() before every attempt to release any
+    cached-but-unreserved CUDA blocks from the previous synthesis.  On
+    Jetson, the first request after warmup can raise 'Allocation on device'
+    because the warmup left allocations in the cache; empty_cache() prevents
+    this.  If the error still occurs, we retry up to _MAX_OOM_RETRIES times
+    with a 500ms pause between attempts.
+
+    The HTTP connection from voice_tts stays open during retries (httpx
+    timeout=15s >> max retry wait ~1.5s), so voice_tts never sees a 500 for
+    a transient OOM and never falls through to wyoming-piper.
+    """
+    import time
     import torch
-    chunks: list = []
-    for result in _pipeline(text, voice=voice, speed=speed):
-        if result.audio is not None and result.audio.numel() > 0:
-            chunks.append(result.audio.detach())
-    if not chunks:
-        raise RuntimeError("Kokoro produced no audio")
-    return _pcm_to_wav(torch.cat(chunks))
+
+    def _run_inference():
+        torch.cuda.empty_cache()
+        chunks: list = []
+        for result in _pipeline(text, voice=voice, speed=speed):
+            if result.audio is not None and result.audio.numel() > 0:
+                chunks.append(result.audio.detach())
+        if not chunks:
+            raise RuntimeError("Kokoro produced no audio")
+        return _pcm_to_wav(torch.cat(chunks))
+
+    last_exc: Exception = RuntimeError("unknown")
+    for attempt in range(1 + _MAX_OOM_RETRIES):
+        try:
+            return _run_inference()
+        except RuntimeError as exc:
+            if "Allocation" in str(exc) or "memory" in str(exc).lower():
+                last_exc = exc
+                logger.warning(
+                    "CUDA memory pressure (attempt %d/%d): %s",
+                    attempt + 1, 1 + _MAX_OOM_RETRIES, exc,
+                )
+                torch.cuda.empty_cache()
+                time.sleep(0.5)
+            else:
+                raise
+    raise RuntimeError(f"CUDA OOM after {_MAX_OOM_RETRIES} retries") from last_exc
 
 
 async def _run_synthesis(text: str, voice: str, speed: float = 1.0) -> bytes:
