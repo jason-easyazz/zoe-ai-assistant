@@ -237,3 +237,13 @@ tests/unit/test_jag_board_game_store.py
 
 # Runtime SQLite caches
 data/touch_cache/
+
+# graphify — commit graph/report/html; exclude local-only runtime files
+# NOTE: the broad *.json rule above would swallow these files without explicit exceptions
+!graphify-out/graph.json
+!graphify-out/GRAPH_REPORT.md
+!graphify-out/graph.html
+graphify-out/manifest.json
+graphify-out/cost.json
+graphify-out/cache/
+!.cursor/mcp.json

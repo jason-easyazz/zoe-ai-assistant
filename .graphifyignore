@@ -1,0 +1,37 @@
+# secrets and env files — never send to LLM API
+.env
+.env.*
+secrets.yaml
+*.key
+*.pem
+*.crt
+
+# large binary/data trees
+models/
+data/
+backups/
+ssl/
+checkpoints/
+zoe-legacy-backup-*.tar.gz
+
+# compiled frontend (generated; not source)
+services/zoe-ui/dist/
+
+# HA runtime tree (DBs, logs, secrets)
+homeassistant/
+
+# docs archive — embedded binaries, old DB dumps, git pack files
+docs/archive/
+
+# per-module game content (excluded from git too)
+modules/jag-board/
+modules/questionable-decisions/
+
+# build artefacts
+*.pyc
+__pycache__/
+.pytest_cache/
+.git/
+
+# graphify's own output (avoids self-referential loop on re-runs)
+graphify-out/

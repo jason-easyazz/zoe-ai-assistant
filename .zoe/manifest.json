@@ -87,7 +87,9 @@
     "demos": "demos/**/*",
     "skills": "skills/**/*",
     "github": ".github/**/*",
-    "training": "training/**/*"
+    "training": "training/**/*",
+    "graphify_out": "graphify-out/**/*",
+    "cursor_rules": ".cursor/**/*"
   },
   
   "approved_root_files": [
@@ -115,6 +117,8 @@
     ".env",
     ".env.example",
     ".cursorrules",
+    ".graphifyignore",
+    "AGENTS.md",
     "RESTART_SERVICES.sh",
     "warmup_models.py",
     "home-profile.json"

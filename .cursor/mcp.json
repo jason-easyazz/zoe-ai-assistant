@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "graphify": {
+      "command": "/home/zoe/.local/share/uv/tools/graphifyy/bin/python",
+      "args": ["-m", "graphify.serve", "/home/zoe/assistant/graphify-out/graph.json"]
+    }
+  }
+}
