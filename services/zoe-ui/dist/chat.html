@@ -2590,18 +2590,36 @@
             }
             if (t === 'CUSTOM' && data.name === 'zoe.run_log') {
                 const v = data.value || {};
-                if (thinkingIndicator && thinkingIndicator.parentNode && v.message) {
+                const msg = String(v.message || '');
+
+                // Always update the thinking indicator text
+                if (thinkingIndicator && thinkingIndicator.parentNode && msg) {
                     const tx = thinkingIndicator.querySelector('span:last-child');
-                    if (tx) tx.textContent = String(v.message);
+                    if (tx) tx.textContent = msg;
                 }
+
                 const panel = ctx.toolTraceEl;
-                if (panel) {
-                    panel.style.display = 'flex';
+                if (!panel) return;
+                panel.style.display = 'flex';
+
+                if (v.heartbeat) {
+                    // Heartbeat: update a single sticky status row in-place instead
+                    // of appending a new card on every tick.
+                    let hb = panel.querySelector('.tool-call-heartbeat');
+                    if (!hb) {
+                        hb = document.createElement('div');
+                        hb.className = 'tool-call-heartbeat';
+                        hb.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 12px;font-size:12px;color:var(--clr-text-3);border-top:1px solid rgba(123,97,255,0.08);';
+                        hb.innerHTML = '<span style="animation:long-run-spin 1.4s linear infinite;display:inline-block">⏳</span><span class="hb-text"></span>';
+                        panel.appendChild(hb);
+                    }
+                    hb.querySelector('.hb-text').textContent = msg;
+                } else {
+                    // Regular log entry — append a collapsible card as before
                     const log = document.createElement('details');
                     log.className = 'tool-call-card';
                     log.open = false;
                     const lvl = (v.level || 'info').toUpperCase();
-                    const msg = String(v.message || '');
                     log.innerHTML =
                         '<summary class="tool-call-summary">' +
                             '<span class="tool-call-icon">📋</span>' +
@@ -2610,8 +2628,8 @@
                             '<span class="tool-call-chevron">›</span>' +
                         '</summary>';
                     panel.appendChild(log);
-                    scrollToBottom();
                 }
+                scrollToBottom();
                 return;
             }
             if (t === 'CUSTOM' && data.name === 'zoe.session') {

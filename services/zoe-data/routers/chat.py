@@ -554,11 +554,14 @@ async def _iter_openclaw_heartbeats(emit, task: asyncio.Task, *, phase_label: st
         if task.done():
             break
         elapsed = int(time.monotonic() - t0)
+        # heartbeat=true tells the frontend to update a single sticky status
+        # line rather than appending a new trace card on every tick.
         yield emit(
             CustomEvent(
                 name="zoe.run_log",
                 value={
                     "level": "info",
+                    "heartbeat": True,
                     "message": f"{phase_label} still working… {elapsed}s elapsed (browser and tools can take several minutes).",
                 },
             )
