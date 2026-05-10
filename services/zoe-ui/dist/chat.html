@@ -74,14 +74,19 @@
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #fafbfc 0%, #f1f3f6 100%);
-            overflow: hidden; height: 100vh;
+            overflow: hidden;
+            height: 100vh; /* fallback */
+            height: 100dvh; /* avoids iOS Safari address-bar inclusion */
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
         }
         
         /* Main Layout */
         .app-container {
             display: grid;
             grid-template-columns: 1fr 380px;
-            height: calc(100vh - 60px);
+            height: calc(100vh - 60px); /* fallback */
+            height: calc(100dvh - 60px); /* iOS Safari dvh fix */
             margin-top: 60px;
             gap: 0;
             transition: grid-template-columns 0.3s ease;
@@ -422,10 +427,12 @@
 
         /* Input Area */
         .input-area {
-            padding: 20px;
+            padding: 16px 20px;
+            padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
             background: rgba(255, 255, 255, 0.8);
             backdrop-filter: blur(20px);
             border-top: 1px solid rgba(255, 255, 255, 0.3);
+            flex-shrink: 0; /* ensure it never gets squashed by messages */
         }
         
         .input-wrapper {
@@ -441,7 +448,7 @@
             padding: 14px 18px;
             border: 2px solid rgba(123, 97, 255, 0.2);
             border-radius: 24px;
-            font-size: 15px;
+            font-size: 16px; /* must be ≥16px to prevent iOS Safari zoom-on-focus */
             font-family: inherit;
             resize: none;
             outline: none;
@@ -1401,9 +1408,9 @@
         
         .notifications-btn { 
             background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); 
-            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; 
+            border-radius: 50%; width: 44px; height: 44px; display: flex; align-items: center; 
             justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
-            font-size: 16px; font-weight: bold;
+            font-size: 16px; font-weight: bold; flex-shrink: 0;
         }
         .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
         .notifications-btn.has-notifications { animation: notificationPulse 2s ease-in-out infinite; }
@@ -2048,6 +2055,55 @@
         .tn-title { font-weight: 700; font-size: 14px; color: var(--clr-primary); }
         .tn-task { font-size: 12px; color: var(--clr-text-2); margin-top: 2px; }
 
+        /* ── Mobile chat layout improvements ──────────────────────────────── */
+
+        /* On phones (≤ 768 px) the nav right side gets crowded. Hide the time/date
+           display to give the notification buttons enough room. */
+        @media (max-width: 768px) {
+            .time-date-display { display: none !important; }
+
+            /* Slightly smaller nav buttons on phone while keeping 44px touch target */
+            .notifications-btn {
+                width: 40px !important;
+                height: 40px !important;
+                min-width: 44px !important;
+                min-height: 44px !important;
+                font-size: 15px !important;
+            }
+
+            /* Tighter nav padding */
+            .nav-right { gap: 4px !important; }
+
+            /* Tighter message padding */
+            .messages-container {
+                padding: 14px 16px !important;
+                gap: 14px !important;
+            }
+
+            /* Slightly wider bubbles on small screens */
+            .message-bubble { max-width: 88% !important; }
+
+            /* Compact input area */
+            .input-area { padding: 10px 12px !important; padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)) !important; }
+
+            /* Float button — clear the input bar */
+            .mobile-sessions-toggle {
+                bottom: calc(80px + env(safe-area-inset-bottom, 0px)) !important;
+            }
+
+            /* Hide suggestion chips on very small screens to save space */
+            .suggestions-wrapper { display: none !important; }
+        }
+
+        /* ── Active / tap feedback on touch devices ─────────────────────── */
+        @media (pointer: coarse) {
+            .send-btn:active { transform: scale(0.92) !important; opacity: 0.85; }
+            .notifications-btn:active { transform: scale(0.92) !important; }
+            .mobile-nav-item:active, .nav-item:active { transform: scale(0.97) !important; }
+            /* Remove hover effects that feel wrong on touch */
+            .send-btn:hover:not(:disabled) { transform: none; box-shadow: none; }
+        }
+
     </style>
 <!-- PWA Meta Tags -->
     <meta name="application-name" content="Zoe AI">
@@ -2248,6 +2304,10 @@
                         rows="1"
                         onkeydown="handleKeyDown(event)"
                         oninput="adjustTextareaHeight(this)"
+                        autocorrect="on"
+                        autocapitalize="sentences"
+                        spellcheck="true"
+                        enterkeyhint="send"
                     ></textarea>
                     <button type="button" class="stop-stream-btn" id="stopStreamBtn" title="Stop">■</button>
                     <button class="send-btn" id="sendBtn" onclick="sendMessage()">
@@ -6174,6 +6234,64 @@
         }
 
     </script>
+
+    <!-- Mobile keyboard + viewport handling -->
+    <script>
+    (function () {
+        // ── visualViewport: shrink messages area when the soft keyboard appears ──
+        // When the keyboard slides up, the visual viewport height drops. We keep
+        // the input bar in view by setting an explicit height on the chat area
+        // so the browser doesn't scroll the page in unexpected ways.
+        if (window.visualViewport) {
+            var appContainer = document.getElementById('appContainer') || document.querySelector('.app-container');
+            var chatArea     = document.querySelector('.chat-area');
+            var NAV_H = 60;
+
+            function onViewportResize() {
+                var vvh = window.visualViewport.height;
+                var vvw = window.visualViewport.width;
+
+                // Only apply on narrow (mobile) viewports
+                if (vvw > 900) return;
+
+                if (chatArea) {
+                    // Reserve space: visual viewport height minus nav bar
+                    chatArea.style.height = (vvh - NAV_H) + 'px';
+                    chatArea.style.maxHeight = (vvh - NAV_H) + 'px';
+                }
+
+                // Scroll latest message into view whenever keyboard resizes
+                var msgs = document.querySelector('.messages-container');
+                if (msgs) {
+                    requestAnimationFrame(function() {
+                        msgs.scrollTop = msgs.scrollHeight;
+                    });
+                }
+            }
+
+            window.visualViewport.addEventListener('resize', onViewportResize);
+            window.visualViewport.addEventListener('scroll', onViewportResize);
+        }
+
+        // ── Prevent "rubber-band" over-scroll on the page body ──
+        document.addEventListener('touchmove', function(e) {
+            if (e.target.closest('.messages-container, .sessions-list, .mobile-nav-content, .notifications-content, .more-content')) return;
+            e.preventDefault();
+        }, { passive: false });
+
+        // ── Scroll messages to bottom on input focus (keyboard pop) ──
+        var chatInput = document.getElementById('chatInput');
+        if (chatInput) {
+            chatInput.addEventListener('focus', function() {
+                setTimeout(function() {
+                    var msgs = document.querySelector('.messages-container');
+                    if (msgs) msgs.scrollTop = msgs.scrollHeight;
+                }, 350); // let keyboard animation complete
+            });
+        }
+    })();
+    </script>
+
     <script src="/js/websocket-sync.js"></script>
     <!-- Mini Player for persistent music playback -->
     <script src="js/mini-player.js"></script>

@@ -1,0 +1,344 @@
+/**
+ * Zoe — Shared Dark Mode + Mobile Styles
+ * Applied across all main (web) pages that link this file.
+ * Load order: page inline <style> → this file
+ *
+ * Also carries mobile-specific improvements that benefit all pages:
+ *   - iOS safe-area insets
+ *   - touch-action / tap highlight suppression
+ *   - 100dvh layout fix
+ *   - Keyboard-safe input bars
+ */
+
+/* ═══════════════════════════════════════════════
+   1. DARK MODE — CSS variable overrides
+   ═══════════════════════════════════════════════ */
+
+html.dark-mode {
+    color-scheme: dark;
+}
+
+html.dark-mode body {
+    background: linear-gradient(135deg, #060610 0%, #0d0d1a 100%) !important;
+    color: rgba(255, 255, 255, 0.93) !important;
+}
+
+/* CSS custom property overrides for dark mode */
+html.dark-mode :root,
+html.dark-mode {
+    --clr-glass-bg: rgba(255, 255, 255, 0.06) !important;
+    --clr-glass-bg-2: rgba(255, 255, 255, 0.04) !important;
+    --clr-glass-border: rgba(255, 255, 255, 0.10) !important;
+    --clr-border: rgba(255, 255, 255, 0.10) !important;
+    --clr-surface: #111122 !important;
+    --clr-surface-2: #0e0e1c !important;
+    --clr-text: rgba(255, 255, 255, 0.93) !important;
+    --clr-text-2: rgba(255, 255, 255, 0.60) !important;
+    --clr-text-3: rgba(255, 255, 255, 0.38) !important;
+}
+
+/* Navigation */
+html.dark-mode .nav-bar {
+    background: rgba(6, 6, 16, 0.88) !important;
+    border-bottom-color: rgba(123, 97, 255, 0.20) !important;
+}
+
+html.dark-mode .nav-item,
+html.dark-mode .more-nav-btn {
+    color: rgba(255, 255, 255, 0.70) !important;
+}
+
+html.dark-mode .nav-item:hover,
+html.dark-mode .nav-item.active {
+    color: #a78bfa !important;
+    background: rgba(123, 97, 255, 0.15) !important;
+}
+
+html.dark-mode .notifications-btn {
+    background: rgba(255, 255, 255, 0.07) !important;
+    border-color: rgba(255, 255, 255, 0.12) !important;
+    color: rgba(255, 255, 255, 0.85) !important;
+}
+
+html.dark-mode .current-time,
+html.dark-mode .current-date {
+    color: rgba(255, 255, 255, 0.75) !important;
+}
+
+/* Cards and surfaces */
+html.dark-mode .message-bubble,
+html.dark-mode .message-content,
+html.dark-mode .session-item,
+html.dark-mode .sessions-header,
+html.dark-mode .context-panel,
+html.dark-mode .sessions-panel {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border-color: rgba(255, 255, 255, 0.09) !important;
+    color: rgba(255, 255, 255, 0.93) !important;
+}
+
+html.dark-mode .message-group.user .message-bubble {
+    background: rgba(123, 97, 255, 0.25) !important;
+    border-color: rgba(123, 97, 255, 0.30) !important;
+}
+
+/* Input area */
+html.dark-mode .input-area {
+    background: rgba(6, 6, 16, 0.85) !important;
+    border-top-color: rgba(255, 255, 255, 0.10) !important;
+}
+
+html.dark-mode .input-field {
+    background: rgba(255, 255, 255, 0.07) !important;
+    color: rgba(255, 255, 255, 0.93) !important;
+    border-color: rgba(123, 97, 255, 0.30) !important;
+}
+
+html.dark-mode .input-field::placeholder {
+    color: rgba(255, 255, 255, 0.35) !important;
+}
+
+html.dark-mode .input-field:focus {
+    border-color: rgba(123, 97, 255, 0.60) !important;
+    background: rgba(255, 255, 255, 0.09) !important;
+}
+
+/* Modals and overlays */
+html.dark-mode .more-overlay .more-content,
+html.dark-mode .more-content {
+    background: rgba(14, 14, 28, 0.97) !important;
+    border-color: rgba(255, 255, 255, 0.10) !important;
+}
+
+html.dark-mode .more-item {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border-color: rgba(255, 255, 255, 0.08) !important;
+    color: rgba(255, 255, 255, 0.87) !important;
+}
+
+html.dark-mode .mobile-nav-menu {
+    background: rgba(10, 10, 22, 0.97) !important;
+    border-right-color: rgba(255, 255, 255, 0.10) !important;
+}
+
+html.dark-mode .mobile-nav-item {
+    color: rgba(255, 255, 255, 0.75) !important;
+}
+
+html.dark-mode .mobile-nav-item.active {
+    color: #a78bfa !important;
+    background: rgba(123, 97, 255, 0.18) !important;
+}
+
+html.dark-mode .notifications-panel,
+html.dark-mode .notifications-header {
+    background: rgba(14, 14, 28, 0.97) !important;
+    border-color: rgba(255, 255, 255, 0.10) !important;
+}
+
+/* Generic text */
+html.dark-mode h1, html.dark-mode h2, html.dark-mode h3,
+html.dark-mode h4, html.dark-mode h5, html.dark-mode h6 {
+    color: rgba(255, 255, 255, 0.93) !important;
+}
+
+html.dark-mode p, html.dark-mode span, html.dark-mode label,
+html.dark-mode li, html.dark-mode td, html.dark-mode th {
+    color: rgba(255, 255, 255, 0.87);
+}
+
+html.dark-mode input,
+html.dark-mode textarea,
+html.dark-mode select {
+    background: rgba(255, 255, 255, 0.07) !important;
+    color: rgba(255, 255, 255, 0.93) !important;
+    border-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+html.dark-mode input::placeholder,
+html.dark-mode textarea::placeholder {
+    color: rgba(255, 255, 255, 0.38) !important;
+}
+
+
+/* ═══════════════════════════════════════════════
+   2. MOBILE IMPROVEMENTS — applied on all screens
+      (progressive enhancement; don't break desktop)
+   ═══════════════════════════════════════════════ */
+
+/* Prevent 300 ms tap delay on all interactive elements */
+html {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+}
+
+button,
+a,
+[role="button"],
+input,
+textarea,
+select,
+label {
+    touch-action: manipulation;
+}
+
+/* ═══════════════════════════════════════════════
+   3. LAYOUT — use dynamic viewport units so the
+      browser chrome (address bar, home indicator)
+      does not cause layout overflow on iOS Safari.
+   ═══════════════════════════════════════════════ */
+
+/* chat.html .app-container uses calc(100vh - 60px).
+   Override with dvh so it accounts for the browser chrome.
+   Only applied to the grid container so scrollable pages aren't affected. */
+@supports (height: 100dvh) {
+    .app-container {
+        height: calc(100dvh - 60px) !important;
+        max-height: calc(100dvh - 60px) !important;
+    }
+}
+
+
+/* ═══════════════════════════════════════════════
+   4. SAFE AREA INSETS — iPhone notch + home bar
+   ═══════════════════════════════════════════════ */
+
+/* The chat input bar must clear the home indicator on iPhone */
+.input-area {
+    padding-bottom: calc(16px + env(safe-area-inset-bottom)) !important;
+}
+
+/* Nav bar must clear the status bar notch in standalone PWA mode */
+.nav-bar {
+    padding-top: max(10px, env(safe-area-inset-top));
+    padding-left: max(15px, env(safe-area-inset-left));
+    padding-right: max(15px, env(safe-area-inset-right));
+}
+
+/* ═══════════════════════════════════════════════
+   5. TOUCH TARGETS — minimum 44 × 44 px (HIG/WCAG)
+   ═══════════════════════════════════════════════ */
+
+@media (pointer: coarse) {
+    /* Notification / action buttons in the nav */
+    .notifications-btn,
+    .refresh-btn,
+    .theme-nav-btn {
+        min-width: 44px !important;
+        min-height: 44px !important;
+        width: 44px !important;
+        height: 44px !important;
+    }
+
+    /* Chat send + stop buttons */
+    .send-btn,
+    .stop-stream-btn {
+        min-width: 52px !important;
+        min-height: 52px !important;
+        width: 52px !important;
+        height: 52px !important;
+    }
+
+    /* OpenClaw toggle in chat */
+    .openclaw-toggle-btn {
+        min-width: 44px !important;
+        min-height: 44px !important;
+    }
+
+    /* Prevent iOS font-size zoom (must be ≥ 16 px) */
+    .input-field,
+    input[type="text"],
+    input[type="search"],
+    input[type="email"],
+    input[type="password"],
+    input[type="number"],
+    textarea,
+    select {
+        font-size: 16px !important;
+    }
+
+    /* Sessions toggle floating button — move above input area on small screens */
+    .mobile-sessions-toggle {
+        bottom: calc(90px + env(safe-area-inset-bottom)) !important;
+    }
+}
+
+
+/* ═══════════════════════════════════════════════
+   6. SMALL PHONE LAYOUT — 360 – 480 px wide
+   ═══════════════════════════════════════════════ */
+
+@media (max-width: 480px) {
+    /* Nav: hide time/date display to reclaim space */
+    .time-date-display {
+        display: none !important;
+    }
+
+    /* Condense nav padding */
+    .nav-bar {
+        padding: 6px 12px !important;
+        padding-top: max(6px, env(safe-area-inset-top)) !important;
+    }
+
+    /* Tighten message padding */
+    .messages-container {
+        padding: 12px 14px !important;
+        gap: 14px !important;
+    }
+
+    /* Compact input */
+    .input-area {
+        padding: 10px 12px !important;
+        padding-bottom: calc(10px + env(safe-area-inset-bottom)) !important;
+    }
+
+    /* Message bubbles: allow more width on small screens */
+    .message-bubble {
+        max-width: 90% !important;
+    }
+
+    /* Suggestion chips: horizontally scrollable row */
+    .suggestions-row {
+        overflow-x: auto !important;
+        flex-wrap: nowrap !important;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: 4px;
+    }
+
+    /* Sessions panel hides completely on very small phones */
+    .sessions-panel {
+        display: none !important;
+    }
+    #appContainer {
+        grid-template-columns: 1fr !important;
+    }
+}
+
+
+/* ═══════════════════════════════════════════════
+   7. KEYBOARD-AWARE LAYOUT
+   Provided via JS in chat.html; CSS fallback here:
+   When the virtual keyboard is up on mobile, shrink
+   the messages container via dvh so the input stays
+   visible without overlapping.
+   ═══════════════════════════════════════════════ */
+
+/* Smooth resize transitions when viewport changes */
+.chat-area,
+.messages-container,
+.input-area {
+    transition: none; /* don't animate layout shifts — feels laggy on mobile */
+}
+
+
+/* ═══════════════════════════════════════════════
+   8. OVERSCROLL / PULL-TO-REFRESH SUPPRESSION
+   ═══════════════════════════════════════════════ */
+
+body {
+    overscroll-behavior: none;
+}
+
+.messages-container {
+    overscroll-behavior: contain;
+}
