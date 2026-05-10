@@ -292,6 +292,7 @@ _OPENCLAW_DELEGATION_INTENTS: frozenset[str] = frozenset({
     "build_widget",
     "build_page",
     "extend_capability",
+    "connect_chatgpt",
 })
 
 
