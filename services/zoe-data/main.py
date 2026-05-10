@@ -36,6 +36,7 @@ from routers.system import (
     start_memory_digest_background,
     start_memory_consolidation_background,
 )
+from system_updates import start_zoe_update_background_tasks
 from routers.openclaw import router as openclaw_router
 import logging
 
@@ -48,18 +49,8 @@ logger = logging.getLogger(__name__)
 _REQUEST_ID_CTX_VAR = None  # set after app creation to avoid import cycles
 _openclaw_bg_task = None
 _digest_bg_task = None
-_keepwarm_task = None
+_zoe_update_bg_task = None
 _memory_capture_health: dict[str, str] = {"status": "unknown", "detail": "startup pending"}
-
-# --- Keep-warm constants --------------------------------------------------
-# Session ID used for keep-warm pings. A fixed ID means Hermes reuses the
-# same cached AIAgent → Bonsai's 16k-token KV prefix stays hot in VRAM.
-_HERMES_WARMUP_SESSION = "zoe-system-keepwarm"
-# Ping interval (seconds). Hermes agent pool TTL is now 3600s (1 hour);
-# ping every 25 minutes (1500s) to refresh the pool entry well before expiry.
-_KEEPWARM_INTERVAL_S = 1500
-# Initial delay before first warm-up so the service finishes starting.
-_KEEPWARM_INITIAL_DELAY_S = 15
 
 
 class RequestIdFilter(logging.Filter):
@@ -75,82 +66,16 @@ for _handler in logging.getLogger().handlers:
     _handler.addFilter(RequestIdFilter())
 
 
-async def _keepwarm_loop():
-    """
-    Periodically ping Hermes so the agent pool never expires and Bonsai's
-    16k-token KV prefix (SOUL.md + MCP schemas) stays hot in VRAM.
-
-    - System keepwarm session: always-warm baseline so ANY user's first message
-      benefits from a partially warm Bonsai KV cache.
-    - Recently-active user sessions: if a session had traffic in the last hour,
-      refresh its TTL so returning users get sub-2s responses, not a 45s cold start.
-    """
-    import httpx
-    from database import DB_PATH
-    import aiosqlite
-
-    _HERMES_API_URL = os.environ.get("HERMES_API_URL", "http://127.0.0.1:11435")
-    _HERMES_FAST_PATH = os.environ.get("HERMES_FAST_PATH", "true").lower() == "true"
-
-    await asyncio.sleep(_KEEPWARM_INITIAL_DELAY_S)
-
-    while True:
-        if not _HERMES_FAST_PATH:
-            await asyncio.sleep(_KEEPWARM_INTERVAL_S)
-            continue
-
-        # --- 1. System keepwarm session (always-on baseline) ---
-        try:
-            async with httpx.AsyncClient(timeout=90.0) as client:
-                r = await client.post(
-                    f"{_HERMES_API_URL}/v1/chat/completions",
-                    json={"model": "hermes-agent", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 5},
-                    headers={"X-Hermes-Session-Id": _HERMES_WARMUP_SESSION},
-                )
-                logger.info("Keep-warm system session: HTTP %s", r.status_code)
-        except Exception as e:
-            logger.debug("Keep-warm system session failed (will retry): %s", e)
-
-        # --- 2. Recently-active user sessions (refresh their agent pool TTL) ---
-        # Find sessions with activity in the past hour. Re-ping them so the
-        # cached AIAgent doesn't expire before the user returns.
-        active_sessions = []
-        try:
-            async with aiosqlite.connect(DB_PATH) as db:
-                db.row_factory = aiosqlite.Row
-                rows = await db.execute_fetchall(
-                    """SELECT DISTINCT chat_session_id
-                       FROM chat_messages
-                       WHERE created_at > datetime('now', '-1 hour')
-                       AND chat_session_id != ?
-                       ORDER BY created_at DESC
-                       LIMIT 10""",
-                    (_HERMES_WARMUP_SESSION,),
-                )
-                active_sessions = [r["chat_session_id"] for r in rows]
-        except Exception as e:
-            logger.debug("Keep-warm: could not query active sessions: %s", e)
-
-        for session_id in active_sessions:
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    await client.post(
-                        f"{_HERMES_API_URL}/v1/chat/completions",
-                        json={"model": "hermes-agent", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 5},
-                        headers={"X-Hermes-Session-Id": session_id},
-                    )
-                    logger.debug("Keep-warm user session %s: refreshed", session_id)
-            except Exception as e:
-                logger.debug("Keep-warm session %s failed: %s", session_id, e)
-
-        await asyncio.sleep(_KEEPWARM_INTERVAL_S)
-
-
 async def _run_memory_capture_startup_probe() -> None:
     """Validate memory capture plumbing at startup.
 
     This is a non-invasive probe: it verifies extractor import/patterns and
     MemoryService read paths without writing synthetic rows.
+
+    Timeouts are generous (10 s) because at cold boot the vector index and
+    ONNX runtime are both initialising concurrently with DB setup.  A
+    background retry fires 45 s later so transient cold-boot failures
+    self-heal without requiring a service restart.
     """
     global _memory_capture_health
     try:
@@ -163,30 +88,43 @@ async def _run_memory_capture_startup_probe() -> None:
             raise RuntimeError("memory_extractor produced no candidates for probe")
 
         svc = get_memory_service()
-        await asyncio.wait_for(svc.load_for_prompt("family-admin", limit=1), timeout=3.0)
+        await asyncio.wait_for(svc.load_for_prompt("family-admin", limit=1), timeout=10.0)
         await asyncio.wait_for(
-            svc.search("startup probe", user_id="family-admin", limit=1, timeout_s=1.5),
-            timeout=3.0,
+            svc.search("startup probe", user_id="family-admin", limit=1, timeout_s=3.0),
+            timeout=10.0,
         )
         _memory_capture_health = {"status": "ok", "detail": "extractor+service ready"}
         logger.info("Memory capture startup probe: OK")
     except Exception as exc:
-        detail = str(exc)[:240]
-        _memory_capture_health = {"status": "degraded", "detail": detail}
+        detail = str(exc) or type(exc).__name__
+        _memory_capture_health = {"status": "degraded", "detail": detail[:240]}
         logger.error("Memory capture startup probe FAILED: %s", detail)
         if os.environ.get("ZOE_MEMORY_STARTUP_STRICT", "false").strip().lower() == "true":
             raise
 
 
+async def _memory_capture_retry_task() -> None:
+    """Background retry: re-run the startup probe once, 45 s after boot.
+
+    Clears false-degraded status caused by cold-boot timeouts without
+    requiring a full service restart.
+    """
+    await asyncio.sleep(45)
+    if _memory_capture_health.get("status") == "ok":
+        return
+    logger.info("Memory capture retry probe starting...")
+    await _run_memory_capture_startup_probe()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _openclaw_bg_task, _digest_bg_task, _keepwarm_task
+    global _openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task
     logger.info("Initializing zoe-data database...")
     await init_db()
     logger.info("Database initialized. zoe-data is ready.")
     # One-time MemPalace migration: re-tag legacy records from wing="zoe" to wing="family-admin"
     try:
-        from pi_agent import migrate_mempalace_legacy_records
+        from zoe_agent import migrate_mempalace_legacy_records
         await asyncio.get_event_loop().run_in_executor(None, migrate_mempalace_legacy_records)
     except Exception as _mig_exc:
         logger.warning("MemPalace migration (non-fatal): %s", _mig_exc)
@@ -201,19 +139,18 @@ async def lifespan(app: FastAPI):
     except Exception as _exc:
         logger.warning("Could not pre-load device tokens: %s", _exc)
     await _run_memory_capture_startup_probe()
+    asyncio.create_task(_memory_capture_retry_task(), name="memory_capture_retry")
     _openclaw_bg_task = start_openclaw_background_tasks()
     _digest_bg_task = start_memory_digest_background()
     _consolidation_bg_task = start_memory_consolidation_background()
-    _keepwarm_task = asyncio.create_task(_keepwarm_loop(), name="keepwarm")
-    logger.info("Keep-warm task started (Hermes every %ds, session=%s)", _KEEPWARM_INTERVAL_S, _HERMES_WARMUP_SESSION)
-
+    _zoe_update_bg_task = start_zoe_update_background_tasks()
     # Pi/Jetson Agent: warm Gemma's KV cache in background so first real query is fast
     # Check env directly to avoid circular import from routers.chat
     _pi_mode = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
     _jetson_mode = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
     if _pi_mode or _jetson_mode:
         try:
-            from pi_agent import warmup_kv_cache
+            from zoe_agent import warmup_kv_cache
             asyncio.create_task(warmup_kv_cache(), name="gemma_kv_warmup")
             tier = "Jetson" if _jetson_mode else "Pi"
             logger.info("%s Agent: Gemma KV cache warmup scheduled (fires in 8s)", tier)
@@ -250,7 +187,7 @@ async def lifespan(app: FastAPI):
         stop_proactive_engine()
     except Exception:
         pass
-    for task in (_openclaw_bg_task, _digest_bg_task, _keepwarm_task):
+    for task in (_openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task):
         if task:
             task.cancel()
             try:

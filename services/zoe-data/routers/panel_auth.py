@@ -553,6 +553,22 @@ async def submit_pin(payload: dict, db=Depends(get_db)):
                 ses = _VOICE_SESSIONS.get(p_id)
                 if ses:
                     ses["bound_user_id"] = resolved_user_id
+                # Persist to DB so _resolve_recent_panel_session_user trusts this panel
+                # for the next 15 min (ZOE_PANEL_SESSION_TRUST_WINDOW_S default 900s),
+                # preventing repeated auth challenges within the same session.
+                try:
+                    await db.execute(
+                        """INSERT INTO ui_panel_sessions (panel_id, user_id, last_seen_at, updated_at)
+                           VALUES (?, ?, datetime('now'), datetime('now'))
+                           ON CONFLICT(panel_id) DO UPDATE SET
+                             user_id=excluded.user_id,
+                             last_seen_at=datetime('now'),
+                             updated_at=datetime('now')""",
+                        (p_id, resolved_user_id),
+                    )
+                    await db.commit()
+                except Exception as _db_exc:
+                    logger.debug("panel_auth: ui_panel_sessions update failed (non-fatal): %s", _db_exc)
                 if pending_transcript:
                     # Replay the held voice command under the verified identity.
                     async def _run_replay():

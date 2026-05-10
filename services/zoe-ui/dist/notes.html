@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <script>
+    (function(){
+        if(localStorage.getItem('zoe_kiosk')==='1') return;
+        var p=new URLSearchParams(location.search);
+        if(p.get('kiosk')==='1') localStorage.setItem('zoe_kiosk','1');
+    })();
+    </script>
+    <script>
+    (function(){var s=localStorage.getItem('zoe_theme')||'auto';var dark=s==='dark'||(s==='auto'&&(new Date().getHours()<7||new Date().getHours()>=19));if(dark){document.documentElement.classList.add('dark-mode');}})();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <title>Zoe – Notes</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <script src="/js/sw-registration.js" defer></script>
+    <link rel="stylesheet" href="css/dark-mode-shared.css">
+    <script src="/js/auth.js"></script>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: #fafbfc; color: #1f2937;
+        }
+        html.dark-mode body { background: #060610; color: rgba(255,255,255,0.93); }
+
+        /* ── Nav Bar ── */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0;
+            background: rgba(255,255,255,0.85); backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255,255,255,0.3);
+            padding: 10px 15px; z-index: 100;
+            display: flex; justify-content: space-between; align-items: center; height: 60px;
+        }
+        html.dark-mode .nav-bar { background: rgba(6,6,16,0.85); border-bottom-color: rgba(255,255,255,0.1); }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb {
+            width: 32px; height: 32px; border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            cursor: pointer; transition: transform 0.3s; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item {
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400;
+            transition: all 0.3s; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        html.dark-mode .nav-item { color: rgba(255,255,255,0.65); }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123,97,255,0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        .more-nav-btn {
+            color: #666; font-size: 13px; font-weight: 400;
+            transition: all 0.3s; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+            cursor: pointer; background: none; border: none;
+        }
+        html.dark-mode .more-nav-btn { color: rgba(255,255,255,0.65); }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123,97,255,0.1); }
+        .api-indicator {
+            font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 8px;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .api-indicator::before { content:''; width:8px; height:8px; border-radius:50%; display:inline-block; }
+        .api-indicator.online { background: rgba(34,197,94,0.1); color: #22c55e; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline { background: rgba(239,68,68,0.1); color: #ef4444; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.connecting { background: rgba(251,146,60,0.1); color: #ea580c; }
+        .api-indicator.connecting::before { background: #ea580c; }
+        .notifications-btn {
+            background: rgba(255,255,255,0.6); border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 50%; width: 32px; height: 32px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.3s; color: #666; font-size: 16px; position: relative;
+        }
+        html.dark-mode .notifications-btn { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.15); color: rgba(255,255,255,0.7); }
+        .notifications-btn:hover { background: rgba(255,255,255,0.8); color: #333; }
+        .time-date-display { text-align: right; }
+        .current-time { font-size: 14px; font-weight: 600; color: #333; line-height: 1.2; }
+        .current-date { font-size: 11px; color: #888; line-height: 1.2; }
+        html.dark-mode .current-time { color: rgba(255,255,255,0.9); }
+        html.dark-mode .current-date { color: rgba(255,255,255,0.5); }
+
+        /* ── More Overlay ── */
+        .more-overlay {
+            position: fixed; top:0; left:0; width:100vw; height:100vh;
+            background: rgba(0,0,0,0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255,255,255,0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255,255,255,0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s;
+        }
+        html.dark-mode .more-content { background: rgba(20,20,40,0.97); border-color: rgba(255,255,255,0.15); }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px;
+            background: rgba(255,255,255,0.6); border: none; border-radius: 50%;
+            width: 36px; height: 36px; font-size: 18px; cursor: pointer; color: #666;
+        }
+        html.dark-mode .more-close { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.7); }
+        .more-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255,255,255,0.8); border: 1px solid rgba(255,255,255,0.4);
+            border-radius: 16px; padding: 20px; text-align: center; cursor: pointer;
+            transition: all 0.3s; min-height: 100px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        html.dark-mode .more-item { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.1); }
+        .more-item:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(123,97,255,0.2); }
+        .more-item.active { background: rgba(123,97,255,0.12); border-color: rgba(123,97,255,0.3); }
+        .more-item-icon { font-size: 28px; margin-bottom: 8px; }
+        .more-item-label { font-size: 13px; font-weight: 500; color: #555; }
+        html.dark-mode .more-item-label { color: rgba(255,255,255,0.75); }
+
+        /* ── Mobile Nav ── */
+        .mobile-nav-menu {
+            display: none; position: fixed; top:0; left:-280px; width:280px; height:100vh;
+            background: rgba(255,255,255,0.97); backdrop-filter: blur(20px);
+            z-index: 4000; transition: left 0.3s; flex-direction: column;
+            box-shadow: 4px 0 20px rgba(0,0,0,0.1);
+        }
+        html.dark-mode .mobile-nav-menu { background: rgba(10,10,25,0.98); }
+        .mobile-nav-menu.open { left: 0; }
+        .mobile-nav-header {
+            padding: 20px; border-bottom: 1px solid rgba(0,0,0,0.08);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        html.dark-mode .mobile-nav-header { border-bottom-color: rgba(255,255,255,0.1); }
+        .mobile-nav-header h3 { margin: 0; font-size: 20px; font-weight: 600; color: #333; }
+        html.dark-mode .mobile-nav-header h3 { color: rgba(255,255,255,0.9); }
+        .mobile-nav-close {
+            width: 36px; height: 36px; border-radius: 50%; border: none;
+            background: rgba(0,0,0,0.05); color: #666; font-size: 18px; cursor: pointer;
+        }
+        .mobile-nav-content { flex: 1; overflow-y: auto; padding: 10px; }
+        .mobile-nav-item {
+            display: flex; align-items: center; gap: 12px;
+            padding: 14px 16px; border-radius: 12px; color: #444; text-decoration: none;
+            font-size: 15px; transition: background 0.2s;
+        }
+        html.dark-mode .mobile-nav-item { color: rgba(255,255,255,0.8); }
+        .mobile-nav-item:hover { background: rgba(123,97,255,0.08); }
+        .mobile-nav-item.active { background: rgba(123,97,255,0.15); color: #7B61FF; font-weight: 600; }
+        .mobile-nav-overlay {
+            display: none; position: fixed; inset:0; background: rgba(0,0,0,0.4);
+            z-index: 3999; opacity: 0; transition: opacity 0.3s; pointer-events: none;
+        }
+        .mobile-nav-overlay.open { opacity: 1; pointer-events: auto; }
+
+        /* ── Notifications Panel ── */
+        .notifications-panel {
+            position: fixed; top:0; right:-400px; width:400px; height:100vh;
+            background: rgba(255,255,255,0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255,255,255,0.3); z-index: 2000;
+            transition: right 0.3s; overflow-y: auto;
+        }
+        html.dark-mode .notifications-panel { background: rgba(10,10,25,0.97); border-left-color: rgba(255,255,255,0.1); }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(0,0,0,0.08);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        html.dark-mode .notifications-header { border-bottom-color: rgba(255,255,255,0.1); }
+        .notifications-title { font-size: 18px; font-weight: 600; color: #333; margin: 0; }
+        html.dark-mode .notifications-title { color: rgba(255,255,255,0.9); }
+        .notifications-close {
+            width: 36px; height: 36px; border-radius: 50%; border: none;
+            background: rgba(0,0,0,0.05); color: #666; font-size: 18px; cursor: pointer;
+        }
+        .notifications-content { padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .no-notifications { text-align: center; color: #888; font-size: 14px; padding: 40px 20px; }
+
+        /* ── Notes Layout ── */
+        .notes-layout {
+            position: fixed; top: 60px; left: 0; right: 0; bottom: 0;
+            display: flex;
+        }
+
+        /* Sidebar */
+        .notes-sidebar {
+            width: 300px; flex-shrink: 0;
+            display: flex; flex-direction: column;
+            border-right: 1px solid rgba(0,0,0,0.08);
+            background: rgba(255,255,255,0.6);
+            backdrop-filter: blur(10px);
+        }
+        html.dark-mode .notes-sidebar { background: rgba(255,255,255,0.03); border-right-color: rgba(255,255,255,0.08); }
+
+        .sidebar-header {
+            padding: 16px;
+            border-bottom: 1px solid rgba(0,0,0,0.08);
+            display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+        }
+        html.dark-mode .sidebar-header { border-bottom-color: rgba(255,255,255,0.08); }
+        .sidebar-title { font-size: 18px; font-weight: 700; flex: 1; }
+        .new-note-btn {
+            width: 36px; height: 36px; border-radius: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            border: none; color: #fff; font-size: 22px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            line-height: 1; transition: opacity 0.2s;
+        }
+        .new-note-btn:hover { opacity: 0.85; }
+
+        .search-bar {
+            padding: 10px 14px;
+            border-bottom: 1px solid rgba(0,0,0,0.06);
+            flex-shrink: 0;
+        }
+        html.dark-mode .search-bar { border-bottom-color: rgba(255,255,255,0.06); }
+        .search-input {
+            width: 100%; border: 1px solid rgba(0,0,0,0.1); border-radius: 8px;
+            padding: 8px 12px; font-size: 13px; background: rgba(255,255,255,0.8);
+            color: #333; outline: none; font-family: inherit;
+        }
+        html.dark-mode .search-input { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.12); color: rgba(255,255,255,0.9); }
+        .search-input::placeholder { color: #aaa; }
+        html.dark-mode .search-input::placeholder { color: rgba(255,255,255,0.35); }
+
+        .notes-list {
+            flex: 1; overflow-y: auto; padding: 8px;
+        }
+        .note-item {
+            padding: 12px 14px; border-radius: 10px; cursor: pointer;
+            transition: background 0.15s; position: relative;
+            border-left: 3px solid transparent; margin-bottom: 2px;
+        }
+        .note-item:hover { background: rgba(123,97,255,0.06); }
+        .note-item.selected { background: rgba(123,97,255,0.1); border-left-color: #7B61FF; }
+        html.dark-mode .note-item:hover { background: rgba(123,97,255,0.1); }
+        html.dark-mode .note-item.selected { background: rgba(123,97,255,0.15); }
+        .note-item-title { font-size: 14px; font-weight: 600; color: #1f2937; margin-bottom: 3px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        html.dark-mode .note-item-title { color: rgba(255,255,255,0.9); }
+        .note-item-preview { font-size: 12px; color: #6b7280;
+            overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+            line-height: 1.4; margin-bottom: 4px; }
+        html.dark-mode .note-item-preview { color: rgba(255,255,255,0.5); }
+        .note-item-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .note-item-date { font-size: 11px; color: #9ca3af; }
+        .note-item-tag {
+            font-size: 10px; border-radius: 4px; padding: 1px 6px;
+            background: rgba(123,97,255,0.12); color: #7B61FF;
+        }
+        .notes-empty-list {
+            padding: 32px 16px; text-align: center; color: #9ca3af; font-size: 13px;
+        }
+
+        /* Main Content Area */
+        .notes-main {
+            flex: 1; display: flex; flex-direction: column; overflow: hidden;
+            background: #fff;
+        }
+        html.dark-mode .notes-main { background: #0a0a18; }
+
+        .editor-toolbar {
+            padding: 12px 20px;
+            border-bottom: 1px solid rgba(0,0,0,0.07);
+            display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+        }
+        html.dark-mode .editor-toolbar { border-bottom-color: rgba(255,255,255,0.07); }
+        .toolbar-title {
+            font-size: 14px; font-weight: 500; color: #6b7280; flex: 1;
+        }
+        html.dark-mode .toolbar-title { color: rgba(255,255,255,0.5); }
+        .btn {
+            min-height: 36px; border-radius: 8px; border: 1px solid rgba(0,0,0,0.1);
+            background: #fff; color: #374151; padding: 6px 14px;
+            font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.2s;
+            font-family: inherit;
+        }
+        html.dark-mode .btn { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.12); color: rgba(255,255,255,0.85); }
+        .btn:hover { background: #f3f4f6; }
+        html.dark-mode .btn:hover { background: rgba(255,255,255,0.12); }
+        .btn.primary { border: none; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); color: #fff; }
+        .btn.primary:hover { opacity: 0.9; }
+        .btn.danger { border-color: rgba(220,38,38,0.25); background: rgba(220,38,38,0.07); color: #dc2626; }
+        html.dark-mode .btn.danger { border-color: rgba(220,38,38,0.35); background: rgba(220,38,38,0.12); color: #fca5a5; }
+        .btn.danger:hover { background: rgba(220,38,38,0.14); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .editor-area {
+            flex: 1; overflow-y: auto; padding: 24px 28px;
+            display: flex; flex-direction: column; gap: 12px;
+        }
+        .title-input {
+            width: 100%; border: none; outline: none; background: none;
+            font-size: 26px; font-weight: 700; color: #111827; font-family: inherit;
+            line-height: 1.2;
+        }
+        html.dark-mode .title-input { color: rgba(255,255,255,0.95); }
+        .title-input::placeholder { color: #d1d5db; }
+        html.dark-mode .title-input::placeholder { color: rgba(255,255,255,0.2); }
+        .editor-divider { height: 1px; background: rgba(0,0,0,0.07); flex-shrink: 0; }
+        html.dark-mode .editor-divider { background: rgba(255,255,255,0.07); }
+        .content-textarea {
+            flex: 1; width: 100%; border: none; outline: none; background: none;
+            font-size: 15px; color: #374151; font-family: inherit;
+            line-height: 1.7; resize: none; min-height: 300px;
+        }
+        html.dark-mode .content-textarea { color: rgba(255,255,255,0.75); }
+        .content-textarea::placeholder { color: #d1d5db; }
+        html.dark-mode .content-textarea::placeholder { color: rgba(255,255,255,0.2); }
+
+        .editor-meta {
+            border-top: 1px solid rgba(0,0,0,0.07); padding: 12px 28px;
+            display: flex; align-items: center; gap: 12px; flex-shrink: 0; flex-wrap: wrap;
+        }
+        html.dark-mode .editor-meta { border-top-color: rgba(255,255,255,0.07); }
+        .meta-label {
+            font-size: 11px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase;
+            color: #9ca3af;
+        }
+        .tags-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 1; }
+        .tag-chip {
+            font-size: 12px; border-radius: 6px; padding: 3px 9px;
+            background: rgba(123,97,255,0.1); color: #7B61FF;
+            border: 1px solid rgba(123,97,255,0.2);
+            display: flex; align-items: center; gap: 4px;
+        }
+        .tag-remove { cursor: pointer; opacity: 0.7; font-size: 13px; line-height: 1; }
+        .tag-remove:hover { opacity: 1; }
+        .tag-input-wrap { display: flex; gap: 6px; }
+        .tag-input {
+            border: 1px solid rgba(0,0,0,0.1); border-radius: 6px; padding: 4px 10px;
+            font-size: 12px; background: rgba(255,255,255,0.8); color: #333; outline: none;
+            font-family: inherit; min-width: 100px;
+        }
+        html.dark-mode .tag-input { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.12); color: rgba(255,255,255,0.9); }
+        .tag-input::placeholder { color: #bbb; }
+
+        .color-row { display: flex; align-items: center; gap: 8px; }
+        .color-swatch {
+            width: 22px; height: 22px; border-radius: 50%;
+            border: 2px solid transparent; cursor: pointer; transition: transform 0.15s;
+        }
+        .color-swatch:hover { transform: scale(1.15); }
+        .color-swatch.selected { border-color: #1f2937; }
+        html.dark-mode .color-swatch.selected { border-color: rgba(255,255,255,0.9); }
+
+        /* Empty state in main */
+        .main-empty {
+            flex: 1; display: flex; flex-direction: column; align-items: center;
+            justify-content: center; gap: 12px; color: #9ca3af; text-align: center;
+            padding: 40px;
+        }
+        .main-empty-icon { font-size: 48px; }
+        .main-empty-title { font-size: 20px; font-weight: 600; color: #6b7280; }
+        .main-empty-body { font-size: 14px; line-height: 1.6; max-width: 300px; }
+        html.dark-mode .main-empty-title { color: rgba(255,255,255,0.5); }
+        html.dark-mode .main-empty-body { color: rgba(255,255,255,0.35); }
+
+        /* Toast */
+        .toast {
+            position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(12px);
+            background: rgba(10,10,25,0.9); color: #fff; backdrop-filter: blur(10px);
+            border-radius: 20px; padding: 8px 20px; font-size: 13px; font-weight: 500;
+            opacity: 0; transition: all 0.25s; pointer-events: none; z-index: 5000;
+            white-space: nowrap;
+        }
+        .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+        html.dark-mode .toast { background: rgba(255,255,255,0.12); }
+
+        @media (max-width: 900px) {
+            .nav-menu { display: none !important; }
+            .more-nav-btn { display: none !important; }
+            .mobile-nav-menu { display: flex; }
+            .mobile-nav-overlay { display: block; }
+            .notes-sidebar { width: 240px; }
+        }
+        @media (max-width: 600px) {
+            .notes-sidebar { display: none; }
+        }
+        @media (min-width: 901px) {
+            .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Nav Bar -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="window.location.href='index.html'" title="Home"></div>
+            <nav class="nav-menu">
+                <a href="chat.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="lists.html" class="nav-item">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </nav>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            <button class="notifications-btn refresh-btn" onclick="typeof forceRefreshCache==='function'&&forceRefreshCache()" title="Refresh">🔄</button>
+            <button class="notifications-btn theme-nav-btn" title="Toggle theme" onclick="window.cycleZoeTheme&&window.cycleZoeTheme()">🌓</button>
+            <button class="notifications-btn" onclick="openNotificationsSafe()" title="Notifications">🔔</button>
+            <div class="time-date-display">
+                <div class="current-time" id="navCurrentTime">--:--</div>
+                <div class="current-date" id="navCurrentDate">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay" onclick="if(event.target===this)closeMoreOverlay()">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('people.html')">
+                    <div class="more-item-icon">👥</div>
+                    <div class="more-item-label">People</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item active" onclick="closeMoreOverlay()">
+                    <div class="more-item-icon">📝</div>
+                    <div class="more-item-label">Notes</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('cooking.html')">
+                    <div class="more-item-icon">🍳</div>
+                    <div class="more-item-label">Cooking</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('smart-home.html')">
+                    <div class="more-item-icon">🏠</div>
+                    <div class="more-item-label">Smart Home</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('updates.html')">
+                    <div class="more-item-icon">⬇️</div>
+                    <div class="more-item-label">Updates</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Nav -->
+    <div class="mobile-nav-menu" id="mobileNavMenu">
+        <div class="mobile-nav-header">
+            <h3>Navigation</h3>
+            <button class="mobile-nav-close" onclick="toggleMobileMenu()">✕</button>
+        </div>
+        <div class="mobile-nav-content">
+            <a href="chat.html" class="mobile-nav-item">💬 Chat</a>
+            <a href="dashboard.html" class="mobile-nav-item">📊 Dashboard</a>
+            <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
+            <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
+            <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
+            <a href="notes.html" class="mobile-nav-item active">📝 Notes</a>
+            <a href="cooking.html" class="mobile-nav-item">🍳 Cooking</a>
+            <a href="smart-home.html" class="mobile-nav-item">🏠 Smart Home</a>
+            <a href="updates.html" class="mobile-nav-item">⬇️ Updates</a>
+            <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
+        </div>
+    </div>
+    <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+
+    <!-- Notes Layout -->
+    <div class="notes-layout">
+        <!-- Sidebar -->
+        <aside class="notes-sidebar">
+            <div class="sidebar-header">
+                <span class="sidebar-title">Notes</span>
+                <button class="new-note-btn" onclick="newNote()" title="New note">+</button>
+            </div>
+            <div class="search-bar">
+                <input class="search-input" type="search" id="searchInput" placeholder="Search notes…" autocomplete="off">
+            </div>
+            <div class="notes-list" id="notesList">
+                <div class="notes-empty-list">Loading…</div>
+            </div>
+        </aside>
+
+        <!-- Main Editor -->
+        <main class="notes-main" id="notesMain">
+            <div class="main-empty" id="emptyState">
+                <div class="main-empty-icon">📝</div>
+                <div class="main-empty-title">Select a note</div>
+                <div class="main-empty-body">Choose a note from the sidebar, or click <strong>+</strong> to create a new one.</div>
+            </div>
+
+            <div id="editorPanel" style="display:none; flex-direction:column; flex:1; overflow:hidden; display:none;">
+                <div class="editor-toolbar">
+                    <span class="toolbar-title" id="toolbarTitle">New Note</span>
+                    <button class="btn danger" id="deleteBtn" onclick="deleteNote()" style="display:none">🗑 Delete</button>
+                    <button class="btn" onclick="discardChanges()">Discard</button>
+                    <button class="btn primary" onclick="saveNote()">Save</button>
+                </div>
+
+                <div class="editor-area">
+                    <input class="title-input" id="noteTitleInput" type="text" placeholder="Title" autocomplete="off">
+                    <div class="editor-divider"></div>
+                    <textarea class="content-textarea" id="noteEditor" placeholder="Start writing…" spellcheck="true"></textarea>
+                </div>
+
+                <div class="editor-meta">
+                    <span class="meta-label">Tags</span>
+                    <div class="tags-row">
+                        <div id="tagsChips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+                        <div class="tag-input-wrap">
+                            <input class="tag-input" id="tagInput" type="text" placeholder="Add tag…">
+                            <button class="btn" style="min-height:28px;padding:3px 10px;font-size:12px;" onclick="addTagFromInput()">Add</button>
+                        </div>
+                    </div>
+                    <span class="meta-label" style="margin-left:12px;">Color</span>
+                    <div class="color-row" id="colorPicker">
+                        <div class="color-swatch selected" data-color="#7B61FF" style="background:#7B61FF" onclick="selectColor(this)"></div>
+                        <div class="color-swatch" data-color="#5AE0E0" style="background:#5AE0E0" onclick="selectColor(this)"></div>
+                        <div class="color-swatch" data-color="#FF6B9D" style="background:#FF6B9D" onclick="selectColor(this)"></div>
+                        <div class="color-swatch" data-color="#FFB347" style="background:#FFB347" onclick="selectColor(this)"></div>
+                        <div class="color-swatch" data-color="#6BCB77" style="background:#6BCB77" onclick="selectColor(this)"></div>
+                        <div class="color-swatch" data-color="#FF6B6B" style="background:#FF6B6B" onclick="selectColor(this)"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script src="js/common.js"></script>
+    <script src="/js/notifications-panel.js"></script>
+    <script src="/js/websocket-sync.js"></script>
+    <script>
+        const NOTE_COLORS = ['#7B61FF','#5AE0E0','#FF6B9D','#FFB347','#6BCB77','#FF6B6B'];
+
+        let notes = [];
+        let filteredNotes = [];
+        let currentNoteId = null;
+        let currentColor = '#7B61FF';
+        let currentTags = [];
+        let searchQuery = '';
+        let isDirty = false;
+
+        /* ── Nav helpers ── */
+        function navigateToPage(page) { closeMoreOverlay(); window.location.href = page; }
+        function toggleMobileMenu() {
+            document.getElementById('mobileNavMenu').classList.toggle('open');
+            document.getElementById('mobileNavOverlay').classList.toggle('open');
+        }
+        function openNotificationsSafe() {
+            if (typeof openNotificationsPanel === 'function') openNotificationsPanel();
+            else { const p = document.getElementById('notificationsPanel'); if (p) p.classList.toggle('open'); }
+        }
+        function closeNotifications() {
+            const p = document.getElementById('notificationsPanel'); if (p) p.classList.remove('open');
+        }
+
+        /* Clock */
+        function updateClock() {
+            const now = new Date();
+            const tEl = document.getElementById('navCurrentTime');
+            const dEl = document.getElementById('navCurrentDate');
+            if (tEl) tEl.textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            if (dEl) dEl.textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+        }
+        updateClock(); setInterval(updateClock, 30000);
+
+        /* API status */
+        (async function() {
+            try {
+                const r = await fetch('/health');
+                const ind = document.getElementById('apiStatus');
+                if (ind) { if (r.ok) { ind.textContent = 'Online'; ind.className = 'api-indicator online'; } }
+            } catch { const ind = document.getElementById('apiStatus'); if (ind) { ind.textContent = 'Offline'; ind.className = 'api-indicator offline'; } }
+        })();
+
+        /* ── Notes logic ── */
+        function escHtml(str) {
+            return (str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
+        function hashStr(s) {
+            let h = 0; for (let i = 0; i < s.length; i++) h = (Math.imul(31,h)+s.charCodeAt(i))|0; return Math.abs(h);
+        }
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            document.getElementById('searchInput').addEventListener('input', e => {
+                searchQuery = e.target.value.toLowerCase(); applyFilter();
+            });
+            document.getElementById('tagInput').addEventListener('keydown', e => {
+                if (e.key === 'Enter') { e.preventDefault(); addTagFromInput(); }
+            });
+
+            try {
+                const session = JSON.parse(localStorage.getItem('zoe_session') || '{}');
+                const userId = session.user_id || session.userId || 'anonymous';
+                if (typeof ZoeWebSockets !== 'undefined') {
+                    ZoeWebSockets.init(userId);
+                    if (ZoeWebSockets.notes && typeof ZoeWebSockets.notes.on === 'function') {
+                        ZoeWebSockets.notes.on('note_created', loadNotes);
+                        ZoeWebSockets.notes.on('note_updated', loadNotes);
+                        ZoeWebSockets.notes.on('note_deleted', loadNotes);
+                    }
+                }
+            } catch(e) { console.warn('WS init:', e); }
+
+            await loadNotes();
+        });
+
+        async function loadNotes() {
+            try {
+                const r = await fetch('/api/notes');
+                if (!r.ok) throw new Error();
+                const data = await r.json();
+                notes = Array.isArray(data) ? data : (data.notes || []);
+                applyFilter();
+            } catch {
+                notes = []; renderSidebar([]);
+            }
+        }
+
+        function applyFilter() {
+            if (!searchQuery) { filteredNotes = [...notes]; }
+            else {
+                filteredNotes = notes.filter(n =>
+                    (n.title||'').toLowerCase().includes(searchQuery) ||
+                    (n.content||'').toLowerCase().includes(searchQuery) ||
+                    (n.tags||[]).some(t => t.toLowerCase().includes(searchQuery))
+                );
+            }
+            renderSidebar(filteredNotes);
+        }
+
+        function renderSidebar(list) {
+            const el = document.getElementById('notesList');
+            if (!list.length) {
+                el.innerHTML = `<div class="notes-empty-list">${searchQuery ? 'No results for "' + escHtml(searchQuery) + '"' : 'No notes yet. Click + to create one.'}</div>`;
+                return;
+            }
+            el.innerHTML = list.map(note => {
+                const color = note.color || NOTE_COLORS[hashStr(note.id || note.title || '') % NOTE_COLORS.length];
+                const date = note.updated_at || note.created_at
+                    ? new Date(note.updated_at || note.created_at).toLocaleDateString(undefined, { month:'short', day:'numeric' }) : '';
+                const tags = (note.tags||[]).slice(0,2).map(t => `<span class="note-item-tag">${escHtml(t)}</span>`).join('');
+                const sel = currentNoteId === (note.id || note._id) ? ' selected' : '';
+                return `<div class="note-item${sel}" style="border-left-color:${color}" onclick='selectNote(${JSON.stringify(note)})'>
+                    <div class="note-item-title">${escHtml(note.title || 'Untitled')}</div>
+                    <div class="note-item-preview">${escHtml(note.content || '')}</div>
+                    <div class="note-item-meta">
+                        ${date ? `<span class="note-item-date">${date}</span>` : ''}
+                        ${tags}
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function selectNote(note) {
+            if (isDirty && !confirm('You have unsaved changes. Discard them?')) return;
+            currentNoteId = note.id || note._id || null;
+            currentColor = note.color || '#7B61FF';
+            currentTags = Array.isArray(note.tags) ? [...note.tags] : [];
+            isDirty = false;
+
+            document.getElementById('noteTitleInput').value = note.title || '';
+            document.getElementById('noteEditor').value = note.content || '';
+            document.getElementById('toolbarTitle').textContent = 'Edit Note';
+            document.getElementById('deleteBtn').style.display = 'flex';
+
+            updateTagsChips(); updateColorPicker(); showEditor();
+            applyFilter(); // re-render sidebar to update selection highlight
+        }
+
+        function newNote() {
+            if (isDirty && !confirm('You have unsaved changes. Discard them?')) return;
+            currentNoteId = null;
+            currentColor = '#7B61FF';
+            currentTags = [];
+            isDirty = false;
+
+            document.getElementById('noteTitleInput').value = '';
+            document.getElementById('noteEditor').value = '';
+            document.getElementById('toolbarTitle').textContent = 'New Note';
+            document.getElementById('deleteBtn').style.display = 'none';
+
+            updateTagsChips(); updateColorPicker(); showEditor();
+            document.getElementById('noteTitleInput').focus();
+        }
+
+        function showEditor() {
+            document.getElementById('emptyState').style.display = 'none';
+            const ep = document.getElementById('editorPanel');
+            ep.style.display = 'flex';
+            ep.style.flexDirection = 'column';
+            ep.style.flex = '1';
+        }
+
+        function discardChanges() {
+            isDirty = false;
+            currentNoteId = null;
+            document.getElementById('emptyState').style.display = 'flex';
+            document.getElementById('editorPanel').style.display = 'none';
+            applyFilter();
+        }
+
+        /* Tags */
+        function addTagFromInput() {
+            const inp = document.getElementById('tagInput');
+            const val = inp.value.trim();
+            if (val && !currentTags.includes(val)) { currentTags.push(val); updateTagsChips(); isDirty = true; }
+            inp.value = '';
+        }
+        function removeTag(tag) { currentTags = currentTags.filter(t => t !== tag); updateTagsChips(); isDirty = true; }
+        function updateTagsChips() {
+            document.getElementById('tagsChips').innerHTML = currentTags.map(t =>
+                `<span class="tag-chip">${escHtml(t)}<span class="tag-remove" onclick="removeTag('${escHtml(t)}')">×</span></span>`
+            ).join('');
+        }
+
+        /* Color */
+        function selectColor(el) {
+            currentColor = el.dataset.color;
+            document.querySelectorAll('.color-swatch').forEach(s => s.classList.toggle('selected', s === el));
+            isDirty = true;
+        }
+        function updateColorPicker() {
+            document.querySelectorAll('.color-swatch').forEach(s => s.classList.toggle('selected', s.dataset.color === currentColor));
+        }
+
+        /* Mark dirty on typing */
+        ['noteTitleInput','noteEditor'].forEach(id => {
+            document.addEventListener('DOMContentLoaded', () => {
+                const el = document.getElementById(id);
+                if (el) el.addEventListener('input', () => { isDirty = true; });
+            });
+        });
+
+        /* Save */
+        async function saveNote() {
+            const title = document.getElementById('noteTitleInput').value.trim();
+            const content = document.getElementById('noteEditor').value.trim();
+            if (!title && !content) { showToast('⚠ Nothing to save'); return; }
+            const payload = { title: title || 'Untitled', content, tags: currentTags, color: currentColor };
+            try {
+                let r;
+                if (currentNoteId) {
+                    r = await fetch(`/api/notes/${currentNoteId}`, {
+                        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                    });
+                } else {
+                    r = await fetch('/api/notes', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                    });
+                }
+                if (!r.ok) throw new Error(await r.text());
+                const saved = await r.json();
+                if (!currentNoteId && saved.id) currentNoteId = saved.id;
+                isDirty = false;
+                showToast(currentNoteId ? '✓ Note updated' : '✓ Note created');
+                await loadNotes();
+                document.getElementById('toolbarTitle').textContent = 'Edit Note';
+                document.getElementById('deleteBtn').style.display = 'flex';
+            } catch(e) { showToast('⚠ Could not save: ' + (e.message || e)); }
+        }
+
+        /* Delete */
+        async function deleteNote() {
+            if (!currentNoteId) return;
+            if (!confirm('Delete this note?')) return;
+            try {
+                const r = await fetch(`/api/notes/${currentNoteId}`, { method: 'DELETE' });
+                if (!r.ok) throw new Error();
+                isDirty = false;
+                discardChanges();
+                showToast('Note deleted');
+                await loadNotes();
+            } catch { showToast('⚠ Could not delete'); }
+        }
+
+        /* Toast */
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg; t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 2400);
+        }
+
+        /* ZOE_OPEN_FORM hook */
+        window.ZOE_OPEN_FORM = function(formType, prefill) {
+            if (formType === 'new_note') {
+                newNote();
+                if (prefill) {
+                    if (prefill.title) document.getElementById('noteTitleInput').value = prefill.title;
+                    if (prefill.content) document.getElementById('noteEditor').value = prefill.content;
+                    if (prefill.tags) { currentTags = Array.isArray(prefill.tags) ? prefill.tags : [prefill.tags]; updateTagsChips(); }
+                }
+                setTimeout(() => document.getElementById('noteEditor').focus(), 100);
+            }
+        };
+    </script>
+</body>
+</html>

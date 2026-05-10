@@ -1,7 +1,7 @@
 """
 Message composer for the proactive engine.
 
-Calls llama-server (same endpoint as pi_agent) to generate a concise,
+Calls llama-server (same endpoint as zoe_agent) to generate a concise,
 friendly push-notification message from a trigger context dict.
 Falls back to the raw trigger message on any failure.
 """
@@ -14,7 +14,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-_LLM_BASE = os.environ.get("LLAMA_SERVER_URL", "http://localhost:8080")
+_LLM_BASE = os.environ.get("LLAMA_SERVER_URL", "http://localhost:11434")
 _TIMEOUT = 12.0
 _MAX_TOKENS = 80
 

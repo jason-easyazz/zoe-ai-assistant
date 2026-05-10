@@ -862,6 +862,143 @@ async def _broadcast_list_ui(
         logger.debug("voice list ui enqueue failed (non-fatal): %s", exc)
 
 
+def _parse_voice_form_field(text: str, panel_type: str) -> dict:
+    """Extract field updates from a voice utterance directed at the active action form.
+
+    Returns a dict of {field_name: value} pairs, or {} if no match found.
+    For shopping_list, field_name may be "add" or "remove" (list ops).
+    """
+    import re as _re
+    t = text.lower().strip()
+    result: dict = {}
+
+    if panel_type == "shopping_list":
+        # "add <item>", "put <item> on the list", "we also need <item>"
+        m = _re.match(
+            r"^(?:add|put|we need|also need|get|buy)\s+(.+?)(?:\s+(?:to|on)(?:\s+(?:the|my)\s+)?(?:list|shopping list))?$",
+            t,
+        )
+        if m:
+            result["add"] = m.group(1).strip().rstrip(".,;")
+            return result
+        # "remove <item>", "cross off <item>", "we got <item>"
+        m = _re.match(
+            r"^(?:remove|delete|take off|cross off|we got|got|we have)\s+(.+?)(?:\s+(?:from|off)(?:\s+(?:the|my)\s+)?(?:list))?$",
+            t,
+        )
+        if m:
+            result["remove"] = m.group(1).strip().rstrip(".,;")
+            return result
+        return result
+
+    if panel_type == "calendar_event":
+        # Title: "the title is X", "call it X", "name it X", "event title X"
+        m = _re.match(r"^(?:the\s+)?(?:title|name|event)\s+(?:is\s+|should be\s+)?(?:called?\s+)?(.+)$", t)
+        if m:
+            result["title"] = m.group(1).strip().rstrip(".,;")
+            return result
+        m = _re.match(r"^(?:call|name)\s+it\s+(.+)$", t)
+        if m:
+            result["title"] = m.group(1).strip().rstrip(".,;")
+            return result
+        # Date: "on <date>", "the date is <date>", "change the date to <date>"
+        m = _re.match(r"^(?:on|the\s+date\s+is|date\s+is|change(?:\s+the)?\s+date\s+to|set(?:\s+the)?\s+date\s+to)\s+(.+)$", t)
+        if m:
+            from intent_router import _parse_date as _pd
+            _raw_date = m.group(1).strip().rstrip(".,;")
+            _parsed = _pd(_raw_date)
+            if _parsed:
+                result["date"] = _parsed
+                return result
+        # Time: "at <time>", "the time is <time>", "change the time to <time>"
+        m = _re.match(r"^(?:at|the\s+time\s+is|time\s+is|change(?:\s+the)?\s+time\s+to|set(?:\s+the)?\s+time\s+to)\s+(.+)$", t)
+        if m:
+            from intent_router import _parse_time as _pt
+            _raw_time = m.group(1).strip().rstrip(".,;")
+            _parsed_t = _pt(_raw_time)
+            if _parsed_t:
+                result["time"] = _parsed_t
+                return result
+        # Location: "at <location>", "the location is X", "in <location>"
+        m = _re.match(r"^(?:(?:(?:the\s+)?location\s+(?:is|should be)|located?\s+at)\s+)(.+)$", t)
+        if m:
+            result["location"] = m.group(1).strip().rstrip(".,;")
+            return result
+        # Notes: "add a note X", "notes say X"
+        m = _re.match(r"^(?:(?:add\s+a?\s+)?note[s]?\s+(?:saying|says?|is|:)\s+|add\s+notes?\s+)(.+)$", t)
+        if m:
+            result["notes"] = m.group(1).strip().rstrip(".,;")
+            return result
+        # Duration: "for <N> hours/minutes"
+        m = _re.match(r"^(?:for|duration\s+is|lasts?)\s+(\d+\s*(?:hour|hr|minute|min)s?)$", t)
+        if m:
+            result["duration"] = m.group(1).strip()
+            return result
+        return result
+
+    return result
+
+
+async def _broadcast_action_form_panel(
+    panel_id: str,
+    panel_type: str,
+    data: dict,
+    title: str = "",
+    turn_key: Optional[str] = None,
+) -> None:
+    """Broadcast a panel_show_action_form event so the touch overlay opens.
+
+    panel_type: "calendar_event" | "shopping_list"
+    data: pre-fill data dict (slots already parsed)
+    """
+    from panel_form_state import set_active_form
+    set_active_form(panel_id, panel_type, data)
+
+    delivery_key = turn_key or str(time.monotonic_ns())
+    form_action = {
+        "id": f"voice_action_form_{panel_id}_{delivery_key}",
+        "action_type": "panel_show_action_form",
+        "payload": {
+            "panel_type": panel_type,
+            "title": title,
+            "data": data,
+            "panel_id": panel_id,
+        },
+    }
+    try:
+        from push import broadcaster
+        await broadcaster.broadcast("all", "ui_action", {"action": form_action})
+    except Exception as exc:
+        logger.debug("_broadcast_action_form_panel broadcast failed (non-fatal): %s", exc)
+    try:
+        from database import get_db as _get_db
+        from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
+        async for _db in _get_db():
+            _panel_user_id = "family-admin"
+            try:
+                _cur = await _db.execute(
+                    "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+                    (panel_id,),
+                )
+                _row = await _cur.fetchone()
+                if _row and _row["user_id"]:
+                    _panel_user_id = str(_row["user_id"])
+            except Exception:
+                pass
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="panel_show_action_form",
+                payload=form_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_action_form_{panel_id}_{delivery_key}",
+            )
+            break
+    except Exception as exc:
+        logger.debug("_broadcast_action_form_panel enqueue failed (non-fatal): %s", exc)
+
+
 async def _broadcast_reminder_ui(
     panel_id: str,
     summary: str,
@@ -1587,6 +1724,188 @@ async def voice_command(
     logger.info("voice/command panel=%s session=%s user=%s len=%d",
                 panel_id, session_id, effective_user, len(text))
 
+    # ── Active action-form panel: route voice to field-filling ─────────────
+    # When the touch panel has an action form open (calendar_event or shopping_list),
+    # incoming voice utterances are interpreted as field updates rather than new
+    # chat commands. Simple NLU extracts the field/value and emits panel_update_field
+    # or panel_list_update events. "Cancel" / "dismiss" closes the form.
+    try:
+        from panel_form_state import get_active_form, clear_active_form
+        _active_form = get_active_form(panel_id)
+        if _active_form:
+            _form_panel_type = _active_form.get("panel_type", "")
+            _lc_voice = text.lower().strip().rstrip(".!?")
+            _cancel_words = {"cancel", "dismiss", "close", "never mind", "nevermind", "forget it", "stop"}
+            if any(w in _lc_voice for w in _cancel_words):
+                # User said cancel — dismiss the panel
+                clear_active_form(panel_id)
+                try:
+                    from push import broadcaster as _bc_af
+                    await _bc_af.broadcast("all", "ui_action", {
+                        "action": {
+                            "id": f"voice_form_close_{panel_id}_{_turn_key}",
+                            "action_type": "panel_close_action_form",
+                            "payload": {"panel_id": panel_id},
+                        }
+                    })
+                except Exception:
+                    pass
+                _cancel_reply = "Okay, cancelled."
+                _cancel_audio = await synthesize({"text": _cancel_reply}, caller=caller)
+                return {
+                    "ok": True, "panel_id": panel_id, "reply": _cancel_reply,
+                    "audio_base64": base64.b64encode(_cancel_audio.body).decode("ascii"),
+                    "content_type": _cancel_audio.media_type,
+                }
+            # Confirm words: submit the active form without requiring a tap on the button.
+            _FORM_CONFIRM_EXACT = {
+                "confirm", "save", "yes", "submit", "done", "accept",
+                "ok", "okay", "perfect", "correct",
+            }
+            _FORM_CONFIRM_PHRASES = {
+                "that's correct", "thats correct", "looks good", "looks right",
+                "sounds good", "go ahead", "yes please", "yes do it", "save it",
+            }
+            _is_form_confirm = (
+                _lc_voice in _FORM_CONFIRM_EXACT
+                or any(phrase in _lc_voice for phrase in _FORM_CONFIRM_PHRASES)
+                or any(_lc_voice.startswith(w + " ") or _lc_voice.endswith(" " + w)
+                       for w in _FORM_CONFIRM_EXACT)
+            )
+            if _is_form_confirm:
+                _form_data = _active_form.get("slots") or {}
+                _confirm_reply = "Event saved." if _form_panel_type == "calendar_event" else "List saved."
+                try:
+                    if _form_panel_type == "calendar_event":
+                        from intent_router import execute_intent as _exec_cal_confirm
+                        from dataclasses import dataclass as _dc_cal
+
+                        @_dc_cal
+                        class _SynthIntentVCal:
+                            name: str
+                            slots: dict
+
+                        _synth_cal = _SynthIntentVCal(name="calendar_create", slots=_form_data)
+                        _cal_result = await _exec_cal_confirm(_synth_cal, effective_user)
+                        _confirm_reply = _cal_result or "Event saved."
+                    elif _form_panel_type == "shopping_list":
+                        from intent_router import execute_intent as _exec_list_confirm
+                        from dataclasses import dataclass as _dc_list
+
+                        @_dc_list
+                        class _SynthIntentVList:
+                            name: str
+                            slots: dict
+
+                        # Prefer new_item when panel was prefilled with existing list.
+                        _new_item_save = _form_data.get("new_item") or ""
+                        if _new_item_save:
+                            _items_to_save = [_new_item_save]
+                        else:
+                            _items_to_save = _form_data.get("items") or (
+                                [_form_data["item"]] if _form_data.get("item") else []
+                            )
+                        _list_name_save = _form_data.get("list_name", "shopping")
+                        _save_results = []
+                        for _it_save in _items_to_save:
+                            _sy = _SynthIntentVList(
+                                name="list_add",
+                                slots={"item": str(_it_save), "list_name": _list_name_save,
+                                       "list_type": _list_name_save},
+                            )
+                            _r_save = await _exec_list_confirm(_sy, effective_user)
+                            if _r_save:
+                                _save_results.append(_r_save)
+                        _confirm_reply = "; ".join(_save_results) if _save_results else "List saved."
+                except Exception as _conf_exc:
+                    logger.warning("voice form voice-confirm failed: %s", _conf_exc)
+                clear_active_form(panel_id)
+                try:
+                    from push import broadcaster as _bc_conf
+                    await _bc_conf.broadcast("all", "ui_action", {
+                        "action": {
+                            "id": f"voice_form_close_{panel_id}_{_turn_key}",
+                            "action_type": "panel_close_action_form",
+                            "payload": {"panel_id": panel_id},
+                        }
+                    })
+                except Exception:
+                    pass
+                _confirm_audio = await synthesize({"text": _confirm_reply}, caller=caller)
+                return {
+                    "ok": True, "panel_id": panel_id, "reply": _confirm_reply,
+                    "audio_base64": base64.b64encode(_confirm_audio.body).decode("ascii"),
+                    "content_type": _confirm_audio.media_type,
+                }
+            # Try to extract a field update from the utterance.
+            _field_updates = _parse_voice_form_field(text, _form_panel_type)
+            if _field_updates:
+                try:
+                    from push import broadcaster as _bc_af2
+                    for _fname, _fval in _field_updates.items():
+                        _af_action_type = (
+                            "panel_list_update"
+                            if _form_panel_type == "shopping_list" and _fname in ("add", "remove")
+                            else "panel_update_field"
+                        )
+                        _af_payload: dict = {"panel_id": panel_id}
+                        if _af_action_type == "panel_list_update":
+                            _af_payload["op"] = _fname
+                            _af_payload["item"] = _fval
+                        else:
+                            _af_payload["field"] = _fname
+                            _af_payload["value"] = _fval
+                        await _bc_af2.broadcast("all", "ui_action", {
+                            "action": {
+                                "id": f"voice_field_{panel_id}_{_fname}_{_turn_key}",
+                                "action_type": _af_action_type,
+                                "payload": _af_payload,
+                            }
+                        })
+                except Exception as _afe:
+                    logger.debug("voice form field broadcast failed (non-fatal): %s", _afe)
+                # Persist field changes into in-memory slots so a subsequent voice
+                # "confirm" command uses the latest values.
+                try:
+                    _slots_ref = _active_form.setdefault("slots", {})
+                    for _usf_name, _usf_val in _field_updates.items():
+                        if _form_panel_type == "shopping_list":
+                            _slot_items = _slots_ref.setdefault("items", [])
+                            if _usf_name == "add" and _usf_val not in _slot_items:
+                                _slot_items.append(_usf_val)
+                            elif _usf_name == "remove" and _usf_val in _slot_items:
+                                _slot_items.remove(_usf_val)
+                        else:
+                            _slots_ref[_usf_name] = _usf_val
+                except Exception:
+                    pass
+                _field_reply_parts = []
+                for _fn, _fv in _field_updates.items():
+                    if _fn == "add":
+                        _field_reply_parts.append(f"Added {_fv} to the list.")
+                    elif _fn == "remove":
+                        _field_reply_parts.append(f"Removed {_fv}.")
+                    elif _fn == "title":
+                        _field_reply_parts.append(f"Title set to {_fv}.")
+                    elif _fn == "date":
+                        _field_reply_parts.append(f"Date updated.")
+                    elif _fn == "time":
+                        _field_reply_parts.append(f"Time set to {_fv}.")
+                    elif _fn == "location":
+                        _field_reply_parts.append(f"Location set to {_fv}.")
+                    else:
+                        _field_reply_parts.append("Updated.")
+                _field_reply = " ".join(_field_reply_parts) or "Got it."
+                _field_audio = await synthesize({"text": _field_reply}, caller=caller)
+                return {
+                    "ok": True, "panel_id": panel_id, "reply": _field_reply,
+                    "audio_base64": base64.b64encode(_field_audio.body).decode("ascii"),
+                    "content_type": _field_audio.media_type,
+                }
+            # Utterance didn't match a known field — let it fall through to normal chat.
+    except Exception as _af_outer_exc:
+        logger.debug("voice form routing failed (non-fatal): %s", _af_outer_exc)
+
     # ── Voice confirmation: check if we're waiting for yes/no ─────────────
     pending = _PENDING_CONFIRMATIONS.get(panel_id)
     if pending:
@@ -1698,7 +2017,9 @@ async def voice_command(
             except Exception:
                 pass
         if _quick_intent and _quick_intent.name == "list_add":
-            # Fast-path list adds so the touch chat can immediately show the updated list.
+            # Show the shopping list action-form panel with the item pre-filled.
+            # The panel's Done button POSTs to /api/ui/panel/form/confirm which
+            # then adds all confirmed items to the list.
             _allow_quick_list = True
             try:
                 from voice_scope import classify as _vscope_list
@@ -1709,15 +2030,64 @@ async def voice_command(
                 pass
             if _allow_quick_list:
                 try:
-                    from intent_router import execute_intent as _exec_list
                     slots = _quick_intent.slots or {}
-                    _list_reply = await _exec_list(_quick_intent, effective_user)
-                    reply_text = _list_reply or "Added to your list."
-                    await _broadcast_list_ui(
+                    _item_text = str(slots.get("item", "")).strip()
+                    _list_type = str(slots.get("list_type", "shopping"))
+                    _list_title = "Shopping List" if _list_type == "shopping" else f"{_list_type.title()} List"
+
+                    # Pre-load existing non-completed items so the panel shows the full list.
+                    _existing_list_items: list = []
+                    try:
+                        from database import get_db as _get_db_prefill
+                        _norm_lt = _list_type.replace("_todos", "") if "_todos" in _list_type else _list_type
+                        async for _pdb in _get_db_prefill():
+                            _lc = await _pdb.execute(
+                                """SELECT id FROM lists
+                                   WHERE list_type = ? AND deleted = 0
+                                     AND (visibility = 'family' OR user_id = ?)
+                                   ORDER BY updated_at DESC LIMIT 1""",
+                                (_norm_lt, effective_user),
+                            )
+                            _lr = await _lc.fetchone()
+                            if _lr:
+                                _ic = await _pdb.execute(
+                                    """SELECT text FROM list_items
+                                       WHERE list_id = ? AND deleted = 0 AND completed = 0
+                                       ORDER BY sort_order, created_at""",
+                                    (_lr["id"],),
+                                )
+                                _irs = await _ic.fetchall()
+                                _existing_list_items = [
+                                    r["text"] for r in _irs if r and r["text"]
+                                ]
+                            break
+                    except Exception as _pf_exc:
+                        logger.debug("voice list prefill fetch failed (non-fatal): %s", _pf_exc)
+
+                    # Place the new item first, then existing items (deduped).
+                    if _item_text:
+                        _prefill_items = [_item_text] + [
+                            i for i in _existing_list_items if i != _item_text
+                        ]
+                    else:
+                        _prefill_items = list(_existing_list_items)
+
+                    _list_form_data = {
+                        "list_name": _list_type,
+                        "items": _prefill_items,
+                        "item": _item_text,
+                        # Flag so confirm endpoint knows which item is the new addition.
+                        "new_item": _item_text,
+                    }
+                    reply_text = (
+                        f"I've added {_item_text} to your list." if _item_text
+                        else "Here's your shopping list."
+                    ) + " Check the panel and tap Done when you're finished."
+                    await _broadcast_action_form_panel(
                         panel_id=panel_id,
-                        item_text=str(slots.get("item", "")),
-                        list_type=str(slots.get("list_type", "shopping")),
-                        summary=reply_text,
+                        panel_type="shopping_list",
+                        data=_list_form_data,
+                        title=_list_title,
                         turn_key=_turn_key,
                     )
                     _list_audio = await synthesize({"text": reply_text}, caller=caller)
@@ -1728,11 +2098,14 @@ async def voice_command(
                         "audio_base64": base64.b64encode(_list_audio.body).decode("ascii"),
                         "content_type": _list_audio.media_type,
                         "intent": "list_add",
+                        "action_panel": "shopping_list",
                     }
                 except Exception as _list_exc:
-                    logger.warning("voice/command quick list_add failed: %s", _list_exc)
+                    logger.warning("voice/command list_add panel failed: %s", _list_exc)
         if _quick_intent and _quick_intent.name == "calendar_create":
-            # Calendar writes: execute immediately, then navigate to calendar page.
+            # Show the interactive action-form panel so the user can verify / edit
+            # the extracted slots before the event is created. The panel's Confirm
+            # button POSTs to /api/ui/panel/form/confirm which executes the intent.
             _allow_quick_calendar = True
             try:
                 from voice_scope import classify as _vscope_cal
@@ -1743,11 +2116,30 @@ async def voice_command(
                 pass
             if _allow_quick_calendar:
                 try:
-                    from intent_router import execute_intent as _exec_cal
+                    import datetime as _dt
+                    from intent_router import _parse_date, _parse_time
                     slots = _quick_intent.slots or {}
-                    _cal_reply = await _exec_cal(_quick_intent, effective_user)
-                    reply_text = _cal_reply or "I added that calendar event."
-                    await _broadcast_calendar_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
+                    _date_raw = slots.get("date", "")
+                    _time_raw = slots.get("time", "")
+                    _parsed_date = (_parse_date(_date_raw) if _date_raw else None) or _dt.date.today().isoformat()
+                    _parsed_time = (_parse_time(_time_raw) if _time_raw else "") or ""
+                    _cal_form_data = {
+                        "title": slots.get("title") or slots.get("event") or "",
+                        "date": _parsed_date,
+                        "time": _parsed_time,
+                        "duration": slots.get("duration") or "",
+                        "category": slots.get("category") or "general",
+                        "location": slots.get("location") or "",
+                        "notes": slots.get("notes") or "",
+                    }
+                    reply_text = "Here's your calendar event — check the details and tap Confirm to save."
+                    await _broadcast_action_form_panel(
+                        panel_id=panel_id,
+                        panel_type="calendar_event",
+                        data=_cal_form_data,
+                        title="New Calendar Event",
+                        turn_key=_turn_key,
+                    )
                     _cal_audio = await synthesize({"text": reply_text}, caller=caller)
                     return {
                         "ok": True,
@@ -1756,9 +2148,10 @@ async def voice_command(
                         "audio_base64": base64.b64encode(_cal_audio.body).decode("ascii"),
                         "content_type": _cal_audio.media_type,
                         "intent": "calendar_create",
+                        "action_panel": "calendar_event",
                     }
                 except Exception as _cal_exc:
-                    logger.warning("voice/command quick calendar_create failed: %s", _cal_exc)
+                    logger.warning("voice/command calendar_create panel failed: %s", _cal_exc)
         if _quick_intent and _quick_intent.name == "reminder_create":
             _allow_quick_reminder = True
             try:
@@ -2072,14 +2465,14 @@ async def voice_command(
         #   (b) silently dropped `identified_user_id` because chat.py never
         #       reads that field (Pass 0 finding), causing every identified
         #       turn to resolve to the device-token's user (family-admin).
-        # We now call run_pi_agent_streaming directly:
+        # We now call run_zoe_agent_streaming directly:
         #   * user_id is passed explicitly -> memory writes, MemPalace reads,
         #     transaction rows, etc. all land under the right user.
         #   * token_budget is the same tight voice budget.
         #   * Streaming tokens are accumulated so that Pass 2b can hand the
         #     sentence-buffered stream to Kokoro.create_stream() and bring
         #     first-audio-byte latency down further.
-        from pi_agent import run_pi_agent_streaming
+        from zoe_agent import run_zoe_agent_streaming
 
         voice_timeout = float(os.environ.get("ZOE_VOICE_CHAT_TIMEOUT_S", "20"))
         try:
@@ -2178,7 +2571,7 @@ async def voice_command(
                     async def _emit_line(line: dict):
                         yield (_json.dumps(line) + "\n").encode()
 
-                    async for delta in run_pi_agent_streaming(text, session_id, user_id=effective_user, voice_mode=True):
+                    async for delta in run_zoe_agent_streaming(text, session_id, user_id=effective_user, voice_mode=True):
                         if not delta:
                             continue
                         if delta.startswith("__ESCALATE__:") or delta.startswith("__ESCALATE_BG__:"):
@@ -2270,7 +2663,7 @@ async def voice_command(
 
         async def _stream_collect() -> None:
             nonlocal _t_first_token
-            async for delta in run_pi_agent_streaming(
+            async for delta in run_zoe_agent_streaming(
                 text,
                 session_id,
                 user_id=effective_user,
@@ -2328,6 +2721,80 @@ async def voice_command(
             (_t_first_token if _t_first_token is not None else -1.0),
             _t_llm_total, len(reply_text), effective_user,
         )
+
+        # ── Fix 3: If an action form is still open, try to extract field-fill
+        # events from the LLM response text and broadcast them to the panel.
+        # This handles utterances that fell through field-NLU but whose intent
+        # the LLM successfully interpreted (e.g. "change the time to three pm").
+        if reply_text:
+            try:
+                from panel_form_state import get_active_form as _get_af_llm
+                _llm_active_form = _get_af_llm(panel_id)
+                if _llm_active_form:
+                    _llm_form_type = _llm_active_form.get("panel_type", "")
+                    _llm_field_updates = _parse_voice_form_field(reply_text, _llm_form_type)
+                    if _llm_field_updates:
+                        try:
+                            from push import broadcaster as _bc_llm_ff
+                            for _lf_name, _lf_val in _llm_field_updates.items():
+                                _lf_action_type = (
+                                    "panel_list_update"
+                                    if _llm_form_type == "shopping_list"
+                                    and _lf_name in ("add", "remove")
+                                    else "panel_update_field"
+                                )
+                                _lf_payload: dict = {"panel_id": panel_id}
+                                if _lf_action_type == "panel_list_update":
+                                    _lf_payload["op"] = _lf_name
+                                    _lf_payload["item"] = _lf_val
+                                else:
+                                    _lf_payload["field"] = _lf_name
+                                    _lf_payload["value"] = _lf_val
+                                await _bc_llm_ff.broadcast("all", "ui_action", {
+                                    "action": {
+                                        "id": f"llm_field_{panel_id}_{_lf_name}_{_turn_key}",
+                                        "action_type": _lf_action_type,
+                                        "payload": _lf_payload,
+                                    }
+                                })
+                        except Exception as _llm_ff_exc:
+                            logger.debug("LLM form field broadcast failed (non-fatal): %s", _llm_ff_exc)
+                        # Persist field changes into in-memory slots.
+                        try:
+                            _llm_slots_ref = _llm_active_form.setdefault("slots", {})
+                            for _lsf_n, _lsf_v in _llm_field_updates.items():
+                                if _llm_form_type == "shopping_list":
+                                    _llm_slot_items = _llm_slots_ref.setdefault("items", [])
+                                    if _lsf_n == "add" and _lsf_v not in _llm_slot_items:
+                                        _llm_slot_items.append(_lsf_v)
+                                    elif _lsf_n == "remove" and _lsf_v in _llm_slot_items:
+                                        _llm_slot_items.remove(_lsf_v)
+                                else:
+                                    _llm_slots_ref[_lsf_n] = _lsf_v
+                        except Exception:
+                            pass
+                        # Replace spoken reply with concise field-update confirmation.
+                        _llm_ff_parts = []
+                        for _lf_n, _lf_v in _llm_field_updates.items():
+                            if _lf_n == "add":
+                                _llm_ff_parts.append(f"Added {_lf_v} to the list.")
+                            elif _lf_n == "remove":
+                                _llm_ff_parts.append(f"Removed {_lf_v}.")
+                            elif _lf_n == "title":
+                                _llm_ff_parts.append(f"Title set to {_lf_v}.")
+                            elif _lf_n == "date":
+                                _llm_ff_parts.append(f"Date updated.")
+                            elif _lf_n == "time":
+                                _llm_ff_parts.append(f"Time set to {_lf_v}.")
+                            elif _lf_n == "location":
+                                _llm_ff_parts.append(f"Location set to {_lf_v}.")
+                            else:
+                                _llm_ff_parts.append("Got it, updated.")
+                        if _llm_ff_parts:
+                            reply_text = " ".join(_llm_ff_parts)
+            except Exception as _fix3_outer:
+                logger.debug("LLM form field routing failed (non-fatal): %s", _fix3_outer)
+
     except Exception as exc:
         logger.error("voice/command chat error: %s", exc)
         try:

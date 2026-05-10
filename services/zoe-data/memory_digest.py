@@ -38,10 +38,10 @@ Chat messages (user turns only):
 """
 
 
-# When Bonsai judges contradictions, we want a single-token yes/no so the
-# decision is cheap and unambiguous. The schema lets us also capture *which*
-# existing fact is contradicted when multiple candidates are evaluated at
-# once. Temperature=0 removes jitter.
+# For contradiction checks we want a single-token yes/no so the decision is
+# cheap and unambiguous. The schema lets us also capture *which* existing fact
+# is contradicted when multiple candidates are evaluated at once.
+# Temperature=0 removes jitter.
 _CONTRADICTION_PROMPT = """\
 You are judging whether a NEW fact contradicts an EXISTING fact about the same person.
 
@@ -89,7 +89,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
         if not facts:
             return result
 
-        from pi_agent import _mempalace_load_user_facts  # type: ignore[import]
+        from zoe_agent import _mempalace_load_user_facts  # type: ignore[import]
         from memory_service import MemoryServiceError, get_memory_service
         existing_text = await _mempalace_load_user_facts(user_id, limit=100)
         existing_lower = existing_text.lower()
@@ -108,7 +108,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
 
             # ── Contradiction check ──────────────────────────────────────
             # Pull the top-3 semantically similar existing facts and ask
-            # Bonsai whether any of them contradict the new one. If yes,
+            # the LLM whether any of them contradict the new one. If yes,
             # supersede the old memory via review(decision="edit"), which
             # writes the new fact and links it to the old row via
             # supersedes_id / superseded_by_id.
@@ -206,7 +206,7 @@ async def _load_todays_messages(user_id: str, db=None) -> str:
 
 
 async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
-    """Send chat transcript to Bonsai and parse the JSON fact list."""
+    """Send chat transcript to the LLM and parse the JSON fact list."""
     prompt = _EXTRACTION_PROMPT.format(chat_text=chat_text[:3000])
     payload = {
         "model": "gemma-4-E2B-it-Q4_K_M.gguf",
@@ -228,19 +228,19 @@ async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
             start = text.find("[")
             end = text.rfind("]") + 1
             if start == -1 or end == 0:
-                logger.warning("memory_digest: Bonsai returned no JSON array: %s", text[:200])
+                logger.warning("memory_digest: LLM returned no JSON array: %s", text[:200])
                 return []
             return json.loads(text[start:end])
     except json.JSONDecodeError as je:
         logger.warning("memory_digest: JSON parse error: %s", je)
         return []
     except Exception as exc:
-        logger.warning("memory_digest: Bonsai call failed: %s", exc)
+        logger.warning("memory_digest: LLM call failed: %s", exc)
         return []
 
 
 async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:
-    """Ask Bonsai whether a new fact contradicts an existing one.
+    """Ask the LLM whether a new fact contradicts an existing one.
 
     Fails **closed** (returns False) on any error — we prefer a
     duplicate over losing a real fact to a flaky LLM call.
@@ -286,7 +286,7 @@ async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:
 #      pure word-overlap is cheap and safe because anything this close
 #      already lost information at capture time.
 #   2. **Resolve contradictions**: for each pair in the top-K most similar
-#      approved rows, ask Bonsai if they contradict; if yes, keep the
+#      approved rows, ask the LLM if they contradict; if yes, keep the
 #      newest and supersede the other.
 #   3. **Soft-archive low-score stale rows** via
 #      `MemoryService.sweep_soft_archive()`.

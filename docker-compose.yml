@@ -125,27 +125,31 @@ services:
     networks:
     - zoe-network
 
-  wyoming-whisper:
-    image: rhasspy/wyoming-whisper:latest
-    container_name: wyoming-whisper
-    restart: unless-stopped
-    command: --model tiny-int8 --language en --uri tcp://0.0.0.0:10300
-    volumes:
-    - ./data/wyoming/whisper:/data
-    networks:
-    - zoe-network
-
-  wyoming-openwakeword:
-    image: rhasspy/wyoming-openwakeword:latest
-    container_name: wyoming-openwakeword
-    restart: unless-stopped
-    command: --preload-model ok_nabu --threshold 0.08 --trigger-level 0 --uri tcp://0.0.0.0:10400 --debug --debug-probability
-    ports:
-    - 10400:10400
-    volumes:
-    - ./data/wyoming/openwakeword:/data
-    networks:
-    - zoe-network
+  # wyoming-whisper: disabled — HA satellite STT experiment abandoned (quality insufficient).
+  # wyoming-openwakeword: disabled — OOM-killed May 2026, not configured in any active pipeline.
+  # To re-enable either, uncomment the block below and run: docker compose up -d wyoming-whisper
+  #
+  # wyoming-whisper:
+  #   image: rhasspy/wyoming-whisper:latest
+  #   container_name: wyoming-whisper
+  #   restart: unless-stopped
+  #   command: --model tiny-int8 --language en --uri tcp://0.0.0.0:10300
+  #   volumes:
+  #   - ./data/wyoming/whisper:/data
+  #   networks:
+  #   - zoe-network
+  #
+  # wyoming-openwakeword:
+  #   image: rhasspy/wyoming-openwakeword:latest
+  #   container_name: wyoming-openwakeword
+  #   restart: unless-stopped
+  #   command: --preload-model ok_nabu --threshold 0.08 --trigger-level 0 --uri tcp://0.0.0.0:10400 --debug --debug-probability
+  #   ports:
+  #   - 10400:10400
+  #   volumes:
+  #   - ./data/wyoming/openwakeword:/data
+  #   networks:
+  #   - zoe-network
 
   # ── Keeper.sh Calendar Sync ────────────────────────────────────────────────
   keeper:

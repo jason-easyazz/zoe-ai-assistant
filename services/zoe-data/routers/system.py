@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -387,7 +388,7 @@ def start_memory_digest_background():
 async def _memory_consolidation_loop():
     """Sleep until the next Sunday 04:00, then run weekly consolidation.
 
-    The consolidation pass merges near-duplicate memories, asks Bonsai to
+    The consolidation pass merges near-duplicate memories, uses the LLM to
     resolve high-similarity contradictions, and soft-archives low-score
     stale rows. See ``memory_digest.run_weekly_consolidation`` for the
     full algorithm.
@@ -707,3 +708,89 @@ async def post_display_brightness(
             return r.json()
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail=f"panel agent unreachable: {exc}")
+
+
+@router.get("/display/volume")
+async def get_display_volume(
+    user: dict = Depends(get_current_user),
+):
+    """Return the current ALSA master volume (0-100) via amixer on the local host."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "amixer", "sget", "Master",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        text = stdout.decode(errors="replace")
+        m = re.search(r"\[(\d+)%\]", text)
+        vol = int(m.group(1)) if m else None
+        return {"volume": vol}
+    except Exception as exc:
+        logger.warning("get_display_volume: amixer failed: %s", exc)
+        return {"volume": None, "error": str(exc)}
+
+
+@router.post("/display/volume")
+async def post_display_volume(
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Set ALSA master volume (0-100) on the local host via amixer.
+
+    Falls back to forwarding to the Pi panel agent when a pi_host is provided,
+    using the /volume endpoint (add that handler to the panel agent if absent).
+    """
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    try:
+        pct = int(body.get("value", 80))
+    except Exception:
+        raise HTTPException(status_code=400, detail="value must be an integer 0-100")
+    pct = max(0, min(100, pct))
+
+    pi_host = body.get("pi_host") or None
+
+    if pi_host:
+        # Forward to the Pi panel agent which controls the Pi's ALSA/PulseAudio volume
+        url = f"http://{pi_host}:{_PANEL_AGENT_PORT}/volume"
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as c:
+                r = await c.post(url, json={"value": pct})
+                if r.status_code == 200:
+                    return r.json()
+                # Non-fatal: fall through to local amixer attempt
+                logger.warning("panel agent /volume returned %d — trying local amixer", r.status_code)
+        except httpx.HTTPError as exc:
+            logger.warning("panel agent /volume unreachable (%s) — trying local amixer", exc)
+
+    # Local ALSA fallback (Jetson or any host with amixer)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "amixer", "sset", "Master", f"{pct}%",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+        text = stdout.decode(errors="replace")
+        m = re.search(r"\[(\d+)%\]", text)
+        confirmed = int(m.group(1)) if m else pct
+        # Persist the new volume in the ALSA state file so it survives reboots and
+        # USB reconnects (alsactl restore is called by alsa-restore.service at boot).
+        asyncio.create_task(_persist_alsa_state())
+        return {"volume": confirmed, "ok": True}
+    except Exception as exc:
+        logger.warning("post_display_volume: amixer failed: %s", exc)
+        raise HTTPException(status_code=502, detail=f"amixer error: {exc}")
+
+
+async def _persist_alsa_state() -> None:
+    """Fire-and-forget: persist ALSA mixer state so volume survives reboots."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "alsactl", "store",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=5.0)
+    except Exception as exc:
+        logger.debug("alsactl store failed (non-fatal): %s", exc)

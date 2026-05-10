@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <script>
+    (function(){
+        if(localStorage.getItem('zoe_kiosk')==='1') return;
+        var p=new URLSearchParams(location.search);
+        if(p.get('kiosk')==='1') localStorage.setItem('zoe_kiosk','1');
+    })();
+    </script>
+    <script>
+    (function(){var s=localStorage.getItem('zoe_theme')||'auto';var dark=s==='dark'||(s==='auto'&&(new Date().getHours()<7||new Date().getHours()>=19));if(dark){document.documentElement.classList.add('dark-mode');}})();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Zoe">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#7B61FF">
+    <title>Zoe – Updates</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+    <script src="/js/sw-registration.js" defer></script>
+    <link rel="stylesheet" href="css/dark-mode-shared.css">
+    <script src="/js/auth.js"></script>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; height: 100%; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: #fafbfc;
+            color: #1f2937;
+        }
+        html.dark-mode body { background: #060610; color: rgba(255,255,255,0.93); }
+
+        /* ── Nav Bar ── */
+        .nav-bar {
+            position: fixed; top: 0; left: 0; right: 0;
+            background: rgba(255,255,255,0.85); backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255,255,255,0.3);
+            padding: 10px 15px; z-index: 100;
+            display: flex; justify-content: space-between; align-items: center; height: 60px;
+        }
+        html.dark-mode .nav-bar { background: rgba(6,6,16,0.85); border-bottom-color: rgba(255,255,255,0.1); }
+        .nav-left { display: flex; align-items: center; gap: 15px; }
+        .mini-orb {
+            width: 32px; height: 32px; border-radius: 50%;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            cursor: pointer; transition: transform 0.3s; min-width: 44px; min-height: 44px;
+        }
+        .mini-orb:hover { transform: scale(1.1); }
+        .nav-menu { display: flex; gap: 20px; }
+        .nav-item {
+            color: #666; text-decoration: none; font-size: 13px; font-weight: 400;
+            transition: all 0.3s; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+        }
+        html.dark-mode .nav-item { color: rgba(255,255,255,0.65); }
+        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123,97,255,0.1); }
+        .nav-right { display: flex; align-items: center; gap: 10px; }
+        .more-nav-btn {
+            color: #666; font-size: 13px; font-weight: 400;
+            transition: all 0.3s; padding: 8px 12px; border-radius: 6px;
+            min-height: 44px; display: flex; align-items: center;
+            cursor: pointer; background: none; border: none;
+        }
+        html.dark-mode .more-nav-btn { color: rgba(255,255,255,0.65); }
+        .more-nav-btn:hover { color: #7B61FF; background: rgba(123,97,255,0.1); }
+        .api-indicator {
+            font-size: 12px; font-weight: 500; padding: 4px 8px; border-radius: 8px;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .api-indicator::before { content:''; width:8px; height:8px; border-radius:50%; display:inline-block; }
+        .api-indicator.online { background: rgba(34,197,94,0.1); color: #22c55e; }
+        .api-indicator.online::before { background: #22c55e; }
+        .api-indicator.offline { background: rgba(239,68,68,0.1); color: #ef4444; }
+        .api-indicator.offline::before { background: #ef4444; }
+        .api-indicator.connecting { background: rgba(251,146,60,0.1); color: #ea580c; }
+        .api-indicator.connecting::before { background: #ea580c; }
+        .notifications-btn {
+            background: rgba(255,255,255,0.6); border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 50%; width: 32px; height: 32px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.3s; color: #666; font-size: 16px; position: relative;
+        }
+        html.dark-mode .notifications-btn { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.15); color: rgba(255,255,255,0.7); }
+        .notifications-btn:hover { background: rgba(255,255,255,0.8); color: #333; }
+        .time-date-display { text-align: right; }
+        .current-time { font-size: 14px; font-weight: 600; color: #333; line-height: 1.2; }
+        .current-date { font-size: 11px; color: #888; line-height: 1.2; }
+        html.dark-mode .current-time { color: rgba(255,255,255,0.9); }
+        html.dark-mode .current-date { color: rgba(255,255,255,0.5); }
+
+        /* ── More Overlay ── */
+        .more-overlay {
+            position: fixed; top:0; left:0; width:100vw; height:100vh;
+            background: rgba(0,0,0,0.4); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center; z-index: 3000;
+            opacity: 0; transition: all 0.3s;
+        }
+        .more-overlay.active { display: flex; opacity: 1; }
+        .more-content {
+            background: rgba(255,255,255,0.95); backdrop-filter: blur(60px);
+            border: 1px solid rgba(255,255,255,0.5); border-radius: 20px;
+            padding: 40px; max-width: 500px; width: 90%; position: relative;
+            transform: scale(0.8); transition: transform 0.3s;
+        }
+        html.dark-mode .more-content { background: rgba(20,20,40,0.97); border-color: rgba(255,255,255,0.15); }
+        .more-overlay.active .more-content { transform: scale(1); }
+        .more-header { text-align: center; margin-bottom: 30px; }
+        .more-title {
+            font-size: 24px; font-weight: 300; margin-bottom: 10px;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .more-close {
+            position: absolute; top: 15px; right: 15px;
+            background: rgba(255,255,255,0.6); border: none; border-radius: 50%;
+            width: 36px; height: 36px; font-size: 18px; cursor: pointer; color: #666;
+        }
+        html.dark-mode .more-close { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.7); }
+        .more-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
+        .more-item {
+            background: rgba(255,255,255,0.8); border: 1px solid rgba(255,255,255,0.4);
+            border-radius: 16px; padding: 20px; text-align: center; cursor: pointer;
+            transition: all 0.3s; min-height: 100px; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+        }
+        html.dark-mode .more-item { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.1); }
+        .more-item:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(123,97,255,0.2); }
+        .more-item.active { background: rgba(123,97,255,0.12); border-color: rgba(123,97,255,0.3); }
+        .more-item-icon { font-size: 28px; margin-bottom: 8px; }
+        .more-item-label { font-size: 13px; font-weight: 500; color: #555; }
+        html.dark-mode .more-item-label { color: rgba(255,255,255,0.75); }
+
+        /* ── Mobile Nav ── */
+        .mobile-nav-menu {
+            display: none; position: fixed; top:0; left:-280px; width:280px; height:100vh;
+            background: rgba(255,255,255,0.97); backdrop-filter: blur(20px);
+            z-index: 4000; transition: left 0.3s; flex-direction: column;
+            box-shadow: 4px 0 20px rgba(0,0,0,0.1);
+        }
+        html.dark-mode .mobile-nav-menu { background: rgba(10,10,25,0.98); }
+        .mobile-nav-menu.open { left: 0; }
+        .mobile-nav-header {
+            padding: 20px; border-bottom: 1px solid rgba(0,0,0,0.08);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        html.dark-mode .mobile-nav-header { border-bottom-color: rgba(255,255,255,0.1); }
+        .mobile-nav-header h3 { margin: 0; font-size: 20px; font-weight: 600; color: #333; }
+        html.dark-mode .mobile-nav-header h3 { color: rgba(255,255,255,0.9); }
+        .mobile-nav-close {
+            width: 36px; height: 36px; border-radius: 50%; border: none;
+            background: rgba(0,0,0,0.05); color: #666; font-size: 18px; cursor: pointer;
+        }
+        .mobile-nav-content { flex: 1; overflow-y: auto; padding: 10px; }
+        .mobile-nav-item {
+            display: flex; align-items: center; gap: 12px;
+            padding: 14px 16px; border-radius: 12px; color: #444; text-decoration: none;
+            font-size: 15px; transition: background 0.2s;
+        }
+        html.dark-mode .mobile-nav-item { color: rgba(255,255,255,0.8); }
+        .mobile-nav-item:hover { background: rgba(123,97,255,0.08); }
+        .mobile-nav-item.active { background: rgba(123,97,255,0.15); color: #7B61FF; font-weight: 600; }
+        .mobile-nav-overlay {
+            display: none; position: fixed; inset:0; background: rgba(0,0,0,0.4);
+            z-index: 3999; opacity: 0; transition: opacity 0.3s; pointer-events: none;
+        }
+        .mobile-nav-overlay.open { opacity: 1; pointer-events: auto; }
+
+        /* ── Notifications Panel ── */
+        .notifications-panel {
+            position: fixed; top:0; right:-400px; width:400px; height:100vh;
+            background: rgba(255,255,255,0.95); backdrop-filter: blur(20px);
+            border-left: 1px solid rgba(255,255,255,0.3); z-index: 2000;
+            transition: right 0.3s; overflow-y: auto;
+        }
+        html.dark-mode .notifications-panel { background: rgba(10,10,25,0.97); border-left-color: rgba(255,255,255,0.1); }
+        .notifications-panel.open { right: 0; }
+        .notifications-header {
+            padding: 20px; border-bottom: 1px solid rgba(0,0,0,0.08);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        html.dark-mode .notifications-header { border-bottom-color: rgba(255,255,255,0.1); }
+        .notifications-title { font-size: 18px; font-weight: 600; color: #333; margin: 0; }
+        html.dark-mode .notifications-title { color: rgba(255,255,255,0.9); }
+        .notifications-close {
+            width: 36px; height: 36px; border-radius: 50%; border: none;
+            background: rgba(0,0,0,0.05); color: #666; font-size: 18px; cursor: pointer;
+        }
+        .notifications-content { padding: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .no-notifications { text-align: center; color: #888; font-size: 14px; padding: 40px 20px; }
+
+        /* ── Main Content ── */
+        .main-container { padding: 80px 24px 24px; max-width: 1200px; margin: 0 auto; }
+        .page-header {
+            display: flex; align-items: flex-start; justify-content: space-between;
+            gap: 16px; margin-bottom: 24px;
+        }
+        .page-title { margin: 0; font-size: clamp(24px, 3vw, 32px); font-weight: 700; letter-spacing: -0.02em; }
+        .page-subtitle { margin: 4px 0 0; color: #6b7280; font-size: 14px; }
+        html.dark-mode .page-subtitle { color: rgba(255,255,255,0.6); }
+        .header-actions { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+        .meta { color: #6b7280; font-size: 12px; font-weight: 600; }
+        html.dark-mode .meta { color: rgba(255,255,255,0.55); }
+        .btn {
+            min-height: 40px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.12);
+            background: #fff; color: #1f2937; padding: 8px 16px;
+            font-weight: 600; font-size: 14px; cursor: pointer; transition: all 0.2s;
+        }
+        html.dark-mode .btn { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.14); color: rgba(255,255,255,0.9); }
+        .btn:hover { background: #f3f4f6; }
+        html.dark-mode .btn:hover { background: rgba(255,255,255,0.12); }
+        .btn.primary { border: none; background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%); color: #fff; }
+        .btn.primary:hover { opacity: 0.9; }
+        .btn:disabled { opacity: .55; cursor: not-allowed; }
+
+        /* ── Component Tiles ── */
+        .tiles {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 14px;
+        }
+        .tile {
+            background: #fff; border: 1px solid rgba(0,0,0,0.08); border-radius: 14px;
+            padding: 16px; display: grid; gap: 8px;
+            transition: box-shadow 0.2s;
+        }
+        .tile:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
+        html.dark-mode .tile { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); }
+        .tile.highlight {
+            outline: 2px solid rgba(123,97,255,0.65);
+            box-shadow: 0 0 0 5px rgba(123,97,255,0.18);
+        }
+        .tile-name { font-size: 16px; font-weight: 700; }
+        .tile-row {
+            display: grid; grid-template-columns: 1fr auto; gap: 8px;
+            align-items: center; font-size: 13px;
+        }
+        .tile-label { color: #6b7280; }
+        html.dark-mode .tile-label { color: rgba(255,255,255,0.55); }
+        .tile-detail { color: #4b5563; font-size: 12px; line-height: 1.4; }
+        html.dark-mode .tile-detail { color: rgba(255,255,255,0.7); }
+        .pill { border-radius: 999px; padding: 2px 10px; font-size: 11px; font-weight: 700; }
+        .ok  { background: rgba(22,163,74,0.15); color: #15803d; }
+        .warn{ background: rgba(217,119,6,0.18);  color: #b45309; }
+        .err { background: rgba(220,38,38,0.16);  color: #b91c1c; }
+        .plain{ background: rgba(107,114,128,0.14); color: #4b5563; }
+        html.dark-mode .ok   { color: #86efac; background: rgba(22,163,74,0.22); }
+        html.dark-mode .warn { color: #fde68a; background: rgba(217,119,6,0.26); }
+        html.dark-mode .err  { color: #fecaca; background: rgba(220,38,38,0.24); }
+        html.dark-mode .plain{ color: #d1d5db; background: rgba(107,114,128,0.28); }
+        .empty {
+            border-radius: 12px; padding: 20px;
+            background: rgba(255,255,255,0.9); border: 1px solid rgba(0,0,0,0.08);
+            color: #6b7280; font-size: 14px; grid-column: 1 / -1;
+        }
+        html.dark-mode .empty { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); color: rgba(255,255,255,0.6); }
+
+        @media (max-width: 900px) {
+            .nav-menu { display: none !important; }
+            .more-nav-btn { display: none !important; }
+            .mobile-nav-menu { display: flex; }
+            .mobile-nav-overlay { display: block; }
+        }
+        @media (min-width: 901px) {
+            .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Nav Bar -->
+    <div class="nav-bar">
+        <div class="nav-left">
+            <div class="mini-orb" onclick="window.location.href='index.html'" title="Home"></div>
+            <nav class="nav-menu">
+                <a href="chat.html" class="nav-item">Chat</a>
+                <a href="dashboard.html" class="nav-item">Dashboard</a>
+                <a href="lists.html" class="nav-item">Lists</a>
+                <a href="calendar.html" class="nav-item">Calendar</a>
+                <a href="journal.html" class="nav-item">Journal</a>
+                <button class="more-nav-btn" onclick="openMoreOverlay()">More</button>
+            </nav>
+            <button class="more-nav-btn" style="display:none" onclick="toggleMobileMenu()">☰</button>
+        </div>
+        <div class="nav-right">
+            <div class="api-indicator connecting" id="apiStatus">Connecting</div>
+            <button class="notifications-btn refresh-btn" onclick="typeof forceRefreshCache==='function'&&forceRefreshCache()" title="Refresh">🔄</button>
+            <button class="notifications-btn theme-nav-btn" title="Toggle theme" onclick="window.cycleZoeTheme&&window.cycleZoeTheme()">🌓</button>
+            <button class="notifications-btn" onclick="openNotificationsSafe()" title="Notifications">🔔</button>
+            <div class="time-date-display">
+                <div class="current-time" id="navCurrentTime">--:--</div>
+                <div class="current-date" id="navCurrentDate">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- More Overlay -->
+    <div class="more-overlay" id="moreOverlay" onclick="if(event.target===this)closeMoreOverlay()">
+        <div class="more-content">
+            <button class="more-close" onclick="closeMoreOverlay()">×</button>
+            <div class="more-header">
+                <h2 class="more-title">More Options</h2>
+            </div>
+            <div class="more-grid">
+                <div class="more-item" onclick="navigateToPage('people.html')">
+                    <div class="more-item-icon">👥</div>
+                    <div class="more-item-label">People</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div>
+                    <div class="more-item-label">Memories</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('notes.html')">
+                    <div class="more-item-icon">📝</div>
+                    <div class="more-item-label">Notes</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('cooking.html')">
+                    <div class="more-item-icon">🍳</div>
+                    <div class="more-item-label">Cooking</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('smart-home.html')">
+                    <div class="more-item-icon">🏠</div>
+                    <div class="more-item-label">Smart Home</div>
+                </div>
+                <div class="more-item active" onclick="closeMoreOverlay()">
+                    <div class="more-item-icon">⬇️</div>
+                    <div class="more-item-label">Updates</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div>
+                    <div class="more-item-label">Settings</div>
+                </div>
+                <div class="more-item" onclick="navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div>
+                    <div class="more-item-label">Developer</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mobile Nav -->
+    <div class="mobile-nav-menu" id="mobileNavMenu">
+        <div class="mobile-nav-header">
+            <h3>Navigation</h3>
+            <button class="mobile-nav-close" onclick="toggleMobileMenu()">✕</button>
+        </div>
+        <div class="mobile-nav-content">
+            <a href="chat.html" class="mobile-nav-item">💬 Chat</a>
+            <a href="dashboard.html" class="mobile-nav-item">📊 Dashboard</a>
+            <a href="lists.html" class="mobile-nav-item">✅ Lists</a>
+            <a href="calendar.html" class="mobile-nav-item">📅 Calendar</a>
+            <a href="journal.html" class="mobile-nav-item">📔 Journal</a>
+            <a href="notes.html" class="mobile-nav-item">📝 Notes</a>
+            <a href="cooking.html" class="mobile-nav-item">🍳 Cooking</a>
+            <a href="smart-home.html" class="mobile-nav-item">🏠 Smart Home</a>
+            <a href="updates.html" class="mobile-nav-item active">⬇️ Updates</a>
+            <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
+        </div>
+    </div>
+    <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
+
+    <!-- Notifications Panel -->
+    <div class="notifications-panel" id="notificationsPanel">
+        <div class="notifications-header">
+            <h3 class="notifications-title">💬 Notifications</h3>
+            <button class="notifications-close" onclick="closeNotifications()">×</button>
+        </div>
+        <div class="notifications-content" id="notificationsContent">
+            <div class="no-notifications">No notifications</div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-container">
+        <div class="page-header">
+            <div>
+                <h1 class="page-title">Updates</h1>
+                <p class="page-subtitle">Check versions and install component updates on Zoe.</p>
+            </div>
+            <div class="header-actions">
+                <span id="meta" class="meta">Loading…</span>
+                <button id="checkBtn" class="btn primary">Check all</button>
+            </div>
+        </div>
+        <div id="components" class="tiles"></div>
+    </div>
+
+    <script src="js/common.js"></script>
+    <script src="/js/notifications-panel.js"></script>
+    <script>
+        function navigateToPage(page) {
+            closeMoreOverlay();
+            window.location.href = page;
+        }
+
+        function toggleMobileMenu() {
+            const menu = document.getElementById('mobileNavMenu');
+            const overlay = document.getElementById('mobileNavOverlay');
+            if (menu && overlay) {
+                menu.classList.toggle('open');
+                overlay.classList.toggle('open');
+            }
+        }
+
+        function openNotificationsSafe() {
+            if (typeof openNotificationsPanel === 'function') openNotificationsPanel();
+            else {
+                const p = document.getElementById('notificationsPanel');
+                if (p) p.classList.toggle('open');
+            }
+        }
+
+        function closeNotifications() {
+            const p = document.getElementById('notificationsPanel');
+            if (p) p.classList.remove('open');
+        }
+
+        // Clock
+        function updateClock() {
+            const now = new Date();
+            const tEl = document.getElementById('navCurrentTime');
+            const dEl = document.getElementById('navCurrentDate');
+            if (tEl) tEl.textContent = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            if (dEl) dEl.textContent = now.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+        }
+        updateClock();
+        setInterval(updateClock, 30000);
+
+        // API status
+        (async function checkApiStatus() {
+            try {
+                const r = await fetch('/health');
+                const ind = document.getElementById('apiStatus');
+                if (ind) {
+                    if (r.ok) { ind.textContent = 'Online'; ind.className = 'api-indicator online'; }
+                    else { ind.textContent = 'Warning'; ind.className = 'api-indicator warning'; }
+                }
+            } catch {
+                const ind = document.getElementById('apiStatus');
+                if (ind) { ind.textContent = 'Offline'; ind.className = 'api-indicator offline'; }
+            }
+        })();
+
+        // ── Updates logic ──
+        (function () {
+            const $components = document.getElementById('components');
+            const $meta = document.getElementById('meta');
+            const $check = document.getElementById('checkBtn');
+            const highlight = new URLSearchParams(location.search).get('highlight');
+            let installing = new Set();
+
+            function esc(s) {
+                return String(s == null ? '' : s)
+                    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                    .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+                    .replace(/'/g,'&#39;');
+            }
+            function pillClass(h) {
+                h = String(h || '').toLowerCase();
+                if (h === 'ok' || h === 'healthy' || h === 'connected') return 'ok';
+                if (h === 'warn' || h === 'warning' || h === 'degraded') return 'warn';
+                if (h === 'error' || h === 'failed' || h === 'offline') return 'err';
+                return 'plain';
+            }
+            async function api(url, opts) {
+                const r = await fetch(url, opts || {});
+                let data = null;
+                try { data = await r.json(); } catch (_) {}
+                if (!r.ok) {
+                    const detail = data && data.detail ? data.detail : ('HTTP ' + r.status);
+                    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+                }
+                return data;
+            }
+
+            function renderComponents(payload) {
+                const components = Array.isArray(payload.components) ? payload.components : [];
+                $components.innerHTML = '';
+                if (!components.length) {
+                    $components.innerHTML = '<div class="empty">No components returned from updates API.</div>';
+                    return;
+                }
+                components.forEach(c => {
+                    const id = String(c.id || '');
+                    const updating = installing.has(id);
+                    const updateAvail = !!c.update_available;
+                    const tile = document.createElement('div');
+                    const isHighlighted = highlight === id || (highlight === 'openclaw' && id === 'openclaw');
+                    tile.className = 'tile' + (isHighlighted ? ' highlight' : '');
+                    const action = c.installable
+                        ? (updateAvail
+                            ? `<button class="btn primary" data-install="${esc(id)}" ${updating ? 'disabled' : ''}>${updating ? 'Installing…' : 'Install update'}</button>`
+                            : '<button class="btn" disabled>Up to date</button>')
+                        : '<button class="btn" disabled>Not installable</button>';
+                    tile.innerHTML = `
+                        <div class="tile-name">${esc(c.name || id)}</div>
+                        <div class="tile-detail">${esc(c.detail || '')}</div>
+                        <div class="tile-row"><span class="tile-label">Installed</span><span>${esc(c.version || '—')}</span></div>
+                        <div class="tile-row"><span class="tile-label">Latest</span><span>${esc(c.latest || '—')}</span></div>
+                        <div class="tile-row"><span class="tile-label">Health</span><span class="pill ${pillClass(c.health)}">${esc(c.health || 'unknown')}</span></div>
+                        <div class="tile-row"><span class="tile-label">Update</span><span class="pill ${updateAvail ? 'warn' : 'ok'}">${updateAvail ? 'Available' : 'Up to date'}</span></div>
+                        ${action}
+                    `;
+                    $components.appendChild(tile);
+                });
+
+                $components.querySelectorAll('[data-install]').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const id = btn.getAttribute('data-install');
+                        if (!id) return;
+                        if (!confirm('Install update for "' + id + '" now?')) return;
+                        try {
+                            installing.add(id);
+                            await loadSnapshot(false);
+                            const res = await api('/api/system/updates/install/' + encodeURIComponent(id), {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ confirm: true })
+                            });
+                            if (typeof showNotification === 'function') showNotification((res && res.ok) ? 'Install complete.' : 'Install finished.', 'success');
+                        } catch (e) {
+                            if (typeof showNotification === 'function') showNotification(String(e.message || e), 'error');
+                            else alert('Install error: ' + e.message);
+                        } finally {
+                            installing.delete(id);
+                            await loadSnapshot(true);
+                        }
+                    });
+                });
+            }
+
+            async function loadSnapshot(force) {
+                $check.disabled = true;
+                try {
+                    $meta.textContent = 'Loading…';
+                    const q = force ? '?force=true' : '';
+                    const data = await api('/api/system/updates' + q);
+                    renderComponents(data);
+                    const ts = data.fetched_at ? new Date(data.fetched_at * 1000) : new Date();
+                    $meta.textContent = 'Last check: ' + ts.toLocaleTimeString();
+                } catch (e) {
+                    $components.innerHTML = '<div class="empty">Failed to load updates: ' + esc(String(e.message || e)) + '</div>';
+                    $meta.textContent = 'Load failed';
+                } finally {
+                    $check.disabled = false;
+                }
+            }
+
+            $check.addEventListener('click', () => loadSnapshot(true));
+            loadSnapshot(false);
+        })();
+    </script>
+</body>
+</html>

@@ -356,7 +356,7 @@ Bias toward caution on non-trivial work; use judgment on one-liners.
   `requirements.txt` includes Jetson-specific packages (`pyannote.audio`, `faster-whisper`,
   `silero-vad`, `kokoro-onnx`) that pull in PyTorch (~3 GB) and will timeout or fail on x86_64.
 - Use a slim explicit install list covering only what the CI steps actually need.
-- Tests that import local service modules (`routers`, `pi_agent`, `mcp_server`, etc.) or start
+- Tests that import local service modules (`routers`, `zoe_agent`, `mcp_server`, etc.) or start
   the full FastAPI lifespan (`TestClient(app)`) cannot run on GitHub runners — run them on the
   self-hosted Jetson runner only.
 

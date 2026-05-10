@@ -382,6 +382,63 @@ async def requeue_stale_actions(
     return {"status": "ok", "requeued": len(action_ids), "action_ids": action_ids}
 
 
+# ── Action Form Lifecycle ─────────────────────────────────────────────────────
+
+@router.post("/panel/form/open")
+async def open_action_form(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Called by the touch panel when a full-screen action-form overlay opens.
+
+    Registers the panel as having an active form so that subsequent voice
+    commands are routed to field-filling rather than the main chat pipeline.
+
+    Body: {"panel_id": "...", "panel_type": "calendar_event"|"shopping_list", "data": {...}}
+    """
+    body = await request.json()
+    panel_id = str(body.get("panel_id") or "").strip() or None
+    panel_type = str(body.get("panel_type") or "").strip()
+    data = body.get("data") or {}
+
+    if panel_id and panel_type:
+        try:
+            from panel_form_state import set_active_form
+            set_active_form(panel_id, panel_type, data)
+        except Exception as exc:
+            logger.debug("panel/form/open state update failed (non-fatal): %s", exc)
+
+    logger.info("panel/form/open panel=%s type=%s", panel_id, panel_type)
+    return {"status": "ok", "panel_id": panel_id, "panel_type": panel_type}
+
+
+@router.post("/panel/form/close")
+async def close_action_form(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Called by the touch panel when the action-form overlay is dismissed (cancel/close).
+
+    Clears the active form state so voice commands return to the main pipeline.
+
+    Body: {"panel_id": "..."}
+    """
+    body = await request.json()
+    panel_id = str(body.get("panel_id") or "").strip() or None
+
+    if panel_id:
+        try:
+            from panel_form_state import clear_active_form
+            clear_active_form(panel_id)
+        except Exception as exc:
+            logger.debug("panel/form/close state clear failed (non-fatal): %s", exc)
+
+    logger.info("panel/form/close panel=%s", panel_id)
+    return {"status": "ok", "panel_id": panel_id}
+
+
 # ── Action Form Confirm ───────────────────────────────────────────────────────
 
 @router.post("/panel/form/confirm")
@@ -447,7 +504,13 @@ async def confirm_action_form(
                 from intent_router import execute_intent
                 from dataclasses import dataclass
 
-                items = data.get("items") or []
+                # If a specific new_item is flagged (panel pre-filled with existing items),
+                # only submit that item to avoid duplicating items already in the list.
+                new_item = data.get("new_item") or ""
+                if new_item:
+                    items_to_add = [new_item]
+                else:
+                    items_to_add = data.get("items") or []
 
                 @dataclass
                 class _SynthIntent:
@@ -456,10 +519,13 @@ async def confirm_action_form(
 
                 results = []
                 list_name = data.get("list_name", "shopping")
-                for item in items:
+                for item in items_to_add:
+                    item_str = str(item).strip()
+                    if not item_str:
+                        continue
                     synth = _SynthIntent(
                         name="list_add",
-                        slots={"item": str(item), "list_name": list_name, "list_type": list_name},
+                        slots={"item": item_str, "list_name": list_name, "list_type": list_name},
                     )
                     r = await execute_intent(synth, user_id)
                     if r:
@@ -490,6 +556,14 @@ async def confirm_action_form(
         })
     except Exception as exc:
         logger.debug("form/confirm close broadcast failed (non-fatal): %s", exc)
+
+    # Clear the active form state so voice returns to the main pipeline.
+    if panel_id:
+        try:
+            from panel_form_state import clear_active_form
+            clear_active_form(panel_id)
+        except Exception as exc:
+            logger.debug("form/confirm state clear failed (non-fatal): %s", exc)
 
     logger.info("form/confirm panel_type=%s user=%s result=%s", panel_type, user_id, result_text[:120])
     return {"status": "ok", "panel_type": panel_type, "result": result_text}

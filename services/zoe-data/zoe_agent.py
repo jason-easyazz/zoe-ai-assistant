@@ -1,5 +1,5 @@
 """
-Pi/Jetson Agent — fast, minimal agent loop for Zoe.
+Zoe Agent — fast, minimal agent loop for Zoe.
 
 Model: Gemma 4 E2B (llama.cpp)
   Pi:     CPU, --reasoning off, 7 TPS, port 11434 (override via GEMMA_SERVER_URL)
@@ -697,7 +697,7 @@ _SKILL_TOOLS: dict[str, list[str]] = {
     "memory":     ["mempalace_search", "mempalace_add"],
     "smart-home": ["ha_control"],
     "calendar":   ["calendar_today", "calendar_list_events", "calendar_create_event"],
-    "reminders":  ["reminder_create", "reminder_list"],
+    "reminders":  ["reminder_create", "reminder_list", "proactive_schedule"],
     "lists":      ["list_add_item", "list_get_items"],
     "weather":    ["weather_current", "weather_forecast"],
     "touch":      ["open_touch_page"],
@@ -1679,7 +1679,7 @@ async def _llm_call(
 
 # ── Main Pi Agent entry point ─────────────────────────────────────────────────
 
-async def run_pi_agent(
+async def run_zoe_agent(
     message: str,
     session_id: str,
     user_id: str = "family-admin",
@@ -2003,7 +2003,7 @@ def _fire_memory_capture(
 
 # ── Streaming version for SSE chat endpoint ───────────────────────────────────
 
-async def run_pi_agent_streaming(
+async def run_zoe_agent_streaming(
     message: str,
     session_id: str,
     user_id: str = "family-admin",
@@ -2158,7 +2158,7 @@ async def run_pi_agent_streaming(
                                 pass
 
         except httpx.ConnectError:
-            yield "\n[Pi Agent: Gemma server offline — please check gemma-server / llama-server]"
+            yield "\n[Zoe Agent: Gemma server offline — please check gemma-server / llama-server]"
             return
         except Exception as exc:
             logger.exception("pi_agent streaming: LLM error iter=%d: %s", iteration, exc)

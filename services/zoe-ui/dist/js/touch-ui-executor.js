@@ -1540,8 +1540,18 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
 
     function _closeActionForm() {
         if (_activeActionForm) {
+            const _closingPanelId = (_activeActionForm.payload && _activeActionForm.payload.panel_id) || state.panelId;
             _activeActionForm.overlay.remove();
             _activeActionForm = null;
+            // Notify backend so voice returns to the main chat pipeline.
+            (async () => {
+                try {
+                    await api('/api/ui/panel/form/close', {
+                        method: 'POST',
+                        body: JSON.stringify({ panel_id: _closingPanelId }),
+                    });
+                } catch (_) { /* non-fatal */ }
+            })();
         }
     }
 
@@ -2078,6 +2088,22 @@ body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,2
 
         // Store reference for voice field-fill events.
         _activeActionForm = { overlay, formFields, listController, panelType, payload };
+
+        // Notify the backend that this panel has an active form open.
+        // This enables voice field-routing: subsequent voice commands are
+        // directed to field-fill rather than the main chat pipeline.
+        (async () => {
+            try {
+                await api('/api/ui/panel/form/open', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        panel_id: payload.panel_id || state.panelId,
+                        panel_type: panelType,
+                        data: data,
+                    }),
+                });
+            } catch (_) { /* non-fatal */ }
+        })();
 
         // Focus the first meaningful field on open.
         setTimeout(() => {

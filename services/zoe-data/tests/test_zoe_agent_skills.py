@@ -11,7 +11,7 @@ import re
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-import pi_agent
+import zoe_agent as pi_agent
 
 
 # ── _select_skills ────────────────────────────────────────────────────────────

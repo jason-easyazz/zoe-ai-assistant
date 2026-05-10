@@ -163,6 +163,38 @@
             font-family: 'SF Mono', Monaco, monospace;
         }
 
+        /* PIN dot visual indicator — replaces the unreliable readonly password input */
+        .pin-dot-row {
+            display: flex;
+            justify-content: center;
+            gap: 14px;
+            padding: 14px 0 6px;
+        }
+
+        .pin-dot {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            border: 2px solid #aab0b8;
+            background: transparent;
+            transition: background 0.12s ease, border-color 0.12s ease, transform 0.12s ease;
+        }
+
+        .pin-dot.filled {
+            background: #7B61FF;
+            border-color: #7B61FF;
+            transform: scale(1.15);
+        }
+
+        .touch-panel-mode .pin-dot {
+            border-color: rgba(255, 255, 255, 0.4);
+        }
+
+        .touch-panel-mode .pin-dot.filled {
+            background: #7B61FF;
+            border-color: #7B61FF;
+        }
+
         .passcode-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -498,7 +530,20 @@
             
             <div class="form-group">
                 <label class="form-label">PIN Code</label>
-                <input type="password" class="form-input passcode-input" id="passcodeInput" placeholder="••••" maxlength="8" readonly>
+                <!-- Visual dot indicator — avoids readonly password input rendering issues
+                     in Chromium kiosk mode where .value changes don't always repaint. -->
+                <div class="pin-dot-row" id="pinDotRow" aria-label="PIN entry indicator">
+                    <span class="pin-dot" data-idx="0"></span>
+                    <span class="pin-dot" data-idx="1"></span>
+                    <span class="pin-dot" data-idx="2"></span>
+                    <span class="pin-dot" data-idx="3"></span>
+                    <span class="pin-dot" data-idx="4"></span>
+                    <span class="pin-dot" data-idx="5"></span>
+                    <span class="pin-dot" data-idx="6"></span>
+                    <span class="pin-dot" data-idx="7"></span>
+                </div>
+                <!-- Hidden input holds the actual PIN value for form submission -->
+                <input type="hidden" class="form-input passcode-input" id="passcodeInput" maxlength="8">
             </div>
 
             <div class="passcode-grid">
@@ -755,6 +800,13 @@
                     form.classList.toggle('active', form.id === tabName + 'Form');
                 });
 
+                // Clear PIN state when switching away from passcode tab
+                if (tabName !== 'passcode') {
+                    const pinInput = document.getElementById('passcodeInput');
+                    if (pinInput) pinInput.value = '';
+                    this.updatePinDots(0);
+                }
+
                 // Clear any previous errors
                 this.hideMessage();
             }
@@ -763,12 +815,21 @@
                 const input = document.getElementById('passcodeInput');
                 if (input.value.length < 8) {
                     input.value += digit;
+                    this.updatePinDots(input.value.length);
                 }
             }
 
             backspacePasscode() {
                 const input = document.getElementById('passcodeInput');
                 input.value = input.value.slice(0, -1);
+                this.updatePinDots(input.value.length);
+            }
+
+            updatePinDots(filledCount) {
+                const dots = document.querySelectorAll('#pinDotRow .pin-dot');
+                dots.forEach((dot, idx) => {
+                    dot.classList.toggle('filled', idx < filledCount);
+                });
             }
 
             async handlePasswordLogin() {
@@ -939,10 +1000,12 @@
                         this.showError(data.error_message || 'PIN login failed');
                         // Clear passcode on error
                         document.getElementById('passcodeInput').value = '';
+                        this.updatePinDots(0);
                     }
                 } catch (error) {
                     this.showError('Connection error. Please try again.');
                     document.getElementById('passcodeInput').value = '';
+                    this.updatePinDots(0);
                 } finally {
                     this.setLoading(btn, false);
                 }
@@ -997,12 +1060,55 @@
                 this.currentSession = data;
                 localStorage.setItem('zoe_session', JSON.stringify(data));
 
+                // Eagerly register the authenticated panel session in zoe-data so the
+                // voice scope-gate can trust this identity before the dashboard page
+                // loads and touch-ui-executor.js calls bindPanel().  Without this,
+                // the first voice command after login hits a stale/missing
+                // ui_panel_sessions row and triggers a redundant PIN challenge.
+                this.bindPanelSession(data.session_id);
+
                 if (data.session_type === 'passcode') {
                     this.showSessionInfo(data);
                 } else {
                     this.showSuccess('Login successful!');
                     setTimeout(() => this.redirectToApp(), 1500);
                 }
+            }
+
+            bindPanelSession(sessionId) {
+                if (!sessionId) return;
+                // Determine panel_id: URL redirect param → stored localStorage value.
+                let panelId = null;
+                try {
+                    const params = new URLSearchParams(window.location.search);
+                    const redirectUrl = params.get('redirect') || '';
+                    if (redirectUrl) {
+                        const redirectParams = new URLSearchParams(
+                            new URL(redirectUrl, window.location.origin).search
+                        );
+                        panelId = redirectParams.get('panel_id') || null;
+                    }
+                } catch (_) {}
+                if (!panelId) {
+                    panelId = localStorage.getItem('zoe_touch_panel_id') || null;
+                }
+                if (!panelId) return;
+                // Store the panel_id so subsequent pages pick it up immediately.
+                localStorage.setItem('zoe_touch_panel_id', panelId);
+                // Fire-and-forget — failure is non-fatal; the dashboard's bindPanel()
+                // call will succeed shortly after the page redirect completes.
+                fetch('/api/ui/panel/bind', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Session-ID': sessionId,
+                    },
+                    body: JSON.stringify({
+                        panel_id: panelId,
+                        is_foreground: true,
+                        page: '/auth.html',
+                    }),
+                }).catch(() => {});
             }
 
             showSessionInfo(sessionData) {

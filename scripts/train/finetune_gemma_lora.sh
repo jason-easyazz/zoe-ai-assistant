@@ -206,6 +206,6 @@ echo "  To deploy to Pi:"
 echo "    scp $GGUF_OUT ${PI_HOST}:~/models/zoe-gemma-4-e2b-Q4_K_M.gguf"
 echo "    ssh $PI_HOST 'sed -i \"s|google_gemma-4-E2B-it-Q4_K_M.gguf|zoe-gemma-4-e2b-Q4_K_M.gguf|\" ~/.config/systemd/user/gemma-server.service && systemctl --user daemon-reload && systemctl --user restart gemma-server'"
 echo
-echo "  After deploying the fine-tuned model, shrink _PI_SOUL in pi_agent.py:"
+echo "  After deploying the fine-tuned model, shrink _PI_SOUL in zoe_agent.py:"
 echo '    _PI_SOUL = "You are Zoe. Tools: mempalace_search, mempalace_add, ha_control, bash."'
 echo "════════════════════════════════════════════════════════════════"

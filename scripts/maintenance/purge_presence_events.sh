@@ -19,7 +19,7 @@ DELETED=$(python3 - <<EOF
 import sqlite3, sys
 db = sqlite3.connect("$DB")
 cur = db.execute(
-    "DELETE FROM panel_presence_events WHERE seen_at < ?",
+    "DELETE FROM panel_presence_events WHERE created_at < ?",
     ("$CUTOFF",)
 )
 db.commit()

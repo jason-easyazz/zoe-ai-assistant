@@ -231,8 +231,8 @@ async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
         logger.debug("_broadcast_intent_nav failed (non-fatal): %s", exc)
 from openclaw_ws import openclaw_cli, chat_inject, discover_openclaw_capabilities, _zoe_context_prefix
 from zoe_acp_client import openclaw_acp_stream as _acp_stream
-from pi_agent import (
-    run_pi_agent, run_pi_agent_streaming,
+from zoe_agent import (
+    run_zoe_agent, run_zoe_agent_streaming,
     _mempalace_load_user_facts, _mempalace_add, _fire_memory_capture,
 )
 from auth import get_current_user
@@ -369,12 +369,12 @@ _FORM_BLURB: dict[str, str] = {
 }
 _MEMORY_AUTO_INGEST = os.environ.get("MEMORY_AUTO_INGEST", "false").lower() == "true"
 # Approval guard: disabled in Pi/Jetson Agent mode — Pi Agent handles safety natively
-_PI_AGENT_MODE    = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
+_ZOE_AGENT_MODE    = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
 _JETSON_AGENT_MODE = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
-_USE_PI_AGENT = _PI_AGENT_MODE or _JETSON_AGENT_MODE
+_USE_ZOE_AGENT = _ZOE_AGENT_MODE or _JETSON_AGENT_MODE
 _GUARDED_AUTO = (
     os.environ.get("OPENCLAW_GUARDED_AUTO", "true").lower() == "true"
-    and not _USE_PI_AGENT
+    and not _USE_ZOE_AGENT
 )
 _ALL_TOOLS_ENABLED = os.environ.get("OPENCLAW_ALL_TOOLS_ENABLED", "true").lower() == "true"
 _WHATSAPP_FLOW_ENABLED = os.environ.get("WHATSAPP_FLOW_ENABLED", "true").lower() == "true"
@@ -443,7 +443,7 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
 
     Delegates to ``memory_extractor.extract_and_ingest`` which enforces the
     one-extractor-one-writer contract. Previously we ran two regex passes
-    (this router's and ``pi_agent._fast_memory_extract``) with overlapping
+    (this router's and ``zoe_agent._fast_memory_extract``) with overlapping
     pattern sets, dual-writing to SQLite ``memory_items`` and MemPalace.
     Both old paths now funnel through this single call.
     """
@@ -1259,7 +1259,7 @@ async def chat_stream_generator(
                     _tc_status = {"status": "delegated_to_openclaw", "tool": tool_name}
                 else:
                     logger.warning("Intent %s execution failed, falling back to LLM", intent.name)
-                    logger.info("intent_outcome=matched_exec_failed intent=%s fallback=%s", intent.name, "pi_agent" if _USE_PI_AGENT else "openclaw")
+                    logger.info("intent_outcome=matched_exec_failed intent=%s fallback=%s", intent.name, "zoe_agent" if _USE_ZOE_AGENT else "openclaw")
                     _tc_status = {"status": "failed", "tool": tool_name}
                 yield emit(
                     ToolCallResultEvent(
@@ -1275,20 +1275,20 @@ async def chat_stream_generator(
                 # can't run the builder skills.  For all other fallbacks, prefer
                 # Pi Agent when enabled (it will self-escalate if needed).
                 _force_openclaw_here = intent.name in _OPENCLAW_DELEGATION_INTENTS
-                if _USE_PI_AGENT and not _force_openclaw_here:
+                if _USE_ZOE_AGENT and not _force_openclaw_here:
                     yield emit(
                         StateSnapshotEvent(
                             type=EventType.STATE_SNAPSHOT,
                             snapshot={
                                 "status": "generating",
-                                "phase": "pi_agent",
+                                "phase": "zoe_agent",
                                 "model": "Zoe (Pi Agent fallback)",
                                 "detail": "Thinking…",
                             },
                         )
                     )
                     task = asyncio.create_task(
-                        run_pi_agent(message_for_processing, session_id, user_id)
+                        run_zoe_agent(message_for_processing, session_id, user_id)
                     )
                     async for hb in _iter_openclaw_heartbeats(emit, task, phase_label="Pi Agent"):
                         yield hb
@@ -1342,7 +1342,7 @@ async def chat_stream_generator(
                     yield line
         else:
             logger.info("intent_outcome=no_match fast_path=%s", bool(use_intent_fast_path))
-            if _USE_PI_AGENT:
+            if _USE_ZOE_AGENT:
                 # ── Pi/Jetson Agent: Gemma 4 E2B with MemPalace + tools — true SSE streaming ──
                 tier_label = "Jetson" if _JETSON_AGENT_MODE else "Pi"
                 yield emit(
@@ -1350,7 +1350,7 @@ async def chat_stream_generator(
                         type=EventType.STATE_SNAPSHOT,
                         snapshot={
                             "status": "generating",
-                            "phase": "pi_agent",
+                            "phase": "zoe_agent",
                             "model": f"Zoe ({tier_label} Agent)",
                             "detail": "Thinking…",
                         },
@@ -1392,7 +1392,7 @@ async def chat_stream_generator(
                 # Apply openclaw_user_message expansion so Pi Agent has the same rich context
                 # as the OpenClaw path (includes HA device state bootstrap text when intent matched).
                 expanded_msg = openclaw_user_message(intent, message_for_processing) if intent else message_for_processing
-                async for chunk in run_pi_agent_streaming(
+                async for chunk in run_zoe_agent_streaming(
                     expanded_msg,
                     session_id,
                     user_id,
@@ -1579,7 +1579,7 @@ async def chat_stream_generator(
                     yield line
 
         if task_class == "research":
-            backend = "openclawLocal" if force_openclaw or not _USE_PI_AGENT else "piAgent"
+            backend = "openclawLocal" if force_openclaw or not _USE_ZOE_AGENT else "zoeAgent"
             pkg = await _build_research_package(
                 query=message_for_processing,
                 response_text=response_text,
@@ -1762,9 +1762,9 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
         try:
             # Pi Agent loads MemPalace facts directly; non-streaming path passes None
             ns_db_memory = await _mempalace_load_user_facts(user_id)
-            if _USE_PI_AGENT:
+            if _USE_ZOE_AGENT:
                 expanded_msg = openclaw_user_message(intent, message_for_processing) if intent else message_for_processing
-                response_text = await run_pi_agent(
+                response_text = await run_zoe_agent(
                     expanded_msg, session_id, user_id, db_memory_context=None,
                     max_tokens_override=voice_max_tokens,
                 )
@@ -1810,7 +1810,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             pkg = await _build_research_package(
                 query=message_for_processing,
                 response_text=response_text,
-                backend="openclawLocal" if force_openclaw or not _USE_PI_AGENT else "piAgent",
+                backend="openclawLocal" if force_openclaw or not _USE_ZOE_AGENT else "zoeAgent",
                 user_id=user_id,
                 session_id=session_id,
             )

@@ -305,7 +305,9 @@
             const dp = parseNotifData(n);
             const item = document.createElement('div');
             const hasInstall = dp && dp.kind === 'openclaw_update';
-            item.className = 'zoe-notif-item' + (hasInstall ? ' has-action' : '');
+            const hasZoeUpdate = dp && dp.kind === 'zoe_update';
+            const hasAction = hasInstall || hasZoeUpdate;
+            item.className = 'zoe-notif-item' + (hasAction ? ' has-action' : '');
             item.style.borderLeftColor = getTypeColor(n.type);
 
             item.innerHTML = `
@@ -314,6 +316,7 @@
                     <div class="zoe-notif-msg">${escapeHtmlNotif(n.message || '')}</div>
                     ${hasInstall ? `<button class="zoe-np-install-btn" data-nid="${n.id}">⬇️ Install Update</button>` : ''}
                     ${hasInstall ? `<button class="zoe-np-action-btn" data-open-updates="${n.id}">Open Updates Page</button>` : ''}
+                    ${hasZoeUpdate ? `<button class="zoe-np-action-btn" data-open-zoe-updates="${n.id}">Open Updates Page</button>` : ''}
                     <div class="zoe-notif-time">${formatTime(n.created_at)}</div>
                 </div>
                 <button class="zoe-notif-dismiss-btn" data-nid="${n.id}" aria-label="Dismiss">✕</button>
@@ -343,6 +346,19 @@
                     };
                     openBtn.addEventListener('click', openHandler);
                     openBtn.addEventListener('touchend', function(e) { e.preventDefault(); openHandler(e); });
+                }
+            }
+
+            if (hasZoeUpdate) {
+                const openZoeBtn = item.querySelector('[data-open-zoe-updates]');
+                if (openZoeBtn) {
+                    const openZoeHandler = function(e) {
+                        e.stopPropagation();
+                        close();
+                        location.href = '/touch/updates.html';
+                    };
+                    openZoeBtn.addEventListener('click', openZoeHandler);
+                    openZoeBtn.addEventListener('touchend', function(e) { e.preventDefault(); openZoeHandler(e); });
                 }
             }
 

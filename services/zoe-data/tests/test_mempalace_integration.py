@@ -2,7 +2,7 @@
 Comprehensive MemPalace integration tests.
 
 Tests: user isolation, upsert behaviour, recency ordering, pattern coverage,
-all-agent read paths, Bonsai memory capture, nightly digest, dedup, timeout safety.
+all-agent read paths, memory capture, nightly digest, dedup, timeout safety.
 
 Run: cd services/zoe-data && python -m pytest tests/test_mempalace_integration.py -v
 """
@@ -127,9 +127,9 @@ def _install_mempalace_stubs():
 
 _install_mempalace_stubs()
 
-# Now we can import pi_agent functions
+# Now we can import zoe_agent as pi_agent functions
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from pi_agent import (
+from zoe_agent import (
     _mempalace_add,
     _mempalace_search,
     _mempalace_load_user_facts,
@@ -162,7 +162,7 @@ def fresh_collection():
         pass
     # Also drop pi_agent's per-turn facts cache.
     try:
-        import pi_agent as _pa
+        import zoe_agent as _pa
         _pa._USER_FACTS_CACHE.clear()
     except Exception:
         pass
@@ -314,10 +314,10 @@ async def test_all_agents_see_same_facts():
 
     # Simulate each agent calling _mempalace_load_user_facts
     pi_view = await _mempalace_load_user_facts("jason")
-    bonsai_view = await _mempalace_load_user_facts("jason")
+    gemma_view = await _mempalace_load_user_facts("jason")
     openclaw_view = await _mempalace_load_user_facts("jason")
 
-    assert pi_view == bonsai_view == openclaw_view
+    assert pi_view == gemma_view == openclaw_view
     assert "44" in pi_view
     assert "Perth" in pi_view
 
@@ -329,7 +329,7 @@ async def test_all_agents_see_same_facts():
 @pytest.mark.asyncio
 async def test_memory_capture_paths_pi_hermes_openclaw():
     """All runtime agent paths should persist through shared MemPalace pipeline."""
-    from pi_agent import _background_memory_save
+    from zoe_agent import _background_memory_save
 
     # Pi-agent post-turn capture
     await _background_memory_save(
@@ -388,7 +388,7 @@ async def test_fire_memory_capture_user_scoped():
     msg = "I was born on 24 March 1982"
     reply = "I've noted that you were born on 24 March 1982."
     # Directly call the async save to test (not the fire wrapper)
-    from pi_agent import _background_memory_save
+    from zoe_agent import _background_memory_save
     await _background_memory_save(msg, reply, user_id="jason")
 
     col = _GLOBAL_COLLECTION
@@ -405,7 +405,7 @@ async def test_fire_memory_capture_user_scoped():
 @pytest.mark.asyncio
 async def test_background_dedup():
     """Writing same fact twice via _background_memory_save should not create duplicates."""
-    from pi_agent import _background_memory_save
+    from zoe_agent import _background_memory_save
     msg = "My name is Jason"
     await _background_memory_save(msg, "", user_id="jason")
     await _background_memory_save(msg, "", user_id="jason")
@@ -486,8 +486,8 @@ async def test_migration_retags_legacy_records(tmp_path, monkeypatch):
 
     # Use a temp dir so the flag file doesn't interfere with real .mempalace
     flag_path = str(tmp_path / ".migration_v1_done")
-    monkeypatch.setattr("pi_agent._MIGRATION_DONE_FLAG", flag_path)
-    import pi_agent as _pa
+    monkeypatch.setattr("zoe_agent._MIGRATION_DONE_FLAG", flag_path)
+    import zoe_agent as _pa
     monkeypatch.setattr(_pa, "_MIGRATION_DONE_FLAG", flag_path)
 
     await asyncio.get_event_loop().run_in_executor(None, migrate_mempalace_legacy_records)
