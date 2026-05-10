@@ -157,19 +157,6 @@ async def lifespan(app: FastAPI):
         except Exception as _wup_exc:
             logger.warning("Agent KV warmup scheduling failed (non-fatal): %s", _wup_exc)
 
-    # Warm wyoming-piper TTS: one dummy request so Piper's ONNX model is loaded
-    # before the first real voice command. Avoids ~1.5s cold-start on first request.
-    async def _warmup_piper():
-        await asyncio.sleep(10)  # let service fully start first
-        try:
-            from routers.voice_tts import _synthesize_wyoming_piper
-            await _synthesize_wyoming_piper("Zoe is ready.")
-            logger.info("wyoming-piper TTS warmup complete")
-        except Exception as _exc:
-            logger.debug("wyoming-piper warmup failed (non-fatal): %s", _exc)
-
-    asyncio.create_task(_warmup_piper(), name="piper_tts_warmup")
-
     # Proactive engine: APScheduler (Tier 1) + slow-loop (Tier 2).
     try:
         from proactive.engine import start_proactive_engine, register_trigger

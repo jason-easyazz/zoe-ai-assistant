@@ -308,6 +308,10 @@ async def login(request: LoginRequest, http_request: Request):
                 error_message=session_result.error_message
             )
 
+        # Honour "Keep me signed in" — extend session to 30 days
+        if request.remember_me and session_result.session:
+            session_manager.extend_session(session_result.session.session_id, days=30)
+
         # Get user info
         user_info = auth_manager.get_user_info(auth_result.user_id)
         

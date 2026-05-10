@@ -69,6 +69,8 @@ def _zoe_context_prefix(
     return prefix
 
 
+_BUILDER_INTENT_PREFIXES = ("[ZOE_SELF_BUILD:", "[ZOE_CONNECT:")
+
 async def openclaw_cli(
     message: str,
     session_id: str,
@@ -85,8 +87,16 @@ async def openclaw_cli(
     memory_* tools) scopes memories per family member. The ACP bridge
     connects to the running openclaw-gateway, giving access to the browser
     tool and other gateway-managed resources.
+
+    Builder and connection intents route to a separate session key so long-running
+    code-generation tasks don't pollute the user's main conversation context.
     """
-    gateway_session_key = f"agent:main:zoe_{user_id}_{session_id}"
+    is_builder = any(message.startswith(p) for p in _BUILDER_INTENT_PREFIXES)
+    if is_builder:
+        gateway_session_key = f"agent:main:builder_{user_id}_{session_id}"
+        skip_context_prefix = True  # builder prompts are self-contained
+    else:
+        gateway_session_key = f"agent:main:zoe_{user_id}_{session_id}"
     if not skip_context_prefix:
         message = _zoe_context_prefix(
             user_id, user_role=user_role, username=username, memories=memories

@@ -6,7 +6,7 @@ rtc:
   # For local network access, we need to announce the local IP
   # LiveKit will auto-detect it from the host
 keys:
-  devkey: secretsecretsecretsecretsecretsecret
+  zoe-k5Sq6QANfemQ1ash: VR2FnhtPlr_l6z7mHMc50w64MNkA2eyG9Bk-dKrp1PY
 logging:
   level: info
   sample: false

@@ -150,14 +150,6 @@ _DOCKER_SERVICES: list[tuple[str, str, str, str, str, bool]] = [
         True,
     ),
     (
-        "wyoming-piper",
-        "Wyoming Piper TTS",
-        "Text-to-speech voice synthesis",
-        "wyoming-piper",
-        "rhasspy/wyoming-piper:latest",
-        False,
-    ),
-    (
         "keeper",
         "Keeper",
         "Scheduled task runner",

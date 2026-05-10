@@ -27,3 +27,5 @@ SQLAlchemy>=2.0,<3.0
 # Push notifications
 pywebpush>=2.0
 py-vapid>=1.8
+# Speaker identification (voice enrollment and identify endpoints)
+resemblyzer>=0.1.3

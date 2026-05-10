@@ -106,25 +106,24 @@ services:
   #    - Speaker ID:  resemblyzer 256-dim embeddings on Pi
   #    This stack is NOT in Docker — the Pi daemon runs as a systemd service.
   #
-  # 2. WYOMING STACK (these services below — for HA Voice Assist only):
-  #    - wyoming-piper:       TTS for HA Assist satellite mode (port 10200)
-  #    - wyoming-whisper:     STT for HA Assist satellite mode (port 10300)
-  #    - wyoming-openwakeword: Wake word for HA Assist satellite mode (port 10400)
-  #    If you DO NOT use Home Assistant Voice Assist (voice pipeline in HA settings),
-  #    you can safely stop these services to reclaim ~2GB RAM and ~30% CPU:
-  #      docker compose stop wyoming-piper wyoming-whisper wyoming-openwakeword
-  #    To permanently disable, comment out the service definitions below.
-  #
-  wyoming-piper:
-    image: rhasspy/wyoming-piper:latest
-    container_name: wyoming-piper
+  # ── LiveKit WebRTC server (for remote "Her"-style voice via /voice?mode=livekit) ──────────────
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: livekit
     restart: unless-stopped
-    command: --voice en_US-lessac-medium --uri tcp://0.0.0.0:10200
+    command: --config /config.yaml
+    ports:
+    - "7880:7880"
+    - "50000-50200:50000-50200/udp"
     volumes:
-    - ./data/wyoming/piper:/data
+    - ./services/livekit/config.yaml:/config.yaml:ro
     networks:
     - zoe-network
 
+  # 2. WYOMING STACK (retired 2026-05-10):
+  #    wyoming-piper TTS was replaced by Kokoro GPU sidecar — retired to save ~2GB RAM.
+  #    wyoming-whisper: HA satellite STT experiment abandoned (quality insufficient).
+  #    wyoming-openwakeword: OOM-killed May 2026, not configured in any active pipeline.
   # wyoming-whisper: disabled — HA satellite STT experiment abandoned (quality insufficient).
   # wyoming-openwakeword: disabled — OOM-killed May 2026, not configured in any active pipeline.
   # To re-enable either, uncomment the block below and run: docker compose up -d wyoming-whisper

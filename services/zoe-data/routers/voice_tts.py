@@ -345,107 +345,6 @@ async def _synthesize_kokoro_sidecar(text: str) -> Optional[bytes]:
         return None
 
 
-async def _synthesize_wyoming_piper(text: str) -> Optional[bytes]:
-    """Synthesize via wyoming-piper TCP socket (rhasspy/wyoming-piper Docker container).
-
-    p50 ~127ms first-audio-byte on Jetson — 8x faster than Kokoro ONNX on CPU.
-    Set ZOE_WYOMING_PIPER_HOST (default 127.0.0.1) and ZOE_WYOMING_PIPER_PORT (default 10200).
-    Wyoming protocol: newline-delimited JSON headers + optional binary payloads.
-    """
-    host = os.environ.get("ZOE_WYOMING_PIPER_HOST", "127.0.0.1").strip()
-    port = int(os.environ.get("ZOE_WYOMING_PIPER_PORT", "10200"))
-    voice_name = os.environ.get("ZOE_WYOMING_PIPER_VOICE", "en_US-lessac-medium").strip()
-
-    try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port), timeout=2.0
-        )
-    except Exception as exc:
-        logger.debug("wyoming-piper connect failed: %s", exc)
-        return None
-
-    try:
-        event = {
-            "type": "synthesize",
-            "data": {"text": text, "voice": {"name": voice_name}},
-            "data_length": 0,
-        }
-        writer.write((json.dumps(event) + "\n").encode())
-        await writer.drain()
-
-        audio_rate = 22050
-        audio_width = 2
-        audio_channels = 1
-        pcm_chunks: list[bytes] = []
-        buf = b""
-
-        while True:
-            try:
-                chunk = await asyncio.wait_for(reader.read(65536), timeout=10.0)
-            except asyncio.TimeoutError:
-                break
-            if not chunk:
-                break
-            buf += chunk
-
-            while b"\n" in buf:
-                idx = buf.index(b"\n")
-                header_bytes, buf = buf[:idx], buf[idx + 1:]
-                try:
-                    hdr = json.loads(header_bytes.decode(errors="replace"))
-                except Exception:
-                    continue
-
-                ev_type = hdr.get("type", "")
-                data_len = hdr.get("data_length", 0)
-                payload_len = hdr.get("payload_length", 0)
-
-                # Consume structured sub-data (audio format info)
-                while len(buf) < data_len:
-                    buf += await asyncio.wait_for(reader.read(65536), timeout=10.0)
-                if data_len > 0:
-                    try:
-                        sub = json.loads(buf[:data_len].decode(errors="replace"))
-                        if ev_type == "audio-start":
-                            audio_rate = sub.get("rate", audio_rate)
-                            audio_width = sub.get("width", audio_width)
-                            audio_channels = sub.get("channels", audio_channels)
-                    except Exception:
-                        pass
-                    buf = buf[data_len:]
-
-                # Consume raw PCM payload
-                while len(buf) < payload_len:
-                    buf += await asyncio.wait_for(reader.read(65536), timeout=10.0)
-                if payload_len > 0:
-                    pcm_chunks.append(buf[:payload_len])
-                    buf = buf[payload_len:]
-
-                if ev_type == "audio-stop":
-                    # Wrap collected PCM in a WAV container
-                    import wave as _wave, io as _io
-
-                    raw_pcm = b"".join(pcm_chunks)
-                    wav_buf = _io.BytesIO()
-                    with _wave.open(wav_buf, "wb") as wf:
-                        wf.setnchannels(audio_channels)
-                        wf.setsampwidth(audio_width)
-                        wf.setframerate(audio_rate)
-                        wf.writeframes(raw_pcm)
-                    return wav_buf.getvalue()
-
-        return None
-    except Exception as exc:
-        logger.warning("wyoming-piper synthesis failed: %s", exc)
-        return None
-    finally:
-        try:
-            writer.close()
-            await writer.wait_closed()
-        except Exception:
-            pass
-
-
 async def _synthesize_kokoro(text: str, voice: str = "af_sky") -> Optional[bytes]:
     """Synthesize using Kokoro ONNX (thewh1teagle/kokoro-onnx).
 
@@ -1272,7 +1171,7 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
     content_type = "audio/wav"
     provider = "none"
 
-    # ── TTS waterfall: kokoro-sidecar → local sidecar → wyoming-piper → Kokoro ONNX → Edge TTS → espeak-ng ──
+    # ── TTS waterfall: kokoro-sidecar → local sidecar → Kokoro ONNX → Edge TTS → espeak-ng ──
     if mode in {"hybrid", "local"}:
         audio_bytes = await _synthesize_local_service(text, profile=profile, base_url=local_tts_url)
         if audio_bytes:
@@ -1286,16 +1185,6 @@ async def synthesize(payload: dict, caller: dict = Depends(_require_voice_auth))
         if audio_bytes:
             provider = "kokoro-sidecar"
             content_type = "audio/wav"
-
-    # wyoming-piper — p50 127ms on Jetson, 8x faster than Kokoro ONNX CPU.
-    if audio_bytes is None and mode != "cloud":
-        wyoming_host = os.environ.get("ZOE_WYOMING_PIPER_HOST", "127.0.0.1").strip()
-        wyoming_port = int(os.environ.get("ZOE_WYOMING_PIPER_PORT", "10200"))
-        if wyoming_host and wyoming_port:
-            audio_bytes = await _synthesize_wyoming_piper(text)
-            if audio_bytes:
-                provider = "wyoming-piper"
-                content_type = "audio/wav"
 
     # Kokoro ONNX — offline fallback (CPU ~1.1s on Jetson, fast if CUDA available).
     if audio_bytes is None and mode != "cloud":
@@ -1380,7 +1269,7 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
             provider = "none"
             error_msg: Optional[str] = None
 
-            # Waterfall: kokoro-sidecar → local sidecar → wyoming-piper → Kokoro ONNX → Edge TTS → espeak
+            # Waterfall: kokoro-sidecar → local sidecar → Kokoro ONNX → Edge TTS → espeak
             if mode in {"hybrid", "local"} and local_tts_url:
                 audio_bytes = await _synthesize_local_service(sentence, profile=profile, base_url=local_tts_url)
                 if audio_bytes:
@@ -1390,11 +1279,6 @@ async def voice_stream(payload: dict, caller: dict = Depends(_require_voice_auth
                 audio_bytes = await _synthesize_kokoro_sidecar(sentence)
                 if audio_bytes:
                     provider = "kokoro-sidecar"
-
-            if audio_bytes is None and mode != "cloud":
-                audio_bytes = await _synthesize_wyoming_piper(sentence)
-                if audio_bytes:
-                    provider = "wyoming-piper"
 
             if audio_bytes is None and mode != "cloud":
                 audio_bytes = await _synthesize_kokoro(sentence)
@@ -2505,12 +2389,9 @@ async def voice_command(
                             "text": s[:200],
                         })
 
-                        # Prefer kokoro-sidecar (natural GPU voice); fall back to wyoming-piper then Kokoro stream
+                        # Prefer kokoro-sidecar (natural GPU voice); fall back to Kokoro stream
                         wav_bytes = await _synthesize_kokoro_sidecar(s)
                         _tts_provider = "kokoro-sidecar"
-                        if not wav_bytes:
-                            wav_bytes = await _synthesize_wyoming_piper(s)
-                            _tts_provider = "wyoming-piper"
                         if wav_bytes:
                             if _t_first_audio is None:
                                 _t_first_audio = time.monotonic() - t_chat_start
@@ -3227,37 +3108,51 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
 
 @router.post("/identify")
 async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_auth)):
-    """Identify speaker from a WAV audio sample by comparing to enrolled profiles.
+    """Identify speaker by comparing to enrolled profiles.
 
-    Request: { "audio_base64": "...", "panel_id": "..." }
+    Accepts two request formats:
+    - { "embedding_base64": "...", "panel_id": "..." }  — pre-computed float32 embedding bytes
+      (sent by zoe_voice_daemon.py which computes resemblyzer locally on Pi/Jetson)
+    - { "audio_base64": "...", "panel_id": "..." }  — raw WAV bytes; server computes embedding
     Returns best-match profile with confidence score.
     """
     import aiosqlite
     from database import DB_PATH
 
-    b64 = str((payload or {}).get("audio_base64", "")).strip()
-    if not b64:
-        raise HTTPException(status_code=400, detail="audio_base64 is required")
+    payload = payload or {}
 
-    try:
-        raw = base64.b64decode(b64, validate=True)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
-
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-        tmp.write(raw)
-        wav_path = tmp.name
-
-    try:
-        query_emb = _compute_resemblyzer_embedding(wav_path)
-    finally:
+    # Fast path: pre-computed embedding from the voice daemon
+    emb_b64 = str(payload.get("embedding_base64", "")).strip()
+    if emb_b64:
         try:
-            os.unlink(wav_path)
-        except OSError:
-            pass
+            query_emb = base64.b64decode(emb_b64, validate=True)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="invalid base64 embedding") from exc
+    else:
+        # Fallback: raw WAV bytes — compute embedding server-side
+        b64 = str(payload.get("audio_base64", "")).strip()
+        if not b64:
+            raise HTTPException(status_code=400, detail="embedding_base64 or audio_base64 is required")
 
-    if query_emb is None:
-        raise HTTPException(status_code=503, detail="resemblyzer not available")
+        try:
+            raw = base64.b64decode(b64, validate=True)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="invalid base64 audio") from exc
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(raw)
+            wav_path = tmp.name
+
+        try:
+            query_emb = _compute_resemblyzer_embedding(wav_path)
+        finally:
+            try:
+                os.unlink(wav_path)
+            except OSError:
+                pass
+
+        if query_emb is None:
+            raise HTTPException(status_code=503, detail="resemblyzer not available")
 
     try:
         async with aiosqlite.connect(DB_PATH) as db:
@@ -3301,6 +3196,50 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
         "best_confidence": round(best_score, 4),
         "threshold": threshold,
     }
+
+
+@router.get("/profiles")
+async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
+    """List enrolled speaker profiles (id, user_id, display_name, sample_count).
+
+    Used by the settings page Voice Identity section to show who is enrolled.
+    """
+    import aiosqlite
+    from database import DB_PATH
+
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT id, user_id, display_name, sample_count, panel_id FROM speaker_profiles ORDER BY display_name"
+            ) as cur:
+                rows = await cur.fetchall()
+        return {
+            "ok": True,
+            "profiles": [
+                {"id": r[0], "user_id": r[1], "display_name": r[2],
+                 "sample_count": r[3] or 1, "panel_id": r[4]}
+                for r in rows
+            ]
+        }
+    except Exception as exc:
+        logger.error("voice/profiles DB error: %s", exc)
+        raise HTTPException(status_code=500, detail="DB error") from exc
+
+
+@router.delete("/profiles/{profile_id}")
+async def voice_profile_delete(profile_id: str, caller: dict = Depends(_require_voice_auth)):
+    """Delete an enrolled speaker profile."""
+    import aiosqlite
+    from database import DB_PATH
+
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("DELETE FROM speaker_profiles WHERE id=?", (profile_id,))
+            await db.commit()
+        return {"ok": True, "deleted": profile_id}
+    except Exception as exc:
+        logger.error("voice/profiles delete error: %s", exc)
+        raise HTTPException(status_code=500, detail="DB error") from exc
 
 
 # ── Voice confirmation state ───────────────────────────────────────────────

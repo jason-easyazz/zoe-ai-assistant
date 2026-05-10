@@ -115,12 +115,22 @@ app = FastAPI(
 )
 
 # Configure CORS
+_ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.getenv(
+        "ZOE_AUTH_ALLOWED_ORIGINS",
+        "http://localhost,http://localhost:3000,http://localhost:8000,"
+        "http://127.0.0.1,http://127.0.0.1:8000,"
+        "https://zoe.the411.life",
+    ).split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Simplified for local network
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Session-ID"],
 )
 
 # Request logging middleware

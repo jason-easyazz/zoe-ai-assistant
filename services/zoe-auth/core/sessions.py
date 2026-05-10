@@ -287,6 +287,18 @@ class EnhancedSessionManager:
 
         return True
 
+    def extend_session(self, session_id: str, days: int) -> bool:
+        """Extend session expiry to a fixed number of days from now (used for remember_me)."""
+        session = self.get_session(session_id)
+        if not session:
+            return False
+
+        with self.session_lock:
+            session.expires_at = datetime.now(timezone.utc) + timedelta(days=days)
+            self._save_session_to_db(session)
+
+        return True
+
     def invalidate_session(self, session_id: str) -> bool:
         """Invalidate specific session"""
         with self.session_lock:

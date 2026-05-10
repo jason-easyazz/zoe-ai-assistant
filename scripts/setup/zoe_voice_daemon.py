@@ -682,7 +682,7 @@ def _identify_speaker_from_wav(wav_bytes: bytes) -> str | None:
 
         emb_bytes = embedding.astype(_np.float32).tobytes()
         emb_b64 = _b64.b64encode(emb_bytes).decode()
-        resp = _api_post("/api/voice/identify", {"audio_base64": emb_b64}, timeout=5)
+        resp = _api_post("/api/voice/identify", {"embedding_base64": emb_b64}, timeout=5)
         if resp.get("identified"):
             return resp.get("user_id")
         return None

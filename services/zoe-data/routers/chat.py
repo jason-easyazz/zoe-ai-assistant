@@ -379,7 +379,8 @@ _GUARDED_AUTO = (
 _ALL_TOOLS_ENABLED = os.environ.get("OPENCLAW_ALL_TOOLS_ENABLED", "true").lower() == "true"
 _WHATSAPP_FLOW_ENABLED = os.environ.get("WHATSAPP_FLOW_ENABLED", "true").lower() == "true"
 
-_OPENCLAW_GW = os.environ.get("OPENCLAW_GATEWAY_URL", "http://127.0.0.1:8787")
+_OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW",
+    os.environ.get("OPENCLAW_GATEWAY_URL", "http://127.0.0.1:18789"))
 _BROWSER_BROKER = create_default_browser_broker(_OPENCLAW_GW)
 
 # Per-session concurrency guard: only one OpenClaw turn runs per session at a time.
@@ -447,6 +448,8 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
     pattern sets, dual-writing to SQLite ``memory_items`` and MemPalace.
     Both old paths now funnel through this single call.
     """
+    if user_id == "guest":
+        return
     try:
         from memory_extractor import extract_and_ingest
 
