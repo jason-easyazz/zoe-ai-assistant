@@ -593,6 +593,15 @@
         /* Tool Trace Panel — AG-UI demo quality */
         .tool-trace-panel { margin: 0 0 8px 32px; display: flex; flex-direction: column; gap: 6px; }
 
+        /* While the long-run banner is active, hide all intermediate trace cards
+           and subgraph tiles — the banner is the single source of truth. */
+        .message-group.agent-running .tool-trace-panel,
+        .message-group.agent-running .subgraph-card,
+        .message-group.agent-running .tool-call-card,
+        .message-group.agent-running .tool-call-heartbeat { display: none !important; }
+        /* Also hide the message header until a real response appears */
+        .message-group.agent-running .message-header { display: none; }
+
         /* Long-Run Notice — sticky banner for multi-minute agent tasks.
          * Uses position: sticky so the tile stays pinned at the top of the
          * messages-container viewport while the tool trace below scrolls past.
@@ -2531,6 +2540,7 @@
         function showLongRunNotice(ctx, opts) {
             const lr = ctx && ctx.longRun;
             if (!lr || !lr.el) return;
+            // Always update detail text on every call so it stays live
             if (opts && opts.detail && lr.detailEl) {
                 lr.detailEl.textContent = String(opts.detail);
             }
@@ -2538,6 +2548,12 @@
             lr.started = true;
             lr.startedAt = Date.now();
             lr.el.classList.add('visible');
+            // Hide the redundant floating pill — the banner supersedes it
+            if (ctx.thinkingIndicator && ctx.thinkingIndicator.parentNode) {
+                ctx.thinkingIndicator.style.display = 'none';
+            }
+            // Mark group so CSS hides trace cards while banner is active
+            if (ctx.group) ctx.group.classList.add('agent-running');
             const tick = () => {
                 if (!lr.started) return;
                 const secs = Math.floor((Date.now() - lr.startedAt) / 1000);
@@ -2557,6 +2573,8 @@
             if (lr.timer) { clearInterval(lr.timer); lr.timer = null; }
             lr.started = false;
             lr.el.classList.remove('visible');
+            // Restore group visibility so the response renders normally
+            if (ctx.group) ctx.group.classList.remove('agent-running');
         }
 
         /**
@@ -2603,8 +2621,12 @@
                 panel.style.display = 'flex';
 
                 if (v.heartbeat) {
-                    // Heartbeat: update a single sticky status row in-place instead
-                    // of appending a new card on every tick.
+                    // Heartbeat: if banner is active, just update its detail text.
+                    // Otherwise fall back to a single sticky row in the trace panel.
+                    if (ctx.longRun && ctx.longRun.started && ctx.longRun.detailEl) {
+                        ctx.longRun.detailEl.textContent = msg;
+                        return;
+                    }
                     let hb = panel.querySelector('.tool-call-heartbeat');
                     if (!hb) {
                         hb = document.createElement('div');
@@ -2654,18 +2676,17 @@
                             el.textContent = 'Zoe is typing… (' + (snap.model || 'AI') + ')';
                         }
                     }
-                    if (snap.phase === 'openclaw' && ctx.toolTraceEl) {
+                    // Update banner detail from snapshot — don't open toolTraceEl while banner is active
+                    if (snap.phase === 'openclaw' && ctx.toolTraceEl && !ctx.longRun?.started) {
                         ctx.toolTraceEl.style.display = 'flex';
                     }
                     // Only show agent panel for tool-calling (openclaw) runs
                     if (snap.phase === 'openclaw') {
                         showAgentPanel(snap.model || 'OpenClaw');
-                        // OpenClaw runs are always multi-second; surface the
-                        // long-run notice immediately so the user isn't left
-                        // wondering whether the chat is stuck.
-                        showLongRunNotice(ctx, {
-                            detail: 'Zoe is using the agent system (OpenClaw) to fulfil this request. Complex tasks like building widgets, pages, or new skills can take 1–3 minutes. You can cancel at any time.',
-                        });
+                        const liveDetail = snap.detail
+                            ? String(snap.detail)
+                            : 'Zoe is using the agent system (OpenClaw) to fulfil this request. Complex tasks like building widgets, pages, or new skills can take 1–3 minutes. You can cancel at any time.';
+                        showLongRunNotice(ctx, { detail: liveDetail });
                     } else if (snap.status === 'generating') {
                         // Non-openclaw phases: only surface the tile if we've
                         // been waiting a while (>20s) — small talk shouldn't
@@ -2732,7 +2753,10 @@
                 };
                 const _toolName = data.toolCallName || data.tool_call_name || 'tool';
                 const _toolLabel = _toolLabels[_toolName] || ('🔧 ' + _toolName);
-                if (thinkingIndicator && thinkingIndicator.parentNode) {
+                // Update banner detail with live tool name while agent-running
+                if (ctx.longRun && ctx.longRun.started && ctx.longRun.detailEl) {
+                    ctx.longRun.detailEl.textContent = _toolLabel + '…';
+                } else if (thinkingIndicator && thinkingIndicator.parentNode) {
                     thinkingIndicator.className = 'activity-indicator executing';
                     const ic = thinkingIndicator.querySelector('span:first-child');
                     const tx = thinkingIndicator.querySelector('span:last-child');
