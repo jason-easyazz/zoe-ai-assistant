@@ -17,7 +17,7 @@ class EventsWidget extends WidgetModule {
     getTemplate() {
         return `
             <div class="widget-header">
-                <div class="widget-title">📅 Today's Events</div>
+                <div class="widget-title">📅 Upcoming Events</div>
                 <div class="widget-badge" id="eventsCount">0</div>
             </div>
             <div class="widget-content events-widget-content">
@@ -58,31 +58,50 @@ class EventsWidget extends WidgetModule {
             if (response.ok) {
                 const data = await response.json();
                 const events = Array.isArray(data) ? data : data.events || [];
-                
-                const today = new Date().toISOString().split('T')[0];
-                const todaysEvents = events.filter(event => {
-                    const eventDate = event.start_date || event.date;
-                    return eventDate === today;
+
+                // Use local date to avoid UTC timezone mismatch (e.g. UTC+8 would show yesterday's date if using toISOString)
+                const now = new Date();
+                const todayLocal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+                const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+                // Show today's remaining events and all future events
+                const upcomingEvents = events.filter(event => {
+                    const eventDate = event.start_date || event.date || '';
+                    if (!eventDate) return false;
+                    if (eventDate > todayLocal) return true;
+                    if (eventDate === todayLocal) {
+                        // For today, skip events that have already ended
+                        const endTime = event.end_time || event.start_time || event.time || '23:59';
+                        return endTime >= nowTime;
+                    }
+                    return false;
                 });
-                
-                // Transform events to match expected format
-                const transformedEvents = todaysEvents.map(event => ({
+
+                // Sort chronologically by date then time
+                upcomingEvents.sort((a, b) => {
+                    const da = (a.start_date || a.date || '') + ' ' + (a.start_time || a.time || '00:00');
+                    const db = (b.start_date || b.date || '') + ' ' + (b.start_time || b.time || '00:00');
+                    return da.localeCompare(db);
+                });
+
+                const transformedEvents = upcomingEvents.map(event => ({
                     title: event.title,
-                    start_time: event.start_time,
+                    start_time: event.start_time || event.time,
+                    date: event.start_date || event.date,
                     category: event.category || 'personal'
                 }));
-                
-                this.updateEvents(transformedEvents);
+
+                this.updateEvents(transformedEvents, todayLocal);
             } else {
-                this.updateEvents([]);
+                this.updateEvents([], '');
             }
         } catch (error) {
             console.error('Failed to load events:', error);
-            this.updateEvents([]);
+            this.updateEvents([], '');
         }
     }
     
-    updateEvents(events) {
+    updateEvents(events, todayLocal) {
         const content = this.element.querySelector('#eventsContent');
         const count = this.element.querySelector('#eventsCount');
         const isDark = document.documentElement.classList.contains('dark-mode');
@@ -90,35 +109,42 @@ class EventsWidget extends WidgetModule {
         const textSecondary = isDark ? 'rgba(255,255,255,0.68)' : '#666';
         const cardBg = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.92)';
         const cardBorder = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0, 0, 0, 0.08)';
-        
+
         if (count) {
             count.textContent = events.length;
         }
-        
+
         if (content) {
-            // Remove loading widget class
             content.classList.remove('loading-widget');
-            
-            // Ensure content fills available space
             content.style.flex = '1';
             content.style.overflow = 'auto';
             content.style.minHeight = '0';
-            
+
             if (events.length === 0) {
-                content.innerHTML = `<div style="text-align: center; color: ${textSecondary}; font-style: italic; padding: 20px;">No events today</div>`;
+                content.innerHTML = `<div style="text-align: center; color: ${textSecondary}; font-style: italic; padding: 20px;">No upcoming events</div>`;
                 return;
             }
-            
-            // Create events list with proper spacing
-            const eventsHTML = events.map(event => `
+
+            const eventsHTML = events.map(event => {
+                const isToday = event.date === todayLocal;
+                const dateLabel = isToday ? '' : `<div style="font-size: 11px; font-weight: 500; color: ${textSecondary}; margin-bottom: 2px;">${this.formatDate(event.date)}</div>`;
+                return `
                 <div class="calendar-event-item ${event.category || 'personal'}" style="padding: 12px; border-radius: 8px; cursor: pointer; transition: all 0.3s; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.10); border: 1px solid ${cardBorder}; background: ${cardBg}; border-left: 4px solid; width: 100%; box-sizing: border-box; margin-bottom: 8px; color: ${textPrimary};">
+                    ${dateLabel}
                     <div style="font-size: 12px; font-weight: 600; margin-bottom: 4px; color: ${textSecondary};">${this.formatTime(event.start_time || event.time)}</div>
                     <div style="font-size: 14px; font-weight: 500; color: ${textPrimary};">${event.title}</div>
-                </div>
-            `).join('');
-            
+                </div>`;
+            }).join('');
+
             content.innerHTML = eventsHTML;
         }
+    }
+
+    formatDate(dateStr) {
+        if (!dateStr) return '';
+        const [year, month, day] = dateStr.split('-');
+        const d = new Date(+year, +month - 1, +day);
+        return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
     }
     
     formatTime(timeStr) {

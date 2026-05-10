@@ -355,14 +355,19 @@ async function confirmAguiAction(btn, decision, actionId) {
   try {
     await fetch('/api/chat/confirm', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Session-ID': localStorage.getItem('session_id') || '' },
+      headers: { 'Content-Type': 'application/json', 'X-Session-ID': getSessionId() },
       body: JSON.stringify({ action_id: actionId, decision })
     });
   } catch(e) { /* non-fatal */ }
 }
 
 // ── Session helpers ───────────────────────────────────────────────────────
-function getSessionId() { return localStorage.getItem('session_id') || ''; }
+function getSessionId() {
+    try {
+        const s = JSON.parse(localStorage.getItem('zoe_session'));
+        return (s && s.session_id) || '';
+    } catch(e) { return ''; }
+}
 
 // ── LOCAL mode: WebSocket voice session ──────────────────────────────────
 let localWS    = null;

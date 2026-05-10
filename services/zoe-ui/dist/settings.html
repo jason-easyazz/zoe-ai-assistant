@@ -258,22 +258,123 @@
         .api-indicator.warning::before { background: #ea580c; }
 
         /* Main Layout */
-        .main-container { padding: 70px 20px 20px; }
+        .main-container { padding: 70px 20px 40px; }
+
+        /* Settings outer wrapper: sidebar + content */
+        .settings-container {
+            max-width: 1100px;
+            margin: 0 auto;
+            display: flex;
+            gap: 28px;
+            align-items: flex-start;
+        }
+
+        /* Sidebar navigation */
+        .settings-sidebar {
+            width: 200px;
+            flex-shrink: 0;
+            position: sticky;
+            top: 80px;
+        }
+        .settings-sidebar-title {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #999;
+            padding: 0 12px 8px;
+        }
+        .settings-nav-group {
+            margin-bottom: 20px;
+        }
+        .settings-nav-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            color: #555;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+        }
+        .settings-nav-item:hover {
+            background: rgba(123, 97, 255, 0.08);
+            color: #7B61FF;
+        }
+        .settings-nav-item.active {
+            background: rgba(123, 97, 255, 0.12);
+            color: #7B61FF;
+            font-weight: 600;
+        }
+        .settings-nav-icon { font-size: 15px; width: 20px; text-align: center; }
 
         /* Settings Layout */
         .settings-layout {
-            max-width: 800px; margin: 0 auto;
+            flex: 1;
+            min-width: 0;
         }
         .settings-header {
-            text-align: center; margin-bottom: 30px;
+            margin-bottom: 28px;
         }
         .settings-title {
-            font-size: 28px; font-weight: 300; color: #333; margin-bottom: 10px;
-            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            font-size: 24px; font-weight: 600; color: #333; margin-bottom: 4px;
         }
         .settings-subtitle {
-            font-size: 16px; color: #666;
+            font-size: 14px; color: #888;
+        }
+
+        /* Section group anchors/labels */
+        .section-group-anchor {
+            scroll-margin-top: 80px;
+        }
+        .section-group-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #aaa;
+            margin: 32px 0 12px;
+            padding-left: 4px;
+        }
+        .section-group-label:first-child {
+            margin-top: 0;
+        }
+
+        @media (max-width: 768px) {
+            .settings-container { flex-direction: column; gap: 0; }
+            .settings-sidebar { display: none; }
+        }
+
+        /* Dark mode sidebar */
+        html.dark-mode .settings-nav-item {
+            color: rgba(255,255,255,0.60);
+        }
+        html.dark-mode .settings-nav-item:hover {
+            background: rgba(123, 97, 255, 0.15);
+            color: #a78bfa;
+        }
+        html.dark-mode .settings-nav-item.active {
+            background: rgba(123, 97, 255, 0.20);
+            color: #a78bfa;
+        }
+        html.dark-mode .settings-sidebar-title {
+            color: rgba(255,255,255,0.30);
+        }
+        html.dark-mode .section-group-label {
+            color: rgba(255,255,255,0.28);
+        }
+        html.dark-mode .settings-title {
+            color: rgba(255,255,255,0.92);
+        }
+        html.dark-mode .settings-subtitle {
+            color: rgba(255,255,255,0.45);
         }
 
         /* Settings Sections */
@@ -1010,12 +1111,48 @@
     <!-- Main Content -->
     <div class="main-container">
 
+        <!-- Settings Container (sidebar + content) -->
+        <div class="settings-container">
+
+        <!-- Sidebar Navigation -->
+        <nav class="settings-sidebar" id="settingsSidebar">
+            <div class="settings-sidebar-title">Navigation</div>
+            <div class="settings-nav-group">
+                <a class="settings-nav-item active" href="#group-account" onclick="smoothScrollTo('group-account',this);return false;">
+                    <span class="settings-nav-icon">👤</span> Account
+                </a>
+                <a class="settings-nav-item" href="#group-ai" onclick="smoothScrollTo('group-ai',this);return false;">
+                    <span class="settings-nav-icon">🧠</span> AI Agents
+                </a>
+                <a class="settings-nav-item" href="#group-voice" onclick="smoothScrollTo('group-voice',this);return false;">
+                    <span class="settings-nav-icon">🎤</span> Voice
+                </a>
+                <a class="settings-nav-item" href="#group-appearance" onclick="smoothScrollTo('group-appearance',this);return false;">
+                    <span class="settings-nav-icon">🎨</span> Appearance
+                </a>
+                <a class="settings-nav-item" href="#group-notifications" onclick="smoothScrollTo('group-notifications',this);return false;">
+                    <span class="settings-nav-icon">🔔</span> Notifications
+                </a>
+                <a class="settings-nav-item" href="#group-integrations" onclick="smoothScrollTo('group-integrations',this);return false;">
+                    <span class="settings-nav-icon">🔗</span> Integrations
+                </a>
+                <a class="settings-nav-item" href="#group-advanced" onclick="smoothScrollTo('group-advanced',this);return false;">
+                    <span class="settings-nav-icon">⚙️</span> Advanced
+                </a>
+            </div>
+        </nav>
+
         <!-- Settings Layout -->
         <div class="settings-layout">
             <!-- Settings Header -->
             <div class="settings-header">
                 <h1 class="settings-title">Settings</h1>
                 <p class="settings-subtitle">Configure your Zoe AI experience</p>
+            </div>
+
+            <!-- GROUP: Account -->
+            <div id="group-account" class="section-group-anchor">
+                <div class="section-group-label">Account</div>
             </div>
 
             <!-- User Profile Section -->
@@ -1234,6 +1371,11 @@
                         <button class="btn primary" onclick="saveWeatherDefaultSettings()">💾 Save Zoe Default Location</button>
                     </div>
                 </div>
+            </div>
+
+            <!-- GROUP: Appearance -->
+            <div id="group-appearance" class="section-group-anchor">
+                <div class="section-group-label">Appearance &amp; Preferences</div>
             </div>
 
             <!-- General Settings -->
@@ -1632,6 +1774,11 @@
                         </div>
                     </div>
                 </div>
+            </div>
+
+            <!-- GROUP: Notifications -->
+            <div id="group-notifications" class="section-group-anchor">
+                <div class="section-group-label">Notifications</div>
             </div>
 
             <!-- Notification Settings -->
@@ -2448,6 +2595,11 @@
                 }
             </style>
 
+            <!-- GROUP: Advanced -->
+            <div id="group-advanced" class="section-group-anchor">
+                <div class="section-group-label">Advanced</div>
+            </div>
+
             <!-- Data Management — /settings/export|import|clear endpoints unserved by zoe-data. Hidden on desktop. -->
             <div class="settings-section" style="display:none;" data-desktop-hidden="data-mgmt">
                 <div class="section-header" onclick="toggleSection('data')">
@@ -2553,6 +2705,11 @@
                         </div>
                     </div>
                 </div>
+            </div>
+
+            <!-- GROUP: AI Agents -->
+            <div id="group-ai" class="section-group-anchor">
+                <div class="section-group-label">AI Agents</div>
             </div>
 
             <!-- OpenClaw Brain Panel -->
@@ -2846,6 +3003,11 @@
                 </div>
             </div>
 
+            <!-- GROUP: Integrations -->
+            <div id="group-integrations" class="section-group-anchor">
+                <div class="section-group-label">Integrations</div>
+            </div>
+
             <!-- ========== ADMIN: Connected Channels ========== -->
             <div class="settings-section" id="channelsSection" style="display:none;">
                 <div class="section-header" onclick="toggleSection('channelsContent')">
@@ -2855,6 +3017,11 @@
                 <div class="section-content" id="channelsContent">
                     <div id="channelsList"><em>Loading...</em></div>
                 </div>
+            </div>
+
+            <!-- GROUP: Voice -->
+            <div id="group-voice" class="section-group-anchor">
+                <div class="section-group-label">Voice</div>
             </div>
 
             <!-- ── Voice Identity ─────────────────────────────────────────── -->
@@ -2890,7 +3057,7 @@
                     if (!el) return;
                     try {
                         const r = await fetch('/api/voice/profiles', {
-                            headers: { 'X-Session-ID': localStorage.getItem('session_id') || '' }
+                            headers: { 'X-Session-ID': (function(){try{var s=JSON.parse(localStorage.getItem('zoe_session'));return s&&s.session_id||''}catch(e){return ''}}()) }
                         });
                         if (!r.ok) { el.innerHTML = '<em>Could not load profiles.</em>'; return; }
                         const d = await r.json();
@@ -2911,7 +3078,7 @@
                     try {
                         await fetch('/api/voice/profiles/' + profileId, {
                             method: 'DELETE',
-                            headers: { 'X-Session-ID': localStorage.getItem('session_id') || '' }
+                            headers: { 'X-Session-ID': (function(){try{var s=JSON.parse(localStorage.getItem('zoe_session'));return s&&s.session_id||''}catch(e){return ''}}()) }
                         });
                         loadVoiceProfiles();
                     } catch(e) { alert('Failed to delete profile.'); }
@@ -2969,7 +3136,7 @@
                                 method: 'POST',
                                 headers: {
                                     'Content-Type': 'application/json',
-                                    'X-Session-ID': localStorage.getItem('session_id') || ''
+                                    'X-Session-ID': (function(){try{var s=JSON.parse(localStorage.getItem('zoe_session'));return s&&s.session_id||''}catch(e){return ''}}())
                                 },
                                 body: JSON.stringify({ audio_base64: b64, user_id: userId, display_name: displayName })
                             });
@@ -2993,11 +3160,17 @@
                     loadVoiceProfiles();
                 };
 
-                // Load profiles on page load
+                // Load profiles on page load only if authenticated
+                function maybeLoadVoiceProfiles() {
+                    try {
+                        const s = JSON.parse(localStorage.getItem('zoe_session'));
+                        if (s && s.session_id) loadVoiceProfiles();
+                    } catch(_) {}
+                }
                 if (document.readyState === 'loading') {
-                    document.addEventListener('DOMContentLoaded', loadVoiceProfiles);
+                    document.addEventListener('DOMContentLoaded', maybeLoadVoiceProfiles);
                 } else {
-                    loadVoiceProfiles();
+                    maybeLoadVoiceProfiles();
                 }
             })();
             </script>
@@ -3429,11 +3602,48 @@
             document.addEventListener('DOMContentLoaded', loadTrainingSettings);
             </script>
         </div>
-    </div>
+        </div><!-- end settings-container -->
+    </div><!-- end main-container -->
 
     <script src="js/common.js"></script>
     <script src="/js/notifications-panel.js"></script>
     <script>
+        // Sidebar smooth scroll and active state tracking
+        function smoothScrollTo(groupId, el) {
+            const target = document.getElementById(groupId);
+            if (target) {
+                const offset = 80;
+                const top = target.getBoundingClientRect().top + window.scrollY - offset;
+                window.scrollTo({ top, behavior: 'smooth' });
+            }
+            document.querySelectorAll('.settings-nav-item').forEach(a => a.classList.remove('active'));
+            if (el) el.classList.add('active');
+        }
+
+        // Scroll spy: update active nav item as user scrolls
+        function initScrollSpy() {
+            const groups = ['group-account', 'group-appearance', 'group-notifications', 'group-ai', 'group-integrations', 'group-voice', 'group-advanced'];
+            const navItems = {};
+            groups.forEach(id => {
+                const navEl = document.querySelector(`a[href="#${id}"]`);
+                if (navEl) navItems[id] = navEl;
+            });
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        const id = entry.target.id;
+                        document.querySelectorAll('.settings-nav-item').forEach(a => a.classList.remove('active'));
+                        if (navItems[id]) navItems[id].classList.add('active');
+                    }
+                });
+            }, { rootMargin: '-80px 0px -60% 0px' });
+            groups.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) observer.observe(el);
+            });
+        }
+        document.addEventListener('DOMContentLoaded', initScrollSpy);
+
         // Toggle section visibility
         function toggleSection(sectionId) {
             const content = document.getElementById(sectionId);
