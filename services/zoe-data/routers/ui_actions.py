@@ -1,6 +1,8 @@
 import json
+import logging
+import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from auth import get_current_user
 from database import get_db
@@ -12,6 +14,8 @@ from ui_orchestrator import (
     enqueue_ui_action,
     append_ledger,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
@@ -135,14 +139,19 @@ async def ack_ui_action(
     if status not in ACTION_STATES:
         raise HTTPException(status_code=400, detail="Invalid action status")
 
+    # Accept ack by DB uuid (id) OR by idempotency_key — the SSE broadcast uses the
+    # idempotency_key as its action id, while the DB stores a separate UUID.
     cursor = await db.execute(
-        "SELECT id, panel_id, status FROM ui_actions WHERE id = ? AND user_id = ?",
-        (action_id, user_id),
+        """SELECT id, panel_id, status FROM ui_actions
+           WHERE (id = ? OR idempotency_key = ?) AND user_id = ?""",
+        (action_id, action_id, user_id),
     )
     existing = await cursor.fetchone()
     if not existing:
         raise HTTPException(status_code=404, detail="Action not found")
 
+    # Use the real DB id for the update (in case we matched on idempotency_key)
+    real_id = existing["id"]
     error_code = payload.get("error_code")
     error_message = payload.get("error_message")
     retries = payload.get("retry_count")
@@ -155,11 +164,11 @@ async def ack_ui_action(
                updated_at = datetime('now'),
                acked_at = CASE WHEN ? IS NOT NULL THEN datetime('now') ELSE acked_at END
            WHERE id = ? AND user_id = ?""",
-        (status, error_code, error_message, retries, acked_at, action_id, user_id),
+        (status, error_code, error_message, retries, acked_at, real_id, user_id),
     )
     await append_ledger(
         db,
-        action_id=action_id,
+        action_id=real_id,
         user_id=user_id,
         panel_id=existing["panel_id"],
         event_type=f"ack:{status}",
@@ -174,14 +183,14 @@ async def ack_ui_action(
         "all",
         "ui_action_status",
         {
-            "action_id": action_id,
+            "action_id": real_id,
             "panel_id": existing["panel_id"],
             "status": status,
             "error_code": error_code,
             "error_message": error_message,
         },
     )
-    return {"status": "ok", "action_id": action_id, "state": status}
+    return {"status": "ok", "action_id": real_id, "state": status}
 
 
 @router.post("/state/sync")
@@ -371,3 +380,116 @@ async def requeue_stale_actions(
         )
     await db.commit()
     return {"status": "ok", "requeued": len(action_ids), "action_ids": action_ids}
+
+
+# ── Action Form Confirm ───────────────────────────────────────────────────────
+
+@router.post("/panel/form/confirm")
+async def confirm_action_form(
+    request: Request,
+    user: dict = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Handle a Confirm submission from a full-screen action-form overlay.
+
+    The touch panel posts the filled-in form data here. This endpoint routes
+    the submission to the appropriate domain handler (calendar, list, etc.) and
+    broadcasts a panel_close_action_form event so the overlay dismisses.
+
+    Body:
+        panel_type  – "calendar_event" | "shopping_list" | ...
+        action_id   – optional, correlates back to the originating intent run
+        session_id  – chat session that triggered the intent
+        panel_id    – touch panel identifier
+        data        – dict with filled-in field values
+    """
+    body = await request.json()
+    panel_type = str(body.get("panel_type") or "").strip()
+    panel_id = str(body.get("panel_id") or "").strip() or None
+    session_id = str(body.get("session_id") or "").strip() or None
+    data = body.get("data") or {}
+    user_id = user["user_id"]
+
+    if not panel_type:
+        raise HTTPException(status_code=400, detail="panel_type is required")
+
+    result_text = ""
+    try:
+        if panel_type == "calendar_event":
+            try:
+                from intent_router import execute_intent, detect_and_extract_intent
+                from dataclasses import dataclass
+
+                @dataclass
+                class _SynthIntent:
+                    name: str
+                    slots: dict
+
+                synth = _SynthIntent(
+                    name="calendar_create",
+                    slots={
+                        "title": data.get("title", ""),
+                        "date": data.get("date", ""),
+                        "time": data.get("time", ""),
+                        "duration": data.get("duration", ""),
+                        "category": data.get("category", "general"),
+                        "location": data.get("location", ""),
+                        "notes": data.get("notes", ""),
+                    },
+                )
+                result_text = await execute_intent(synth, user_id) or "Calendar event created."
+            except Exception as exc:
+                logger.warning("form/confirm calendar_create failed: %s", exc)
+                result_text = f"Could not save event: {exc}"
+
+        elif panel_type == "shopping_list":
+            try:
+                from intent_router import execute_intent
+                from dataclasses import dataclass
+
+                items = data.get("items") or []
+
+                @dataclass
+                class _SynthIntent:
+                    name: str
+                    slots: dict
+
+                results = []
+                list_name = data.get("list_name", "shopping")
+                for item in items:
+                    synth = _SynthIntent(
+                        name="list_add",
+                        slots={"item": str(item), "list_name": list_name, "list_type": list_name},
+                    )
+                    r = await execute_intent(synth, user_id)
+                    if r:
+                        results.append(r)
+                result_text = "; ".join(results) if results else "Shopping list saved."
+            except Exception as exc:
+                logger.warning("form/confirm shopping_list failed: %s", exc)
+                result_text = f"Could not save list: {exc}"
+
+        else:
+            result_text = f"Form confirmed (panel_type={panel_type!r}). No specific handler registered."
+
+    except Exception as exc:
+        logger.exception("form/confirm unhandled error: %s", exc)
+        raise HTTPException(status_code=500, detail="Form submission failed")
+
+    # Broadcast panel_close_action_form so the overlay dismisses on the panel.
+    try:
+        close_payload: dict = {}
+        if panel_id:
+            close_payload["panel_id"] = panel_id
+        await broadcaster.broadcast("all", "ui_action", {
+            "action": {
+                "id": f"form_close_{uuid.uuid4().hex[:8]}",
+                "action_type": "panel_close_action_form",
+                "payload": close_payload,
+            }
+        })
+    except Exception as exc:
+        logger.debug("form/confirm close broadcast failed (non-fatal): %s", exc)
+
+    logger.info("form/confirm panel_type=%s user=%s result=%s", panel_type, user_id, result_text[:120])
+    return {"status": "ok", "panel_type": panel_type, "result": result_text}

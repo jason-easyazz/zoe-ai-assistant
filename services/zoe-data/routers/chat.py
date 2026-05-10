@@ -7,7 +7,7 @@ Tiered architecture (Jetson + Pi):
 - Tier 1: Pi/Jetson Agent — Gemma 4 E2B with MemPalace memory, HA control,
   bash tools, and escalate_to_openclaw. True SSE streaming, first token fast.
   Active when JETSON_AGENT_MODE=true OR HERMES_FAST_PATH=false.
-  Pi: CPU, 7 TPS, port 11435.  Jetson: GPU, 40+ TPS, port 11434.
+  Pi: CPU, 7 TPS, port 11434.  Jetson: GPU, 40+ TPS, port 11434.
 - Tier 2: OpenClaw — multi-step agentic tasks, browser, sub-agents, cloud.
   Activated via escalation from Tier 1, or force_openclaw flag.
   Also used as direct path when Pi Agent is bypassed.
@@ -21,7 +21,7 @@ import uuid
 import os
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import StreamingResponse
-from intent_router import detect_intent, execute_intent, openclaw_user_message
+from intent_router import detect_intent, detect_and_extract_intent, execute_intent, openclaw_user_message
 from browser_broker import create_default_browser_broker
 
 # Intent → touch panel navigation map (page + optional form to open).
@@ -32,10 +32,20 @@ _INTENT_PANEL_NAV = {
     "journal_create":    ("/touch/journal.html",  "new_journal"),
     "weather":           ("/touch/weather.html",  None),
     "list_add":          ("/touch/lists.html",    "new_list_item"),
+    "list_show":         ("/touch/lists.html",    None),
     "timer_create":      ("/touch/cooking.html",  "new_timer"),
     "recipe_search":     ("/touch/cooking.html",  "recipe_search"),
     "reminder_create":   (None,                   None),  # handled as toast
 }
+
+# Intents that show a full-screen interactive action-form overlay on the touch panel
+# instead of navigating to a detail page. The overlay appears in-place and allows
+# voice + touch editing before a Confirm/Cancel decision.
+_ACTION_FORM_INTENTS: frozenset[str] = frozenset({
+    "calendar_create",
+    "list_add",
+    "list_show",
+})
 
 def _intent_card_data(intent) -> dict:
     """Build show_card data payload from intent slots for Google Home-style card."""
@@ -87,11 +97,68 @@ def _intent_card_data(intent) -> dict:
     }
 
 
-async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
-    """Instantly broadcast panel_navigate + panel_open_form + show_card when intent is detected.
+def _intent_action_form_payload(intent, panel_id: str | None = None) -> dict | None:
+    """Build a panel_show_action_form payload for intents that show an in-place overlay.
 
-    panel_id is embedded in the action payload so the executor can filter events
-    belonging to a different panel (multi-panel homes, web chat open alongside).
+    Returns None for intents that don't have a form template.
+    """
+    import datetime
+    from intent_router import _parse_date, _parse_time
+
+    slots = intent.slots or {}
+    name = intent.name
+
+    if name == "calendar_create":
+        date_raw = slots.get("date", "")
+        time_raw = slots.get("time", "")
+        parsed_date = (_parse_date(date_raw) if date_raw else None) or datetime.date.today().isoformat()
+        parsed_time = (_parse_time(time_raw) if time_raw else "") or ""
+        return {
+            "panel_type": "calendar_event",
+            "title": "New Calendar Event",
+            "data": {
+                "title": slots.get("title") or slots.get("event") or "",
+                "date": parsed_date,
+                "time": parsed_time,
+                "duration": slots.get("duration") or "",
+                "category": slots.get("category") or "general",
+                "location": slots.get("location") or "",
+                "notes": slots.get("notes") or "",
+            },
+            **({"panel_id": panel_id} if panel_id else {}),
+        }
+
+    if name in ("list_add", "list_show"):
+        items: list[str] = []
+        if slots.get("item"):
+            items = [str(slots["item"])]
+        elif slots.get("items"):
+            raw = slots["items"]
+            items = raw if isinstance(raw, list) else [str(raw)]
+        return {
+            "panel_type": "shopping_list",
+            "title": f"{slots.get('list_name', 'Shopping')} List",
+            "data": {
+                "list_name": slots.get("list_name") or "Shopping",
+                "items": items,
+                "item": slots.get("item") or "",
+            },
+            **({"panel_id": panel_id} if panel_id else {}),
+        }
+
+    return None
+
+
+async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
+    """Broadcast UI actions to the touch panel when an intent is detected.
+
+    For action-form intents (calendar_create, list_add/show), a full-screen
+    interactive form overlay is shown instead of navigating to a detail page.
+    For all other intents, the classic panel_navigate + panel_open_form flow runs.
+    A show_card is always emitted so the dashboard overlay shows intent-specific info.
+
+    panel_id is embedded in action payloads so the executor can filter events
+    belonging to a different panel (multi-panel homes, web chat alongside touch).
     """
     nav = _INTENT_PANEL_NAV.get(intent.name)
     if not nav:
@@ -99,6 +166,33 @@ async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
     page, form = nav
     try:
         from push import broadcaster
+
+        # ── Action-form intents: show a full-screen interactive overlay ─────
+        if intent.name in _ACTION_FORM_INTENTS:
+            form_payload = _intent_action_form_payload(intent, panel_id=panel_id)
+            if form_payload:
+                await broadcaster.broadcast("all", "ui_action", {
+                    "action": {
+                        "id": f"intent_action_form_{intent.name}",
+                        "action_type": "panel_show_action_form",
+                        "payload": form_payload,
+                    }
+                })
+                # Also emit show_card for the dashboard bar.
+                card = _intent_card_data(intent)
+                card_payload: dict = {"type": card["type"], "data": card["data"]}
+                if panel_id:
+                    card_payload["panel_id"] = panel_id
+                await broadcaster.broadcast("all", "ui_action", {
+                    "action": {
+                        "id": f"intent_card_{intent.name}",
+                        "action_type": "show_card",
+                        "payload": card_payload,
+                    }
+                })
+                return
+
+        # ── Default: navigate to page + open form + show card ────────────────
         if page:
             nav_payload: dict = {"url": page, "label": f"Opening {page.split('/')[-1]}"}
             if panel_id:
@@ -112,26 +206,25 @@ async def _broadcast_intent_nav(intent, panel_id: str | None = None) -> None:
             })
         if form:
             await asyncio.sleep(0.4)  # Brief delay so page loads before form opens.
-            form_payload: dict = {"form": form, "prefill": intent.slots}
+            form_payload_nav: dict = {"form": form, "prefill": intent.slots}
             if panel_id:
-                form_payload["panel_id"] = panel_id
+                form_payload_nav["panel_id"] = panel_id
             await broadcaster.broadcast("all", "ui_action", {
                 "action": {
                     "id": f"intent_form_{intent.name}",
                     "action_type": "panel_open_form",
-                    "payload": form_payload,
+                    "payload": form_payload_nav,
                 }
             })
-        # Emit a show_card action so the dashboard overlay shows intent-specific info.
         card = _intent_card_data(intent)
-        card_payload: dict = {"type": card["type"], "data": card["data"]}
+        card_payload_nav: dict = {"type": card["type"], "data": card["data"]}
         if panel_id:
-            card_payload["panel_id"] = panel_id
+            card_payload_nav["panel_id"] = panel_id
         await broadcaster.broadcast("all", "ui_action", {
             "action": {
                 "id": f"intent_card_{intent.name}",
                 "action_type": "show_card",
-                "payload": card_payload,
+                "payload": card_payload_nav,
             }
         })
     except Exception as exc:
@@ -286,48 +379,8 @@ _GUARDED_AUTO = (
 _ALL_TOOLS_ENABLED = os.environ.get("OPENCLAW_ALL_TOOLS_ENABLED", "true").lower() == "true"
 _WHATSAPP_FLOW_ENABLED = os.environ.get("WHATSAPP_FLOW_ENABLED", "true").lower() == "true"
 
-# Bonsai fast path is retired. Keep the symbol for compatibility, but force off.
-_BONSAI_FAST_PATH = False
-_BONSAI_URL = os.environ.get("BONSAI_URL", "http://127.0.0.1:11435")
 _OPENCLAW_GW = os.environ.get("OPENCLAW_GATEWAY_URL", "http://127.0.0.1:8787")
 _BROWSER_BROKER = create_default_browser_broker(_OPENCLAW_GW)
-
-# Keywords in Bonsai's response that signal it needs OpenClaw for this task.
-# Bonsai is instructed to say ESCALATE_TO_OPENCLAW when it can't handle something.
-_ESCALATION_MARKERS = {"ESCALATE_TO_OPENCLAW", "[ESCALATE]", "[CLOUD_REQUEST:"}
-
-# System prompt for Bonsai in the web chat context (no tool execution — conversational only).
-# Bonsai handles conversation and signals ESCALATE_TO_OPENCLAW for complex tasks.
-_BONSAI_CHAT_SYSTEM_PROMPT_STATIC = """You are Zoe, a warm, capable home assistant. Be concise and helpful.
-
-You handle CONVERSATIONAL responses only in this channel — calendar/list/reminder tool calls are handled automatically by the system before reaching you.
-
-For any of these, respond with EXACTLY "ESCALATE_TO_OPENCLAW" (nothing else):
-- Multi-step planning or project breakdown
-- Code generation, debugging, or technical analysis
-- Research or web lookup requests
-- Anything requiring specialist skills or sub-agents
-- Tasks where you are genuinely uncertain
-
-For everything else — questions, advice, explanations, opinions, general chat — respond directly and concisely.
-
-User preferences (timezone, language, units) are stored in memory. Adapt your tone to what you know about the user."""
-
-# Legacy alias for backward compatibility
-_BONSAI_CHAT_SYSTEM_PROMPT = _BONSAI_CHAT_SYSTEM_PROMPT_STATIC
-
-
-def _bonsai_system(username: str = "", memory_block: str = "") -> str:
-    """Build the Bonsai system prompt stamped with live datetime, username, and known facts."""
-    import datetime
-    now = datetime.datetime.now()
-    dt_line = now.strftime("%A, %d %B %Y — %I:%M %p")
-    user_line = f"The logged-in user is {username}." if username else ""
-    header = f"[{dt_line}]\n{user_line}".strip()
-    parts = [f"{header}\n\n{_BONSAI_CHAT_SYSTEM_PROMPT_STATIC}"]
-    if memory_block:
-        parts.append(memory_block)
-    return "\n\n".join(parts)
 
 # Per-session concurrency guard: only one OpenClaw turn runs per session at a time.
 # If a second request arrives for the same session while one is running, it waits
@@ -489,104 +542,6 @@ async def run_openclaw_agent(
     )
 
 
-async def _bonsai_slot_free() -> bool:
-    """Return True if Bonsai has a free inference slot (no queued requests)."""
-    import httpx
-    try:
-        async with httpx.AsyncClient(timeout=1.0) as client:
-            r = await client.get(f"{_BONSAI_URL}/slots")
-            if r.status_code == 200:
-                slots = r.json()
-                return all(not s.get("is_processing", False) for s in slots)
-    except Exception:
-        pass
-    return True  # Assume free if check fails
-
-
-async def run_bonsai_agent(
-    message: str,
-    session_id: str,
-    user_id: str = "family-admin",
-    username: str = "",
-    max_tokens_override: int = 0,
-) -> tuple[str, bool]:
-    """
-    Legacy shim: Bonsai path is retired.
-
-    Returns ("", True) so callers continue through Pi Agent/OpenClaw.
-    """
-    return "", True
-
-    import httpx
-
-    # Skip if Bonsai is already busy — another request (e.g. Hermes API) is running.
-    # This avoids queuing behind a 45s MCP-heavy request from another platform.
-    if not await _bonsai_slot_free():
-        logger.info("Bonsai busy — routing directly to OpenClaw for session %s", session_id)
-        return "", True
-
-    # Load last 6 turns so Bonsai can follow up on prior context
-    prior_history: list[dict] = []
-    try:
-        async for db in get_db():
-            rows = await db.execute(
-                "SELECT role, content FROM chat_messages "
-                "WHERE session_id = ? ORDER BY created_at DESC LIMIT 6",
-                (session_id,),
-            )
-            history_rows = await rows.fetchall()
-            prior_history = [{"role": r[0], "content": r[1]} for r in reversed(history_rows)]
-            break
-    except Exception as _he:
-        logger.debug("bonsai history load failed (non-fatal): %s", _he)
-
-    # Load user facts from MemPalace (fast metadata filter, no ONNX)
-    try:
-        mp_memory = await asyncio.wait_for(_mempalace_load_user_facts(user_id), timeout=3.0)
-    except (asyncio.TimeoutError, Exception) as _me:
-        logger.debug("bonsai: mempalace load failed (non-fatal): %s", _me)
-        mp_memory = ""
-    bonsai_system = _bonsai_system(username=username or user_id, memory_block=mp_memory)
-
-    payload = {
-        "model": "bonsai-8b",
-        "messages": [
-            {"role": "system", "content": bonsai_system},
-            *prior_history,
-            {"role": "user", "content": message},
-        ],
-        "max_tokens": max_tokens_override if max_tokens_override > 0 else 512,
-        "temperature": 0.5,
-        "stream": False,
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            t0 = time.monotonic()
-            r = await client.post(f"{_BONSAI_URL}/v1/chat/completions", json=payload)
-            elapsed = time.monotonic() - t0
-
-            if r.status_code != 200:
-                logger.warning("Bonsai returned %s — falling back to OpenClaw", r.status_code)
-                return "", True
-
-            data = r.json()
-            text = data["choices"][0]["message"]["content"].strip()
-            logger.info("Bonsai responded in %.1fs: %s...", elapsed, text[:60])
-
-            # Check if Bonsai is signalling escalation
-            needs_escalation = any(marker in text for marker in _ESCALATION_MARKERS)
-            if needs_escalation:
-                logger.info("Bonsai signalled escalation for session %s", session_id)
-                return "", True
-
-            return text, False
-
-    except Exception as e:
-        logger.warning("Bonsai fast path failed (%s) — falling back to OpenClaw", e)
-        return "", True
-
-
 async def _iter_openclaw_heartbeats(emit, task: asyncio.Task, *, phase_label: str = "OpenClaw"):
     """Emit run_log + STATE_SNAPSHOT every ~4s while the OpenClaw subprocess runs."""
     t0 = time.monotonic()
@@ -632,11 +587,10 @@ _APPROVE_RE = re.compile(r"^/approve\s+([a-zA-Z0-9_-]{8,})\s*(.*)$")
 
 # ── Server-side builder safety net ────────────────────────────────────────────
 # OpenClaw's SKILL.md files instruct the agent to emit `:::zoe-ui` navigate +
-# orb_prompt blocks after staging a widget/page, but the bonsai-8b model is
-# unreliable — it frequently dumps the staged JS into a markdown code fence
-# instead of respecting the contract. These regexes let the server detect a
-# successful stage (preview URL mentioned in the response) and synthesize the
-# missing navigate/orb_prompt events so the user always sees the live preview.
+# orb_prompt blocks after staging a widget/page. These regexes let the server
+# detect a successful stage (preview URL mentioned in the response) and
+# synthesize the missing navigate/orb_prompt events so the user always sees the
+# live preview.
 _PREVIEW_WIDGET_URL_RE = re.compile(
     r"(/_preview_harness/widget-harness\.html\?[^\s)\"'`<>]+)"
 )
@@ -1205,7 +1159,7 @@ async def chat_stream_generator(
             message_for_processing = message_for_processing[len("/openclaw ") :].strip()
             use_intent_fast_path = False
 
-        intent = detect_intent(message_for_processing) if use_intent_fast_path else None
+        intent = await detect_and_extract_intent(message_for_processing, user_id) if use_intent_fast_path else None
         if intent:
             logger.info("Intent matched: %s slots=%s", intent.name, getattr(intent, "slots", None))
             logger.info("intent_outcome=matched intent=%s", intent.name)
@@ -1577,83 +1531,52 @@ async def chat_stream_generator(
                     asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
 
             else:
-                # ── Jetson: Tier 2 Bonsai-8B fast path ──
-                bonsai_response = ""
-                used_bonsai = False
-                if _BONSAI_FAST_PATH and not force_openclaw:
-                    yield emit(
-                        StateSnapshotEvent(
-                            type=EventType.STATE_SNAPSHOT,
-                            snapshot={
-                                "status": "generating",
-                                "phase": "bonsai",
-                                "model": "Zoe",
-                                "detail": "Thinking…",
-                            },
-                        )
+                # ── Jetson: OpenClaw ──
+                yield emit(
+                    StateSnapshotEvent(
+                        type=EventType.STATE_SNAPSHOT,
+                        snapshot={
+                            "status": "generating",
+                            "phase": "openclaw",
+                            "model": "Zoe",
+                            "detail": "Starting OpenClaw agent…",
+                        },
                     )
-                    bonsai_response, needs_escalation = await run_bonsai_agent(
-                        message_for_processing, session_id, user_id, username=username or ""
+                )
+                oc_message = openclaw_user_message(intent, message_for_processing)
+                yield emit(
+                    CustomEvent(
+                        name="zoe.run_log",
+                        value={
+                            "level": "info",
+                            "message": "Starting OpenClaw agent (browser and tools can take 30s to several minutes).",
+                        },
                     )
-                    if not needs_escalation and bonsai_response:
-                        used_bonsai = True
-
-                if used_bonsai:
-                    response_text = bonsai_response
-                    asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, bonsai_response))
-                    if bonsai_response:
-                        asyncio.ensure_future(_save_chat_message(session_id, "assistant", bonsai_response))
-                    async for line in _stream_openclaw_assistant_ag(
-                        enc, recorder, assistant_message_id, bonsai_response
-                    ):
-                        yield line
-                else:
-                    # ── Jetson: Tier 3 OpenClaw ──
-                    yield emit(
-                        StateSnapshotEvent(
-                            type=EventType.STATE_SNAPSHOT,
-                            snapshot={
-                                "status": "generating",
-                                "phase": "openclaw",
-                                "model": "Zoe",
-                                "detail": "Starting OpenClaw agent…",
-                            },
-                        )
+                )
+                oc_db_memory = await _mempalace_load_user_facts(user_id)
+                task = asyncio.create_task(
+                    run_openclaw_agent(
+                        oc_message,
+                        session_id,
+                        user_id,
+                        user_role=user_role,
+                        username=username,
+                        memories=oc_db_memory or None,
                     )
-                    oc_message = openclaw_user_message(intent, message_for_processing)
-                    yield emit(
-                        CustomEvent(
-                            name="zoe.run_log",
-                            value={
-                                "level": "info",
-                                "message": "Starting OpenClaw agent (browser and tools can take 30s to several minutes).",
-                            },
-                        )
-                    )
-                    oc_db_memory = await _mempalace_load_user_facts(user_id)
-                    task = asyncio.create_task(
-                        run_openclaw_agent(
-                            oc_message,
-                            session_id,
-                            user_id,
-                            user_role=user_role,
-                            username=username,
-                            memories=oc_db_memory or None,
-                        )
-                    )
-                    async for hb in _iter_openclaw_heartbeats(emit, task):
-                        yield hb
-                    response_text = await task
-                    _, actions = _extract_ui_actions(response_text)
-                    if actions:
-                        asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
-                    asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
-                    if response_text:
-                        asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
-                    async for line in _stream_openclaw_assistant_ag(
-                        enc, recorder, assistant_message_id, response_text
-                    ):
-                        yield line
+                )
+                async for hb in _iter_openclaw_heartbeats(emit, task):
+                    yield hb
+                response_text = await task
+                _, actions = _extract_ui_actions(response_text)
+                if actions:
+                    asyncio.ensure_future(_queue_ui_actions_background(actions, user_id, session_id))
+                asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, response_text))
+                if response_text:
+                    asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
+                async for line in _stream_openclaw_assistant_ag(
+                    enc, recorder, assistant_message_id, response_text
+                ):
+                    yield line
 
         if task_class == "research":
             backend = "openclawLocal" if force_openclaw or not _USE_PI_AGENT else "piAgent"
@@ -1807,7 +1730,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             message_for_processing = message_for_processing[len("/openclaw ") :].strip()
             use_intent_fast_path = False
 
-        intent = detect_intent(message_for_processing) if use_intent_fast_path else None
+        intent = await detect_and_extract_intent(message_for_processing, user_id) if use_intent_fast_path else None
         # Apply voice mode suffix AFTER intent detection so regex anchors ($) still match.
         if is_voice_mode and message_for_processing:
             try:
@@ -1858,18 +1781,6 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                         memories=ns_db_memory or None,
                     )
             else:
-                # Try Bonsai fast path first for conversational messages
-                if _BONSAI_FAST_PATH and not force_openclaw:
-                    bonsai_text, needs_escalation = await run_bonsai_agent(
-                        message_for_processing, session_id, user_id,
-                        username=user.get("username") or "",
-                        max_tokens_override=voice_max_tokens,
-                    )
-                    if not needs_escalation and bonsai_text:
-                        asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message_for_processing, bonsai_text))
-                        asyncio.ensure_future(_save_chat_message(session_id, "assistant", bonsai_text))
-                        return {"response": bonsai_text, "session_id": session_id}
-
                 oc_message = openclaw_user_message(intent, message_for_processing)
                 response_text = await run_openclaw_agent(
                     oc_message,

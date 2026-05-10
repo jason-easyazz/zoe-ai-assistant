@@ -31,6 +31,10 @@
         'panel_stream_text',
         'panel_dismiss_ambient',
         'show_card',           // Google Home-style intent response card
+        'panel_show_action_form',   // full-screen interactive form (calendar_event, shopping_list)
+        'panel_update_field',       // voice-fill a field in the active action form
+        'panel_list_update',        // add/remove/set items in the active shopping list form
+        'panel_close_action_form',  // programmatically close the action form
     ]);
 
     const state = {
@@ -1146,6 +1150,43 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 return { status: 'success' };
             }
 
+            // ── Full-screen interactive action form ────────────────────────
+            if (actionType === 'panel_show_action_form') {
+                if (payload.panel_id && payload.panel_id !== state.panelId) {
+                    return { status: 'skipped', error_code: 'wrong_panel' };
+                }
+                showActionFormOverlay(payload);
+                return { status: 'success' };
+            }
+
+            if (actionType === 'panel_update_field') {
+                if (payload.panel_id && payload.panel_id !== state.panelId) {
+                    return { status: 'skipped', error_code: 'wrong_panel' };
+                }
+                const ok = updateActionFormField(payload.field, payload.value != null ? String(payload.value) : '');
+                return ok
+                    ? { status: 'success' }
+                    : { status: 'failed', error_code: 'no_active_form', error_message: 'No active action form or unknown field' };
+            }
+
+            if (actionType === 'panel_list_update') {
+                if (payload.panel_id && payload.panel_id !== state.panelId) {
+                    return { status: 'skipped', error_code: 'wrong_panel' };
+                }
+                const ok = updateActionFormList(payload.op, payload.item, payload.items);
+                return ok
+                    ? { status: 'success' }
+                    : { status: 'failed', error_code: 'no_active_list_form', error_message: 'No active shopping list form' };
+            }
+
+            if (actionType === 'panel_close_action_form') {
+                if (payload.panel_id && payload.panel_id !== state.panelId) {
+                    return { status: 'skipped', error_code: 'wrong_panel' };
+                }
+                _closeActionForm();
+                return { status: 'success' };
+            }
+
             // ── Dismiss ambient/screensaver ────────────────────────────────
             if (actionType === 'panel_dismiss_ambient') {
                 if (typeof zoeAmbient !== 'undefined' && zoeAmbient.exit) zoeAmbient.exit();
@@ -1491,6 +1532,609 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
         document.body.appendChild(overlay);
         overlay.querySelector('#zoe-research-close')?.addEventListener('click', () => overlay.remove());
         overlay.querySelector('#zoe-research-save')?.addEventListener('click', () => showToast('Saved to Zoe'));
+    }
+
+    // ── Full-screen Action Form Overlay ──────────────────────────────────────
+    // Active overlay reference so voice field-fill events can find the form elements.
+    let _activeActionForm = null;
+
+    function _closeActionForm() {
+        if (_activeActionForm) {
+            _activeActionForm.overlay.remove();
+            _activeActionForm = null;
+        }
+    }
+
+    function _fmtDate(val) {
+        if (!val) return '';
+        try {
+            const d = new Date(val + (val.includes('T') ? '' : 'T00:00:00'));
+            if (isNaN(d.getTime())) return val;
+            return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+        } catch (_) { return val; }
+    }
+
+    function _buildActionFormStyles() {
+        if (document.getElementById('zoe-action-form-styles')) return;
+        const s = document.createElement('style');
+        s.id = 'zoe-action-form-styles';
+        s.textContent = `
+#zoe-action-form-overlay {
+    position: fixed; inset: 0; z-index: 9000;
+    background: rgba(8, 8, 22, 0.97);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+    animation: zaf-in .25s cubic-bezier(.34,1.2,.64,1);
+}
+@keyframes zaf-in {
+    from { opacity: 0; transform: scale(.97) translateY(12px); }
+    to   { opacity: 1; transform: scale(1)   translateY(0); }
+}
+.zaf-card {
+    width: min(560px, 94vw); max-height: 90vh;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(123,97,255,0.30);
+    border-radius: 20px;
+    overflow: hidden; display: flex; flex-direction: column;
+    box-shadow: 0 16px 64px rgba(0,0,0,0.6), 0 0 0 1px rgba(123,97,255,0.12);
+}
+.zaf-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    flex-shrink: 0;
+}
+.zaf-icon { font-size: 22px; flex-shrink: 0; }
+.zaf-title {
+    flex: 1; font-size: 19px; font-weight: 400;
+    color: rgba(255,255,255,0.92); letter-spacing: -.01em;
+}
+.zaf-close {
+    width: 30px; height: 30px; border-radius: 50%;
+    border: none; background: rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.50); font-size: 15px;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: background .15s;
+}
+.zaf-close:hover { background: rgba(255,255,255,0.14); color: rgba(255,255,255,0.85); }
+.zaf-body {
+    flex: 1; overflow-y: auto; padding: 16px 20px;
+    display: flex; flex-direction: column; gap: 12px;
+    scrollbar-width: thin; scrollbar-color: rgba(123,97,255,0.3) transparent;
+}
+.zaf-field { display: flex; flex-direction: column; gap: 5px; }
+.zaf-label {
+    font-size: 11px; font-weight: 600; letter-spacing: .07em;
+    color: rgba(255,255,255,0.40); text-transform: uppercase;
+}
+.zaf-input, .zaf-textarea {
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 10px; padding: 10px 12px;
+    color: rgba(255,255,255,0.90); font-size: 15px; font-family: inherit;
+    outline: none; width: 100%; box-sizing: border-box;
+    transition: border-color .15s, background .15s;
+}
+.zaf-input:focus, .zaf-textarea:focus {
+    border-color: rgba(123,97,255,0.60);
+    background: rgba(123,97,255,0.10);
+}
+.zaf-input[data-voice-active="true"] {
+    border-color: rgba(255,209,102,0.70);
+    background: rgba(255,209,102,0.08);
+}
+.zaf-textarea { resize: vertical; min-height: 72px; }
+.zaf-row { display: flex; gap: 10px; }
+.zaf-row .zaf-field { flex: 1; }
+/* Shopping list */
+.zaf-list-items { display: flex; flex-direction: column; gap: 6px; }
+.zaf-list-item {
+    display: flex; align-items: center; gap: 10px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 10px; padding: 10px 12px;
+    animation: zaf-item-in .18s ease;
+}
+@keyframes zaf-item-in {
+    from { opacity: 0; transform: translateX(-8px); }
+    to   { opacity: 1; transform: translateX(0); }
+}
+.zaf-item-check {
+    width: 20px; height: 20px; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.25);
+    background: transparent; cursor: pointer; flex-shrink: 0;
+    transition: background .15s, border-color .15s;
+}
+.zaf-item-check.checked {
+    background: rgba(123,97,255,0.6); border-color: rgba(123,97,255,0.8);
+}
+.zaf-item-text {
+    flex: 1; font-size: 15px; color: rgba(255,255,255,0.88);
+    cursor: pointer;
+}
+.zaf-item-text.checked { text-decoration: line-through; color: rgba(255,255,255,0.38); }
+.zaf-item-remove {
+    background: transparent; border: none; color: rgba(255,255,255,0.30);
+    font-size: 16px; cursor: pointer; padding: 4px; border-radius: 50%;
+    transition: color .15s, background .15s;
+}
+.zaf-item-remove:hover { color: rgba(255,100,100,0.80); background: rgba(255,100,100,0.10); }
+.zaf-add-row {
+    display: flex; gap: 8px; margin-top: 4px;
+}
+.zaf-add-input {
+    flex: 1;
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 10px; padding: 10px 12px;
+    color: rgba(255,255,255,0.90); font-size: 15px; font-family: inherit;
+    outline: none; box-sizing: border-box;
+    transition: border-color .15s;
+}
+.zaf-add-input:focus { border-color: rgba(123,97,255,0.60); }
+.zaf-add-btn {
+    padding: 10px 16px; border-radius: 10px; border: none;
+    background: rgba(123,97,255,0.25); color: rgba(255,255,255,0.90);
+    font-size: 14px; cursor: pointer; transition: background .15s;
+}
+.zaf-add-btn:hover { background: rgba(123,97,255,0.45); }
+/* Footer buttons */
+.zaf-footer {
+    display: flex; gap: 10px; padding: 14px 20px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    flex-shrink: 0;
+}
+.zaf-btn {
+    flex: 1; padding: 13px 16px; border-radius: 12px; border: none;
+    font-size: 15px; font-weight: 500; cursor: pointer;
+    transition: background .15s, transform .1s;
+}
+.zaf-btn:active { transform: scale(.97); }
+.zaf-btn-cancel {
+    background: rgba(255,255,255,0.09); color: rgba(255,255,255,0.65);
+}
+.zaf-btn-cancel:hover { background: rgba(255,255,255,0.14); }
+.zaf-btn-confirm {
+    background: rgba(123,97,255,0.80); color: #fff;
+}
+.zaf-btn-confirm:hover { background: rgba(123,97,255,1); }
+.zaf-btn-confirm:disabled {
+    background: rgba(123,97,255,0.30); cursor: default;
+}
+/* Voice listening indicator badge */
+.zaf-voice-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: rgba(255,107,107,0.18); border: 1px solid rgba(255,107,107,0.35);
+    border-radius: 999px; padding: 3px 10px 3px 7px;
+    font-size: 11px; color: rgba(255,180,180,0.90);
+    margin-left: 8px; animation: zaf-badge-pulse 1.5s ease-in-out infinite;
+}
+@keyframes zaf-badge-pulse {
+    0%,100%{ opacity:1 } 50%{ opacity:.55 }
+}
+.zaf-voice-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: rgba(255,107,107,0.9);
+}
+/* Light mode */
+body.light-mode #zoe-action-form-overlay {
+    background: rgba(230,232,245,0.97);
+}
+body.light-mode .zaf-card {
+    background: rgba(255,255,255,0.80);
+    border-color: rgba(123,97,255,0.25);
+}
+body.light-mode .zaf-title { color: rgba(26,26,46,0.92); }
+body.light-mode .zaf-label { color: rgba(26,26,46,0.40); }
+body.light-mode .zaf-input, body.light-mode .zaf-textarea, body.light-mode .zaf-add-input {
+    background: rgba(0,0,0,0.05); border-color: rgba(0,0,0,0.12);
+    color: rgba(26,26,46,0.90);
+}
+body.light-mode .zaf-list-item { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.08); }
+body.light-mode .zaf-item-text { color: rgba(26,26,46,0.88); }
+body.light-mode .zaf-btn-cancel { background: rgba(0,0,0,0.07); color: rgba(26,26,46,0.65); }
+`;
+        document.head.appendChild(s);
+    }
+
+    function _makeField(label, opts) {
+        // opts: { id, type, value, placeholder, half, fieldName }
+        const wrap = document.createElement('div');
+        wrap.className = 'zaf-field';
+        const lbl = document.createElement('label');
+        lbl.className = 'zaf-label';
+        lbl.textContent = label;
+        if (opts.id) lbl.setAttribute('for', opts.id);
+        wrap.appendChild(lbl);
+        let input;
+        if (opts.type === 'textarea') {
+            input = document.createElement('textarea');
+            input.className = 'zaf-textarea';
+            input.rows = 3;
+        } else {
+            input = document.createElement('input');
+            input.className = 'zaf-input';
+            input.type = opts.type || 'text';
+        }
+        if (opts.id) input.id = opts.id;
+        if (opts.fieldName) input.dataset.fieldName = opts.fieldName;
+        if (opts.value != null) input.value = opts.value;
+        if (opts.placeholder) input.placeholder = opts.placeholder;
+        wrap.appendChild(input);
+        return { wrap, input };
+    }
+
+    function _buildCalendarForm(data) {
+        const frag = document.createDocumentFragment();
+
+        const row1 = document.createElement('div');
+        row1.className = 'zaf-field';
+        const { wrap: titleWrap, input: titleInput } = _makeField('Event Title', {
+            id: 'zaf-title', fieldName: 'title',
+            value: data.title || '', placeholder: 'e.g. Birthday Party',
+        });
+        frag.appendChild(titleWrap);
+
+        const row2 = document.createElement('div');
+        row2.className = 'zaf-row';
+        const { wrap: dateWrap, input: dateInput } = _makeField('Date', {
+            id: 'zaf-date', fieldName: 'date', type: 'date',
+            value: data.date || '',
+        });
+        const { wrap: timeWrap, input: timeInput } = _makeField('Time', {
+            id: 'zaf-time', fieldName: 'time', type: 'time',
+            value: data.time || '',
+        });
+        row2.appendChild(dateWrap);
+        row2.appendChild(timeWrap);
+        frag.appendChild(row2);
+
+        const row3 = document.createElement('div');
+        row3.className = 'zaf-row';
+        const { wrap: durWrap, input: durInput } = _makeField('Duration', {
+            id: 'zaf-duration', fieldName: 'duration',
+            value: data.duration || '', placeholder: '1 hour',
+        });
+        const { wrap: catWrap, input: catInput } = _makeField('Category', {
+            id: 'zaf-category', fieldName: 'category',
+            value: data.category || 'general', placeholder: 'general',
+        });
+        row3.appendChild(durWrap);
+        row3.appendChild(catWrap);
+        frag.appendChild(row3);
+
+        const { wrap: locWrap, input: locInput } = _makeField('Location', {
+            id: 'zaf-location', fieldName: 'location',
+            value: data.location || '', placeholder: 'Optional',
+        });
+        frag.appendChild(locWrap);
+
+        const { wrap: notesWrap, input: notesInput } = _makeField('Notes', {
+            id: 'zaf-notes', fieldName: 'notes', type: 'textarea',
+            value: data.notes || '', placeholder: 'Optional',
+        });
+        frag.appendChild(notesWrap);
+
+        return { frag, fields: { title: titleInput, date: dateInput, time: timeInput, duration: durInput, category: catInput, location: locInput, notes: notesInput } };
+    }
+
+    function _buildShoppingListForm(data) {
+        const frag = document.createDocumentFragment();
+        const items = Array.isArray(data.items) ? data.items.slice() : (data.item ? [data.item] : []);
+        const checked = new Set();
+
+        const listWrap = document.createElement('div');
+        listWrap.className = 'zaf-list-items';
+        listWrap.id = 'zaf-list-items';
+
+        function renderItem(text) {
+            const row = document.createElement('div');
+            row.className = 'zaf-list-item';
+            row.dataset.item = text;
+
+            const chk = document.createElement('button');
+            chk.type = 'button';
+            chk.className = 'zaf-item-check' + (checked.has(text) ? ' checked' : '');
+            chk.title = 'Mark done';
+            chk.onclick = () => {
+                if (checked.has(text)) { checked.delete(text); chk.classList.remove('checked'); lbl.classList.remove('checked'); }
+                else { checked.add(text); chk.classList.add('checked'); lbl.classList.add('checked'); }
+            };
+
+            const lbl = document.createElement('span');
+            lbl.className = 'zaf-item-text' + (checked.has(text) ? ' checked' : '');
+            lbl.textContent = text;
+            lbl.onclick = () => chk.click();
+
+            const rm = document.createElement('button');
+            rm.type = 'button';
+            rm.className = 'zaf-item-remove';
+            rm.title = 'Remove';
+            rm.textContent = '✕';
+            rm.onclick = () => {
+                const idx = items.indexOf(text);
+                if (idx !== -1) items.splice(idx, 1);
+                checked.delete(text);
+                row.remove();
+            };
+
+            row.appendChild(chk);
+            row.appendChild(lbl);
+            row.appendChild(rm);
+            return row;
+        }
+
+        items.forEach(it => listWrap.appendChild(renderItem(String(it || '').trim())));
+        frag.appendChild(listWrap);
+
+        const addRow = document.createElement('div');
+        addRow.className = 'zaf-add-row';
+        const addInput = document.createElement('input');
+        addInput.type = 'text';
+        addInput.className = 'zaf-add-input';
+        addInput.id = 'zaf-list-new-item';
+        addInput.placeholder = 'Add an item…';
+        addInput.dataset.fieldName = '_new_item';
+
+        function doAdd() {
+            const val = addInput.value.trim();
+            if (!val) return;
+            if (!items.includes(val)) {
+                items.push(val);
+                listWrap.appendChild(renderItem(val));
+            }
+            addInput.value = '';
+        }
+
+        addInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doAdd(); } });
+        const addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.className = 'zaf-add-btn';
+        addBtn.textContent = 'Add';
+        addBtn.onclick = doAdd;
+        addRow.appendChild(addInput);
+        addRow.appendChild(addBtn);
+        frag.appendChild(addRow);
+
+        // Expose current items for confirm handler
+        const getItems = () => items.filter(i => !checked.has(i));
+        const getAllItems = () => items.slice();
+
+        return {
+            frag,
+            fields: { _new_item: addInput },
+            getItems,
+            getAllItems,
+            addItem(text) {
+                const val = String(text || '').trim();
+                if (!val || items.includes(val)) return;
+                items.push(val);
+                listWrap.appendChild(renderItem(val));
+            },
+            removeItem(text) {
+                const val = String(text || '').trim();
+                const idx = items.indexOf(val);
+                if (idx !== -1) {
+                    items.splice(idx, 1);
+                    const row = listWrap.querySelector(`[data-item="${CSS.escape(val)}"]`);
+                    if (row) row.remove();
+                }
+            },
+        };
+    }
+
+    function showActionFormOverlay(payload) {
+        _buildActionFormStyles();
+
+        // Remove any existing form overlay.
+        _closeActionForm();
+        if (typeof zoeAmbient !== 'undefined' && zoeAmbient.exit) zoeAmbient.exit();
+
+        const panelType = String(payload.panel_type || 'calendar_event');
+        const data = payload.data || {};
+        const sessionId = payload.session_id || (state.sessionId) || null;
+        const actionId = payload.action_id || null;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'zoe-action-form-overlay';
+
+        const card = document.createElement('div');
+        card.className = 'zaf-card';
+
+        // Header
+        const header = document.createElement('div');
+        header.className = 'zaf-header';
+        const iconEl = document.createElement('span');
+        iconEl.className = 'zaf-icon';
+        const titleEl = document.createElement('span');
+        titleEl.className = 'zaf-title';
+
+        if (panelType === 'calendar_event') {
+            iconEl.textContent = '📅';
+            titleEl.textContent = payload.title || 'New Calendar Event';
+        } else if (panelType === 'shopping_list') {
+            iconEl.textContent = '🛒';
+            titleEl.textContent = payload.title || 'Shopping List';
+        } else {
+            iconEl.textContent = '✏️';
+            titleEl.textContent = payload.title || 'Action';
+        }
+
+        const voiceBadge = document.createElement('span');
+        voiceBadge.className = 'zaf-voice-badge';
+        voiceBadge.id = 'zaf-voice-badge';
+        voiceBadge.style.display = 'none';
+        voiceBadge.innerHTML = '<span class="zaf-voice-dot"></span>Voice active';
+
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'zaf-close';
+        closeBtn.title = 'Close';
+        closeBtn.textContent = '✕';
+        closeBtn.onclick = () => _closeActionForm();
+
+        header.appendChild(iconEl);
+        header.appendChild(titleEl);
+        header.appendChild(voiceBadge);
+        header.appendChild(closeBtn);
+        card.appendChild(header);
+
+        // Body
+        const body = document.createElement('div');
+        body.className = 'zaf-body';
+
+        let formFields = {};
+        let listController = null;
+
+        if (panelType === 'calendar_event') {
+            const { frag, fields } = _buildCalendarForm(data);
+            body.appendChild(frag);
+            formFields = fields;
+        } else if (panelType === 'shopping_list') {
+            const result = _buildShoppingListForm(data);
+            body.appendChild(result.frag);
+            formFields = result.fields;
+            listController = result;
+        } else {
+            // Generic: render any fields array from payload
+            const fieldDefs = Array.isArray(payload.fields) ? payload.fields : [];
+            fieldDefs.forEach(f => {
+                const { wrap, input } = _makeField(f.label || f.name, {
+                    id: 'zaf-' + (f.name || ''),
+                    fieldName: f.name,
+                    type: f.type || 'text',
+                    value: data[f.name] || f.default || '',
+                    placeholder: f.placeholder || '',
+                });
+                body.appendChild(wrap);
+                formFields[f.name] = input;
+            });
+        }
+
+        card.appendChild(body);
+
+        // Footer
+        const footer = document.createElement('div');
+        footer.className = 'zaf-footer';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'zaf-btn zaf-btn-cancel';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.onclick = () => _closeActionForm();
+
+        const confirmBtn = document.createElement('button');
+        confirmBtn.type = 'button';
+        confirmBtn.className = 'zaf-btn zaf-btn-confirm';
+        confirmBtn.textContent = panelType === 'shopping_list' ? 'Done' : 'Confirm';
+
+        confirmBtn.onclick = async () => {
+            confirmBtn.disabled = true;
+            confirmBtn.textContent = 'Saving…';
+            try {
+                let confirmPayload = {};
+                if (panelType === 'calendar_event') {
+                    confirmPayload = {
+                        title: formFields.title ? formFields.title.value : '',
+                        date: formFields.date ? formFields.date.value : '',
+                        time: formFields.time ? formFields.time.value : '',
+                        duration: formFields.duration ? formFields.duration.value : '',
+                        category: formFields.category ? formFields.category.value : '',
+                        location: formFields.location ? formFields.location.value : '',
+                        notes: formFields.notes ? formFields.notes.value : '',
+                    };
+                } else if (panelType === 'shopping_list' && listController) {
+                    confirmPayload = { items: listController.getAllItems() };
+                } else {
+                    Object.keys(formFields).forEach(k => {
+                        if (formFields[k]) confirmPayload[k] = formFields[k].value;
+                    });
+                }
+                await api('/api/ui/panel/form/confirm', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        panel_type: panelType,
+                        action_id: actionId,
+                        session_id: sessionId,
+                        panel_id: payload.panel_id || state.panelId,
+                        data: confirmPayload,
+                    }),
+                });
+                showToast(panelType === 'shopping_list' ? 'List saved' : 'Event saved');
+                _closeActionForm();
+            } catch (err) {
+                confirmBtn.disabled = false;
+                confirmBtn.textContent = panelType === 'shopping_list' ? 'Done' : 'Confirm';
+                showToast('Could not save — please try again');
+            }
+        };
+
+        footer.appendChild(cancelBtn);
+        footer.appendChild(confirmBtn);
+        card.appendChild(footer);
+
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+
+        // Store reference for voice field-fill events.
+        _activeActionForm = { overlay, formFields, listController, panelType, payload };
+
+        // Focus the first meaningful field on open.
+        setTimeout(() => {
+            const first = body.querySelector('input:not([type="date"]):not([type="time"]), textarea');
+            if (first) first.focus();
+        }, 120);
+    }
+
+    function updateActionFormField(field, value) {
+        if (!_activeActionForm) return false;
+        const { formFields, listController, panelType } = _activeActionForm;
+        const badge = document.getElementById('zaf-voice-badge');
+
+        // Highlight voice-active state briefly.
+        if (badge) {
+            badge.style.display = 'inline-flex';
+            clearTimeout(updateActionFormField._hideTimer);
+            updateActionFormField._hideTimer = setTimeout(() => {
+                if (badge) badge.style.display = 'none';
+            }, 3500);
+        }
+
+        // Shopping list operations: add / remove
+        if (panelType === 'shopping_list' && listController) {
+            if (field === 'add' || field === '_new_item') {
+                listController.addItem(value);
+                return true;
+            }
+            if (field === 'remove') {
+                listController.removeItem(value);
+                return true;
+            }
+        }
+
+        const input = formFields[field];
+        if (!input) return false;
+        input.value = value;
+        input.dataset.voiceActive = 'true';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        setTimeout(() => { input.dataset.voiceActive = 'false'; }, 2500);
+        return true;
+    }
+
+    function updateActionFormList(op, item, items) {
+        if (!_activeActionForm || !_activeActionForm.listController) return false;
+        const lc = _activeActionForm.listController;
+        if (op === 'add' && item) { lc.addItem(item); return true; }
+        if (op === 'remove' && item) { lc.removeItem(item); return true; }
+        if (op === 'set' && Array.isArray(items)) {
+            // Replace all items — rebuild (re-render via remove+add for animation)
+            const current = lc.getAllItems();
+            current.forEach(i => lc.removeItem(i));
+            items.forEach(i => lc.addItem(i));
+            return true;
+        }
+        return false;
     }
 
     function init() {
