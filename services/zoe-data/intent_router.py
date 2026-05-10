@@ -321,16 +321,22 @@ def detect_intent(text: str) -> Optional[Intent]:
 
     # Connect ChatGPT / OpenAI to OpenClaw — admin-gated, handled via AG-UI OAuth flow.
     if _CONNECT_CHATGPT_RE.match(t):
-        return Intent("connect_chatgpt", {"raw": text})
+        # Delegation intent — no structured slots to extract; empty dict bypasses
+        # the nlu_extractor path in detect_and_extract_intent so it returns the
+        # intent directly instead of trying (and failing) to extract slots.
+        return Intent("connect_chatgpt", {})
 
     # Zoe self-extension — always routes to OpenClaw (admin-gated in the skill).
     # Checked BEFORE list/reminder/etc so "add X widget" doesn't become list_add.
+    # Empty slots: these are delegation intents with no structured fields to
+    # extract, so they must NOT carry {"raw": text} which would send them through
+    # nlu_extractor and cause detect_and_extract_intent to return None on failure.
     if _BUILD_WIDGET_RE.match(t) or _WANT_WIDGET_RE.match(t):
-        return Intent("build_widget", {"raw": text})
+        return Intent("build_widget", {})
     if _BUILD_PAGE_RE.match(t) or _WANT_PAGE_RE.match(t):
-        return Intent("build_page", {"raw": text})
+        return Intent("build_page", {})
     if _EXTEND_CAPABILITY_RE.match(t):
-        return Intent("extend_capability", {"raw": text})
+        return Intent("extend_capability", {})
 
     # === CLOCK / CALENDAR QUERIES — checked before domain patterns (no slots needed) ===
 
