@@ -1616,13 +1616,86 @@ async def chat_stream_generator(
         await _persist_ag_ui_run(session_id, run_id, recorder.events)
 
 
+_HERMES_API_URL = os.environ.get("HERMES_API_URL", "http://127.0.0.1:8642")
+_HERMES_MODEL   = os.environ.get("HERMES_MODEL", "hermes-agent")
+
+
+async def _hermes_stream_generator(message: str, session_id: str, user_id: str):
+    """Stream a response from the Hermes Agent gateway using AG-UI SSE events."""
+    import aiohttp
+    enc = EventEncoder()
+    run_id = uuid.uuid4().hex
+    assistant_message_id = uuid.uuid4().hex
+
+    yield enc.encode(RunStartedEvent(type=EventType.RUN_STARTED, run_id=run_id, thread_id=session_id))
+    yield enc.encode(StateSnapshotEvent(
+        type=EventType.STATE_SNAPSHOT,
+        snapshot={"status": "generating", "phase": "hermes", "model": "Hermes Agent", "detail": "Thinking…"},
+    ))
+    yield enc.encode(TextMessageStartEvent(type=EventType.TEXT_MESSAGE_START, message_id=assistant_message_id, role="assistant"))
+
+    full_text = []
+    try:
+        payload = {
+            "model": _HERMES_MODEL,
+            "messages": [{"role": "user", "content": message}],
+            "stream": True,
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{_HERMES_API_URL}/v1/chat/completions",
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as resp:
+                async for raw_line in resp.content:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        token = delta.get("content", "")
+                        if token:
+                            full_text.append(token)
+                            yield enc.encode(TextMessageChunkEvent(
+                                type=EventType.TEXT_MESSAGE_CHUNK,
+                                message_id=assistant_message_id,
+                                delta=token,
+                            ))
+                    except (json.JSONDecodeError, IndexError, KeyError):
+                        continue
+    except Exception as exc:
+        error_token = f"\n\n*[Hermes Agent error: {exc}]*"
+        full_text.append(error_token)
+        yield enc.encode(TextMessageChunkEvent(
+            type=EventType.TEXT_MESSAGE_CHUNK,
+            message_id=assistant_message_id,
+            delta=error_token,
+        ))
+
+    yield enc.encode(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
+    yield enc.encode(RunFinishedEvent(type=EventType.RUN_FINISHED, run_id=run_id, thread_id=session_id))
+
+    response_text = "".join(full_text)
+    if response_text.strip():
+        asyncio.ensure_future(_save_chat_message(session_id, "user", message))
+        asyncio.ensure_future(_save_chat_message(session_id, "assistant", response_text))
+        if user_id != "guest":
+            asyncio.ensure_future(_persist_memory_candidates(user_id, session_id, message, response_text))
+
+
 @router.post("/")
 async def chat(request: Request, user: dict = Depends(get_current_user), stream: bool = True):
     body = await request.json()
     message = body.get("message", "")
     session_id = body.get("session_id", f"web_{uuid.uuid4().hex[:8]}")
     user_id = user["user_id"]
-    force_openclaw = bool(body.get("force_openclaw", False))
+    force_agent: str = body.get("force_agent", "auto")  # 'auto' | 'hermes' | 'openclaw'
+    # Legacy bool flag kept for clients that haven't migrated to force_agent yet
+    force_openclaw = bool(body.get("force_openclaw", False)) or (force_agent == "openclaw")
     req_panel_id: str | None = body.get("panel_id") or None
     is_voice_mode = request.headers.get("X-Voice-Mode", "").lower() in ("true", "1", "yes")
     voice_max_tokens = int(body.get("max_tokens", 0)) if is_voice_mode else 0
@@ -1633,6 +1706,14 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
     await _ensure_user_and_chat_session(session_id, user_id)
 
     if stream:
+        # Hermes Agent path — direct OpenAI-compat streaming to localhost:8642
+        if force_agent == "hermes":
+            return StreamingResponse(
+                _hermes_stream_generator(message, session_id, user_id),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
         # Wrap the generator with a per-session lock so parallel SSE connections
         # for the same session don't interleave OpenClaw calls.
         async def _locked_stream():

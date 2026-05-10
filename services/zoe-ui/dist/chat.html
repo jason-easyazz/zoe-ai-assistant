@@ -487,6 +487,62 @@
             box-shadow: 0 0 0 2px rgba(123,97,255,0.2);
         }
 
+        /* ── Agent selector pill row ── */
+        .agent-selector {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px 2px;
+        }
+        .agent-pill {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 12px;
+            border: 1.5px solid rgba(123,97,255,0.2);
+            border-radius: 20px;
+            background: transparent;
+            color: var(--clr-text-3);
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.18s ease;
+            white-space: nowrap;
+            letter-spacing: 0.01em;
+        }
+        .agent-pill:hover {
+            border-color: rgba(123,97,255,0.45);
+            color: var(--clr-primary);
+            background: rgba(123,97,255,0.06);
+        }
+        .agent-pill.active {
+            border-color: var(--clr-primary);
+            color: var(--clr-primary);
+            background: rgba(123,97,255,0.12);
+            box-shadow: 0 0 0 2px rgba(123,97,255,0.15);
+        }
+        .agent-pill-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: currentColor;
+            opacity: 0.5;
+            flex-shrink: 0;
+        }
+        .agent-pill.active .agent-pill-dot { opacity: 1; }
+        .agent-selector-label {
+            font-size: 11px;
+            color: var(--clr-text-3);
+            opacity: 0.6;
+            margin-right: 2px;
+            user-select: none;
+        }
+        @media (max-width: 480px) {
+            .agent-selector { padding: 4px 10px 0; gap: 5px; }
+            .agent-pill { padding: 3px 9px; font-size: 11px; }
+            .agent-selector-label { display: none; }
+        }
+
         .send-btn {
             width: 48px;
             height: 48px;
@@ -2291,12 +2347,9 @@
             
             <!-- Input Area -->
             <div class="input-area">
-                <!-- Hidden checkbox preserved for JS compatibility (sendMessage reads .checked) -->
+                <!-- Hidden checkbox preserved for legacy JS compatibility -->
                 <input type="checkbox" id="forceOpenClawToggle" style="display:none">
                 <div class="input-wrapper">
-                    <button class="openclaw-toggle-btn" id="openclawToggleBtn"
-                            title="Run with OpenClaw (full tools)"
-                            onclick="toggleOpenClawMode()">⚡</button>
                     <textarea
                         class="input-field"
                         id="chatInput"
@@ -2317,6 +2370,22 @@
                             <line x1="22" y1="2" x2="11" y2="13"/>
                             <polygon points="22 2 15 22 11 13 2 9 22 2"/>
                         </svg>
+                    </button>
+                </div>
+                <!-- Agent selector pills -->
+                <div class="agent-selector" id="agentSelector">
+                    <span class="agent-selector-label">via</span>
+                    <button class="agent-pill active" id="agentPillAuto"
+                            onclick="selectAgent('auto')" title="Auto — intent detection + Zoe LLM">
+                        <span class="agent-pill-dot"></span>Zoe
+                    </button>
+                    <button class="agent-pill" id="agentPillHermes"
+                            onclick="selectAgent('hermes')" title="Hermes Agent — host-native agentic reasoning">
+                        <span class="agent-pill-dot"></span>Hermes
+                    </button>
+                    <button class="agent-pill" id="agentPillOpenclaw"
+                            onclick="selectAgent('openclaw')" title="OpenClaw — full tool access &amp; builder skills">
+                        <span class="agent-pill-dot"></span>OpenClaw
                     </button>
                 </div>
             </div>
@@ -2947,7 +3016,8 @@
         let currentSessionId = null;
         let messageCount = 0;
         let streamAbortController = null;
-        let forceOpenClawMode = false;
+        let forceOpenClawMode = false;   // legacy compat — driven by selectedAgent now
+        let selectedAgent = 'auto';     // 'auto' | 'hermes' | 'openclaw'
         let lastSubmittedUserMessage = '';
 
         // Initialize
@@ -3396,22 +3466,27 @@
             }, 380);
         }
 
-        function toggleOpenClawMode() {
-            const checkbox = document.getElementById('forceOpenClawToggle');
-            const btn      = document.getElementById('openclawToggleBtn');
-            if (!checkbox || !btn) return;
-            checkbox.checked = !checkbox.checked;
-            btn.classList.toggle('active', checkbox.checked);
-            btn.title = checkbox.checked
-                ? 'OpenClaw active — click to disable'
-                : 'Run with OpenClaw (full tools)';
+        function selectAgent(agent) {
+            selectedAgent = agent;
+            forceOpenClawMode = (agent === 'openclaw'); // legacy compat
+            // Update pill active states
+            ['auto', 'hermes', 'openclaw'].forEach(a => {
+                const el = document.getElementById('agentPill' + a.charAt(0).toUpperCase() + a.slice(1));
+                if (el) el.classList.toggle('active', a === agent);
+            });
+            // Update placeholder hint
+            const textarea = document.getElementById('chatInput');
+            if (textarea) {
+                const hints = { auto: 'Ask me anything...', hermes: 'Hermes Agent — agentic reasoning...', openclaw: 'OpenClaw — full tools & builder skills...' };
+                textarea.placeholder = hints[agent] || hints.auto;
+            }
         }
 
+        // Legacy toggle kept for external callers (e.g. tryPromptWithOpenClaw)
+        function toggleOpenClawMode() { selectAgent(selectedAgent === 'openclaw' ? 'auto' : 'openclaw'); }
+
         function tryPromptWithOpenClaw(text) {
-            const cb  = document.getElementById('forceOpenClawToggle');
-            const btn = document.getElementById('openclawToggleBtn');
-            if (cb)  cb.checked = true;
-            if (btn) btn.classList.add('active');
+            selectAgent('openclaw');
             tryPrompt(text);
         }
 
@@ -3420,7 +3495,7 @@
             const input = document.getElementById('chatInput');
             const message = input.value.trim();
             if (!message || isStreaming) return;
-            forceOpenClawMode = !!document.getElementById('forceOpenClawToggle')?.checked;
+            forceOpenClawMode = (selectedAgent === 'openclaw'); // keep legacy in sync
 
             if (message.toLowerCase() === '/pending approvals') {
                 input.value = '';
@@ -3625,6 +3700,7 @@
                         message: message,
                         user_id: userId,
                         force_openclaw: forceOpenClawMode,
+                        force_agent: selectedAgent,
                         context: { 
                             mode: 'main_chat',
                             channel: 'web',
