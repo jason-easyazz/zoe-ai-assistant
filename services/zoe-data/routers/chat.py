@@ -292,7 +292,7 @@ _OPENCLAW_DELEGATION_INTENTS: frozenset[str] = frozenset({
     "build_widget",
     "build_page",
     "extend_capability",
-    "connect_chatgpt",
+    # connect_chatgpt is handled by execute_intent (Tier-0 Python) — no LLM needed
 })
 
 

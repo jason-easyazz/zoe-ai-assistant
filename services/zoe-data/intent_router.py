@@ -754,6 +754,23 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         spoken_day = _spoken_day_ordinal(now.day)
         return f"Today is {now.strftime('%A')}, {now.strftime('%B')} {spoken_day}."
 
+    if intent.name == "connect_chatgpt":
+        # The ChatGPT / OpenAI Codex OAuth flow is browser-based — it cannot be
+        # automated non-interactively. Return a direct link to the OpenClaw
+        # settings page where the user can complete the connection themselves.
+        openclaw_ui = os.environ.get("OPENCLAW_UI_URL", "https://zoe.the411.life:18790")
+        return (
+            "To connect your ChatGPT Pro account to OpenClaw:\n\n"
+            f"1. Open the **[OpenClaw control panel]({openclaw_ui})** in your browser\n"
+            "2. Go to **Settings → Providers**\n"
+            "3. Select **OpenAI Codex** and click **Connect**\n"
+            "4. Sign in with your ChatGPT Pro account when prompted\n\n"
+            "Once connected, OpenClaw's builder skills will automatically use ChatGPT "
+            "for code generation — covering the cost with your existing subscription.\n\n"
+            "Alternatively, if you have an OpenAI API key you can add it directly:\n"
+            "```\nopenclaw onboard --auth-choice openai-api-key\n```"
+        )
+
     # "forget that" / "never mind what I said" — retract the last MemPalace write.
     # Scoped to the caller's user_id and to writes within the last 10 minutes so
     # a stale retraction can't wipe anything older. Short window keeps the
