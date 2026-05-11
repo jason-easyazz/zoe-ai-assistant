@@ -2,7 +2,6 @@
   "version": "2.0",
   "updated": "2025-12-25",
   "description": "Zoe AI Assistant file manifest - defines approved files and patterns",
-  
   "critical_files": {
     "css": [
       "services/zoe-ui/dist/css/glass.css",
@@ -68,7 +67,6 @@
       "services/zoe-ui/nginx.conf"
     ]
   },
-  
   "approved_patterns": {
     "services": "services/**/*",
     "modules": "modules/**/*",
@@ -91,7 +89,6 @@
     "graphify_out": "graphify-out/**/*",
     "cursor_rules": ".cursor/**/*"
   },
-  
   "approved_root_files": [
     "README.md",
     "CHANGELOG.md",
@@ -121,9 +118,9 @@
     "AGENTS.md",
     "RESTART_SERVICES.sh",
     "warmup_models.py",
-    "home-profile.json"
+    "home-profile.json",
+    "VERSION"
   ],
-  
   "safe_to_delete_patterns": [
     "**/*.pyc",
     "**/__pycache__/**",
@@ -138,7 +135,6 @@
     "**/*_fixed.*",
     "**/.pytest_cache/**"
   ],
-  
   "prohibited_in_root": [
     "test_*.py",
     "*_STATUS*.md",
@@ -151,7 +147,6 @@
     "*.tmp",
     "*.pyc"
   ],
-  
   "notes": {
     "max_root_md_files": 12,
     "llm_backend": "llama.cpp via zoe-llamacpp container (Ollama retired Dec 2025)",
@@ -160,4 +155,3 @@
     "recent_additions": "Module system (zoe-music), MCP tool integration, voice services"
   }
 }
-
