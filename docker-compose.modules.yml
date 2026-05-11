@@ -123,7 +123,7 @@ services:
       - ./data/music-assistant:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8095/info"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8095/info"]
       interval: 30s
       timeout: 10s
       retries: 5
