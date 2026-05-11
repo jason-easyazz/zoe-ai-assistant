@@ -43,7 +43,10 @@
         * { 
             margin: 0; padding: 0; box-sizing: border-box;
             -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
         }
+        body, html, .mobile-nav-content, .grid-stack, .grid-stack-item { touch-action: pan-y; }
+        button, a, select { touch-action: manipulation; }
         
         :root {
             --primary: #7B61FF;
@@ -551,6 +554,86 @@
                 font-size: 20px;
             }
         }
+
+        /* ============================================================
+           DARK MODE OVERRIDES
+           ============================================================ */
+        html.dark-mode body {
+            background: linear-gradient(135deg, #0a0a14 0%, #12121f 100%) !important;
+            color: #e5e7eb;
+        }
+        html.dark-mode .header-btn {
+            background: rgba(255, 255, 255, 0.06) !important;
+            border-color: rgba(255, 255, 255, 0.1) !important;
+            color: #f1f5f9 !important;
+        }
+        html.dark-mode .header-btn:hover {
+            background: rgba(157, 133, 255, 0.15) !important;
+            border-color: rgba(157, 133, 255, 0.35) !important;
+        }
+        html.dark-mode .grid-stack-item-content {
+            background: rgba(255, 255, 255, 0.04) !important;
+            border-color: rgba(255, 255, 255, 0.08) !important;
+            color: #e5e7eb;
+        }
+        html.dark-mode .widget-remove-btn {
+            background: rgba(239, 68, 68, 0.85) !important;
+            color: #fff;
+        }
+
+        /* ---- Voice FAB ---- */
+        .voice-fab {
+            position: fixed; bottom: 90px; right: 20px; z-index: 500;
+            width: 64px; height: 64px; border-radius: 50%; border: none;
+            background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
+            color: #fff; cursor: pointer; box-shadow: 0 4px 16px rgba(123,97,255,0.4);
+            display: flex; align-items: center; justify-content: center;
+            transition: transform 0.15s, box-shadow 0.15s;
+            touch-action: manipulation;
+        }
+        .voice-fab:active { transform: scale(0.94); box-shadow: 0 2px 8px rgba(123,97,255,0.4); }
+        .voice-fab.listening {
+            animation: voicePulse 1s ease-in-out infinite;
+            background: linear-gradient(135deg, #e53e3e 0%, #fc8181 100%);
+        }
+        @keyframes voicePulse {
+            0%,100% { box-shadow: 0 0 0 0 rgba(123,97,255,0.5); }
+            50% { box-shadow: 0 0 0 14px rgba(123,97,255,0); }
+        }
+
+        /* ---- Provider Setup Overlay ---- */
+        .provider-setup-overlay {
+            position: fixed; inset: 0; z-index: 800;
+            background: rgba(0,0,0,0.75); backdrop-filter: blur(4px);
+            display: flex; align-items: center; justify-content: center;
+            padding: 20px;
+        }
+        .provider-setup-card {
+            background: var(--card-bg, #fff); border-radius: 20px;
+            padding: 32px 24px; width: 100%; max-width: 460px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3); text-align: center;
+        }
+        .provider-setup-card h2 { font-size: 22px; font-weight: 700; margin-bottom: 10px; color: var(--text-primary); }
+        .provider-setup-card p { font-size: 14px; color: var(--text-secondary); margin-bottom: 24px; }
+        .provider-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+        .provider-tile {
+            background: var(--bg-secondary, #f1f3f6); border-radius: 14px; padding: 20px 12px;
+            display: flex; flex-direction: column; align-items: center; gap: 8px;
+            cursor: pointer; border: 2px solid transparent; transition: all 0.2s;
+            min-height: 100px; touch-action: manipulation;
+        }
+        .provider-tile:active { transform: scale(0.97); border-color: var(--primary, #7B61FF); }
+        .provider-tile.connected { border-color: #48bb78; background: rgba(72,187,120,0.08); }
+        .provider-icon { font-size: 32px; }
+        .provider-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+        .provider-status { font-size: 11px; color: var(--text-secondary); }
+        .provider-tile.connected .provider-status { color: #48bb78; }
+        .provider-skip-btn {
+            background: none; border: none; color: var(--text-secondary);
+            font-size: 13px; cursor: pointer; padding: 8px; touch-action: manipulation;
+        }
+        html.dark-mode .provider-setup-card { background: #1a1a2e; }
+        html.dark-mode .provider-tile { background: rgba(255,255,255,0.06); }
     </style>
 </head>
 <body>
@@ -810,6 +893,9 @@
             // Check auth
             await checkAuth();
             
+            // Check music provider setup
+            await checkMusicSetup();
+
             // Initialize grid
             initGrid();
             
@@ -882,6 +968,101 @@
             return 'dev-localhost';
         }
 
+
+        // ============================================================
+        // Music Provider Setup
+        // ============================================================
+        async function checkMusicSetup() {
+            try {
+                const resp = await fetch('/api/music/available-providers');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                if (!data.available) return;
+                const streaming = (data.providers || []).filter(p => p.connected);
+                if (streaming.length === 0) {
+                    renderProviderGrid(data.providers || []);
+                    document.getElementById('providerSetupOverlay').style.display = 'flex';
+                }
+            } catch(e) {
+                console.warn('Music setup check failed:', e);
+            }
+        }
+
+        function renderProviderGrid(providers) {
+            const FALLBACK = [
+                {id:'spotify', name:'Spotify', icon:'🟢', connected:false},
+                {id:'ytmusic', name:'YouTube Music', icon:'🔴', connected:false},
+                {id:'apple_music', name:'Apple Music', icon:'🎵', connected:false},
+                {id:'deezer', name:'Deezer', icon:'🎧', connected:false},
+            ];
+            const list = providers.length ? providers : FALLBACK;
+            const grid = document.getElementById('providerGrid');
+            if (!grid) return;
+            grid.innerHTML = list.map(p => `
+                <div class="provider-tile ${p.connected ? 'connected' : ''}"
+                     onclick="connectProvider('${p.id}')"
+                     style="touch-action:manipulation">
+                    <div class="provider-icon">${p.icon || '🎵'}</div>
+                    <div class="provider-name">${p.name}</div>
+                    <div class="provider-status">${p.connected ? '✓ Connected' : 'Tap to connect'}</div>
+                </div>
+            `).join('');
+        }
+
+        async function connectProvider(providerId) {
+            try {
+                const resp = await fetch('/api/chat/', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({message: `connect ${providerId} music provider`})
+                });
+                showToast(`Opening ${providerId} setup…`);
+            } catch(e) {
+                showToast('Could not connect provider');
+            }
+        }
+
+        // ============================================================
+        // Voice FAB
+        // ============================================================
+        function triggerVoice() {
+            const fab = document.getElementById('voiceFab');
+            if (!fab) return;
+
+            // If orb-loader already exposes a voice method, prefer it
+            if (window.zoeOrb && typeof window.zoeOrb.startVoice === 'function') {
+                window.zoeOrb.startVoice();
+                return;
+            }
+
+            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!SR) {
+                showToast('Voice not supported in this browser');
+                return;
+            }
+
+            fab.classList.add('listening');
+            const rec = new SR();
+            rec.lang = 'en-US';
+            rec.interimResults = false;
+            rec.maxAlternatives = 1;
+
+            rec.onresult = async (e) => {
+                fab.classList.remove('listening');
+                const transcript = e.results[0][0].transcript;
+                showToast('Sending: ' + transcript);
+                try {
+                    await fetch('/api/chat/', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({message: transcript})
+                    });
+                } catch(err) { console.error(err); }
+            };
+            rec.onerror = () => fab.classList.remove('listening');
+            rec.onend   = () => fab.classList.remove('listening');
+            rec.start();
+        }
         // ============================================================
         // Gridstack Setup
         // ============================================================
@@ -2368,6 +2549,30 @@
         }
         @keyframes ml-spin { to { transform: rotate(360deg); } }
     </style>
+
+
+    <!-- Voice FAB -->
+    <button class="voice-fab" id="voiceFab" onclick="triggerVoice()"
+        title="Talk to Zoe" aria-label="Voice command">
+        <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
+            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1 1.93c-3.94-.49-7-3.85-7-7.93H2c0 4.8 3.44 8.78 8 9.64v2.36h4v-2.36c4.56-.86 8-4.84 8-9.64h-2c0 4.08-3.06 7.44-7 7.93V15.93z"/>
+        </svg>
+    </button>
+
+    <!-- Music Provider Setup Overlay -->
+    <div class="provider-setup-overlay" id="providerSetupOverlay" style="display:none">
+        <div class="provider-setup-card">
+            <div style="font-size:48px;margin-bottom:12px">🎵</div>
+            <h2>Connect Music Providers</h2>
+            <p>Tap a service below to link your streaming account. You can connect multiple providers.</p>
+            <div class="provider-grid" id="providerGrid">
+                <!-- populated by JS -->
+            </div>
+            <button class="provider-skip-btn" onclick="document.getElementById('providerSetupOverlay').style.display='none'">
+                Maybe later
+            </button>
+        </div>
+    </div>
 
     <!-- TOUCH: gesture navigation (edge swipe) -->
     <script src="/touch/js/gestures.js"></script>
