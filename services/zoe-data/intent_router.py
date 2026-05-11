@@ -307,7 +307,7 @@ _FORGET_LAST_RE = re.compile(
 )
 
 
-def detect_intent(text: str) -> Optional[Intent]:
+def detect_intent(text: str, log_miss: bool = True) -> Optional[Intent]:
     t = _normalize_chat_intent_text(text)
 
     # Full Home Assistant / automation setup → OpenClaw (execute_intent returns None; chat expands message)
@@ -337,6 +337,16 @@ def detect_intent(text: str) -> Optional[Intent]:
         return Intent("build_page", {})
     if _EXTEND_CAPABILITY_RE.match(t):
         return Intent("extend_capability", {})
+
+    # === GREETINGS — morning/evening check-ins ===
+    if re.match(r"^(?:good\s+)?morning(?:\s+zoe)?\.?$", t) or t in {
+        "morning", "morning zoe", "hey morning",
+    }:
+        return Intent("good_morning", {})
+    if re.match(r"^good\s+evening(?:\s+zoe)?\.?$|^good\s+night(?:\s+zoe)?\.?$", t) or t in {
+        "evening", "evening zoe",
+    }:
+        return Intent("good_evening", {})
 
     # === CLOCK / CALENDAR QUERIES — checked before domain patterns (no slots needed) ===
 
@@ -632,7 +642,67 @@ def detect_intent(text: str) -> Optional[Intent]:
             lst = m.group(2).strip() if m.lastindex >= 2 else "shopping"
             return Intent("list_remove", {"item": item, "list_type": _normalize_list(lst)})
 
-    logger.info("intent_miss: %s", text)
+    # === MUSIC / MEDIA CONTROLS ===
+    _MUSIC_PLAY_RE = re.compile(
+        r"^(?:play|put on|play me|play some|start playing)\s+(.+)$", re.IGNORECASE
+    )
+    _MUSIC_CMD_RE = re.compile(
+        r"^(?P<cmd>pause|stop|resume|unpause|skip|next(?: song| track)?|previous(?: song| track)?"
+        r"|next track|prev track|previous track|what(?:'s| is)(?: currently)? playing"
+        r"|what song is this|volume up|volume down|louder|quieter|mute|unmute|shuffle|repeat)(?: the music| music)?\.?$",
+        re.IGNORECASE,
+    )
+    _VOLUME_SET_RE = re.compile(r"^(?:set volume|volume) (?:to |at )?(\d{1,3})(?:\s*%)?\.?$", re.IGNORECASE)
+
+    m = _MUSIC_PLAY_RE.match(t)
+    if m:
+        return Intent("music_play", {"query": m.group(1).strip()})
+
+    m = _VOLUME_SET_RE.match(t)
+    if m:
+        return Intent("music_volume", {"level": int(m.group(1))})
+
+    m = _MUSIC_CMD_RE.match(t)
+    if m:
+        cmd = m.group("cmd").lower().strip()
+        cmd = cmd.replace(" ", "_")
+        if cmd in {"next_song", "next_track"}: cmd = "next"
+        if cmd in {"previous_song", "previous_track", "prev_track"}: cmd = "previous"
+        if cmd in {"unpause"}: cmd = "resume"
+        if cmd in {"louder"}: cmd = "volume_up"
+        if cmd in {"quieter"}: cmd = "volume_down"
+        if "playing" in cmd or "song_is_this" in cmd: cmd = "now_playing"
+        return Intent("music_control", {"command": cmd})
+
+
+    # Auto-patched by zoe-self-improve 2026-05-11 — Unknown gap
+    _AUTOGEN_UNKNOWN_GAP = re.compile('^\\s*(?:(?:turn|put)\\s+(?:the\\s+)?volume\\s+(?P<direction>up|down)|(?P<action>increase|raise|lower|decrease|reduce)\\s+(?:the\\s+)?volume(?:\\s+(?:by|to)\\s+(?P<amount>\\d+|one|two|three|four|five|six|seven|eight|nine|ten))?|set\\s+(?:the\\s+)?volume\\s+to\\s+(?P<level>\\d+|one|two|three|four|five|six|seven|eight|nine|ten))\\s*[.!?]?\\s*$', re.IGNORECASE)
+    if _AUTOGEN_UNKNOWN_GAP.search(t):
+        _num = re.search(r'\b(10|[0-9])\b', t)
+        _wrd = dict(zero=0,one=1,two=2,three=3,four=4,five=5,six=6,seven=7,eight=8,nine=9,ten=10)
+        _wm = re.search(r'\b(' + '|'.join(_wrd) + r')\b', t, re.IGNORECASE)
+        _lvl = int(_num.group(1)) * 10 if _num else (_wrd.get(_wm.group(1).lower(), 5) * 10 if _wm else None)
+        if _lvl is not None:
+            return Intent("music_volume", {"level": _lvl})
+        _dir = "volume_up" if re.search(r'\b(up|raise|louder|increase)\b', t, re.IGNORECASE) else "volume_down"
+        return Intent("music_control", {"command": _dir})
+
+    if log_miss:
+        logger.info("intent_miss: %s", text)
+        # Write to intent-misses file for weekly self-review (PII stripped)
+        import re as _re, json as _json, pathlib as _pathlib
+        _MISS_PATH = _pathlib.Path.home() / "training" / "data" / "intent-misses.jsonl"
+        _MISS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            # Strip names, numbers, emails, URLs before writing
+            _clean = _re.sub(r'\b[A-Z][a-z]+ [A-Z][a-z]+\b', '[NAME]', text)
+            _clean = _re.sub(r'\b\d[\d\s\-]{6,}\b', '[NUMBER]', _clean)
+            _clean = _re.sub(r'[\w.+-]+@[\w-]+\.\w+', '[EMAIL]', _clean)
+            _clean = _re.sub(r'https?://\S+', '[URL]', _clean)
+            with open(_MISS_PATH, "a") as _f:
+                _f.write(_json.dumps({"text": _clean, "ts": __import__("time").time()}) + "\n")
+        except Exception:
+            pass  # Never let logging break intent routing
     return None
 
 
@@ -736,6 +806,26 @@ async def _run_mcporter(cmd: str) -> Optional[str]:
 
 
 async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optional[str]:
+    if intent.name in {"music_play", "music_control", "music_volume"}:
+        return await _execute_music_intent(intent, user_id)
+
+    if intent.name == "good_morning":
+        return await _execute_daily_briefing(user_id)
+
+    if intent.name == "good_evening":
+        try:
+            from proactive.composer import compose_message
+            result = await compose_message(
+                "Good evening — provide a brief, warm check-in for the end of day. "
+                "Mention any outstanding reminders or tomorrow's early events if known, "
+                "otherwise just a warm sign-off. Keep it under 3 sentences.",
+                user_id,
+            )
+            return result
+        except Exception as _e:
+            logger.warning("good_evening composer failed: %s", _e)
+            return "Good evening! Hope your day went well. Let me know if there's anything you need."
+
     if intent.name == "daily_briefing":
         return await _execute_daily_briefing(user_id)
 
@@ -755,21 +845,10 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         return f"Today is {now.strftime('%A')}, {now.strftime('%B')} {spoken_day}."
 
     if intent.name == "connect_chatgpt":
-        # The ChatGPT / OpenAI Codex OAuth flow is browser-based — it cannot be
-        # automated non-interactively. Return a direct link to the OpenClaw
-        # settings page where the user can complete the connection themselves.
-        openclaw_ui = os.environ.get("OPENCLAW_UI_URL", "https://zoe.the411.life:18790")
-        return (
-            "To connect your ChatGPT Pro account to OpenClaw:\n\n"
-            f"1. Open the **[OpenClaw control panel]({openclaw_ui})** in your browser\n"
-            "2. Go to **Settings → Providers**\n"
-            "3. Select **OpenAI Codex** and click **Connect**\n"
-            "4. Sign in with your ChatGPT Pro account when prompted\n\n"
-            "Once connected, OpenClaw's builder skills will automatically use ChatGPT "
-            "for code generation — covering the cost with your existing subscription.\n\n"
-            "Alternatively, if you have an OpenAI API key you can add it directly:\n"
-            "```\nopenclaw onboard --auth-choice openai-api-key\n```"
-        )
+        # Handled directly by chat.py via _chatgpt_connect_flow() — which runs
+        # the full device-code OAuth flow inline in the SSE stream.  Return None
+        # here so execute_intent does not produce a static text reply.
+        return None
 
     # "forget that" / "never mind what I said" — retract the last MemPalace write.
     # Scoped to the caller's user_id and to writes within the last 10 minutes so
@@ -921,6 +1000,100 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optio
     except Exception as exc:
         logger.warning("direct weather intent failed: %s", exc)
         return None
+
+
+async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
+    """Route music intents to HA media_player via zoe-data HA bridge."""
+    try:
+        import os as _os, httpx as _httpx
+        ha_url = _os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")
+        slots = intent.slots or {}
+
+        if intent.name == "music_play":
+            query = slots.get("query", "music")
+            payload = {
+                "type": "service",
+                "domain": "media_player",
+                "service": "play_media",
+                "data": {
+                    "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
+                    "media_content_id": query,
+                    "media_content_type": "music",
+                },
+            }
+            async with _httpx.AsyncClient(timeout=8.0) as c:
+                await c.post(f"{ha_url}/execute", json=payload)
+            return f"Playing {query}."
+
+        elif intent.name == "music_control":
+            cmd = slots.get("command", "")
+            service_map = {
+                "pause": "media_pause",
+                "stop": "media_stop",
+                "resume": "media_play",
+                "next": "media_next_track",
+                "previous": "media_previous_track",
+                "volume_up": "volume_up",
+                "volume_down": "volume_down",
+                "shuffle": "shuffle_set",
+                "mute": "volume_mute",
+                "unmute": "volume_mute",
+            }
+            if cmd == "now_playing":
+                # Fetch state from HA bridge
+                async with _httpx.AsyncClient(timeout=8.0) as c:
+                    r = await c.get(f"{ha_url}/states")
+                    data = r.json() if r.status_code == 200 else {}
+                mp = data.get("media_player", {})
+                for entity, state in mp.items():
+                    title = state.get("attributes", {}).get("media_title")
+                    artist = state.get("attributes", {}).get("media_artist")
+                    if title:
+                        return f"Playing {title}{' by ' + artist if artist else ''}."
+                return "Nothing is playing right now."
+
+            svc = service_map.get(cmd)
+            if svc:
+                extra = {}
+                if cmd == "shuffle": extra = {"shuffle": True}
+                if cmd == "mute":    extra = {"is_volume_muted": True}
+                if cmd == "unmute":  extra = {"is_volume_muted": False}
+                payload = {
+                    "type": "service",
+                    "domain": "media_player",
+                    "service": svc,
+                    "data": {
+                        "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
+                        **extra,
+                    },
+                }
+                async with _httpx.AsyncClient(timeout=8.0) as c:
+                    await c.post(f"{ha_url}/execute", json=payload)
+                label = {"pause": "Paused", "stop": "Stopped", "resume": "Resumed",
+                         "next": "Skipped to next", "previous": "Back to previous",
+                         "volume_up": "Volume up", "volume_down": "Volume down",
+                         "shuffle": "Shuffle on", "mute": "Muted", "unmute": "Unmuted"}.get(cmd, cmd.title())
+                return f"{label}."
+
+        elif intent.name == "music_volume":
+            level = int(slots.get("level", 50))
+            vol = max(0, min(100, level)) / 100.0
+            payload = {
+                "type": "service",
+                "domain": "media_player",
+                "service": "volume_set",
+                "data": {
+                    "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
+                    "volume_level": vol,
+                },
+            }
+            async with _httpx.AsyncClient(timeout=8.0) as c:
+                await c.post(f"{ha_url}/execute", json=payload)
+            return f"Volume set to {level}%."
+
+    except Exception as exc:
+        logger.warning("music intent failed: %s", exc)
+    return None
 
 
 def _build_command(intent: Intent, user_id: str) -> Optional[str]:
