@@ -18,7 +18,9 @@ Rules:
 from __future__ import annotations
 
 import logging
+import os
 import re
+import zoneinfo
 from datetime import datetime, timedelta, timezone, date
 
 import aiosqlite
@@ -29,6 +31,8 @@ log = logging.getLogger(__name__)
 
 # How far ahead to look when scheduling reminders (hours).
 _LOOKAHEAD_HOURS = 25
+
+_ZOE_TZ = zoneinfo.ZoneInfo(os.environ.get("ZOE_TIMEZONE", "Australia/Perth"))
 
 
 def _parse_due_time(due_time_raw: str) -> tuple[int, int] | None:
@@ -65,27 +69,25 @@ def build_run_at(
     hour: int,
     minute: int,
     now_utc: datetime,
-    user_tz_offset_hours: int = 8,  # AWST default; TODO: per-user tz
+    user_tz_offset_hours: int = 8,  # kept for API compat; _ZOE_TZ is used instead
 ) -> datetime | None:
     """
     Build a UTC datetime for when the reminder should fire.
 
-    The reminder times stored by Zoe are in the user's local time (AWST = UTC+8).
-    We convert to UTC for APScheduler.
+    The reminder times stored by Zoe are in the user's local time (ZOE_TIMEZONE).
+    We convert to UTC for APScheduler using zoneinfo (handles DST correctly).
     """
-    offset = timedelta(hours=user_tz_offset_hours)
-
     if due_date_str:
         try:
             d = date.fromisoformat(due_date_str)
         except ValueError:
             return None
         # Construct local datetime and convert to UTC
-        local_dt = datetime(d.year, d.month, d.day, hour, minute, tzinfo=timezone(offset))
+        local_dt = datetime(d.year, d.month, d.day, hour, minute, tzinfo=_ZOE_TZ)
         return local_dt.astimezone(timezone.utc)
 
     # No date → daily: use today if the time hasn't passed, else tomorrow
-    now_local = now_utc.astimezone(timezone(offset))
+    now_local = now_utc.astimezone(_ZOE_TZ)
     candidate = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if candidate <= now_local:
         candidate += timedelta(days=1)

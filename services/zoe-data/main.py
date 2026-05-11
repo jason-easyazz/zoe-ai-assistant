@@ -26,6 +26,7 @@ from routers import (
     user_profile_router,
     panel_auth_router,
     capability_matrix_router,
+    music_router,
 )
 from routers.dashboard import router as dashboard_router
 from routers.stubs import router as stubs_router
@@ -161,9 +162,16 @@ async def lifespan(app: FastAPI):
     try:
         from proactive.engine import start_proactive_engine, register_trigger
         from proactive.triggers.reminder_scan import ReminderScanTrigger
+        from proactive.triggers.morning_checkin import MorningCheckInTrigger
+        from proactive.triggers.evening_windown import EveningWindDownTrigger
         register_trigger(ReminderScanTrigger())
+        register_trigger(MorningCheckInTrigger())
+        register_trigger(EveningWindDownTrigger())
         start_proactive_engine()
-        logger.info("Proactive engine started (ReminderScanTrigger registered)")
+        logger.info(
+            "Proactive engine started (ReminderScanTrigger, MorningCheckInTrigger,"
+            " EveningWindDownTrigger registered)"
+        )
     except Exception as _pe_exc:
         logger.warning("Proactive engine failed to start (non-fatal): %s", _pe_exc)
 
@@ -260,6 +268,7 @@ app.include_router(push_router)
 app.include_router(proactive_router)
 app.include_router(panel_auth_router)
 app.include_router(capability_matrix_router)
+app.include_router(music_router)
 
 from routers.ha_control import router as ha_control_router
 app.include_router(ha_control_router)
@@ -419,6 +428,108 @@ async def journal_ws(websocket: WebSocket, user_id: str):
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
         broadcaster.disconnect(websocket, "all")
+
+
+@app.websocket("/ws/voice/")
+async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
+    """Local voice session WebSocket for voice.html.
+
+    Accepts text and binary (audio) messages:
+    - Text JSON {"type": "text", "message": "..."} → routed through zoe_agent
+    - Binary → transcribed via faster-whisper then routed as text
+    Emits {"type": "state", "state": "..."} and {"type": "transcript", ...}
+    and {"type": "done"} events.
+    """
+    await websocket.accept()
+    ws_session_id = session_id or f"ws-voice-{_uuid_mod.uuid4().hex[:8]}"
+    user_id = "family-admin"
+
+    await websocket.send_json({"type": "state", "state": "ambient"})
+
+    try:
+        while True:
+            message_text: str | None = None
+            try:
+                raw = await websocket.receive()
+            except WebSocketDisconnect:
+                break
+
+            if raw.get("type") == "websocket.disconnect":
+                break
+
+            if raw.get("bytes"):
+                # Binary audio chunk: write to temp WAV and transcribe
+                audio_bytes: bytes = raw["bytes"]
+                await websocket.send_json({"type": "state", "state": "thinking"})
+                try:
+                    import tempfile, os as _os
+                    from routers.voice_tts import _transcribe_audio
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+                        tf.write(audio_bytes)
+                        tmp_path = tf.name
+                    try:
+                        message_text = await _transcribe_audio(tmp_path)
+                    finally:
+                        try:
+                            _os.unlink(tmp_path)
+                        except OSError:
+                            pass
+                    if message_text:
+                        await websocket.send_json({"type": "transcript", "role": "user", "text": message_text})
+                except Exception as _exc:
+                    logger.warning("Voice WS audio transcription failed: %s", _exc)
+                    await websocket.send_json({"type": "state", "state": "ambient"})
+                    continue
+
+            elif raw.get("text"):
+                text_data: str = raw["text"]
+                if text_data == "ping":
+                    await websocket.send_json({"type": "pong"})
+                    continue
+                try:
+                    msg = __import__("json").loads(text_data)
+                    if msg.get("type") == "text":
+                        message_text = msg.get("message", "").strip()
+                except Exception:
+                    pass
+
+            if not message_text:
+                continue
+
+            await websocket.send_json({"type": "state", "state": "thinking"})
+            response = "Sorry, I had trouble with that."
+            try:
+                from zoe_agent import run_zoe_agent
+                response = await run_zoe_agent(
+                    message_text,
+                    ws_session_id,
+                    user_id,
+                    voice_mode=True,
+                )
+            except Exception as _exc:
+                logger.error("Voice WS agent error: %s", _exc)
+            await websocket.send_json({"type": "state", "state": "responding"})
+            await websocket.send_json({"type": "transcript", "role": "zoe", "text": response})
+            # Synthesize TTS and send audio so the client can play without an extra HTTP call
+            try:
+                import base64 as _b64
+                from routers.voice_tts import synthesize as _synth
+                _tts_resp = await _synth({"text": response}, caller={"source": "ws", "user_id": user_id})
+                await websocket.send_json({
+                    "type": "audio",
+                    "audio_base64": _b64.b64encode(_tts_resp.body).decode("ascii"),
+                    "content_type": _tts_resp.media_type,
+                    "text": response,
+                })
+            except Exception as _tts_exc:
+                logger.warning("Voice WS TTS failed: %s", _tts_exc)
+                await websocket.send_json({"type": "text", "content": response})
+
+            await websocket.send_json({"type": "done"})
+            await websocket.send_json({"type": "state", "state": "ambient"})
+
+    except Exception as _exc:
+        logger.warning("Voice WS closed: %s", _exc)
 
 
 if __name__ == "__main__":

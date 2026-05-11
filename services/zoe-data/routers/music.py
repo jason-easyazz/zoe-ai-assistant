@@ -1,0 +1,188 @@
+"""
+Music Assistant proxy endpoints.
+
+Provides Zoe's frontend with MA status, configured providers, and available
+provider types — all forwarded from the local MA instance (default :8095).
+Auth is intentionally session-free here: the data is non-sensitive connection
+status that the music page and settings page both need without an extra auth hop.
+"""
+import logging
+import os
+from typing import Any
+
+import httpx
+from fastapi import APIRouter
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/music", tags=["music"])
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _ma_url() -> str:
+    return os.environ.get("MUSIC_ASSISTANT_URL", "http://localhost:8095").rstrip("/")
+
+
+def _ma_headers() -> dict:
+    h: dict[str, str] = {"Content-Type": "application/json"}
+    token = os.environ.get("MUSIC_ASSISTANT_TOKEN", "")
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return h
+
+
+async def _get_info() -> dict | None:
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as c:
+            r = await c.get(f"{_ma_url()}/info", headers=_ma_headers())
+            if r.status_code == 200:
+                return r.json()
+    except Exception as exc:
+        logger.debug("MA /info unreachable: %s", exc)
+    return None
+
+
+async def _get_providers() -> list | None:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.post(
+                f"{_ma_url()}/api",
+                json={"command": "providers"},
+                headers=_ma_headers(),
+            )
+            if r.status_code == 200:
+                data = r.json()
+                return data if isinstance(data, list) else (data.get("items") or [])
+    except Exception as exc:
+        logger.debug("MA providers unreachable: %s", exc)
+    return None
+
+
+async def _get_players() -> list | None:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.post(
+                f"{_ma_url()}/api",
+                json={"command": "players/all"},
+                headers=_ma_headers(),
+            )
+            if r.status_code == 200:
+                data = r.json()
+                return data if isinstance(data, list) else (data.get("items") or [])
+    except Exception as exc:
+        logger.debug("MA players/all unreachable: %s", exc)
+    return None
+
+
+async def _get_queue_items(queue_id: str, limit: int = 50) -> list | None:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.post(
+                f"{_ma_url()}/api",
+                json={"command": "player_queues/items", "queue_id": queue_id, "limit": limit},
+                headers=_ma_headers(),
+            )
+            if r.status_code == 200:
+                data = r.json()
+                return data if isinstance(data, list) else (data.get("items") or [])
+    except Exception as exc:
+        logger.debug("MA player_queues/items unreachable: %s", exc)
+    return None
+
+
+# Hardcoded catalogue of provider types MA supports — shown as "available to connect"
+# even before the user has configured anything.
+_KNOWN_PROVIDERS = [
+    {"id": "spotify",       "name": "Spotify",       "icon": "🟢"},
+    {"id": "ytmusic",       "name": "YouTube Music", "icon": "🔴"},
+    {"id": "apple_music",   "name": "Apple Music",   "icon": "🎵"},
+    {"id": "deezer",        "name": "Deezer",        "icon": "🎧"},
+    {"id": "tidal",         "name": "Tidal",         "icon": "🌊"},
+    {"id": "plex",          "name": "Plex",          "icon": "🎬"},
+    {"id": "subsonic",      "name": "Subsonic / Navidrome", "icon": "💽"},
+    {"id": "radiobrowser",  "name": "Radio Browser (built-in)", "icon": "📻"},
+]
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/status")
+async def music_status() -> dict[str, Any]:
+    """
+    Returns MA availability, version, player count, and configured providers.
+    Used by music.html and settings.html to show connection state at a glance.
+
+    provider_count only counts music/plugin providers (not metadata or player-management
+    providers) so the music page setup wizard only appears when there are genuinely no
+    streaming or library sources.
+    """
+    info = await _get_info()
+    if info is None:
+        return {"available": False}
+
+    providers = await _get_providers() or []
+    # Count only music-contributing providers (type "music" or "plugin"), not pure metadata
+    music_providers = [p for p in providers if p.get("type") in ("music", "plugin")]
+
+    return {
+        "available": True,
+        "version": info.get("version", ""),
+        "onboard_done": info.get("onboard_done", True),
+        "providers": providers,
+        "provider_count": len(music_providers),
+    }
+
+
+@router.get("/providers")
+async def music_providers() -> dict[str, Any]:
+    """
+    Returns the list of music providers currently configured in MA.
+    """
+    providers = await _get_providers()
+    if providers is None:
+        return {"available": False, "providers": []}
+    return {"available": True, "providers": providers}
+
+
+@router.get("/players")
+async def music_players() -> dict[str, Any]:
+    """
+    Returns the list of players currently registered in MA.
+    Proxied through Zoe so the browser never needs direct access to MA.
+    """
+    players = await _get_players()
+    if players is None:
+        return {"available": False, "players": []}
+    return {"available": True, "players": players}
+
+
+@router.get("/queue/{queue_id}")
+async def music_queue(queue_id: str) -> dict[str, Any]:
+    """
+    Returns up to 50 queue items for the given player/queue ID.
+    """
+    items = await _get_queue_items(queue_id)
+    if items is None:
+        return {"available": False, "items": []}
+    return {"available": True, "items": items}
+
+
+@router.get("/available-providers")
+async def available_providers() -> dict[str, Any]:
+    """
+    Returns the full catalogue of provider types MA can use, merged with
+    currently configured status so the UI can show Connected / Connect buttons.
+    """
+    configured = await _get_providers() or []
+    configured_ids = {(p.get("domain") or p.get("id") or "").lower() for p in configured}
+
+    result = []
+    for p in _KNOWN_PROVIDERS:
+        connected = p["id"] in configured_ids
+        result.append({**p, "connected": connected})
+
+    return {"available": True, "providers": result}

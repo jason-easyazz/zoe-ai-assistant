@@ -25,6 +25,7 @@ the _PI_SOUL system prompt can be shrunk to ~10 tokens (saving ~500ms prefill).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -856,6 +857,19 @@ def _check_fast_response(message: str) -> str | None:
     now = datetime.datetime.now()
     words = set(msg.split())  # whole-word matching to avoid "times" → "time"
 
+    # Instant greetings — no LLM needed
+    _greeting_set = {"hi", "hey", "hello", "yo", "hiya", "howdy",
+                     "hey zoe", "hi zoe", "hello zoe", "hey there"}
+    if msg in _greeting_set:
+        return "Hey! What can I help you with?"
+
+    # Instant acknowledgements — no LLM needed
+    _ack_set = {"thanks", "thank you", "cheers", "ty", "thx",
+                "great", "perfect", "awesome", "nice", "cool",
+                "got it", "ok", "okay", "sounds good", "good"}
+    if msg in _ack_set:
+        return "Glad to help! Anything else?"
+
     # Time queries — only if "time" is an actual word (not inside "times", "sometimes" etc.)
     if "time" in words or "clock" in words:
         if any(w in msg for w in ("what", "tell", "current", "now")):
@@ -884,6 +898,26 @@ def _check_fast_response(message: str) -> str | None:
     if msg in _status_triggers:
         return f"I'm here and running on your {tier}. How can I help?"
 
+    return None
+
+
+_FRUSTRATED_WORDS = {"ugh", "argh", "again", "still", "why", "broken", "useless",
+                      "doesn't work", "not working", "wrong", "failed", "error"}
+_SAD_WORDS = {"sad", "upset", "crying", "miss", "lonely", "tired", "exhausted",
+               "overwhelmed", "anxious", "worried", "scared"}
+_EXCITED_WORDS = {"awesome", "amazing", "great", "love it", "perfect", "excited",
+                   "can't wait", "wonderful", "fantastic"}
+
+
+def _classify_tone(text: str) -> str | None:
+    """Return a short empathy prefix for emotional messages, or None."""
+    lower = text.lower()
+    if any(w in lower for w in _SAD_WORDS):
+        return "I hear you. "
+    if any(w in lower for w in _FRUSTRATED_WORDS):
+        return "Let me sort that out. "
+    if any(w in lower for w in _EXCITED_WORDS):
+        return "That's great! "
     return None
 
 
@@ -1773,6 +1807,9 @@ async def run_zoe_agent(
         messages.extend(history[-12:])
     messages.append({"role": "user", "content": user_message})
 
+    # Empathy tone prefix — prepended to the LLM reply, no LLM cost
+    _tone_prefix = _classify_tone(message) or ""
+
     # Tool loop — tool calls come through the API's tool_calls channel (never text)
     _max_iters = _VOICE_MAX_TOOL_ITERS if voice_mode else _MAX_TOOL_ITERS
     for iteration in range(_max_iters + 1):
@@ -1836,9 +1873,9 @@ async def run_zoe_agent(
                 session_id, iteration, elapsed,
             )
             _fire_memory_capture(message, response_text, user_id=user_id)
-            return response_text
+            return _tone_prefix + response_text
 
-    return response_text
+    return _tone_prefix + response_text
 
 
 # User message patterns that will NEVER contain memorable personal facts

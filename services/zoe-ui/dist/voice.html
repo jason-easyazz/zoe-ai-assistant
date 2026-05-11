@@ -145,6 +145,58 @@
     color: rgba(255,255,255,0.35); font-size: 11px; letter-spacing: 0.08em;
     text-transform: uppercase;
   }
+
+  /* ── Push-to-talk button ─────────────────────────────────────── */
+  #pttBtn {
+    position: fixed;
+    bottom: max(100px, env(safe-area-inset-bottom, 100px));
+    left: 50%; transform: translateX(-50%);
+    width: 72px; height: 72px; border-radius: 50%;
+    background: rgba(108,99,255,0.25);
+    border: 2px solid rgba(108,99,255,0.6);
+    color: rgba(255,255,255,0.8);
+    font-size: 28px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s, transform 0.15s;
+    z-index: 55;
+    touch-action: none;
+    -webkit-user-select: none; user-select: none;
+  }
+  #pttBtn.recording {
+    background: rgba(255,60,60,0.35);
+    border-color: rgba(255,80,80,0.8);
+    transform: translateX(-50%) scale(1.12);
+  }
+  #pttBtn:active { transform: translateX(-50%) scale(0.95); }
+
+  /* ── Conversation mode indicator ────────────────────────────── */
+  #convBadge {
+    position: fixed;
+    top: max(64px, calc(env(safe-area-inset-top, 0px) + 64px));
+    left: 50%; transform: translateX(-50%);
+    background: rgba(108,99,255,0.2);
+    border: 1px solid rgba(108,99,255,0.4);
+    border-radius: 20px; padding: 4px 14px;
+    color: rgba(255,255,255,0.6); font-size: 11px;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    display: none; z-index: 60;
+  }
+  #convBadge.active { display: block; }
+
+  /* ── Mobile responsive ───────────────────────────────────────── */
+  @media (max-width: 430px) {
+    #topBar { padding-top: max(20px, env(safe-area-inset-top, 20px)); }
+    #statusLabel { font-size: 13px; bottom: max(180px, env(safe-area-inset-bottom, 180px)); }
+    .agui-card { max-width: 95vw; padding: 14px 16px; }
+    #pttBtn { width: 80px; height: 80px; font-size: 32px; bottom: max(110px, env(safe-area-inset-bottom, 110px)); }
+  }
+  @media (max-width: 390px) {
+    #transcriptPanel { max-height: 35vh; }
+  }
+  @media (orientation: landscape) and (max-height: 500px) {
+    #pttBtn { bottom: max(20px, env(safe-area-inset-bottom, 20px)); width: 56px; height: 56px; font-size: 22px; }
+    #statusLabel { bottom: max(90px, env(safe-area-inset-bottom, 90px)); font-size: 12px; }
+  }
 </style>
 </head>
 <body>
@@ -165,6 +217,12 @@
 <!-- Status label -->
 <div id="statusLabel">Tap to start</div>
 
+<!-- Conversation mode badge -->
+<div id="convBadge">● Conversation</div>
+
+<!-- Push-to-talk button (shown after session starts) -->
+<button id="pttBtn" style="display:none" title="Hold to speak">🎤</button>
+
 <!-- AG-UI card overlay -->
 <div id="aguiOverlay"></div>
 
@@ -183,8 +241,8 @@ const isLocal  = location.hostname === 'localhost'
               || location.hostname.startsWith('192.168.')
               || location.hostname.startsWith('10.')
               || /^172\.(1[6-9]|2\d|3[01])\./.test(location.hostname);
-const modePref = params.get('mode');
-const MODE     = modePref || (isLocal ? 'local' : 'livekit');
+const modePref = params.get('mode') || 'local';
+const MODE     = modePref;
 document.getElementById('modeLabel').textContent = 'voice · ' + MODE;
 
 // ── Orb canvas animation ──────────────────────────────────────────────────
@@ -369,32 +427,52 @@ function getSessionId() {
     } catch(e) { return ''; }
 }
 
-// ── LOCAL mode: WebSocket voice session ──────────────────────────────────
-let localWS    = null;
-let localActive = false;
+// ── LOCAL WebSocket voice session ─────────────────────────────────────────
+let localWS = null;
+let wsReconnectTimer = null;
+let wsReady = false;
 
+// ── Mic + recording state ─────────────────────────────────────────────────
+let micStream = null;
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+let audioCtx = null;
+let analyser = null;
+let silenceTimer = null;
+let silenceThreshold = 0.01;
+let silenceMs = 1800;  // stop after 1.8s of silence
+let convMode = false;  // continued conversation mode
+let speaking = false;  // true while Zoe TTS is playing
+
+// ── WebSocket connection ──────────────────────────────────────────────────
 function connectLocalVoice() {
+  if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const wsUrl  = `${proto}://${location.host}/ws/voice/?session_id=${getSessionId()}`;
   localWS = new WebSocket(wsUrl);
+  localWS.binaryType = 'arraybuffer';
 
   localWS.onopen = () => {
-    localActive = true;
+    wsReady = true;
     setOrbState('ambient');
+    showPttButton();
   };
 
   localWS.onclose = () => {
-    localActive = false;
-    setStatus('Disconnected — reconnecting…');
-    setTimeout(connectLocalVoice, 3000);
+    wsReady = false;
+    setStatus('Reconnecting…');
+    wsReconnectTimer = setTimeout(connectLocalVoice, 3000);
   };
 
   localWS.onmessage = (ev) => {
     try {
-      const msg = JSON.parse(ev.data);
-      handleVoiceEvent(msg);
+      const msg = typeof ev.data === 'string' ? JSON.parse(ev.data) : null;
+      if (msg) handleVoiceEvent(msg);
     } catch(e) {}
   };
+
+  localWS.onerror = () => { wsReady = false; };
 }
 
 function handleVoiceEvent(msg) {
@@ -404,106 +482,205 @@ function handleVoiceEvent(msg) {
     if (s === 'wake' || s === 'listening') setOrbState('listening');
     else if (s === 'processing' || s === 'thinking') setOrbState('thinking');
     else if (s === 'responding' || s === 'speaking') setOrbState('responding');
-    else setOrbState('ambient');
+    else { setOrbState('ambient'); if (convMode && !speaking) scheduleAutoListen(); }
   } else if (type === 'transcript') {
     addTranscriptLine(msg.role || 'zoe', msg.text || '');
+  } else if (type === 'audio') {
+    playAudioBase64(msg.audio_base64, msg.content_type || 'audio/wav', () => {
+      if (convMode) scheduleAutoListen();
+    });
+  } else if (type === 'text') {
+    // Fallback if no TTS audio is returned
+    setOrbState('ambient');
   } else if (type === 'agui' || type === 'ui_component') {
     showAguiCard(msg.data || msg);
   } else if (type === 'done') {
+    if (!convMode) setOrbState('ambient');
+  }
+}
+
+// ── Audio playback ────────────────────────────────────────────────────────
+function playAudioBase64(b64, mimeType, onDone) {
+  try {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: mimeType });
+    const url  = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    speaking = true;
+    setOrbState('responding');
+    audio.onended = () => {
+      speaking = false;
+      URL.revokeObjectURL(url);
+      if (onDone) onDone();
+    };
+    audio.onerror = () => { speaking = false; URL.revokeObjectURL(url); if (onDone) onDone(); };
+    audio.play().catch(() => { speaking = false; if (onDone) onDone(); });
+  } catch(e) {
+    speaking = false;
+    if (onDone) onDone();
+  }
+}
+
+// ── Mic capture & silence detection ──────────────────────────────────────
+async function startRecording() {
+  if (isRecording || speaking) return;
+  try {
+    if (!micStream) {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(micStream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+
+    audioChunks = [];
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus' : 'audio/webm';
+    mediaRecorder = new MediaRecorder(micStream, { mimeType });
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+    mediaRecorder.onstop = sendRecordingToServer;
+    mediaRecorder.start(100);
+    isRecording = true;
+
+    const pttBtn = document.getElementById('pttBtn');
+    pttBtn.classList.add('recording');
+    pttBtn.textContent = '●';
+    setOrbState('listening');
+
+    startSilenceDetection();
+  } catch(e) {
+    setStatus('Mic error: ' + e.message);
+    console.error('Mic error:', e);
+  }
+}
+
+function stopRecording() {
+  if (!isRecording) return;
+  isRecording = false;
+  clearTimeout(silenceTimer);
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  const pttBtn = document.getElementById('pttBtn');
+  pttBtn.classList.remove('recording');
+  pttBtn.textContent = '🎤';
+  setOrbState('thinking');
+}
+
+function startSilenceDetection() {
+  const buf = new Float32Array(analyser.fftSize);
+  function check() {
+    if (!isRecording) return;
+    analyser.getFloatTimeDomainData(buf);
+    let rms = 0;
+    for (let i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
+    rms = Math.sqrt(rms / buf.length);
+    if (rms < silenceThreshold) {
+      if (!silenceTimer) {
+        silenceTimer = setTimeout(() => {
+          if (isRecording) stopRecording();
+        }, silenceMs);
+      }
+    } else {
+      clearTimeout(silenceTimer);
+      silenceTimer = null;
+    }
+    if (isRecording) requestAnimationFrame(check);
+  }
+  requestAnimationFrame(check);
+}
+
+async function sendRecordingToServer() {
+  if (audioChunks.length === 0 || !wsReady) return;
+  setOrbState('thinking');
+  try {
+    const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+    const arrayBuf = await blob.arrayBuffer();
+    localWS.send(arrayBuf);
+  } catch(e) {
+    console.error('Failed to send audio:', e);
+    setOrbState('ambient');
+  }
+  audioChunks = [];
+}
+
+// ── Continued conversation mode ───────────────────────────────────────────
+let autoListenTimer = null;
+function scheduleAutoListen() {
+  if (!convMode || speaking) return;
+  clearTimeout(autoListenTimer);
+  autoListenTimer = setTimeout(() => {
+    if (convMode && !speaking && !isRecording) startRecording();
+  }, 600);
+}
+
+function toggleConvMode() {
+  convMode = !convMode;
+  const badge = document.getElementById('convBadge');
+  badge.classList.toggle('active', convMode);
+  if (convMode) {
+    setStatus('Conversation mode — speak, Zoe replies, mic reopens');
+    scheduleAutoListen();
+  } else {
+    clearTimeout(autoListenTimer);
+    setStatus('');
     setOrbState('ambient');
   }
 }
 
-// ── LIVEKIT mode: WebRTC real-time voice ─────────────────────────────────
-let livekitRoom = null;
+// ── PTT button wiring ─────────────────────────────────────────────────────
+function showPttButton() {
+  const btn = document.getElementById('pttBtn');
+  btn.style.display = 'flex';
 
-async function connectLiveKit() {
-  setStatus('Connecting…');
-  try {
-    // Fetch access token for this user from our backend
-    const resp = await fetch('/api/voice/livekit-token', {
-      headers: { 'X-Session-ID': getSessionId() }
-    });
-    if (!resp.ok) {
-      setStatus('LiveKit not configured yet — using local mode');
-      connectLocalVoice();
-      return;
-    }
-    const { token, url } = await resp.json();
-
-    if (typeof LivekitClient === 'undefined') {
-      setStatus('LiveKit client not loaded');
-      console.error('livekit-client.umd.min.js not loaded');
-      return;
-    }
-
-    livekitRoom = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
-
-    livekitRoom.on(LivekitClient.RoomEvent.ParticipantSpeaking, (participant, speaking) => {
-      if (participant.isLocal) return;
-      setOrbState(speaking ? 'responding' : 'ambient');
-    });
-
-    livekitRoom.on(LivekitClient.RoomEvent.DataReceived, (data) => {
-      try {
-        const msg = JSON.parse(new TextDecoder().decode(data));
-        if (msg.type === 'agui') showAguiCard(msg.data);
-        if (msg.type === 'transcript') addTranscriptLine(msg.role, msg.text);
-      } catch(e) {}
-    });
-
-    livekitRoom.on(LivekitClient.RoomEvent.Disconnected, () => {
-      setStatus('Disconnected');
-      setOrbState('ambient');
-      setTimeout(connectLiveKit, 5000);
-    });
-
-    await livekitRoom.connect(url, token);
-    await livekitRoom.localParticipant.setMicrophoneEnabled(true);
-
-    setOrbState('ambient');
-    setStatus('Connected — speak to Zoe');
-  } catch(e) {
-    console.error('LiveKit connect error:', e);
-    setStatus('LiveKit unavailable — switching to local mode');
-    connectLocalVoice();
-  }
+  // Touch events for mobile hold-to-talk
+  btn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); }, { passive: false });
+  btn.addEventListener('touchend',   (e) => { e.preventDefault(); if (isRecording) stopRecording(); }, { passive: false });
+  // Mouse events for desktop
+  btn.addEventListener('mousedown', (e) => { e.preventDefault(); startRecording(); });
+  btn.addEventListener('mouseup',   (e) => { e.preventDefault(); if (isRecording) stopRecording(); });
+  btn.addEventListener('mouseleave',(e) => { if (isRecording) stopRecording(); });
+  // Long-press (1s) to toggle conversation mode
+  let longPressTimer = null;
+  btn.addEventListener('touchstart', () => {
+    longPressTimer = setTimeout(() => { toggleConvMode(); }, 1000);
+  }, { passive: true });
+  btn.addEventListener('touchend', () => clearTimeout(longPressTimer), { passive: true });
 }
 
 // ── Start voice session ───────────────────────────────────────────────────
 function startVoice() {
   document.getElementById('tapOverlay').style.display = 'none';
-  if (MODE === 'livekit') {
-    connectLiveKit();
-  } else {
-    connectLocalVoice();
-  }
+  connectLocalVoice();
 }
 
-// ── Keyboard shortcut: Space to force wake ────────────────────────────────
+// ── Keyboard shortcuts ────────────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && !e.repeat) {
-    if (document.getElementById('tapOverlay').style.display !== 'none') {
-      startVoice();
-    }
+    const overlay = document.getElementById('tapOverlay');
+    if (overlay.style.display !== 'none') { startVoice(); return; }
+    startRecording();
   }
+  if (e.code === 'KeyC' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); toggleConvMode(); }
+});
+document.addEventListener('keyup', (e) => {
+  if (e.code === 'Space') { if (isRecording) stopRecording(); }
 });
 
-// Auto-start on non-iOS devices (iOS requires a tap for audio)
+// Auto-start on non-iOS (iOS requires a tap for AudioContext unlock)
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-if (!isIOS) {
-  startVoice();
-}
+if (!isIOS) { startVoice(); }
 
-// ── Broadcast channel: listen for voice events from service worker ────────
+// ── Broadcast channel: voice events from service worker ──────────────────
 try {
   const bc = new BroadcastChannel('zoe-voice');
   bc.onmessage = (ev) => handleVoiceEvent(ev.data || {});
 } catch(e) {}
 </script>
 
-<!-- LiveKit client (loaded last, only needed for livekit mode) -->
-<script src="/lib/livekit/livekit-client.umd.min.js" onerror="console.warn('LiveKit client not loaded')"></script>
+<!-- LiveKit client (optional; only needed for livekit mode) -->
+<script src="/lib/livekit/livekit-client.umd.min.js" onerror="console.warn('LiveKit client not loaded - using local mode')"></script>
 
 </body>
 </html>

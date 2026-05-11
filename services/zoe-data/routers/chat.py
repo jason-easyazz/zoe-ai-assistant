@@ -15,6 +15,7 @@ Tiered architecture (Jetson + Pi):
 import asyncio
 import json
 import logging
+import pathlib
 import re
 import time
 import uuid
@@ -383,6 +384,211 @@ _WHATSAPP_FLOW_ENABLED = os.environ.get("WHATSAPP_FLOW_ENABLED", "true").lower()
 _OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW",
     os.environ.get("OPENCLAW_GATEWAY_URL", "http://127.0.0.1:18789"))
 _BROWSER_BROKER = create_default_browser_broker(_OPENCLAW_GW)
+
+# ── ChatGPT / OpenAI Codex device-code OAuth constants ────────────────────────
+_CODEX_CLIENT_ID    = "app_EMoamEEZ73f0CkXaXp7hrann"
+_CODEX_AUTH_BASE    = "https://auth.openai.com"
+_CODEX_USERCODE_URL = f"{_CODEX_AUTH_BASE}/api/accounts/deviceauth/usercode"
+_CODEX_POLL_URL     = f"{_CODEX_AUTH_BASE}/api/accounts/deviceauth/token"
+_CODEX_TOKEN_URL    = f"{_CODEX_AUTH_BASE}/oauth/token"
+_CODEX_CALLBACK_URL = f"{_CODEX_AUTH_BASE}/deviceauth/callback"
+_CODEX_VERIFY_URL   = f"{_CODEX_AUTH_BASE}/codex/device"
+_CODEX_AUTH_PROFILES_PATH = os.path.expanduser(
+    "~/.openclaw/agents/main/agent/auth-profiles.json"
+)
+
+
+_HERMES_AUTH_PATH = pathlib.Path.home() / ".hermes" / "auth.json"
+
+
+async def _write_hermes_codex_token(access_token: str, refresh_token: str = "") -> bool:
+    """Write ChatGPT OAuth tokens to Hermes auth store (~/.hermes/auth.json)."""
+    import datetime
+    try:
+        auth_data: dict = {}
+        if _HERMES_AUTH_PATH.exists():
+            auth_data = json.loads(_HERMES_AUTH_PATH.read_text())
+        auth_data.setdefault("version", 1)
+        auth_data.setdefault("providers", {})
+        auth_data["providers"]["openai-codex"] = {
+            "tokens": {
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+            },
+            "last_refresh": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
+            "auth_mode": "chatgpt",
+        }
+        _HERMES_AUTH_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _HERMES_AUTH_PATH.write_text(json.dumps(auth_data, indent=2))
+        _HERMES_AUTH_PATH.chmod(0o600)
+        logger.info("Hermes codex token written to %s", _HERMES_AUTH_PATH)
+        return True
+    except Exception as exc:
+        logger.warning("Failed to write Hermes codex token: %s", exc)
+        return False
+
+
+async def _restart_hermes() -> None:
+    """Restart hermes-agent systemd user service so it picks up the new token."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl", "--user", "restart", "hermes-agent.service",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.wait(), timeout=10)
+        logger.info("hermes-agent.service restarted after token write")
+    except Exception as exc:
+        logger.warning("Hermes restart after token write failed: %s", exc)
+
+
+async def _chatgpt_connect_flow(emit, enc, recorder, assistant_message_id, tool_call_id, label):  # noqa: ARG001
+    """Full OpenAI Codex device-code OAuth flow, streamed as AG-UI events.
+
+    Phases emitted via zoe.chatgpt_connect custom events:
+      verify  – show verification URL + user code to the user
+      waiting – heartbeat while polling (every poll interval)
+      success – tokens saved, include email
+      timeout – 15-minute deadline passed without authorization
+      error   – unexpected error, include message
+    """
+    import base64
+    import httpx
+
+    _hdrs = {
+        "Content-Type": "application/json",
+        "originator": "openclaw",
+        "User-Agent": "openclaw",
+    }
+
+    # ── Step 1: request device code ──────────────────────────────────────────
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                _CODEX_USERCODE_URL, json={"client_id": _CODEX_CLIENT_ID}, headers=_hdrs
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        yield emit(CustomEvent(name="zoe.chatgpt_connect", value={"phase": "error", "message": str(exc)}))
+        return
+
+    device_auth_id = data.get("device_auth_id", "")
+    user_code = data.get("user_code", "")
+    interval_sec = int(data.get("interval", 5))
+
+    if not device_auth_id or not user_code:
+        yield emit(CustomEvent(name="zoe.chatgpt_connect", value={"phase": "error", "message": "OpenAI did not return a device code."}))
+        return
+
+    # ── Step 2: show card (card renders into message bubble — no text message) ─
+    yield emit(CustomEvent(name="zoe.chatgpt_connect", value={
+        "phase": "verify",
+        "url": _CODEX_VERIFY_URL,
+        "code": user_code,
+        "expires_in_minutes": 15,
+    }))
+
+    # ── Step 3: poll for authorization ───────────────────────────────────────
+    deadline = asyncio.get_event_loop().time() + 900  # 15 minutes
+    authorization_code = None
+    code_verifier = None
+
+    while asyncio.get_event_loop().time() < deadline:
+        await asyncio.sleep(interval_sec)
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                poll_resp = await client.post(
+                    _CODEX_POLL_URL,
+                    json={"device_auth_id": device_auth_id, "user_code": user_code},
+                    headers=_hdrs,
+                )
+            if poll_resp.status_code == 200:
+                body = poll_resp.json()
+                authorization_code = body.get("authorization_code")
+                code_verifier = body.get("code_verifier")
+                if authorization_code and code_verifier:
+                    break
+            # 403/404 = pending — keep polling
+        except Exception:
+            pass
+        yield emit(CustomEvent(name="zoe.chatgpt_connect", value={"phase": "waiting"}))
+
+    if not authorization_code:
+        yield emit(CustomEvent(name="zoe.chatgpt_connect", value={"phase": "timeout"}))
+        return
+
+    # ── Step 4: exchange for tokens ───────────────────────────────────────────
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            tok_resp = await client.post(
+                _CODEX_TOKEN_URL,
+                data={
+                    "grant_type": "authorization_code",
+                    "code": authorization_code,
+                    "redirect_uri": _CODEX_CALLBACK_URL,
+                    "client_id": _CODEX_CLIENT_ID,
+                    "code_verifier": code_verifier,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded", "originator": "openclaw", "User-Agent": "openclaw"},
+            )
+            tok_resp.raise_for_status()
+            tok = tok_resp.json()
+    except Exception as exc:
+        yield emit(CustomEvent(name="zoe.chatgpt_connect", value={"phase": "error", "message": f"Token exchange failed: {exc}"}))
+        return
+
+    access_token  = tok.get("access_token", "")
+    refresh_token = tok.get("refresh_token", "")
+    expires_in    = tok.get("expires_in", 3600)
+    expires_at_ms = int((time.time() + expires_in) * 1000)
+
+    # ── Step 5: decode email from JWT payload ─────────────────────────────────
+    email = None
+    try:
+        payload_b64 = access_token.split(".")[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        jd = json.loads(base64.urlsafe_b64decode(payload_b64).decode())
+        email = jd.get("email") or jd.get("sub")
+    except Exception:
+        pass
+
+    # ── Step 6: persist to ~/.openclaw/agents/main/agent/auth-profiles.json ──
+    profile_id = f"openai-codex:{email}" if email else "openai-codex:default"
+    os.makedirs(os.path.dirname(_CODEX_AUTH_PROFILES_PATH), exist_ok=True)
+    try:
+        store: dict = {}
+        if os.path.exists(_CODEX_AUTH_PROFILES_PATH):
+            with open(_CODEX_AUTH_PROFILES_PATH) as _f:
+                store = json.load(_f)
+        store.setdefault("version", 1)
+        store.setdefault("profiles", {})[profile_id] = {
+            "profileId": profile_id,
+            "credential": {
+                "type": "oauth",
+                "provider": "openai-codex",
+                "access": access_token,
+                "refresh": refresh_token,
+                "expires": expires_at_ms,
+                **({"email": email} if email else {}),
+            },
+        }
+        with open(_CODEX_AUTH_PROFILES_PATH, "w") as _f:
+            json.dump(store, _f, indent=2)
+        os.chmod(_CODEX_AUTH_PROFILES_PATH, 0o600)
+    except Exception as exc:
+        yield emit(CustomEvent(name="zoe.chatgpt_connect", value={"phase": "error", "message": f"Failed to save credentials: {exc}"}))
+        return
+
+    # ── Step 6b: persist to ~/.hermes/auth.json (openai-codex provider) ─────
+    hermes_ok = await _write_hermes_codex_token(access_token, refresh_token)
+    if hermes_ok:
+        await _restart_hermes()
+
+    # ── Step 7: success ───────────────────────────────────────────────────────
+    services_note = "OpenClaw and Hermes are now using your ChatGPT account." if hermes_ok else "OpenClaw is now using your ChatGPT account."
+    yield emit(CustomEvent(name="zoe.chatgpt_connect", value={"phase": "success", "email": email or "your account", "services_note": services_note}))
+    logger.info("ChatGPT OAuth connected: profile_id=%s hermes_ok=%s", profile_id, hermes_ok)
 
 # Per-session concurrency guard: only one OpenClaw turn runs per session at a time.
 # If a second request arrives for the same session while one is running, it waits
@@ -1226,6 +1432,25 @@ async def chat_stream_generator(
                     asyncio.ensure_future(_save_chat_message(session_id, "assistant", _blurb))
                 return  # skip the standard execute_intent path
 
+            # ── ChatGPT connect: full device-code OAuth flow inline ────────────
+            if intent.name == "connect_chatgpt":
+                logger.info("intent_outcome=chatgpt_connect_flow")
+                yield emit(
+                    ToolCallResultEvent(
+                        type=EventType.TOOL_CALL_RESULT,
+                        message_id=assistant_message_id,
+                        tool_call_id=tool_call_id,
+                        content=json.dumps({"status": "chatgpt_connect_started"}),
+                        role="tool",
+                    )
+                )
+                yield emit(StepFinishedEvent(type=EventType.STEP_FINISHED, step_name=label))
+                async for event in _chatgpt_connect_flow(emit, enc, recorder, assistant_message_id, tool_call_id, label):
+                    yield event
+                yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
+                await _record_run_state(run_id, session_id, user_id, mode="chat", status="completed", request_text=message, response_text="chatgpt_connect_flow")
+                return
+
             result = await execute_intent(intent, user_id)
 
             if result:
@@ -1819,6 +2044,9 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             use_intent_fast_path = False
 
         intent = await detect_and_extract_intent(message_for_processing, user_id) if use_intent_fast_path else None
+        # Save original message before appending voice suffix; run_zoe_agent needs the
+        # clean text so _check_fast_response (greetings/acks) still matches correctly.
+        _original_message_for_agent = message_for_processing
         # Apply voice mode suffix AFTER intent detection so regex anchors ($) still match.
         if is_voice_mode and message_for_processing:
             try:
@@ -1851,10 +2079,13 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
             # Pi Agent loads MemPalace facts directly; non-streaming path passes None
             ns_db_memory = await _mempalace_load_user_facts(user_id)
             if _USE_ZOE_AGENT:
-                expanded_msg = openclaw_user_message(intent, message_for_processing) if intent else message_for_processing
+                # Use original (pre-suffix) message for agent so fast-path checks work
+                _agent_msg = _original_message_for_agent if is_voice_mode else message_for_processing
+                expanded_msg = openclaw_user_message(intent, _agent_msg) if intent else _agent_msg
                 response_text = await run_zoe_agent(
                     expanded_msg, session_id, user_id, db_memory_context=None,
                     max_tokens_override=voice_max_tokens,
+                    voice_mode=is_voice_mode,
                 )
                 # If Pi Agent signals escalation, route to OpenClaw
                 if response_text.startswith("__ESCALATE__:"):

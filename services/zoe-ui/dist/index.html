@@ -1078,12 +1078,12 @@
             setLoading(btn, true);
 
             try {
-                const response = await fetch('/api/auth/login', {
+                const response = await fetch('/api/auth/login/passcode', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         username,
-                        password: currentPin,
+                        passcode: currentPin,
                         device_info: {
                             type: 'web',
                             device_id: getDeviceId()

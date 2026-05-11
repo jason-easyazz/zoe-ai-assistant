@@ -1724,6 +1724,25 @@
     <!-- Service Worker Registration -->
     <script src="/js/sw-registration.js" defer></script>
     <link rel="stylesheet" href="css/dark-mode-shared.css">
+
+<style>
+/* iPhone notch / dynamic island safe area */
+@supports (padding: env(safe-area-inset-top)) {
+  body {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  .nav-bar, .top-bar, .header {
+    padding-top: max(10px, env(safe-area-inset-top));
+  }
+  .main-container, .main-content, .main-layout > div, .page-content {
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+  }
+  .bottom-nav, .footer, .fixed-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+</style>
 </head>
 <body>
     <!-- Navigation -->
@@ -1842,6 +1861,8 @@
     <div class="app-container month-view-active">
         <!-- Main Content -->
         <div class="main-content">
+            <!-- Note: This calendar shows Zoe-managed local events only. External calendar
+                 account sync (Google, Apple, etc.) is not connected in this version. -->
             <div class="content-header">
                 <div class="view-title" id="viewTitle">September 2025</div>
                 <div class="header-controls">

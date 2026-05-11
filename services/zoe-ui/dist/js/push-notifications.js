@@ -216,12 +216,15 @@
             await subscription.unsubscribe();
             console.log('✅ Unsubscribed from push service');
             
-            // Remove from backend
+            // Remove from backend (DELETE /api/push/subscribe with endpoint in body)
             const subscriptionJson = subscription.toJSON();
-            await fetch(`${API_BASE}/unsubscribe`, {
-                method: 'POST',
+            const sessionToken = document.cookie.match(/access_token=([^;]+)/)?.[1]
+                              || localStorage.getItem('access_token') || '';
+            await fetch(`${API_BASE}/subscribe`, {
+                method: 'DELETE',
                 headers: {
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    ...(sessionToken ? { 'Authorization': 'Bearer ' + sessionToken } : {}),
                 },
                 body: JSON.stringify({
                     endpoint: subscriptionJson.endpoint
@@ -274,37 +277,6 @@
         }
     }
     
-    /**
-     * Send test notification
-     */
-    async function sendTestNotification() {
-        try {
-            const response = await fetch(`${API_BASE}/test`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    user_id: 'current',
-                    title: 'Test Notification 🔔',
-                    body: 'If you see this, push notifications are working!',
-                    url: '/dashboard.html'
-                })
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-            
-            const data = await response.json();
-            console.log('✅ Test notification sent:', data);
-            return data;
-            
-        } catch (error) {
-            console.error('❌ Failed to send test notification:', error);
-            throw error;
-        }
-    }
     
     /**
      * Auto-subscribe on page load — prompts if permission not yet decided.
@@ -353,7 +325,6 @@
         subscribe: subscribeToPush,
         unsubscribe: unsubscribeFromPush,
         isSubscribed: isSubscribed,
-        sendTest: sendTestNotification
     };
     
     // Initialize

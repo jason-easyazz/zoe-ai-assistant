@@ -2126,7 +2126,7 @@ async def voice_command(
     }
     try:
         from intent_router import detect_intent as _detect_pub, execute_intent as _exec_pub
-        _pub_intent = _detect_pub(text)
+        _pub_intent = _detect_pub(text, log_miss=False)
         if _pub_intent and _pub_intent.name in _PUBLIC_VOICE_INTENTS:
             if not await _can_use_voice_intent(db, _voice_policy_user, _pub_intent.name):
                 _record_guest_policy(
@@ -2196,7 +2196,7 @@ async def voice_command(
     # still resolve weather deterministically instead of dropping to generic LLM text.
     try:
         from intent_router import detect_intent as _detect_weather_fb, execute_intent as _exec_weather_fb
-        _weather_fb_intent = _detect_weather_fb(text)
+        _weather_fb_intent = _detect_weather_fb(text, log_miss=False)
         if _weather_fb_intent and _weather_fb_intent.name == "weather":
             _weather_fb_reply = await _exec_weather_fb(
                 _weather_fb_intent,
@@ -3240,6 +3240,48 @@ async def voice_profile_delete(profile_id: str, caller: dict = Depends(_require_
     except Exception as exc:
         logger.error("voice/profiles delete error: %s", exc)
         raise HTTPException(status_code=500, detail="DB error") from exc
+
+
+@router.get("/chatgpt-auth-status")
+async def chatgpt_auth_status():
+    """Stub: ChatGPT voice auth status (not connected)."""
+    return {"status": "not_connected"}
+
+
+@router.get("/livekit-token")
+async def get_livekit_token(user: dict = Depends(get_current_user)):
+    """Mint a LiveKit join token for the voice page.
+
+    Returns {"token": "<jwt>", "url": "<ws url>"}.  The token is a standard
+    HS256 JWT with LiveKit video-grant claims — no livekit-api package required.
+    """
+    import time as _time
+    import uuid as _uuid
+    import jwt as _jwt
+
+    api_key = os.environ.get("LIVEKIT_API_KEY", "").strip()
+    api_secret = os.environ.get("LIVEKIT_API_SECRET", "").strip()
+    livekit_url = os.environ.get("LIVEKIT_URL", "ws://127.0.0.1:7880").strip()
+
+    if not api_key or not api_secret:
+        raise HTTPException(status_code=503, detail="LiveKit credentials not configured")
+
+    user_id = user.get("user_id", "voice-guest")
+    now = int(_time.time())
+    payload = {
+        "exp": now + 3600,
+        "iss": api_key,
+        "sub": user_id,
+        "jti": _uuid.uuid4().hex,
+        "video": {
+            "roomJoin": True,
+            "room": "zoe-voice",
+            "canPublish": True,
+            "canSubscribe": True,
+        },
+    }
+    token = _jwt.encode(payload, api_secret, algorithm="HS256")
+    return {"token": token, "url": livekit_url}
 
 
 # ── Voice confirmation state ───────────────────────────────────────────────

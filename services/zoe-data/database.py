@@ -7,6 +7,39 @@ from contextlib import asynccontextmanager
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("ZOE_DATA_DB", os.path.join(_BASE_DIR, "zoe.db"))
 
+async def log_music_event(
+    user_id: str,
+    event_type: str,
+    query: str = "",
+    track_title: str = "",
+    artist: str = "",
+    album: str = "",
+    genre: str = "",
+    source: str = "",
+    volume_level=None,
+    session_id: str = "",
+    percent_played=None,
+    duration_seconds=None,
+) -> None:
+    """Record a music playback event for taste learning. Never raises."""
+    import time as _time
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """INSERT INTO music_listening_events
+                   (user_id, event_type, track_title, artist, album, genre,
+                    source, query, volume_level, session_id, ts,
+                    percent_played, duration_seconds)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (user_id, event_type, track_title, artist, album, genre,
+                 source, query, volume_level, session_id, _time.time(),
+                 percent_played, duration_seconds),
+            )
+            await db.commit()
+    except Exception:
+        pass  # logging must never crash a music command
+
+
 async def get_db():
     db = await aiosqlite.connect(DB_PATH)
     db.row_factory = aiosqlite.Row
@@ -34,6 +67,14 @@ async def init_db():
             pass  # column already exists
         try:
             await db.execute("ALTER TABLE proactive_scheduled ADD COLUMN item_id TEXT DEFAULT ''")
+        except Exception:
+            pass  # column already exists
+        try:
+            await db.execute("ALTER TABLE music_listening_events ADD COLUMN percent_played REAL")
+        except Exception:
+            pass  # column already exists
+        try:
+            await db.execute("ALTER TABLE music_listening_events ADD COLUMN duration_seconds REAL")
         except Exception:
             pass  # column already exists
         await db.execute(
@@ -656,4 +697,25 @@ CREATE TABLE IF NOT EXISTS proactive_scheduled (
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
 CREATE INDEX IF NOT EXISTS idx_proactive_scheduled_user ON proactive_scheduled(user_id, fired);
+
+-- Music taste learning: raw playback events consolidated nightly into MemPalace preferences.
+CREATE TABLE IF NOT EXISTS music_listening_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,       -- 'play', 'skip', 'skip_fast', 'volume_change', 'now_playing', 'repeat'
+    track_title TEXT,
+    artist TEXT,
+    album TEXT,
+    genre TEXT,
+    source TEXT,                    -- 'spotify', 'youtube_music', 'radio', etc.
+    query TEXT,                     -- original search query e.g. "some jazz"
+    volume_level INTEGER,           -- for volume_change events
+    session_id TEXT,
+    ts REAL NOT NULL,               -- unix timestamp
+    percent_played REAL,            -- 0.0-1.0, null if unknown
+    duration_seconds REAL,          -- track duration in seconds
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_mle_user_ts ON music_listening_events(user_id, ts);
+CREATE INDEX IF NOT EXISTS idx_mle_user_event ON music_listening_events(user_id, event_type);
 """

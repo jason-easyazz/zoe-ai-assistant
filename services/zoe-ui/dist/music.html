@@ -2,7 +2,6 @@
 <html lang="en">
 <head>
     <script>
-    // Apply saved theme before first paint to prevent flash (ported from touch).
     (function () {
         try {
             var s = localStorage.getItem('zoe_theme') || 'auto';
@@ -10,271 +9,675 @@
             var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
             if (dark) document.documentElement.classList.add('dark-mode');
             var mc = document.querySelector('meta[name="theme-color"]');
-            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
+            if (mc) mc.content = dark ? '#060610' : '#f2f2f7';
         } catch (e) {}
     })();
     </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <meta name="theme-color" content="#fafbfc">
-    <!-- Zoe theme bootstrap (must run before UI scripts) -->
-    <script>
-    (function(){
-        try {
-            var s = localStorage.getItem('zoe_theme') || 'auto';
-            var h = new Date().getHours();
-            var dark = s === 'dark' || (s === 'auto' && (h < 7 || h >= 19));
-            if (dark) document.documentElement.classList.add('dark-mode');
-            var mc = document.querySelector('meta[name=theme-color]');
-            if (mc) mc.content = dark ? '#060610' : '#fafbfc';
-        } catch(e) {}
-    })();
-    </script>
+    <meta name="theme-color" content="#f2f2f7">
     <title>Zoe - Music</title>
-
     <style>
-        /* ------------------------------------------------------------------
-         * Shared nav + overlay styles (bundled inline because the referenced
-         * css/dashboard.css / css/navigation.css files do not exist in
-         * services/zoe-ui/dist/css/ — keeping everything self-contained
-         * avoids an unstyled nav bar on this page.
-         * ------------------------------------------------------------------ */
-        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        /* ── Reset ─────────────────────────────────────────────────────────── */
+        *, *::before, *::after {
+            margin: 0; padding: 0; box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
 
+        /* ── CSS Variables (light-mode defaults) ────────────────────────────── */
+        :root {
+            --primary: #7B61FF;
+            --secondary: #5AE0E0;
+            --accent-glow: rgba(123, 97, 255, 0.4);
+            /* Light mode */
+            --bg: #f2f2f7;
+            --bg2: #ffffff;
+            --card: rgba(255, 255, 255, 0.90);
+            --card-border: rgba(0, 0, 0, 0.08);
+            --text1: #1c1c1e;
+            --text2: #6e6e73;
+            --text3: #aeaeb2;
+            --nav-bg: rgba(242, 242, 247, 0.88);
+            --nav-border: rgba(0, 0, 0, 0.08);
+            --art-overlay-start: rgba(242, 242, 247, 0.55);
+            --art-overlay-end:   rgba(242, 242, 247, 0.88);
+        }
+
+        /* ── Dark mode overrides ─────────────────────────────────────────────── */
+        html.dark-mode {
+            --bg: #060610;
+            --bg2: #0d0d1a;
+            --card: rgba(20, 20, 33, 0.82);
+            --card-border: rgba(255, 255, 255, 0.08);
+            --text1: #e5e7eb;
+            --text2: #a1a1aa;
+            --text3: #52526b;
+            --nav-bg: rgba(6, 6, 16, 0.85);
+            --nav-border: rgba(255, 255, 255, 0.08);
+            --art-overlay-start: rgba(6, 6, 16, 0.55);
+            --art-overlay-end:   rgba(6, 6, 16, 0.88);
+        }
+
+        /* ── Base ───────────────────────────────────────────────────────────── */
+        html, body {
+            height: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text1);
+            font-size: 14px;
+            overflow-x: hidden;
+        }
+
+        /* ── Art background blur ────────────────────────────────────────────── */
+        #artBg {
+            position: fixed;
+            inset: -40px;
+            background-size: cover;
+            background-position: center;
+            filter: blur(70px) saturate(1.6) brightness(0.55);
+            transform: scale(1.15);
+            opacity: 0;
+            transition: background-image 1.2s ease, opacity 1s ease;
+            z-index: 0;
+            pointer-events: none;
+        }
+        #artBg.visible { opacity: 1; }
+        #artOverlay {
+            position: fixed;
+            inset: 0;
+            background: linear-gradient(to bottom,
+                var(--art-overlay-start) 0%,
+                var(--art-overlay-end)   100%);
+            z-index: 1;
+            pointer-events: none;
+        }
+
+        /* ── Nav Bar ────────────────────────────────────────────────────────── */
         .nav-bar {
-            position: fixed; top: 0; left: 0; right: 0; background: rgba(255, 255, 255, 0.8);
-            backdrop-filter: blur(20px); border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-            padding: 10px 15px; z-index: 100; display: flex; justify-content: space-between;
-            align-items: center; height: 60px;
+            position: fixed; top: 0; left: 0; right: 0;
+            background: var(--nav-bg);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--nav-border);
+            padding: 10px 15px;
+            z-index: 100;
+            display: flex; justify-content: space-between; align-items: center;
+            height: 60px;
         }
         .nav-left { display: flex; align-items: center; gap: 15px; }
         .mini-orb {
             width: 32px; height: 32px; border-radius: 50%;
             background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
-            cursor: pointer; transition: all 0.3s ease; min-width: 44px; min-height: 44px;
+            cursor: pointer; transition: transform 0.3s ease;
+            min-width: 44px; min-height: 44px;
+            display: flex; align-items: center; justify-content: center;
         }
         .mini-orb:hover { transform: scale(1.1); }
         .nav-menu { display: flex; gap: 20px; }
         .nav-item {
-            color: #666; text-decoration: none; font-size: 13px; font-weight: 400;
+            color: var(--text2); text-decoration: none; font-size: 13px; font-weight: 400;
             transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
             min-height: 44px; display: flex; align-items: center;
         }
-        .nav-item:hover, .nav-item.active { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .nav-item:hover, .nav-item.active { color: var(--primary); background: rgba(123,97,255,0.1); }
         .nav-right { display: flex; align-items: center; gap: 10px; }
         .more-nav-btn {
-            color: #666; background: none; border: none; font-size: 13px; font-weight: 400;
+            color: var(--text2); background: none; border: none; font-size: 13px; font-weight: 400;
             transition: all 0.3s ease; padding: 8px 12px; border-radius: 6px;
             min-height: 44px; display: flex; align-items: center; cursor: pointer;
         }
-        .more-nav-btn:hover { color: #7B61FF; background: rgba(123, 97, 255, 0.1); }
+        .more-nav-btn:hover { color: var(--primary); background: rgba(123,97,255,0.1); }
         .notifications-btn {
-            background: rgba(255, 255, 255, 0.6); border: 1px solid rgba(255, 255, 255, 0.3);
-            border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center;
-            justify-content: center; cursor: pointer; transition: all 0.3s ease; color: #666;
-            font-size: 16px; font-weight: bold; position: relative;
+            background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 50%; width: 32px; height: 32px;
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; transition: all 0.3s ease; color: var(--text2);
+            font-size: 16px;
         }
-        .notifications-btn:hover { background: rgba(255, 255, 255, 0.8); color: #333; }
-        .api-indicator { font-size: 12px; padding: 4px 8px; border-radius: 8px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
-        .api-indicator.online { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
-        .api-indicator.offline { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
-        .api-indicator.warning { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
-        .api-indicator.connecting { background: rgba(251, 146, 60, 0.1); color: #ea580c; }
-        .api-indicator::before { content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-        .api-indicator.online::before { background: #22c55e; }
+        .notifications-btn:hover { background: rgba(255,255,255,0.12); color: var(--text1); }
+        .api-indicator {
+            font-size: 12px; padding: 4px 8px; border-radius: 8px;
+            font-weight: 500; display: flex; align-items: center; gap: 6px;
+        }
+        .api-indicator::before {
+            content: ''; width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+        }
+        .api-indicator.online  { background: rgba(34,197,94,0.1); color: #22c55e; }
+        .api-indicator.online::before  { background: #22c55e; }
+        .api-indicator.offline { background: rgba(239,68,68,0.1); color: #ef4444; }
         .api-indicator.offline::before { background: #ef4444; }
-        .api-indicator.warning::before { background: #ea580c; }
-        .api-indicator.connecting::before { background: #ea580c; }
+        .api-indicator.connecting, .api-indicator.warning {
+            background: rgba(251,146,60,0.1); color: #ea580c;
+        }
+        .api-indicator.connecting::before, .api-indicator.warning::before { background: #ea580c; }
         .time-date-display {
             display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
-            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
         }
-        .current-time { font-size: 16px; font-weight: 500; color: #333; line-height: 1.2; }
-        .current-date { font-size: 11px; color: #666; line-height: 1.2; }
+        .current-time { font-size: 16px; font-weight: 500; color: var(--text1); line-height: 1.2; }
+        .current-date { font-size: 11px; color: var(--text2); line-height: 1.2; }
 
+        /* ── More Overlay ───────────────────────────────────────────────────── */
         .more-overlay {
-            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px);
-            display: none; align-items: center; justify-content: center; z-index: 3000;
-            opacity: 0; transition: all 0.3s ease;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.5); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center;
+            z-index: 3000; opacity: 0; transition: opacity 0.3s ease;
         }
         .more-overlay.active { display: flex; opacity: 1; }
         .more-content {
-            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(60px);
-            border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px;
+            background: var(--card); backdrop-filter: blur(60px);
+            border: 1px solid var(--card-border); border-radius: 20px;
             padding: 40px; max-width: 500px; width: 90%; position: relative;
-            transform: scale(0.8); transition: transform 0.3s ease;
+            transform: scale(0.9); transition: transform 0.3s ease;
         }
         .more-overlay.active .more-content { transform: scale(1); }
         .more-header { text-align: center; margin-bottom: 30px; }
         .more-title {
-            font-size: 24px; font-weight: 300; color: #333; margin-bottom: 10px;
+            font-size: 24px; font-weight: 300;
             background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
             background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent;
         }
         .more-close {
             position: absolute; top: 15px; right: 15px;
-            background: rgba(255, 255, 255, 0.6); border: none;
+            background: rgba(255,255,255,0.08); border: none;
             border-radius: 50%; width: 36px; height: 36px;
-            font-size: 18px; cursor: pointer; color: #666;
+            font-size: 18px; cursor: pointer; color: var(--text2);
         }
         .more-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
         .more-item {
-            background: rgba(255, 255, 255, 0.8); border: 1px solid rgba(255, 255, 255, 0.4);
+            background: rgba(128,128,128,0.08); border: 1px solid var(--card-border);
             border-radius: 16px; padding: 24px; text-align: center; cursor: pointer;
-            transition: all 0.3s ease; min-height: 120px; display: flex;
-            flex-direction: column; align-items: center; justify-content: center;
+            transition: all 0.3s ease; min-height: 120px;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            color: var(--text1);
         }
-        .more-item:hover {
+        .more-item:hover, .more-item.active {
             background: linear-gradient(135deg, #7B61FF 0%, #5AE0E0 100%);
             color: white; transform: translateY(-4px);
         }
         .more-item-icon { font-size: 36px; margin-bottom: 12px; }
         .more-item-label { font-size: 15px; font-weight: 500; }
 
+        /* ── Mobile Nav ─────────────────────────────────────────────────────── */
         .mobile-nav-menu {
             position: fixed; top: 0; left: -280px; width: 280px; height: 100vh;
-            background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(20px);
-            border-right: 1px solid rgba(255, 255, 255, 0.3); z-index: 2000;
-            transition: left 0.3s ease; display: flex; flex-direction: column;
+            background: var(--nav-bg); backdrop-filter: blur(20px);
+            border-right: 1px solid var(--nav-border);
+            z-index: 2000; transition: left 0.3s ease;
+            display: flex; flex-direction: column;
         }
         .mobile-nav-menu.open { left: 0; }
         .mobile-nav-header {
-            padding: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 20px; border-bottom: 1px solid rgba(255,255,255,0.08);
             display: flex; justify-content: space-between; align-items: center;
         }
-        .mobile-nav-header h3 { margin: 0; font-size: 20px; font-weight: 600; color: #333; }
+        .mobile-nav-header h3 { margin: 0; font-size: 20px; font-weight: 600; color: var(--text1); }
         .mobile-nav-close {
             width: 40px; height: 40px; border-radius: 50%; border: none;
-            background: rgba(255, 255, 255, 0.3); color: #666; font-size: 24px;
+            background: rgba(255,255,255,0.08); color: var(--text2); font-size: 24px;
             cursor: pointer; display: flex; align-items: center; justify-content: center;
         }
         .mobile-nav-content { flex: 1; overflow-y: auto; padding: 10px; }
         .mobile-nav-item {
             display: flex; align-items: center; gap: 12px; padding: 16px; margin: 4px 0;
-            color: #666; text-decoration: none; font-size: 16px; font-weight: 500;
+            color: var(--text2); text-decoration: none; font-size: 16px; font-weight: 500;
             border-radius: 12px; transition: all 0.3s ease;
         }
-        .mobile-nav-item.active { background: rgba(123, 97, 255, 0.15); color: #7B61FF; font-weight: 600; }
+        .mobile-nav-item.active { background: rgba(123,97,255,0.15); color: var(--primary); font-weight: 600; }
         .mobile-nav-item.logout { color: #ff4444; }
-        .mobile-nav-divider { height: 1px; background: rgba(255, 255, 255, 0.3); margin: 10px 0; }
+        .mobile-nav-divider { height: 1px; background: rgba(255,255,255,0.08); margin: 10px 0; }
         .mobile-nav-overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0, 0, 0, 0.3); z-index: 1999; opacity: 0;
-            pointer-events: none; transition: opacity 0.3s ease;
+            position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+            z-index: 1999; opacity: 0; pointer-events: none; transition: opacity 0.3s ease;
         }
         .mobile-nav-overlay.open { opacity: 1; pointer-events: auto; }
 
-        @media (max-width: 768px) {
-            .nav-menu { display: none !important; }
-            .mini-orb { display: flex !important; }
-        }
-        @media (min-width: 769px) {
-            .mobile-nav-menu, .mobile-nav-overlay { display: none !important; }
-        }
+        @media (max-width: 768px) { .nav-menu { display: none !important; } }
+        @media (min-width: 769px) { .mobile-nav-menu, .mobile-nav-overlay { display: none !important; } }
 
-        html.dark-mode .nav-bar { background: rgba(15, 15, 30, 0.8); border-bottom-color: rgba(255,255,255,0.08); }
-        html.dark-mode .nav-item { color: #a1a1aa; }
-        html.dark-mode .current-time { color: #e5e7eb; }
-        html.dark-mode .current-date { color: #a1a1aa; }
-        html.dark-mode .notifications-btn { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.12); color: #e5e7eb; }
-        html.dark-mode .more-content { background: rgba(20,20,33,0.95); border-color: rgba(255,255,255,0.08); }
-        html.dark-mode .more-item { background: rgba(30,30,46,0.8); border-color: rgba(255,255,255,0.06); color: #e5e7eb; }
-        :root {
-            --primary: #7B61FF;
-            --secondary: #5AE0E0;
-            --text-primary: #333;
-            --text-secondary: #666;
-            --text-tertiary: #999;
-            --bg-primary: #fafbfc;
-            --bg-secondary: #f1f3f6;
-            --card-bg: rgba(255, 255, 255, 0.9);
-        }
-        html.dark-mode :root,
-        html.dark-mode {
-            --text-primary: #e5e7eb;
-            --text-secondary: #a1a1aa;
-            --text-tertiary: #71717a;
-            --bg-primary: #060610;
-            --bg-secondary: #0d0d1a;
-            --card-bg: rgba(20, 20, 33, 0.85);
-        }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
-            background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
-            min-height: 100vh;
-            color: var(--text-primary);
-            font-size: 14px;
-        }
+        /* ── Main Layout ────────────────────────────────────────────────────── */
         .main-container {
-            padding: 90px 24px 48px;
-            max-width: 820px;
+            position: relative; z-index: 2;
+            padding-top: calc(60px + env(safe-area-inset-top));
+            padding-bottom: calc(32px + env(safe-area-inset-bottom));
+            padding-left: calc(16px + env(safe-area-inset-left));
+            padding-right: calc(16px + env(safe-area-inset-right));
+            min-height: 100vh;
+            max-width: 900px;
             margin: 0 auto;
         }
-        .music-placeholder-card {
-            background: var(--card-bg);
-            border-radius: 20px;
-            padding: 48px 40px;
-            text-align: center;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
-            backdrop-filter: blur(14px);
-        }
-        .music-placeholder-icon {
-            font-size: 56px;
-            margin-bottom: 12px;
-        }
-        .music-placeholder-title {
-            font-size: 22px;
-            font-weight: 600;
-            margin-bottom: 10px;
-            background: linear-gradient(135deg, var(--primary), var(--secondary));
-            -webkit-background-clip: text;
-            background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        .music-placeholder-body {
-            font-size: 15px;
-            line-height: 1.6;
-            color: var(--text-secondary);
-            margin-bottom: 24px;
-        }
-        .music-placeholder-body strong { color: var(--text-primary); }
-        .music-actions {
+
+        /* ── Offline / Connecting State ─────────────────────────────────────── */
+        #offlineState {
             display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            justify-content: center;
-        }
-        .music-actions a,
-        .music-actions button {
-            display: inline-flex;
+            flex-direction: column;
             align-items: center;
-            gap: 8px;
-            padding: 12px 20px;
-            border-radius: 12px;
-            border: none;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            text-decoration: none;
-            transition: transform 0.15s ease, box-shadow 0.15s ease;
+            justify-content: center;
+            text-align: center;
+            padding: 60px 24px;
+            min-height: calc(100vh - 100px);
+            gap: 0;
         }
-        .music-actions .primary {
+        #offlineState.hidden { display: none; }
+        .offline-icon { font-size: 72px; margin-bottom: 24px; animation: pulse 2s ease-in-out infinite; }
+        @keyframes pulse { 0%,100%{ transform: scale(1); } 50%{ transform: scale(1.06); } }
+        .offline-title { font-size: 24px; font-weight: 700; color: var(--text1); margin-bottom: 12px; }
+        .offline-subtitle {
+            font-size: 15px; color: var(--text2); margin-bottom: 36px;
+            line-height: 1.6; max-width: 320px;
+        }
+        .offline-actions { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+        .btn-primary {
             background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
-            color: #fff;
-            box-shadow: 0 6px 18px rgba(123, 97, 255, 0.3);
+            border: none; border-radius: 14px; color: white;
+            font-size: 15px; font-weight: 600; padding: 14px 28px;
+            cursor: pointer;
+            box-shadow: 0 6px 24px var(--accent-glow);
+            transition: transform 0.15s, box-shadow 0.15s;
         }
-        .music-actions .secondary {
-            background: rgba(123, 97, 255, 0.12);
-            color: var(--primary);
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 32px var(--accent-glow); }
+        .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+        .btn-secondary {
+            background: rgba(123,97,255,0.12); border: 1px solid rgba(123,97,255,0.25);
+            border-radius: 14px; color: var(--primary);
+            font-size: 15px; font-weight: 600; padding: 14px 28px;
+            cursor: pointer; transition: background 0.15s;
         }
-        .music-actions a:hover,
-        .music-actions button:hover { transform: translateY(-1px); }
+        .btn-secondary:hover { background: rgba(123,97,255,0.2); }
+        .ma-status-badge {
+            display: inline-flex; align-items: center; gap: 6px;
+            font-size: 12px; color: var(--text3);
+            background: rgba(255,255,255,0.05); border-radius: 20px;
+            padding: 6px 14px; margin-bottom: 28px;
+        }
+        .status-dot {
+            width: 7px; height: 7px; border-radius: 50%;
+            background: #ef4444;
+            box-shadow: 0 0 6px #ef4444;
+        }
+        .status-dot.connecting { background: #f59e0b; box-shadow: 0 0 6px #f59e0b; animation: blink 1s step-end infinite; }
+        @keyframes blink { 50%{ opacity: 0; } }
+
+        /* ── Player Layout ──────────────────────────────────────────────────── */
+        #playerMain {
+            display: none;
+            gap: 20px;
+            padding-top: 24px;
+        }
+        #playerMain.visible { display: flex; flex-direction: column; }
+
+        @media (min-width: 700px) {
+            #playerMain.visible { flex-direction: row; align-items: flex-start; }
+            .now-playing-card { width: 360px; flex-shrink: 0; position: sticky; top: 80px; }
+            .queue-panel { flex: 1; min-width: 0; }
+        }
+
+        /* ── Now Playing Card ───────────────────────────────────────────────── */
+        .now-playing-card {
+            background: var(--card);
+            backdrop-filter: blur(40px);
+            border: 1px solid var(--card-border);
+            border-radius: 24px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0;
+        }
+
+        /* Album art */
+        .album-art-wrapper {
+            width: min(260px, calc(100vw - 80px));
+            aspect-ratio: 1;
+            border-radius: 18px;
+            overflow: hidden;
+            margin-bottom: 20px;
+            box-shadow: 0 24px 60px rgba(0,0,0,0.55);
+            background: rgba(255,255,255,0.04);
+            position: relative;
+        }
+        #albumArt {
+            width: 100%; height: 100%;
+            object-fit: cover;
+            display: none;
+            transition: opacity 0.6s ease;
+        }
+        #albumArt.loaded { display: block; }
+        .art-placeholder {
+            width: 100%; height: 100%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 80px;
+            background: linear-gradient(135deg, rgba(123,97,255,0.15), rgba(90,224,224,0.1));
+        }
+
+        /* Track info */
+        #trackInfoBlock {
+            text-align: center;
+            width: 100%;
+            margin-bottom: 16px;
+        }
+        #trackInfoBlock.track-anim {
+            animation: trackSlideIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        @keyframes trackSlideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        #trackTitle {
+            font-size: 18px; font-weight: 700; color: var(--text1);
+            margin-bottom: 4px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            max-width: 100%;
+        }
+        #trackArtist {
+            font-size: 14px; color: var(--text2); font-weight: 400;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            max-width: 100%;
+        }
+
+        /* Progress bar */
+        .progress-section { width: 100%; margin-bottom: 18px; }
+        #progressBarTrack {
+            width: 100%; height: 4px;
+            background: rgba(255,255,255,0.12);
+            border-radius: 2px; position: relative; cursor: pointer;
+            margin-bottom: 6px;
+        }
+        #progressBarTrack:hover { height: 6px; margin-bottom: 4px; }
+        #progressBarTrack:hover #progressThumb { opacity: 1; }
+        #progressFill {
+            height: 100%; width: 0%;
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            border-radius: 2px; position: relative;
+            transition: width 0.25s linear;
+            pointer-events: none;
+        }
+        #progressThumb {
+            position: absolute; right: -6px; top: 50%;
+            transform: translateY(-50%);
+            width: 12px; height: 12px; border-radius: 50%;
+            background: white; box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+            opacity: 0; transition: opacity 0.15s;
+            pointer-events: none;
+        }
+        .time-row {
+            display: flex; justify-content: space-between;
+            font-size: 11px; color: var(--text3);
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Transport controls */
+        .transport-controls {
+            display: flex; align-items: center; justify-content: center;
+            gap: 8px; width: 100%; margin-bottom: 18px;
+        }
+        .t-btn {
+            background: none; border: none; cursor: pointer;
+            color: var(--text2); border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            transition: color 0.2s, transform 0.1s, background 0.2s;
+            padding: 8px;
+        }
+        .t-btn:hover { color: var(--text1); }
+        .t-btn:active { transform: scale(0.92); }
+        .t-btn.secondary { width: 40px; height: 40px; font-size: 18px; }
+        .t-btn.secondary.active { color: var(--primary); }
+        .t-btn.skip { width: 44px; height: 44px; }
+        .t-btn.skip svg { width: 28px; height: 28px; }
+        .t-btn.play-pause {
+            width: 58px; height: 58px;
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 6px 24px var(--accent-glow);
+        }
+        .t-btn.play-pause:hover {
+            transform: scale(1.06);
+            box-shadow: 0 10px 32px var(--accent-glow);
+            color: white;
+        }
+        .t-btn.play-pause svg { width: 26px; height: 26px; }
+
+        /* Volume */
+        .volume-row {
+            display: flex; align-items: center; gap: 10px; width: 100%;
+            margin-bottom: 16px;
+        }
+        .vol-icon { font-size: 14px; color: var(--text3); flex-shrink: 0; }
+        input[type="range"]#volumeSlider {
+            flex: 1; -webkit-appearance: none; appearance: none;
+            height: 4px; border-radius: 2px; outline: none; cursor: pointer;
+            background: linear-gradient(
+                to right,
+                var(--primary) 0%,
+                var(--primary) var(--vol-pct, 70%),
+                rgba(255,255,255,0.12) var(--vol-pct, 70%),
+                rgba(255,255,255,0.12) 100%
+            );
+        }
+        input[type="range"]#volumeSlider::-webkit-slider-thumb {
+            -webkit-appearance: none; appearance: none;
+            width: 14px; height: 14px; border-radius: 50%;
+            background: white; box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+        }
+        input[type="range"]#volumeSlider::-moz-range-thumb {
+            width: 14px; height: 14px; border-radius: 50%; border: none;
+            background: white; box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+        }
+
+        /* Source selector */
+        .source-row { width: 100%; }
+        #sourceSelector {
+            width: 100%;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 10px;
+            color: var(--text2);
+            font-size: 13px; font-family: inherit;
+            padding: 8px 12px; outline: none; cursor: pointer;
+            appearance: none; -webkit-appearance: none;
+            text-align: center;
+        }
+        #sourceSelector:focus { border-color: var(--primary); }
+        .source-row-label {
+            font-size: 11px; color: var(--text3); text-align: center;
+            margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.06em;
+        }
+
+        /* ── Queue Panel ────────────────────────────────────────────────────── */
+        .queue-panel {
+            background: var(--card);
+            backdrop-filter: blur(40px);
+            border: 1px solid var(--card-border);
+            border-radius: 24px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 0;
+        }
+
+        /* Search */
+        .search-row {
+            display: flex; gap: 8px; margin-bottom: 16px;
+        }
+        #searchInput {
+            flex: 1;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px; color: var(--text1);
+            font-size: 14px; font-family: inherit;
+            padding: 10px 14px; outline: none;
+            transition: border-color 0.2s;
+        }
+        #searchInput::placeholder { color: var(--text3); }
+        #searchInput:focus { border-color: var(--primary); }
+        #searchBtn {
+            background: var(--primary); border: none; border-radius: 12px;
+            color: white; padding: 10px 16px; cursor: pointer;
+            font-size: 14px; font-weight: 600; transition: opacity 0.15s;
+            display: flex; align-items: center; justify-content: center; gap: 6px;
+        }
+        #searchBtn:hover { opacity: 0.88; }
+        #searchBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* Search feedback toast */
+        #searchFeedback {
+            display: none; align-items: center; gap: 8px;
+            background: rgba(34,197,94,0.12); border: 1px solid rgba(34,197,94,0.25);
+            border-radius: 10px; padding: 10px 14px; margin-bottom: 12px;
+            font-size: 13px; color: #4ade80;
+        }
+        #searchFeedback.visible { display: flex; }
+
+        /* Queue header */
+        .queue-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 10px;
+        }
+        .queue-title { font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: 0.06em; }
+        #clearQueueBtn {
+            background: none; border: none; color: var(--text3);
+            font-size: 12px; cursor: pointer; padding: 4px 10px;
+            border-radius: 6px; transition: color 0.2s, background 0.2s;
+            font-family: inherit;
+        }
+        #clearQueueBtn:hover { color: #ef4444; background: rgba(239,68,68,0.1); }
+
+        /* Queue list */
+        #queueList { max-height: 420px; overflow-y: auto; }
+        #queueList::-webkit-scrollbar { width: 4px; }
+        #queueList::-webkit-scrollbar-track { background: transparent; }
+        #queueList::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+        .queue-item {
+            display: flex; align-items: center; gap: 12px;
+            padding: 9px 8px; border-radius: 10px; cursor: pointer;
+            transition: background 0.15s;
+        }
+        .queue-item:hover { background: rgba(255,255,255,0.06); }
+        .queue-item.now-playing { background: rgba(123,97,255,0.12); }
+
+        .queue-art {
+            width: 40px; height: 40px; border-radius: 7px;
+            object-fit: cover; flex-shrink: 0;
+            background: rgba(255,255,255,0.06);
+        }
+        .queue-art-placeholder {
+            width: 40px; height: 40px; border-radius: 7px;
+            background: rgba(255,255,255,0.06);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px; flex-shrink: 0;
+        }
+        .queue-item-info { flex: 1; min-width: 0; }
+        .queue-item-title {
+            font-size: 14px; color: var(--text1);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .queue-item.now-playing .queue-item-title { color: var(--primary); font-weight: 600; }
+        .queue-item-artist {
+            font-size: 12px; color: var(--text3);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .queue-item-dur {
+            font-size: 12px; color: var(--text3);
+            flex-shrink: 0; font-variant-numeric: tabular-nums;
+        }
+        .queue-empty {
+            text-align: center; padding: 40px 20px;
+            color: var(--text3); font-size: 14px;
+        }
+        .queue-loading {
+            text-align: center; padding: 30px 20px;
+            color: var(--text3); font-size: 13px;
+        }
+
+        /* ── Provider Setup Wizard ──────────────────────────────────────────── */
+        #setupState {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            padding: 40px 24px 60px;
+            gap: 0;
+        }
+        #setupState.visible { display: flex; }
+        .setup-title {
+            font-size: 22px; font-weight: 700; color: var(--text1);
+            margin-bottom: 10px;
+        }
+        .setup-subtitle {
+            font-size: 15px; color: var(--text2); margin-bottom: 32px;
+            line-height: 1.6; max-width: 360px;
+        }
+        .provider-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 12px;
+            width: 100%; max-width: 560px;
+            margin-bottom: 28px;
+        }
+        .provider-card {
+            background: var(--card);
+            border: 1px solid var(--card-border);
+            border-radius: 16px;
+            padding: 18px 12px;
+            display: flex; flex-direction: column; align-items: center;
+            gap: 8px; cursor: default;
+            transition: border-color 0.2s;
+        }
+        .provider-card.connected {
+            border-color: rgba(34,197,94,0.4);
+        }
+        .provider-icon { font-size: 28px; line-height: 1; }
+        .provider-name {
+            font-size: 13px; font-weight: 600; color: var(--text1);
+            text-align: center; line-height: 1.3;
+        }
+        .provider-badge-connected {
+            font-size: 11px; font-weight: 600; color: #22c55e;
+            background: rgba(34,197,94,0.12); border-radius: 8px;
+            padding: 2px 8px;
+        }
+        .connect-btn {
+            background: var(--primary); border: none; border-radius: 8px;
+            color: white; font-size: 12px; font-weight: 600;
+            padding: 5px 12px; cursor: pointer;
+            transition: opacity 0.15s;
+        }
+        .connect-btn:hover { opacity: 0.85; }
+        .setup-open-btn {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            border: none; border-radius: 14px; color: white;
+            font-size: 15px; font-weight: 600; padding: 14px 32px;
+            cursor: pointer; box-shadow: 0 6px 24px var(--accent-glow);
+            transition: transform 0.15s, box-shadow 0.15s; margin-bottom: 16px;
+        }
+        .setup-open-btn:hover { transform: translateY(-2px); box-shadow: 0 10px 32px var(--accent-glow); }
+        .setup-note {
+            font-size: 13px; color: var(--text3); max-width: 360px; line-height: 1.5;
+        }
+        #setupPollingStatus {
+            font-size: 13px; color: var(--text2); margin-top: 12px;
+            min-height: 20px;
+        }
+
+        /* ── Responsive tweaks ──────────────────────────────────────────────── */
+        @media (max-width: 400px) {
+            .now-playing-card { padding: 18px; }
+            .album-art-wrapper { width: calc(100vw - 68px); }
+            .t-btn.play-pause { width: 52px; height: 52px; }
+        }
+        @media (min-width: 700px) {
+            #queueList { max-height: calc(100vh - 280px); }
+        }
     </style>
     <link rel="stylesheet" href="css/dark-mode-shared.css">
 </head>
 <body>
-    <!-- Navigation -->
+
+    <!-- Background art layers -->
+    <div id="artBg"></div>
+    <div id="artOverlay"></div>
+
+    <!-- ── Nav Bar ──────────────────────────────────────────────────────────── -->
     <div class="nav-bar">
         <div class="nav-left">
             <div class="mini-orb" onclick="toggleMobileMenu()"></div>
@@ -289,62 +692,54 @@
         </div>
         <div class="nav-right">
             <div class="api-indicator connecting" id="apiStatus">Connecting</div>
-            <button class="refresh-btn notifications-btn" onclick="forceRefreshCache()" title="Refresh App (clears cache)">🔄</button>
-            <button class="theme-nav-btn notifications-btn" title="Toggle theme" onclick="window.cycleZoeTheme && window.cycleZoeTheme()">🌓</button>
-            <button class="notifications-btn" onclick="openNotificationsSafe()" title="Notifications">🔔</button>
+            <button class="notifications-btn" onclick="forceRefreshCache && forceRefreshCache()" title="Refresh">🔄</button>
+            <button class="notifications-btn" title="Toggle theme" onclick="window.cycleZoeTheme && window.cycleZoeTheme()">🌓</button>
+            <button class="notifications-btn" onclick="openNotificationsSafe && openNotificationsSafe()" title="Notifications">🔔</button>
             <div class="time-date-display">
                 <div class="current-time" id="navCurrentTime">--:--</div>
                 <div class="current-date" id="navCurrentDate">Loading...</div>
             </div>
         </div>
-        </div>
+    </div>
 
-    <!-- More Overlay -->
+    <!-- ── More Overlay ─────────────────────────────────────────────────────── -->
     <div class="more-overlay" id="moreOverlay">
         <div class="more-content">
             <button class="more-close" onclick="closeMoreOverlay()">×</button>
             <div class="more-header"><h2 class="more-title">More Options</h2></div>
             <div class="more-grid">
-                <div class="more-item" onclick="navigateToPage('people.html')">
-                    <div class="more-item-icon">👥</div>
-                    <div class="more-item-label">People</div>
+                <div class="more-item" onclick="navigateToPage && navigateToPage('people.html')">
+                    <div class="more-item-icon">👥</div><div class="more-item-label">People</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('memories.html')">
-                    <div class="more-item-icon">🧠</div>
-                    <div class="more-item-label">Memories</div>
+                <div class="more-item" onclick="navigateToPage && navigateToPage('memories.html')">
+                    <div class="more-item-icon">🧠</div><div class="more-item-label">Memories</div>
                 </div>
-                <div class="more-item active" onclick="navigateToPage('music.html')">
-                    <div class="more-item-icon">🎵</div>
-                    <div class="more-item-label">Music</div>
+                <div class="more-item active" onclick="navigateToPage && navigateToPage('music.html')">
+                    <div class="more-item-icon">🎵</div><div class="more-item-label">Music</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('notes.html')">
-                    <div class="more-item-icon">📝</div>
-                    <div class="more-item-label">Notes</div>
+                <div class="more-item" onclick="navigateToPage && navigateToPage('notes.html')">
+                    <div class="more-item-icon">📝</div><div class="more-item-label">Notes</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('cooking.html')">
-                    <div class="more-item-icon">🍳</div>
-                    <div class="more-item-label">Cooking</div>
+                <div class="more-item" onclick="navigateToPage && navigateToPage('cooking.html')">
+                    <div class="more-item-icon">🍳</div><div class="more-item-label">Cooking</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('smart-home.html')">
-                    <div class="more-item-icon">🏠</div>
-                    <div class="more-item-label">Smart Home</div>
+                <div class="more-item" onclick="navigateToPage && navigateToPage('smart-home.html')">
+                    <div class="more-item-icon">🏠</div><div class="more-item-label">Smart Home</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('updates.html')">
-                    <div class="more-item-icon">⬇️</div>
-                    <div class="more-item-label">Updates</div>
+                <div class="more-item" onclick="navigateToPage && navigateToPage('updates.html')">
+                    <div class="more-item-icon">⬇️</div><div class="more-item-label">Updates</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('settings.html')">
-                    <div class="more-item-icon">⚙️</div>
-                    <div class="more-item-label">Settings</div>
+                <div class="more-item" onclick="navigateToPage && navigateToPage('settings.html')">
+                    <div class="more-item-icon">⚙️</div><div class="more-item-label">Settings</div>
                 </div>
-                <div class="more-item" onclick="navigateToPage('developer/index.html')">
-                    <div class="more-item-icon">👨‍💻</div>
-                    <div class="more-item-label">Developer</div>
+                <div class="more-item" onclick="navigateToPage && navigateToPage('developer/index.html')">
+                    <div class="more-item-icon">👨‍💻</div><div class="more-item-label">Developer</div>
                 </div>
             </div>
         </div>
+    </div>
 
-    <!-- Mobile Navigation -->
+    <!-- ── Mobile Nav ───────────────────────────────────────────────────────── -->
     <div class="mobile-nav-menu" id="mobileNavMenu">
         <div class="mobile-nav-header">
             <h3>Navigation</h3>
@@ -359,70 +754,795 @@
             <a href="music.html" class="mobile-nav-item active">🎵 Music</a>
             <a href="memories.html" class="mobile-nav-item">🧠 Memories</a>
             <a href="notes.html" class="mobile-nav-item">📝 Notes</a>
-
             <a href="cooking.html" class="mobile-nav-item">🍳 Cooking</a>
-
             <a href="smart-home.html" class="mobile-nav-item">🏠 Smart Home</a>
-
             <a href="updates.html" class="mobile-nav-item">⬇️ Updates</a>
-
             <a href="settings.html" class="mobile-nav-item">⚙️ Settings</a>
             <div class="mobile-nav-divider"></div>
-            <a href="#" class="mobile-nav-item logout" onclick="handleLogout()">🚪 Sign Out</a>
+            <a href="#" class="mobile-nav-item logout" onclick="handleLogout && handleLogout()">🚪 Sign Out</a>
         </div>
     </div>
-    <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu()"></div>
+    <div class="mobile-nav-overlay" id="mobileNavOverlay" onclick="toggleMobileMenu && toggleMobileMenu()"></div>
 
-    <!-- Main Content -->
+    <!-- ── Main Content ──────────────────────────────────────────────────────── -->
     <main class="main-container">
-        <div class="music-placeholder-card">
-            <div class="music-placeholder-icon">🎵</div>
-            <h1 class="music-placeholder-title">Music lives in Home Assistant</h1>
-            <p class="music-placeholder-body">
-                Playback, queueing, and media controls are handled by
-                <strong>Music Assistant</strong> inside Home Assistant. Zoe talks to
-                that stack over the existing HA bridge, so there's no separate
-                music surface in the desktop UI.
-            </p>
-            <p class="music-placeholder-body" style="margin-bottom: 28px;">
-                Ask in chat (e.g. <em>“play some focus music in the office”</em>) or
-                use your Home Assistant dashboard for full control.
-            </p>
-            <div class="music-actions">
-                <a class="primary" id="haLink" href="#" target="_blank" rel="noopener">
-                    🏠 Open Home Assistant
-                </a>
-                <button class="secondary" onclick="location.href='chat.html'">
+
+        <!-- Offline / Connecting state -->
+        <div id="offlineState">
+            <div class="offline-icon" id="offlineIcon">🎵</div>
+            <div class="ma-status-badge">
+                <span class="status-dot connecting" id="statusDot"></span>
+                <span id="statusText">Connecting to Music Assistant…</span>
+            </div>
+            <div class="offline-title" id="offlineTitle">Music Assistant</div>
+            <div class="offline-subtitle" id="offlineSubtitle">
+                Connecting to your music player. This will be ready in a moment.
+            </div>
+            <div class="offline-actions">
+                <button class="btn-primary" id="startMABtn" style="display:none" onclick="startMA()">
+                    ▶ Start Music Assistant
+                </button>
+                <button class="btn-secondary" onclick="location.href='chat.html'">
                     💬 Ask Zoe
+                </button>
+                <button class="btn-secondary" id="offlineSetupBtn" style="display:none" onclick="openMAUI()">
+                    ⚙ Set up Music Assistant
                 </button>
             </div>
         </div>
+
+        <!-- Provider Setup Wizard (visible when MA is online but has no providers) -->
+        <div id="setupState">
+            <div class="offline-icon">🎵</div>
+            <div class="setup-title">Connect your music services</div>
+            <div class="setup-subtitle">
+                Music Assistant is running but no streaming services are connected yet.
+                Add your favourite services to start listening.
+            </div>
+
+            <div class="provider-grid" id="providerGrid">
+                <!-- Populated by JS -->
+            </div>
+
+            <button class="setup-open-btn" onclick="openMAUI()">
+                Open Music Assistant Setup ↗
+            </button>
+            <div class="setup-note">
+                The Music Assistant setup wizard lets you sign in to Spotify,
+                YouTube Music, Apple Music, Deezer, Tidal, Plex and more.
+                Come back here once connected — the player will appear automatically.
+            </div>
+            <div id="setupPollingStatus"></div>
+        </div>
+
+        <!-- Player -->
+        <div id="playerMain">
+
+            <!-- Now Playing Card -->
+            <div class="now-playing-card">
+
+                <!-- Album art -->
+                <div class="album-art-wrapper">
+                    <div class="art-placeholder" id="artPlaceholder">🎵</div>
+                    <img id="albumArt" alt="Album art" crossorigin="anonymous"
+                         onload="this.classList.add('loaded')"
+                         onerror="this.classList.remove('loaded'); document.getElementById('artPlaceholder').style.display='flex'">
+                </div>
+
+                <!-- Track info -->
+                <div id="trackInfoBlock">
+                    <div id="trackTitle">Nothing playing</div>
+                    <div id="trackArtist">—</div>
+                </div>
+
+                <!-- Progress bar -->
+                <div class="progress-section">
+                    <div id="progressBarTrack">
+                        <div id="progressFill">
+                            <div id="progressThumb"></div>
+                        </div>
+                    </div>
+                    <div class="time-row">
+                        <span id="elapsedTime">0:00</span>
+                        <span id="totalTime">0:00</span>
+                    </div>
+                </div>
+
+                <!-- Transport controls -->
+                <div class="transport-controls">
+                    <button class="t-btn secondary" id="shuffleBtn" onclick="toggleShuffle()" title="Shuffle">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                            <path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/>
+                        </svg>
+                    </button>
+                    <button class="t-btn skip" id="prevBtn" onclick="prevTrack()" title="Previous">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/>
+                        </svg>
+                    </button>
+                    <button class="t-btn play-pause" id="playPauseBtn" onclick="playPause()" title="Play / Pause" data-playing="0">
+                        <svg viewBox="0 0 24 24" fill="currentColor" id="playPauseIcon">
+                            <path d="M8 5v14l11-7z"/>
+                        </svg>
+                    </button>
+                    <button class="t-btn skip" id="nextBtn" onclick="nextTrack()" title="Next">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
+                        </svg>
+                    </button>
+                    <button class="t-btn secondary" id="repeatBtn" onclick="toggleRepeat()" title="Repeat">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                            <path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/>
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Volume -->
+                <div class="volume-row">
+                    <span class="vol-icon">🔈</span>
+                    <input type="range" id="volumeSlider" min="0" max="100" value="70"
+                           oninput="onVolumeInput(this.value)" onchange="commitVolume(this.value)">
+                    <span class="vol-icon">🔊</span>
+                </div>
+
+                <!-- Source selector -->
+                <div class="source-row">
+                    <div class="source-row-label">Zone / Player</div>
+                    <select id="sourceSelector" onchange="onSourceChange(this.value)">
+                        <option value="">No players found</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Queue Panel -->
+            <div class="queue-panel">
+                <!-- Search -->
+                <div class="search-row">
+                    <input type="text" id="searchInput" placeholder="Search or ask Zoe…"
+                           onkeydown="if(event.key==='Enter') doSearch()">
+                    <button id="searchBtn" onclick="doSearch()">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                        </svg>
+                        Ask
+                    </button>
+                </div>
+
+                <!-- Search feedback -->
+                <div id="searchFeedback">
+                    <span>✓</span> <span id="searchFeedbackText">Sent to Zoe!</span>
+                </div>
+
+                <!-- Queue header -->
+                <div class="queue-header">
+                    <span class="queue-title">Up Next</span>
+                    <button id="clearQueueBtn" onclick="clearQueue()">Clear</button>
+                </div>
+
+                <!-- Queue list -->
+                <div id="queueList">
+                    <div class="queue-loading">Connecting…</div>
+                </div>
+            </div>
+
+        </div><!-- #playerMain -->
     </main>
 
     <script src="js/notifications-panel.js"></script>
     <script src="js/common.js"></script>
     <script src="js/navigation.js" defer></script>
+
     <script>
-        // The zoe-data settings endpoint stores the Home Assistant URL under
-        // the `homeassistant_url` key. Fall back to a sensible default so the
-        // button always points somewhere useful.
-        (async function wireHaLink() {
-            const link = document.getElementById('haLink');
-            if (!link) return;
-            let url = 'http://homeassistant.local:8123';
-            try {
-                if (typeof apiRequest === 'function') {
-                    const settings = await apiRequest('/api/settings').catch(() => null);
-                    if (settings && typeof settings === 'object') {
-                        const candidate = settings.homeassistant_url
-                            || settings.home_assistant_url
-                            || (settings.settings && settings.settings.homeassistant_url);
-                        if (candidate) url = candidate;
-                    }
+    /* ── Music Player Controller ─────────────────────────────────────────── */
+
+    const MA_WS  = 'ws://localhost:8095/ws';
+
+    const S = {
+        ws: null,
+        wsRetryDelay: 2000,
+        wsRetries: 0,
+        wsRetryTimer: null,
+        maAvailable: false,   // set true once Zoe backend confirms MA is up
+        players: [],
+        activeId: null,
+        playerState: 'idle',
+        currentTrack: null,
+        currentTime: 0,
+        duration: 0,
+        volume: 70,
+        queue: [],
+        shuffle: false,
+        repeat: false,
+        tickTimer: null,
+        volumeTimer: null,
+        seeking: false,
+        prevArtUrl: null,
+    };
+
+    /* ── Session ─────────────────────────────────────────────────────────── */
+    function sessionId() {
+        try { return JSON.parse(localStorage.getItem('zoe_session') || '{}').session_id || ''; }
+        catch { return ''; }
+    }
+    function zoeHdrs() {
+        return { 'Content-Type': 'application/json', 'X-Session-ID': sessionId() };
+    }
+
+    /* ── Fetch with timeout ──────────────────────────────────────────────── */
+    async function fetchT(url, ms, opts) {
+        const c = new AbortController();
+        const t = setTimeout(() => c.abort(), ms);
+        try { return await fetch(url, { signal: c.signal, ...opts }); }
+        finally { clearTimeout(t); }
+    }
+
+    /* ── WebSocket ───────────────────────────────────────────────────────── */
+    function connectWS() {
+        clearTimeout(S.wsRetryTimer);
+        try {
+            if (S.ws) { S.ws.onclose = null; S.ws.close(); }
+            S.ws = new WebSocket(MA_WS);
+            S.ws.onopen  = onWSOpen;
+            S.ws.onmessage = onWSMsg;
+            S.ws.onclose = onWSClose;
+            S.ws.onerror = () => { S.ws && S.ws.close(); };
+        } catch { onWSClose(); }
+    }
+
+    function onWSOpen() {
+        S.wsRetries = 0;
+        S.wsRetryDelay = 2000;
+        // MA WS is a one-way event stream (server pushes player_updated / queue_updated).
+        // Do NOT call REST endpoints here — they don't exist on MA's API.
+        // Initial player state is loaded via the Zoe backend proxy in init().
+    }
+
+    function onWSClose() {
+        S.wsRetries++;
+        // Only show "offline" if MA was never confirmed available AND WS keeps failing.
+        // If MA is confirmed running (S.maAvailable), the WS retry is transparent.
+        if (S.wsRetries >= 3 && !S.maAvailable) showOffline('offline');
+        S.wsRetryDelay = Math.min(S.wsRetryDelay * 1.5, 30000);
+        S.wsRetryTimer = setTimeout(connectWS, S.wsRetryDelay);
+    }
+
+    function onWSMsg(evt) {
+        try {
+            const msg = JSON.parse(evt.data);
+            // First message after connect is MA server_info (no "event" key) — ignore it.
+            if (!msg.event) return;
+            if (msg.event === 'player_updated') onPlayerUpdate(msg.data);
+            else if (msg.event === 'queue_updated') onQueueUpdate(msg.data);
+        } catch {}
+    }
+
+    /* ── MA REST (proxied via Zoe backend) ──────────────────────────────── */
+    async function fetchPlayersFromBackend() {
+        try {
+            const res = await fetch('/api/music/players', { headers: zoeHdrs() });
+            if (!res.ok) throw new Error('players fetch failed');
+            const data = await res.json();
+            const list = data.players || (Array.isArray(data) ? data : []);
+            S.players = list;
+            buildSourceSelector(S.players);
+            if (!S.activeId && S.players.length) {
+                S.activeId = S.players[0].player_id || S.players[0].id;
+            }
+            const active = S.players.find(p =>
+                (p.player_id || p.id) === S.activeId
+            ) || S.players[0];
+            if (active) onPlayerUpdate(active);
+            if (S.activeId) fetchQueue(S.activeId);
+            showPlayer();
+        } catch {
+            // MA confirmed available but no players loaded yet — still show player shell
+            if (S.maAvailable) {
+                buildSourceSelector([]);
+                showPlayer();
+            } else {
+                showOffline('offline');
+            }
+        }
+    }
+
+    async function fetchQueue(queueId) {
+        try {
+            const res = await fetch(`/api/music/queue/${encodeURIComponent(queueId)}`,
+                { headers: zoeHdrs() });
+            if (!res.ok) throw new Error();
+            const data = await res.json();
+            S.queue = data.items || (Array.isArray(data) ? data : []);
+            renderQueue(S.queue);
+        } catch {
+            document.getElementById('queueList').innerHTML =
+                '<div class="queue-empty">Couldn\'t load queue.</div>';
+        }
+    }
+
+    /* ── Event handlers ──────────────────────────────────────────────────── */
+    function onPlayerUpdate(data) {
+        S.playerState = data.state || 'idle';
+        const item = data.current_item;
+        if (item) {
+            if (!S.seeking) {
+                S.currentTime = item.current_time ?? S.currentTime;
+                S.duration    = item.duration    ?? S.duration;
+            }
+            const t = item.track || {};
+            const newTrack = {
+                title:  t.title  || data.name  || 'Nothing playing',
+                artist: joinArtists(t.artists) || data.media_artist || '—',
+                image:  t.image  || t.album?.image || data.media_image_url || null,
+            };
+            const changed = !S.currentTrack ||
+                S.currentTrack.title !== newTrack.title ||
+                S.currentTrack.image !== newTrack.image;
+            S.currentTrack = newTrack;
+            if (changed) {
+                setArt(newTrack.image);
+                setTrackInfo(newTrack);
+            }
+        }
+        setVolume(data.volume_level != null ? Math.round(data.volume_level * 100) : S.volume, false);
+        updatePlayPause(S.playerState === 'playing');
+        updateProgress(S.currentTime, S.duration);
+        tickStart();
+    }
+
+    function onQueueUpdate(data) {
+        S.queue = data.items || [];
+        renderQueue(S.queue);
+    }
+
+    /* ── UI ──────────────────────────────────────────────────────────────── */
+    function showOffline(kind) {
+        const dot   = document.getElementById('statusDot');
+        const txt   = document.getElementById('statusText');
+        const title = document.getElementById('offlineTitle');
+        const sub   = document.getElementById('offlineSubtitle');
+        const btn   = document.getElementById('startMABtn');
+        const icon  = document.getElementById('offlineIcon');
+
+        if (kind === 'offline') {
+            dot.className = 'status-dot';
+            txt.textContent = 'Music Assistant offline';
+            title.textContent = 'Music Assistant is offline';
+            sub.textContent = 'Start Music Assistant so Zoe can control your music, or ask Zoe to start it for you.';
+            btn.style.display = 'inline-block';
+            icon.textContent = '🎧';
+            const setupBtn = document.getElementById('offlineSetupBtn');
+            if (setupBtn) setupBtn.style.display = 'inline-block';
+        } else {
+            dot.className = 'status-dot connecting';
+            txt.textContent = 'Connecting to Music Assistant…';
+            title.textContent = 'Music Assistant';
+            sub.textContent = 'Connecting to your music player. This will be ready in a moment.';
+            btn.style.display = 'none';
+        }
+        document.getElementById('offlineState').classList.remove('hidden');
+        document.getElementById('playerMain').classList.remove('visible');
+    }
+
+    function showPlayer() {
+        document.getElementById('offlineState').classList.add('hidden');
+        document.getElementById('playerMain').classList.add('visible');
+    }
+
+    function setArt(url) {
+        const img  = document.getElementById('albumArt');
+        const ph   = document.getElementById('artPlaceholder');
+        const bg   = document.getElementById('artBg');
+
+        if (url && url !== S.prevArtUrl) {
+            S.prevArtUrl = url;
+            img.style.opacity = '0';
+            img.classList.remove('loaded');
+            img.onload = () => {
+                img.style.opacity = '1';
+                ph.style.display = 'none';
+            };
+            img.onerror = () => {
+                img.classList.remove('loaded');
+                ph.style.display = 'flex';
+                bg.classList.remove('visible');
+            };
+            img.src = url;
+            img.classList.add('loaded');
+            bg.style.backgroundImage = `url('${url}')`;
+            bg.classList.add('visible');
+        } else if (!url) {
+            img.classList.remove('loaded');
+            ph.style.display = 'flex';
+            bg.classList.remove('visible');
+            bg.style.backgroundImage = '';
+        }
+    }
+
+    function setTrackInfo(track) {
+        document.getElementById('trackTitle').textContent  = track.title;
+        document.getElementById('trackArtist').textContent = track.artist;
+        const block = document.getElementById('trackInfoBlock');
+        block.classList.remove('track-anim');
+        void block.offsetWidth;
+        block.classList.add('track-anim');
+    }
+
+    function updatePlayPause(playing) {
+        const btn  = document.getElementById('playPauseBtn');
+        const icon = document.getElementById('playPauseIcon');
+        btn.dataset.playing = playing ? '1' : '0';
+        icon.innerHTML = playing
+            ? '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>'
+            : '<path d="M8 5v14l11-7z"/>';
+    }
+
+    function updateProgress(cur, total) {
+        const pct = total > 0 ? Math.min((cur / total) * 100, 100) : 0;
+        document.getElementById('progressFill').style.width = pct + '%';
+        document.getElementById('elapsedTime').textContent = fmtTime(cur);
+        document.getElementById('totalTime').textContent   = fmtTime(total);
+    }
+
+    function buildSourceSelector(players) {
+        const sel = document.getElementById('sourceSelector');
+        if (!players.length) {
+            sel.innerHTML = '<option value="">No players found</option>';
+            return;
+        }
+        sel.innerHTML = players.map(p =>
+            `<option value="${escH(p.player_id || p.id)}">${escH(p.display_name || p.name || p.player_id || p.id)}</option>`
+        ).join('');
+        if (S.activeId) sel.value = S.activeId;
+    }
+
+    function renderQueue(items) {
+        const el = document.getElementById('queueList');
+        if (!items || !items.length) {
+            el.innerHTML = '<div class="queue-empty">Queue is empty</div>';
+            return;
+        }
+        const currentTitle = S.currentTrack?.title;
+        el.innerHTML = items.map((item, i) => {
+            const t      = item.track || item;
+            const title  = t.title || item.name || 'Unknown';
+            const artist = joinArtists(t.artists) || t.artist || item.artist || '';
+            const dur    = fmtTime(t.duration || item.duration || 0);
+            const img    = t.image || t.album?.image || item.image || '';
+            const active = title === currentTitle ? ' now-playing' : '';
+            const artEl  = img
+                ? `<img class="queue-art" src="${escH(img)}" alt="" onerror="this.style.display='none'">`
+                : `<div class="queue-art-placeholder">🎵</div>`;
+            return `<div class="queue-item${active}" data-idx="${i}">
+                ${artEl}
+                <div class="queue-item-info">
+                    <div class="queue-item-title">${escH(title)}</div>
+                    <div class="queue-item-artist">${escH(artist)}</div>
+                </div>
+                <div class="queue-item-dur">${dur}</div>
+            </div>`;
+        }).join('');
+    }
+
+    /* ── Tick timer (smooth progress) ───────────────────────────────────── */
+    function tickStart() {
+        clearInterval(S.tickTimer);
+        if (S.playerState === 'playing') {
+            S.tickTimer = setInterval(() => {
+                if (S.seeking) return;
+                S.currentTime = Math.min(S.currentTime + 1, S.duration || Infinity);
+                updateProgress(S.currentTime, S.duration);
+                if (S.duration && S.currentTime >= S.duration) clearInterval(S.tickTimer);
+            }, 1000);
+        }
+    }
+
+    /* ── Progress bar drag/click ─────────────────────────────────────────── */
+    (function initProgressBar() {
+        const track = document.getElementById('progressBarTrack');
+
+        function seekTo(clientX) {
+            const r   = track.getBoundingClientRect();
+            const pct = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+            S.currentTime = pct * (S.duration || 0);
+            updateProgress(S.currentTime, S.duration);
+        }
+        function endSeek() {
+            if (!S.seeking) return;
+            S.seeking = false;
+            haService('media_seek', { seek_position: Math.round(S.currentTime) });
+        }
+
+        track.addEventListener('mousedown', e => {
+            S.seeking = true;
+            seekTo(e.clientX);
+        });
+        document.addEventListener('mousemove', e => { if (S.seeking) seekTo(e.clientX); });
+        document.addEventListener('mouseup',   () => endSeek());
+
+        track.addEventListener('touchstart', e => {
+            S.seeking = true;
+            seekTo(e.touches[0].clientX);
+        }, { passive: true });
+        document.addEventListener('touchmove', e => {
+            if (S.seeking) seekTo(e.touches[0].clientX);
+        }, { passive: true });
+        document.addEventListener('touchend', () => endSeek());
+    })();
+
+    /* ── Volume ──────────────────────────────────────────────────────────── */
+    function setVolume(val, sendToDevice) {
+        S.volume = val;
+        const slider = document.getElementById('volumeSlider');
+        slider.value = val;
+        slider.style.setProperty('--vol-pct', val + '%');
+        if (sendToDevice) {
+            clearTimeout(S.volumeTimer);
+            S.volumeTimer = setTimeout(() => {
+                haService('volume_set', { volume_level: val / 100 });
+            }, 300);
+        }
+    }
+    function onVolumeInput(v) { setVolume(Number(v), true); }
+    function commitVolume(v)  { setVolume(Number(v), true); }
+
+    /* ── Transport ───────────────────────────────────────────────────────── */
+    function playPause() {
+        const playing = document.getElementById('playPauseBtn').dataset.playing === '1';
+        if (playing) {
+            haService('media_pause');
+            S.playerState = 'paused';
+            clearInterval(S.tickTimer);
+        } else {
+            haService('media_play');
+            S.playerState = 'playing';
+            tickStart();
+        }
+        updatePlayPause(!playing);
+    }
+
+    function prevTrack() { haService('media_previous_track'); }
+    function nextTrack() { haService('media_next_track'); }
+
+    function toggleShuffle() {
+        S.shuffle = !S.shuffle;
+        document.getElementById('shuffleBtn').classList.toggle('active', S.shuffle);
+        haService('shuffle_set', { shuffle: S.shuffle });
+    }
+
+    function toggleRepeat() {
+        S.repeat = !S.repeat;
+        document.getElementById('repeatBtn').classList.toggle('active', S.repeat);
+        haService('repeat_set', { repeat: S.repeat ? 'all' : 'off' });
+    }
+
+    /* ── HA bridge ───────────────────────────────────────────────────────── */
+    function activeEntityId() {
+        if (!S.activeId && S.players.length) S.activeId = S.players[0].player_id || S.players[0].id;
+        const p = S.players.find(x => (x.player_id || x.id) === S.activeId);
+        return p?.entity_id || (S.activeId ? `media_player.${S.activeId}` : null);
+    }
+
+    async function haService(service, extra) {
+        const eid = activeEntityId();
+        try {
+            await fetch('/api/ha/service', {
+                method: 'POST',
+                headers: zoeHdrs(),
+                body: JSON.stringify({
+                    domain: 'media_player',
+                    service,
+                    data: { ...(eid ? { entity_id: eid } : {}), ...extra }
+                })
+            });
+        } catch {}
+    }
+
+    /* ── Source selector ─────────────────────────────────────────────────── */
+    function onSourceChange(val) {
+        S.activeId = val;
+        const sel = document.getElementById('sourceSelector');
+        if (sel) sel.value = val;
+        fetchQueue(val);
+        const p = S.players.find(x => (x.player_id || x.id) === val);
+        if (p) onPlayerUpdate(p);
+    }
+
+    /* ── Queue clear ─────────────────────────────────────────────────────── */
+    async function clearQueue() {
+        if (!S.activeId) return;
+        haService('clear_playlist');
+        S.queue = [];
+        renderQueue([]);
+    }
+
+    /* ── Search / Zoe ask ────────────────────────────────────────────────── */
+    async function doSearch() {
+        const inp = document.getElementById('searchInput');
+        const query = inp.value.trim();
+        if (!query) return;
+        const btn = document.getElementById('searchBtn');
+        btn.disabled = true;
+        try {
+            await fetch('/api/chat', {
+                method: 'POST',
+                headers: zoeHdrs(),
+                body: JSON.stringify({ message: query, stream: false })
+            });
+            inp.value = '';
+            showSearchFeedback(`Sent to Zoe: "${query.slice(0, 40)}${query.length > 40 ? '…' : ''}"`);
+        } catch {
+            showSearchFeedback('Could not reach Zoe. Try again.');
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    function showSearchFeedback(msg) {
+        const el = document.getElementById('searchFeedback');
+        document.getElementById('searchFeedbackText').textContent = msg || 'Sent to Zoe!';
+        el.classList.add('visible');
+        setTimeout(() => el.classList.remove('visible'), 4000);
+    }
+
+    /* ── Start MA via Zoe ────────────────────────────────────────────────── */
+    async function startMA() {
+        const btn = document.getElementById('startMABtn');
+        btn.disabled = true;
+        btn.textContent = 'Starting…';
+        try {
+            await fetch('/api/chat', {
+                method: 'POST',
+                headers: zoeHdrs(),
+                body: JSON.stringify({ message: 'start music assistant', stream: false })
+            });
+        } catch {}
+        showOffline('connecting');
+        setTimeout(connectWS, 4000);
+    }
+
+    /* ── Helpers ─────────────────────────────────────────────────────────── */
+    function fmtTime(sec) {
+        if (!sec || isNaN(sec) || sec < 0) return '0:00';
+        const m = Math.floor(sec / 60);
+        const s = Math.floor(sec % 60);
+        return `${m}:${s.toString().padStart(2, '0')}`;
+    }
+
+    function joinArtists(artists) {
+        if (!artists || !artists.length) return '';
+        return artists.map(a => typeof a === 'string' ? a : (a.name || '')).filter(Boolean).join(', ');
+    }
+
+    function escH(s) {
+        return String(s ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    /* ── Setup wizard ────────────────────────────────────────────────────── */
+
+    const MA_EXTERNAL_URL = `http://${window.location.hostname}:8095`;
+
+    // Well-known providers we always show in the setup grid.
+    const KNOWN_PROVIDERS = [
+        { id: 'spotify',      name: 'Spotify',       icon: '🟢' },
+        { id: 'ytmusic',      name: 'YouTube Music', icon: '🔴' },
+        { id: 'apple_music',  name: 'Apple Music',   icon: '🎵' },
+        { id: 'deezer',       name: 'Deezer',        icon: '🎧' },
+        { id: 'tidal',        name: 'Tidal',         icon: '🌊' },
+        { id: 'plex',         name: 'Plex',          icon: '🎬' },
+        { id: 'subsonic',     name: 'Navidrome / Subsonic', icon: '💽' },
+        { id: 'radiobrowser', name: 'Radio Browser', icon: '📻' },
+    ];
+
+    let _setupPollingTimer = null;
+
+    function openMAUI() {
+        window.open(MA_EXTERNAL_URL, '_blank', 'width=960,height=720,noopener');
+        // Start polling for newly added providers after a short delay
+        clearTimeout(_setupPollingTimer);
+        setTimeout(pollForProviders, 8000);
+    }
+
+    function openProviderSetup(providerId) {
+        // MA handles OAuth internally — just open the MA UI
+        window.open(MA_EXTERNAL_URL, '_blank', 'width=960,height=720,noopener');
+        clearTimeout(_setupPollingTimer);
+        setTimeout(pollForProviders, 8000);
+    }
+
+    function renderProviderGrid(connectedIds) {
+        const grid = document.getElementById('providerGrid');
+        if (!grid) return;
+        grid.innerHTML = KNOWN_PROVIDERS.map(p => {
+            const connected = connectedIds.has(p.id);
+            return `<div class="provider-card${connected ? ' connected' : ''}">
+                <div class="provider-icon">${p.icon}</div>
+                <div class="provider-name">${escH(p.name)}</div>
+                ${connected
+                    ? '<span class="provider-badge-connected">✓ Connected</span>'
+                    : `<button class="connect-btn" onclick="openProviderSetup('${p.id}')">Connect</button>`
                 }
-            } catch (_) { /* keep default */ }
-            link.href = url;
-        })();
+            </div>`;
+        }).join('');
+    }
+
+    function showSetup(connectedIds) {
+        document.getElementById('offlineState').classList.add('hidden');
+        document.getElementById('playerMain').classList.remove('visible');
+        document.getElementById('setupState').classList.add('visible');
+        renderProviderGrid(connectedIds);
+        startSetupPolling();
+    }
+
+    function hideSetup() {
+        document.getElementById('setupState').classList.remove('visible');
+        clearInterval(_setupPollingTimer);
+        _setupPollingTimer = null;
+    }
+
+    async function pollForProviders() {
+        const statusEl = document.getElementById('setupPollingStatus');
+        try {
+            const res = await fetch('/api/music/status', { headers: zoeHdrs() });
+            if (!res.ok) return;
+            const data = await res.json();
+            S.maAvailable = !!data.available;
+            if (data.available && data.provider_count > 0) {
+                // Providers found — transition to player
+                if (statusEl) statusEl.textContent = '✓ Provider connected! Loading player…';
+                clearInterval(_setupPollingTimer);
+                hideSetup();
+                await fetchPlayersFromBackend();
+                connectWS();
+            } else {
+                // Update the grid so connected ones show up
+                const ids = new Set(
+                    (data.providers || []).map(p => (p.domain || p.id || '').toLowerCase())
+                );
+                renderProviderGrid(ids);
+                if (statusEl) statusEl.textContent = 'Waiting for a service to be connected…';
+            }
+        } catch {}
+    }
+
+    function startSetupPolling() {
+        clearInterval(_setupPollingTimer);
+        _setupPollingTimer = setInterval(pollForProviders, 7000);
+    }
+
+    /* ── Init ────────────────────────────────────────────────────────────── */
+    (async function init() {
+        // 1. Check via Zoe backend — authoritative MA availability and provider list.
+        try {
+            const statusRes = await fetch('/api/music/status', { headers: zoeHdrs() });
+            if (statusRes.ok) {
+                const status = await statusRes.json();
+                S.maAvailable = !!status.available;
+
+                if (status.available) {
+                    if (status.provider_count === 0) {
+                        // MA is running but no music/streaming services configured → setup wizard
+                        const connectedIds = new Set(
+                            (status.providers || []).map(p => (p.domain || p.id || '').toLowerCase())
+                        );
+                        showSetup(connectedIds);
+                        connectWS();
+                        return;
+                    }
+                    // MA is running with providers → load players via Zoe proxy then open WS
+                    await fetchPlayersFromBackend();
+                    connectWS();
+                    return;
+                }
+            }
+        } catch {}
+
+        // 2. Status check failed (Zoe backend unreachable) — keep connecting state, WS will retry
+        connectWS();
+    })();
     </script>
 </body>
 </html>

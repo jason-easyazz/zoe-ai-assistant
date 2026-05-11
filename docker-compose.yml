@@ -119,6 +119,11 @@ services:
     - ./services/livekit/config.yaml:/config.yaml:ro
     networks:
     - zoe-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7880/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
   # 2. WYOMING STACK (retired 2026-05-10):
   #    wyoming-piper TTS was replaced by Kokoro GPU sidecar — retired to save ~2GB RAM.
@@ -207,7 +212,7 @@ services:
   # zoe-whisper: RETIRED - Voice pipeline not active
   # zoe-tts: RETIRED - Voice pipeline not active
   # zoe-voice-agent: RETIRED - Voice pipeline not active
-  # livekit: RETIRED - Voice pipeline not active
+  # livekit: ACTIVE - see livekit service block above (voice.html WebRTC mode)
   # zoe-tensorrt: RETIRED - Not needed with GGUF models
   # vLLM: RETIRED - Blocked by PyTorch CUDA allocator bug
   # people-service: RETIRED - Merged into zoe-data

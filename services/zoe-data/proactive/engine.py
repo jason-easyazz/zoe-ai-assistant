@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import zoneinfo
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -30,9 +31,10 @@ log = logging.getLogger(__name__)
 # Slow-loop poll interval in seconds.  Override with env var.
 SLOW_LOOP_INTERVAL = int(os.environ.get("ZOE_PROACTIVE_SLOW_LOOP_S", "300"))
 
-# Quiet hours: no pushes between 22:00 and 07:00 local (server) time.
+# Quiet hours: no pushes between 22:00 and 07:00 local time (ZOE_TIMEZONE).
 _QUIET_START = int(os.environ.get("ZOE_QUIET_START_HOUR", "22"))
 _QUIET_END = int(os.environ.get("ZOE_QUIET_END_HOUR", "7"))
+_ZOE_TZ = zoneinfo.ZoneInfo(os.environ.get("ZOE_TIMEZONE", "Australia/Perth"))
 
 # Registered Tier 2 trigger instances.
 _slow_triggers: list[ProactiveTrigger] = []
@@ -46,7 +48,7 @@ def register_trigger(trigger: ProactiveTrigger) -> None:
 
 
 def _is_in_quiet_hours() -> bool:
-    hour = datetime.now().hour  # local server time
+    hour = datetime.now(_ZOE_TZ).hour
     if _QUIET_START > _QUIET_END:
         # Spans midnight, e.g. 22–7.
         return hour >= _QUIET_START or hour < _QUIET_END

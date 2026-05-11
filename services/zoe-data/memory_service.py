@@ -282,7 +282,8 @@ class MemoryService:
             memory_search_hit_count.observe(len(rows))
         ids = [r.id for r in rows]
         if ids:
-            asyncio.create_task(self._tick_access(user_id, ids))
+            # Pass query for unique_query_count tracking in dreaming memory
+            asyncio.create_task(self.tick_access(user_id, ids, query=query))
         return rows
 
     async def delete_user(self, user_id: str, *, actor: str) -> int:
@@ -608,6 +609,11 @@ class MemoryService:
             ),
             "idempotency_key": idem_key,
             "tags": ",".join(tags),
+            # Dreaming memory fields (arXiv:2604.20943)
+            "concept_tags": "",        # comma-sep entity types/topics (filled by REM pass)
+            "related_ids": "",         # comma-sep IDs of semantically related memories
+            "unique_query_count": 0,   # distinct queries that have surfaced this memory
+            "consolidation_count": 0,  # weekly deep-sleep passes that have touched this memory
         }
         if session_id:
             md["session_id"] = session_id
@@ -662,7 +668,7 @@ class MemoryService:
             if expires and expires <= now_iso:
                 continue
             st = meta.get("status", "approved")
-            if st in {"archived", "rejected", "superseded"}:
+            if st in {"archived", "rejected", "superseded", "pending"}:
                 continue
             filtered.append(MemoryRef(id=rid, text=doc or "", metadata=dict(meta)))
 
@@ -712,7 +718,7 @@ class MemoryService:
             if expires and expires <= now_iso:
                 continue
             st = md.get("status", "approved")
-            if st in {"archived", "rejected", "superseded"}:
+            if st in {"archived", "rejected", "superseded", "pending"}:
                 continue
             hits.append(
                 MemoryRef(
@@ -815,7 +821,7 @@ class MemoryService:
         except Exception:
             pass
 
-    def _tick_access_sync(self, user_id: str, ids: list[str]) -> None:
+    def _tick_access_sync(self, user_id: str, ids: list[str], query_hash: Optional[str] = None) -> None:
         if not ids:
             return
         col = self._collection()
@@ -829,6 +835,56 @@ class MemoryService:
             m = dict(meta) if isinstance(meta, dict) else {}
             m["access_count"] = int(m.get("access_count", 0) or 0) + 1
             m["last_accessed"] = now_iso
+            if query_hash:
+                # Track distinct queries that have surfaced this memory
+                seen_hashes = set((m.get("_query_hashes") or "").split(","))
+                if query_hash not in seen_hashes:
+                    seen_hashes.add(query_hash)
+                    m["_query_hashes"] = ",".join(h for h in seen_hashes if h)
+                    m["unique_query_count"] = int(m.get("unique_query_count", 0) or 0) + 1
+            new_metas.append(m)
+        if got_ids:
+            col.upsert(ids=got_ids, documents=got_docs, metadatas=new_metas)
+
+    async def tick_access(self, user_id: str, ids: list[str], query: Optional[str] = None) -> None:
+        """Public method: bump access_count + last_accessed for the given memory IDs.
+
+        If `query` is provided, also increments `unique_query_count` when this query
+        is distinct from previously seen queries (via SHA-1 hash tracking).
+        """
+        if not ids:
+            return
+        query_hash: Optional[str] = None
+        if query:
+            query_hash = hashlib.sha1(query.lower().strip().encode()).hexdigest()[:16]
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        try:
+            async with lock:
+                await self._run_sync(self._tick_access_sync, user_id, ids, query_hash)
+        except Exception:
+            pass
+
+    async def tick_consolidation(self, user_id: str, ids: list[str]) -> None:
+        """Increment consolidation_count on the given memory IDs (called by deep-sleep pass)."""
+        if not ids:
+            return
+        lock = self._user_locks.setdefault(user_id, asyncio.Lock())
+        try:
+            async with lock:
+                await self._run_sync(self._tick_consolidation_sync, user_id, ids)
+        except Exception:
+            pass
+
+    def _tick_consolidation_sync(self, user_id: str, ids: list[str]) -> None:
+        col = self._collection()
+        result = col.get(ids=ids, include=["documents", "metadatas"])
+        got_ids  = result.get("ids")       or []
+        got_docs = result.get("documents") or []
+        got_metas = result.get("metadatas") or []
+        new_metas = []
+        for m in got_metas:
+            m = dict(m) if m else {}
+            m["consolidation_count"] = int(m.get("consolidation_count", 0) or 0) + 1
             new_metas.append(m)
         if got_ids:
             col.upsert(ids=got_ids, documents=got_docs, metadatas=new_metas)

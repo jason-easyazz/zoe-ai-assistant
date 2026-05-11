@@ -543,6 +543,165 @@
             .agent-selector-label { display: none; }
         }
 
+        /* ── ChatGPT connect card (renders inside .message-content bubble) ── */
+
+        /* Suppress tool trace + banner; hide the default bubble (card replaces it) */
+        .message-group.chatgpt-connect-active .tool-trace-panel,
+        .message-group.chatgpt-connect-active .subgraph-card,
+        .message-group.chatgpt-connect-active .tool-call-card,
+        .message-group.chatgpt-connect-active .long-run-notice,
+        .message-group.chatgpt-connect-active .message-header,
+        .message-group.chatgpt-connect-active .message-content { display: none !important; }
+
+        /* The card itself becomes the entire visible response */
+        .chatgpt-connect-card {
+            background: var(--clr-glass-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--clr-glass-border);
+            border-radius: var(--radius-lg);
+            border-bottom-left-radius: 4px;
+            box-shadow: var(--shadow-sm);
+            max-width: 400px;
+            overflow: hidden;
+            margin-left: 44px;
+        }
+
+        .cgc-wrap { padding: 18px 20px; }
+        .cgc-done  { padding: 16px 20px; }
+        .cgc-icon-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 2px;
+        }
+        .cgc-icon-bg {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, rgba(16,163,127,0.2) 0%, rgba(16,163,127,0.08) 100%);
+            border: 1px solid rgba(16,163,127,0.25);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #10a37f;
+            flex-shrink: 0;
+        }
+        .cgc-icon-success {
+            background: linear-gradient(135deg, rgba(76,175,80,0.2) 0%, rgba(76,175,80,0.08) 100%);
+            border-color: rgba(76,175,80,0.3);
+            color: #4caf50;
+        }
+        .cgc-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--clr-text);
+            line-height: 1.3;
+        }
+        .cgc-subtitle {
+            font-size: 12px;
+            color: var(--clr-text-3);
+            margin-top: 2px;
+        }
+        .cgc-error-text { color: #ef5350; }
+        .cgc-divider {
+            height: 1px;
+            background: var(--clr-glass-border);
+            margin: 14px -20px;
+        }
+        .cgc-steps {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .cgc-step-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            color: var(--clr-text-2);
+        }
+        .cgc-num {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: rgba(16,163,127,0.15);
+            color: #10a37f;
+            font-size: 11px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .cgc-link-btn {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 9px 14px;
+            background: rgba(16,163,127,0.1);
+            border: 1px solid rgba(16,163,127,0.25);
+            border-radius: 8px;
+            color: #10a37f;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 500;
+            margin-top: 4px;
+            transition: background 0.15s;
+        }
+        .cgc-link-btn:hover { background: rgba(16,163,127,0.18); }
+        .cgc-code {
+            font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+            font-size: 26px;
+            font-weight: 700;
+            letter-spacing: 8px;
+            color: var(--clr-text);
+            background: rgba(255,255,255,0.06);
+            border: 1px dashed rgba(255,255,255,0.15);
+            border-radius: 10px;
+            padding: 12px 16px;
+            margin-top: 8px;
+            text-align: center;
+            cursor: pointer;
+            position: relative;
+            user-select: all;
+            transition: background 0.15s;
+        }
+        .cgc-code:hover { background: rgba(255,255,255,0.1); }
+        .cgc-code.cgc-copied { border-color: #10a37f; background: rgba(16,163,127,0.1); }
+        .cgc-copy-hint {
+            display: block;
+            font-size: 10px;
+            font-family: system-ui, sans-serif;
+            letter-spacing: 0.5px;
+            font-weight: 400;
+            color: var(--clr-text-3);
+            margin-top: 4px;
+        }
+        .cgc-footer {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12.5px;
+            color: var(--clr-text-3);
+        }
+        .cgc-footer-text { flex: 1; }
+        .cgc-spin {
+            width: 13px;
+            height: 13px;
+            border: 1.5px solid rgba(16,163,127,0.25);
+            border-top-color: #10a37f;
+            border-radius: 50%;
+            animation: long-run-spin 0.9s linear infinite;
+            flex-shrink: 0;
+        }
+        .cgc-success-msg {
+            font-size: 13px;
+            color: var(--clr-text-2);
+            line-height: 1.5;
+            margin-top: 2px;
+        }
+
         .send-btn {
             width: 48px;
             height: 48px;
@@ -2573,8 +2732,12 @@
             if (lr.timer) { clearInterval(lr.timer); lr.timer = null; }
             lr.started = false;
             lr.el.classList.remove('visible');
-            // Restore group visibility so the response renders normally
-            if (ctx.group) ctx.group.classList.remove('agent-running');
+            // Keep tool trace hidden after agent run — only restore message-header.
+            if (ctx.group) {
+                ctx.group.classList.remove('agent-running');
+                // Permanently suppress the tool trace panel once a long run is done.
+                if (ctx.toolTraceEl) ctx.toolTraceEl.style.display = 'none';
+            }
         }
 
         /**
@@ -2931,6 +3094,10 @@
                 // Append to group (below the bubble), NOT contentEl — RUN_FINISHED
                 // replaces contentEl.innerHTML which would wipe anything inside it.
                 renderChatComponent(data.value || {}, null, group);
+                return;
+            }
+            if (t === 'CUSTOM' && data.name === 'zoe.chatgpt_connect') {
+                handleChatGPTConnect(data.value || {}, group);
                 return;
             }
             if (t === 'CUSTOM' && data.name === 'zoe.ui_command') {
@@ -5447,6 +5614,108 @@
                 note.style.cssText = 'margin-top:8px;padding:8px 12px;border-radius:10px;background:rgba(123,97,255,0.12);color:#3b2c8a;font-size:13px;';
                 note.textContent = '🎙  ' + detail.prompt;
                 group.appendChild(note);
+            }
+        }
+
+        // ── ChatGPT device-code connect card ────────────────────────────────
+        // Appended as a direct child of group (sibling to .message-content).
+        // .message-content is hidden via CSS when chatgpt-connect-active is set,
+        // so the card is the only visible element in the bubble area.
+        const _chatgptCards = new WeakMap();
+
+        function _cgcGetOrCreate(group) {
+            let card = _chatgptCards.get(group);
+            if (!card) {
+                card = document.createElement('div');
+                card.className = 'chatgpt-connect-card';
+                // Insert before .message-content so it appears in the right position.
+                const mc = group.querySelector('.message-content');
+                if (mc) {
+                    group.insertBefore(card, mc);
+                } else {
+                    group.appendChild(card);
+                }
+                _chatgptCards.set(group, card);
+                group.classList.add('chatgpt-connect-active');
+            }
+            return card;
+        }
+
+        function handleChatGPTConnect(payload, group) {
+            const { phase, url, code, expires_in_minutes, email, message } = payload;
+
+            if (phase === 'verify') {
+                const card = _cgcGetOrCreate(group);
+                card.dataset.cgcStart = Date.now();
+                card.innerHTML =
+                  '<div class="cgc-wrap">' +
+                    '<div class="cgc-icon-row">' +
+                      '<div class="cgc-icon-bg">' +
+                        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>' +
+                      '</div>' +
+                      '<div>' +
+                        '<div class="cgc-title">Connect ChatGPT to Zoe</div>' +
+                        '<div class="cgc-subtitle">Sign in with ChatGPT Plus or Pro</div>' +
+                      '</div>' +
+                    '</div>' +
+                    '<div class="cgc-divider"></div>' +
+                    '<div class="cgc-steps">' +
+                      '<div class="cgc-step-row"><span class="cgc-num">1</span><span>Open this link in your browser</span></div>' +
+                      '<a class="cgc-link-btn" href="' + url + '" target="_blank" rel="noopener">' +
+                        '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>' +
+                        'auth.openai.com/codex/device' +
+                      '</a>' +
+                      '<div class="cgc-step-row" style="margin-top:10px"><span class="cgc-num">2</span><span>Enter this code when prompted</span></div>' +
+                      '<div class="cgc-code" title="Tap to copy" onclick="navigator.clipboard&&navigator.clipboard.writeText(\'' + code + '\').then(function(){this.classList.add(\'cgc-copied\')}.bind(this))">' +
+                        code +
+                        '<span class="cgc-copy-hint">tap to copy</span>' +
+                      '</div>' +
+                    '</div>' +
+                    '<div class="cgc-divider"></div>' +
+                    '<div class="cgc-footer">' +
+                      '<span class="cgc-spin"></span>' +
+                      '<span class="cgc-footer-text">Waiting for authorisation\u2026 ' + expires_in_minutes + ' min</span>' +
+                    '</div>' +
+                  '</div>';
+            } else if (phase === 'waiting') {
+                const card = _chatgptCards.get(group);
+                if (!card) return;
+                const ft = card.querySelector('.cgc-footer-text');
+                if (ft && card.dataset.cgcStart) {
+                    const remaining = Math.max(0, 15 - Math.floor((Date.now() - +card.dataset.cgcStart) / 60000));
+                    ft.textContent = 'Waiting for authorisation\u2026 ' + remaining + ' min remaining';
+                }
+            } else if (phase === 'success') {
+                const card = _cgcGetOrCreate(group);
+                const note = payload.services_note || 'OpenClaw and Hermes are now using your ChatGPT account.';
+                card.innerHTML =
+                  '<div class="cgc-wrap cgc-done">' +
+                    '<div class="cgc-icon-row">' +
+                      '<div class="cgc-icon-bg cgc-icon-success">' +
+                        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>' +
+                      '</div>' +
+                      '<div>' +
+                        '<div class="cgc-title">ChatGPT connected</div>' +
+                        '<div class="cgc-subtitle">' + (email || '') + '</div>' +
+                      '</div>' +
+                    '</div>' +
+                    '<div class="cgc-divider"></div>' +
+                    '<div class="cgc-success-msg">' + note + '</div>' +
+                  '</div>';
+            } else if (phase === 'timeout') {
+                const card = _cgcGetOrCreate(group);
+                card.innerHTML =
+                  '<div class="cgc-wrap cgc-done">' +
+                    '<div class="cgc-title cgc-error-text">Code expired</div>' +
+                    '<div class="cgc-subtitle" style="margin-top:6px">The 15-minute window passed. Say \u201cconnect ChatGPT\u201d again for a fresh code.</div>' +
+                  '</div>';
+            } else if (phase === 'error') {
+                const card = _cgcGetOrCreate(group);
+                card.innerHTML =
+                  '<div class="cgc-wrap cgc-done">' +
+                    '<div class="cgc-title cgc-error-text">Connection failed</div>' +
+                    '<div class="cgc-subtitle" style="margin-top:6px">' + (message || 'Unknown error \u2014 please try again.') + '</div>' +
+                  '</div>';
             }
         }
 

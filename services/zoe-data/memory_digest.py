@@ -209,7 +209,7 @@ async def _extract_facts_with_gemma(chat_text: str) -> list[dict]:
     """Send chat transcript to the LLM and parse the JSON fact list."""
     prompt = _EXTRACTION_PROMPT.format(chat_text=chat_text[:3000])
     payload = {
-        "model": "gemma-4-E2B-it-Q4_K_M.gguf",
+        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
         "messages": [
             {"role": "system", "content": "You are a precise fact extractor. Return ONLY valid JSON."},
             {"role": "user", "content": prompt},
@@ -252,7 +252,7 @@ async def _is_contradiction(new_fact: str, existing_fact: str) -> bool:
         existing_fact=existing_fact.strip(),
     )
     payload = {
-        "model": "gemma-4-E2B-it-Q4_K_M.gguf",
+        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
         "messages": [
             {"role": "system", "content": "You are a strict fact-contradiction judge. Return ONLY the JSON object."},
             {"role": "user", "content": prompt},
@@ -491,4 +491,568 @@ async def run_digest_for_all_active_users(db=None) -> list[dict]:
         result = await run_memory_digest(uid, db=db)
         results.append(result)
         logger.info("memory_digest: %s", result)
+    return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DREAMING MEMORY — arXiv:2604.20943
+# Three-phase nightly/weekly memory reinforcement system:
+#   Phase 1 (REM Reinforce)  — run nightly after fact extraction
+#   Phase 2 (Deep Sleep)     — run weekly, promotes/archives pending memories
+#   Phase 3 (Synthesis)      — run weekly, clusters and synthesizes patterns
+# ═══════════════════════════════════════════════════════════════════════════
+
+_CONCEPT_EXTRACTION_PROMPT = """\
+Given the following memory fact, extract 1-5 concept tags (entity types or topics).
+Return ONLY a JSON array of short lowercase strings, e.g. ["food", "preference", "location"].
+Fact: {fact}
+"""
+
+
+async def _extract_concept_tags(fact: str) -> list[str]:
+    """Use Gemma to extract concept tags from a fact. Returns [] on failure."""
+    prompt = _CONCEPT_EXTRACTION_PROMPT.format(fact=fact[:300])
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{_GEMMA_URL}/v1/chat/completions",
+                json={
+                    "model": os.environ.get("ZOE_LLM_MODEL", "gemma"),
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 60,
+                    "temperature": 0.1,
+                },
+                timeout=10.0,
+            )
+        text = resp.json()["choices"][0]["message"]["content"].strip()
+        start = text.find("[")
+        end = text.rfind("]") + 1
+        if start >= 0 and end > start:
+            tags = json.loads(text[start:end])
+            return [str(t).lower().strip()[:30] for t in tags if t][:5]
+    except Exception as exc:
+        logger.debug("concept extraction failed: %s", exc)
+    return []
+
+
+async def _rem_reinforce_pass(user_id: str) -> dict:
+    """REM pass: for each new memory ingested tonight, strengthen related existing memories.
+
+    Algorithm:
+    1. Fetch tonight's new memories (added_at = today, consolidation_count = 0)
+    2. For each, semantic search for top-5 neighbours
+    3. Bump access_count on neighbours (new fact reinforces existing knowledge)
+    4. Write related_ids on both the new memory and its neighbours
+    5. Extract and store concept_tags if not already set
+    """
+    from memory_service import get_memory_service
+    import datetime, hashlib
+
+    svc = get_memory_service()
+    today = datetime.datetime.utcnow().date().isoformat()
+    linked = 0
+    tagged = 0
+
+    try:
+        col = svc._collection()
+        # ChromaDB $gte only supports int/float — filter by user_id only, then
+        # post-filter by added_at date in Python (ISO strings compare correctly
+        # lexicographically for same-length prefix matching).
+        results = col.get(
+            where={"user_id": {"$eq": user_id}},
+            include=["documents", "metadatas"],
+        )
+        # Keep only memories added today (today = "YYYY-MM-DD")
+        raw_ids   = results.get("ids")   or []
+        raw_docs  = results.get("documents") or []
+        raw_metas = results.get("metadatas") or []
+        today_ids, today_docs, today_metas = [], [], []
+        for _id, _doc, _meta in zip(raw_ids, raw_docs, raw_metas):
+            at = (_meta or {}).get("added_at", "") or ""
+            if at.startswith(today):
+                today_ids.append(_id)
+                today_docs.append(_doc)
+                today_metas.append(_meta)
+        ids   = today_ids
+        docs  = today_docs
+        metas = today_metas
+
+        for mem_id, doc, meta in zip(ids, docs, metas):
+            meta = dict(meta) if meta else {}
+
+            # Skip if already processed
+            if int(meta.get("consolidation_count", 0) or 0) > 0:
+                continue
+
+            # Extract concept tags if missing
+            if not meta.get("concept_tags"):
+                tags = await _extract_concept_tags(doc)
+                if tags:
+                    meta["concept_tags"] = ",".join(tags)
+                    tagged += 1
+
+            # Semantic search for neighbours
+            neighbours = await svc.search(doc, user_id=user_id, limit=6)
+            # Exclude self
+            neighbour_ids = [n.id for n in neighbours if n.id != mem_id][:5]
+
+            if neighbour_ids:
+                # Bump access on neighbours (reinforcement)
+                await svc.tick_access(user_id, neighbour_ids)
+
+                # Write related_ids on new memory
+                existing_related = set((meta.get("related_ids") or "").split(","))
+                existing_related.update(neighbour_ids)
+                meta["related_ids"] = ",".join(i for i in existing_related if i)
+                linked += 1
+
+                # Write related_ids on neighbours (bidirectional)
+                nb_result = col.get(ids=neighbour_ids, include=["metadatas", "documents"])
+                nb_ids = nb_result.get("ids") or []
+                nb_docs = nb_result.get("documents") or []
+                nb_metas = nb_result.get("metadatas") or []
+                new_nb_metas = []
+                for nm in nb_metas:
+                    nm = dict(nm) if nm else {}
+                    nb_related = set((nm.get("related_ids") or "").split(","))
+                    nb_related.add(mem_id)
+                    nm["related_ids"] = ",".join(i for i in nb_related if i)
+                    new_nb_metas.append(nm)
+                if nb_ids:
+                    col.upsert(ids=nb_ids, documents=nb_docs, metadatas=new_nb_metas)
+
+            # Mark as REM-processed
+            meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
+            col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+
+    except Exception as exc:
+        logger.warning("REM reinforce pass failed user=%s: %s", user_id, exc)
+
+    summary = {"user_id": user_id, "linked": linked, "tagged": tagged}
+    logger.info("dreaming/rem: %s", summary)
+    return summary
+
+
+def _promotion_score(meta: dict) -> float:
+    """6-signal weighted promotion score for deep sleep gate.
+
+    Returns a float in [0, 1]. Score >= 0.8 AND unique_query_count >= 3 → promote.
+    """
+    import datetime, math
+
+    # Relevance proxy: confidence (0.30 weight)
+    relevance = float(meta.get("confidence", 0.5) or 0.5)
+
+    # Frequency: normalise access_count (0.24 weight) — cap at 50 for normalisation
+    freq_raw = int(meta.get("access_count", 0) or 0)
+    frequency = min(freq_raw / 50.0, 1.0)
+
+    # Query diversity (0.15 weight) — cap at 10
+    uqc = int(meta.get("unique_query_count", 0) or 0)
+    diversity = min(uqc / 10.0, 1.0)
+
+    # Recency: decay from last_accessed (0.15 weight)
+    try:
+        last = meta.get("last_accessed") or meta.get("added_at") or ""
+        dt = datetime.datetime.fromisoformat(last.replace("Z", "+00:00"))
+        days_ago = (datetime.datetime.now(datetime.timezone.utc) - dt).days
+        recency = math.exp(-days_ago / 30.0)  # e-folding 30 days
+    except Exception:
+        recency = 0.5
+
+    # Consolidation depth (0.10 weight) — cap at 5
+    consol = int(meta.get("consolidation_count", 0) or 0)
+    consolidation = min(consol / 5.0, 1.0)
+
+    # Conceptual richness (0.06 weight)
+    tags = [t for t in (meta.get("concept_tags") or "").split(",") if t]
+    richness = min(len(tags) / 5.0, 1.0)
+
+    score = (
+        0.30 * relevance
+        + 0.24 * frequency
+        + 0.15 * diversity
+        + 0.15 * recency
+        + 0.10 * consolidation
+        + 0.06 * richness
+    )
+    return round(score, 4)
+
+
+async def _deep_sleep_pass(user_id: str) -> dict:
+    """Deep sleep pass: promote high-signal pending memories; archive stale ones.
+
+    Runs once per week (Sunday nightly). Replaces the blunt auto-approve in
+    run_weekly_consolidation with a 6-signal gate.
+
+    Gate: score >= 0.8 AND unique_query_count >= 3 → pending → approved
+    Stale: pending for 14+ days without qualifying → archived
+    """
+    from memory_service import get_memory_service
+    import datetime
+
+    svc = get_memory_service()
+    col = svc._collection()
+    promoted = 0
+    archived = 0
+    cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=14)).isoformat() + "Z"
+
+    try:
+        results = col.get(
+            where={"$and": [{"user_id": {"$eq": user_id}}, {"status": {"$eq": "pending"}}]},
+            include=["documents", "metadatas"],
+        )
+        ids = results.get("ids") or []
+        docs = results.get("documents") or []
+        metas = results.get("metadatas") or []
+
+        for mem_id, doc, meta in zip(ids, docs, metas):
+            meta = dict(meta) if meta else {}
+            score = _promotion_score(meta)
+            uqc = int(meta.get("unique_query_count", 0) or 0)
+            added_at = meta.get("added_at") or ""
+
+            if score >= 0.8 and uqc >= 3:
+                meta["status"] = "approved"
+                meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
+                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+                promoted += 1
+            elif added_at and added_at < cutoff:
+                meta["status"] = "archived"
+                meta["consolidation_count"] = int(meta.get("consolidation_count", 0) or 0) + 1
+                col.upsert(ids=[mem_id], documents=[doc], metadatas=[meta])
+                archived += 1
+
+    except Exception as exc:
+        logger.warning("deep sleep pass failed user=%s: %s", user_id, exc)
+
+    summary = {"user_id": user_id, "promoted": promoted, "archived": archived}
+    logger.info("dreaming/deep_sleep: %s", summary)
+    return summary
+
+
+_SYNTHESIS_PROMPT = """\
+The following {n} memory facts all share the topic "{tag}".
+Synthesize a single higher-order pattern or insight from them in one clear sentence.
+Do NOT use names or personal identifiers. Output ONLY the synthesized fact, nothing else.
+
+Facts:
+{facts}
+"""
+
+
+async def _synthesis_pass(user_id: str) -> dict:
+    """Synthesis pass: cluster approved memories by concept tag; synthesize patterns.
+
+    For clusters of 5+ memories sharing the same top concept tag, prompt Gemma
+    to produce one higher-order insight. Stored with source="synthesis".
+    """
+    from memory_service import get_memory_service, MemoryServiceError
+
+    svc = get_memory_service()
+    col = svc._collection()
+    synthesized = 0
+
+    try:
+        results = col.get(
+            where={"$and": [
+                {"user_id": {"$eq": user_id}},
+                {"status": {"$eq": "approved"}},
+                {"source": {"$ne": "synthesis"}},
+            ]},
+            include=["documents", "metadatas"],
+        )
+        ids = results.get("ids") or []
+        docs = results.get("documents") or []
+        metas = results.get("metadatas") or []
+
+        # Build clusters by top concept tag
+        from collections import defaultdict
+        clusters: dict[str, list[tuple[str, str]]] = defaultdict(list)
+        for mem_id, doc, meta in zip(ids, docs, metas):
+            meta = dict(meta) if meta else {}
+            tags = [t.strip() for t in (meta.get("concept_tags") or "").split(",") if t.strip()]
+            if tags:
+                clusters[tags[0]].append((mem_id, doc))
+
+        for tag, members in clusters.items():
+            if len(members) < 5:
+                continue
+            # Take the 10 most relevant
+            sample = members[:10]
+            facts_text = "\n".join(f"- {doc}" for _, doc in sample)
+            prompt = _SYNTHESIS_PROMPT.format(n=len(sample), tag=tag, facts=facts_text)
+
+            try:
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    resp = await client.post(
+                        f"{_GEMMA_URL}/v1/chat/completions",
+                        json={
+                            "model": os.environ.get("ZOE_LLM_MODEL", "gemma"),
+                            "messages": [{"role": "user", "content": prompt}],
+                            "max_tokens": 120,
+                            "temperature": 0.3,
+                        },
+                    )
+                synthesis_text = resp.json()["choices"][0]["message"]["content"].strip()
+                if len(synthesis_text) < 10:
+                    continue
+
+                ref = await svc.ingest(
+                    synthesis_text,
+                    user_id=user_id,
+                    source="synthesis",
+                    memory_type="insight",
+                    confidence=0.85,
+                    status="approved",
+                    tags=[tag, "synthesis"],
+                )
+                if ref:
+                    # Link synthesized memory back to source cluster
+                    source_ids = [mid for mid, _ in sample]
+                    col_result = col.get(ids=[ref.id], include=["metadatas", "documents"])
+                    if col_result.get("ids"):
+                        sm = dict((col_result["metadatas"] or [{}])[0])
+                        sm["related_ids"] = ",".join(source_ids)
+                        sm["concept_tags"] = tag
+                        col.upsert(ids=[ref.id], documents=[synthesis_text], metadatas=[sm])
+                    synthesized += 1
+            except Exception as exc:
+                logger.warning("synthesis failed for tag=%s user=%s: %s", tag, user_id, exc)
+
+    except Exception as exc:
+        logger.warning("synthesis pass failed user=%s: %s", user_id, exc)
+
+    summary = {"user_id": user_id, "synthesized": synthesized}
+    logger.info("dreaming/synthesis: %s", summary)
+    return summary
+
+
+async def run_dreaming_cycle(user_id: str) -> dict:
+    """Run the full dreaming cycle for a user (all 3 passes).
+
+    Called by nightly-training-cycle.sh after run_memory_digest.
+    Phase 1 (REM)        — runs nightly
+    Phase 2 (Deep Sleep) — runs weekly (Sunday)
+    Phase 3 (Synthesis)  — runs weekly (Sunday)
+    """
+    import datetime
+
+    is_sunday = datetime.datetime.utcnow().weekday() == 6
+    result: dict = {"user_id": user_id}
+
+    rem = await _rem_reinforce_pass(user_id)
+    result["rem"] = rem
+
+    if is_sunday:
+        deep = await _deep_sleep_pass(user_id)
+        result["deep_sleep"] = deep
+        synth = await _synthesis_pass(user_id)
+        result["synthesis"] = synth
+
+    logger.info("dreaming cycle complete: %s", result)
+    return result
+
+
+async def run_dreaming_for_all(db=None) -> list[dict]:
+    """Run dreaming cycle for all users who have approved memories."""
+    from memory_service import get_memory_service
+
+    svc = get_memory_service()
+    try:
+        user_ids = await svc.list_users()
+    except AttributeError:
+        try:
+            from database import get_db
+            if db is None:
+                async for db in get_db():
+                    break
+            rows = await db.execute("SELECT DISTINCT user_id FROM chat_sessions")
+            rows = await rows.fetchall()
+            user_ids = [r[0] for r in rows if r[0]]
+        except Exception as exc:
+            logger.error("dreaming: could not list users: %s", exc)
+            return []
+
+    results = []
+    for uid in user_ids:
+        r = await run_dreaming_cycle(uid)
+        results.append(r)
+    return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MUSIC TASTE DIGEST
+# Nightly pass: reads raw music_listening_events from SQLite, scores artists
+# and genres by play/skip behaviour, and writes preference facts to MemPalace.
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def run_music_taste_digest(user_id: str) -> dict:
+    """Consolidate 30 days of music events into MemPalace preference memories.
+
+    Scoring per entity (artist or genre):
+        play       +2
+        now_playing +1
+        skip        -3
+        skip_fast   -5
+        repeat      +4
+    Entities scoring > 3 → preference fact ingested into MemPalace.
+    Entities scoring < -3 → avoidance fact ingested.
+
+    Returns {"user_id": ..., "facts_ingested": N, "artists_tracked": M}.
+    """
+    import time as _time
+    from collections import defaultdict
+
+    result: dict = {"user_id": user_id, "facts_ingested": 0, "artists_tracked": 0}
+    SIGNAL_WEIGHTS = {
+        "complete":      +2,
+        "repeat":        +3,
+        "partial":       +1,
+        "skip":          -2,
+        "now_playing":   +1,
+        "play":          +1,   # legacy fallback for old events
+        "pause":          0,
+        "volume_change":  0,
+    }
+    _SCORE_MAP = SIGNAL_WEIGHTS
+
+    try:
+        from database import get_db  # type: ignore[import]
+        cutoff_ts = _time.time() - 30 * 86400
+
+        async for db in get_db():
+            rows = await db.execute(
+                """SELECT event_type, track_title, artist, genre
+                   FROM music_listening_events
+                   WHERE user_id = ? AND ts >= ?
+                   ORDER BY ts ASC""",
+                (user_id, cutoff_ts),
+            )
+            events = await rows.fetchall()
+            break  # only need one iteration of the generator
+    except Exception as exc:
+        logger.warning("music_taste_digest: could not load events for %s: %s", user_id, exc)
+        result["error"] = str(exc)
+        return result
+
+    if not events:
+        logger.info("music_taste_digest: no events in last 30d for %s", user_id)
+        result["skipped_reason"] = "no_events"
+        return result
+
+    # Accumulate scores per artist and genre
+    artist_scores: dict[str, float] = defaultdict(float)
+    artist_plays: dict[str, int] = defaultdict(int)
+    artist_skips: dict[str, int] = defaultdict(int)
+    genre_scores: dict[str, float] = defaultdict(float)
+    genre_plays: dict[str, int] = defaultdict(int)
+    genre_skips: dict[str, int] = defaultdict(int)
+
+    for row in events:
+        evt_type = row[0] or ""
+        artist = (row[2] or "").strip()
+        genre = (row[3] or "").strip()
+        delta = _SCORE_MAP.get(evt_type, 0)
+
+        if artist:
+            artist_scores[artist] += delta
+            if delta > 0:
+                artist_plays[artist] += 1
+            elif delta < 0:
+                artist_skips[artist] += 1
+
+        if genre:
+            genre_scores[genre] += delta
+            if delta > 0:
+                genre_plays[genre] += 1
+            elif delta < 0:
+                genre_skips[genre] += 1
+
+    result["artists_tracked"] = len(artist_scores) + len(genre_scores)
+
+    # Build preference facts
+    facts: list[tuple[str, str]] = []  # (fact_text, memory_type_hint)
+    for artist, score in artist_scores.items():
+        plays = artist_plays.get(artist, 0)
+        skips = artist_skips.get(artist, 0)
+        if score > 3:
+            facts.append((
+                f"User frequently plays {artist}: {plays} play(s), {skips} skip(s) in last 30 days.",
+                "preference",
+            ))
+        elif score < -3:
+            facts.append((
+                f"User avoids {artist}: consistently skipped ({skips} skips, {plays} plays).",
+                "preference",
+            ))
+
+    for genre, score in genre_scores.items():
+        plays = genre_plays.get(genre, 0)
+        skips = genre_skips.get(genre, 0)
+        if score > 3:
+            facts.append((
+                f"User frequently listens to {genre} music: {plays} play(s), {skips} skip(s) in last 30 days.",
+                "preference",
+            ))
+        elif score < -3:
+            facts.append((
+                f"User avoids {genre} music: consistently skipped ({skips} skips, {plays} plays).",
+                "preference",
+            ))
+
+    if not facts:
+        logger.info("music_taste_digest: no strong preferences found for %s", user_id)
+        return result
+
+    try:
+        from memory_service import get_memory_service, MemoryServiceError  # type: ignore[import]
+        svc = get_memory_service()
+    except Exception as exc:
+        logger.warning("music_taste_digest: memory service unavailable: %s", exc)
+        result["error"] = str(exc)
+        return result
+
+    for fact_text, mem_type in facts:
+        try:
+            ref = await svc.ingest(
+                fact_text,
+                user_id=user_id,
+                source="music_digest",
+                memory_type="preference",
+                confidence=0.85,
+                status="approved",
+                tags=["music", "taste", "auto"],
+            )
+            if ref is not None:
+                result["facts_ingested"] += 1
+                logger.info("music_taste_digest: stored for %s: %s", user_id, fact_text[:80])
+        except Exception as exc:
+            logger.warning("music_taste_digest: ingest failed for %s: %s", user_id, exc)
+
+    logger.info("music_taste_digest: %s", result)
+    return result
+
+
+async def run_music_taste_digest_for_all(db=None) -> list[dict]:
+    """Run music taste digest for all users who have any music events."""
+    results = []
+    try:
+        from database import get_db  # type: ignore[import]
+        if db is None:
+            async for db in get_db():
+                break
+        rows = await db.execute(
+            "SELECT DISTINCT user_id FROM music_listening_events"
+        )
+        rows = await rows.fetchall()
+        user_ids = [r[0] for r in rows if r[0]]
+    except Exception as exc:
+        logger.error("music_taste_digest: could not list users: %s", exc)
+        return []
+
+    for uid in user_ids:
+        r = await run_music_taste_digest(uid)
+        results.append(r)
+        logger.info("music_taste_digest: %s", r)
     return results

@@ -573,6 +573,19 @@ def detect_intent(text: str, log_miss: bool = True) -> Optional[Intent]:
     if m:
         return Intent("recipe_search", {"query": m.group(1).strip()})
 
+    # === MUSIC SETUP (checked before list_add so "add music service" doesn't misroute) ===
+    _MUSIC_SETUP_EARLY_RE = re.compile(
+        r"^(?:set\s?up|configure|connect|add|setup)\s+"
+        r"(?:music(?:\s+assistant)?|spotify|youtube\s*music|apple\s*music"
+        r"|deezer|tidal|plex|streaming|music\s+services?|music\s+settings?)$"
+        r"|^music\s+settings?$"
+        r"|^set\s+up\s+music\s+assistant$"
+        r"|^connect\s+(?:my\s+)?(?:music|streaming)$",
+        re.IGNORECASE,
+    )
+    if _MUSIC_SETUP_EARLY_RE.match(t):
+        return Intent("music_setup", {})
+
     # === LIST PATTERNS (checked after domain-specific) ===
 
     # --- LIST ADD (with explicit list name) ---
@@ -647,7 +660,7 @@ def detect_intent(text: str, log_miss: bool = True) -> Optional[Intent]:
         r"^(?:play|put on|play me|play some|start playing)\s+(.+)$", re.IGNORECASE
     )
     _MUSIC_CMD_RE = re.compile(
-        r"^(?P<cmd>pause|stop|resume|unpause|skip|next(?: song| track)?|previous(?: song| track)?"
+        r"^(?P<cmd>pause|stop|resume|unpause|skip(?:\s+(?:this|the)\s+(?:song|track))?|next(?: song| track)?|previous(?: song| track)?"
         r"|next track|prev track|previous track|what(?:'s| is)(?: currently)? playing"
         r"|what song is this|volume up|volume down|louder|quieter|mute|unmute|shuffle|repeat)(?: the music| music)?\.?$",
         re.IGNORECASE,
@@ -675,17 +688,23 @@ def detect_intent(text: str, log_miss: bool = True) -> Optional[Intent]:
         return Intent("music_control", {"command": cmd})
 
 
-    # Auto-patched by zoe-self-improve 2026-05-11 — Unknown gap
-    _AUTOGEN_UNKNOWN_GAP = re.compile('^\\s*(?:(?:turn|put)\\s+(?:the\\s+)?volume\\s+(?P<direction>up|down)|(?P<action>increase|raise|lower|decrease|reduce)\\s+(?:the\\s+)?volume(?:\\s+(?:by|to)\\s+(?P<amount>\\d+|one|two|three|four|five|six|seven|eight|nine|ten))?|set\\s+(?:the\\s+)?volume\\s+to\\s+(?P<level>\\d+|one|two|three|four|five|six|seven|eight|nine|ten))\\s*[.!?]?\\s*$', re.IGNORECASE)
+    # Conversational volume phrases — covers polite/natural speech (zoe-self-improve 2026-05-11 refined)
+    _AUTOGEN_UNKNOWN_GAP = re.compile(
+        r'(?:can|could|would|will)\s+you\s+.*?(?:volume|louder|quieter)'
+        r'|(?:turn|put|make|bring|bump|crank)\s+(?:your|the|it|that)?\s*(?:volume\s*)?(?:up|down|louder|quieter)'
+        r'|(?:raise|increase|boost|lower|decrease|reduce)\s+(?:the|your)?\s*(?:volume|sound)'
+        r'|(?:a\s+bit|just\s+a?\s*(?:little|tad)|slightly)\s+(?:louder|quieter|softer)',
+        re.IGNORECASE,
+    )
     if _AUTOGEN_UNKNOWN_GAP.search(t):
-        _num = re.search(r'\b(10|[0-9])\b', t)
         _wrd = dict(zero=0,one=1,two=2,three=3,four=4,five=5,six=6,seven=7,eight=8,nine=9,ten=10)
-        _wm = re.search(r'\b(' + '|'.join(_wrd) + r')\b', t, re.IGNORECASE)
+        _num = re.search(r'\b(10|[0-9])\b', t)
+        _wm  = re.search(r'\b(' + '|'.join(_wrd) + r')\b', t, re.IGNORECASE)
         _lvl = int(_num.group(1)) * 10 if _num else (_wrd.get(_wm.group(1).lower(), 5) * 10 if _wm else None)
         if _lvl is not None:
             return Intent("music_volume", {"level": _lvl})
-        _dir = "volume_up" if re.search(r'\b(up|raise|louder|increase)\b', t, re.IGNORECASE) else "volume_down"
-        return Intent("music_control", {"command": _dir})
+        _up  = re.search(r'\b(up|raise|louder|increase|boost|higher)\b', t, re.IGNORECASE)
+        return Intent("music_control", {"command": "volume_up" if _up else "volume_down"})
 
     if log_miss:
         logger.info("intent_miss: %s", text)
@@ -806,6 +825,9 @@ async def _run_mcporter(cmd: str) -> Optional[str]:
 
 
 async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optional[str]:
+    if intent.name == "music_setup":
+        return await _execute_music_setup(user_id)
+
     if intent.name in {"music_play", "music_control", "music_volume"}:
         return await _execute_music_intent(intent, user_id)
 
@@ -1002,6 +1024,53 @@ async def _execute_weather_direct(user_id: str, forecast: bool = False) -> Optio
         return None
 
 
+async def _execute_music_setup(user_id: str) -> str:
+    """
+    Return a rich markdown response for the music_setup intent.
+    Fetches live status from MA so the reply reflects what is actually configured.
+    """
+    ma_url = os.environ.get("MUSIC_ASSISTANT_URL", "http://localhost:8095")
+    ma_token = os.environ.get("MUSIC_ASSISTANT_TOKEN", "")
+    hdrs: dict[str, str] = {"Content-Type": "application/json"}
+    if ma_token:
+        hdrs["Authorization"] = f"Bearer {ma_token}"
+
+    version_str = ""
+    providers_str = "No streaming services connected yet."
+
+    try:
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=4.0) as c:
+            r = await c.get(f"{ma_url}/info", headers=hdrs)
+            if r.status_code == 200:
+                info = r.json()
+                version_str = f" v{info.get('version', '')}"
+    except Exception:
+        pass
+
+    try:
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.post(f"{ma_url}/api", json={"command": "music/providers"}, headers=hdrs)
+            if r.status_code == 200:
+                data = r.json()
+                providers = data if isinstance(data, list) else (data.get("items") or [])
+                if providers:
+                    names = [p.get("name") or p.get("domain") or p.get("id", "?") for p in providers]
+                    providers_str = "Connected services: **" + "**, **".join(names) + "**."
+    except Exception:
+        pass
+
+    return (
+        f"🎵 **Music Assistant{version_str} Setup**\n\n"
+        f"{providers_str}\n\n"
+        f"To connect music services (Spotify, YouTube Music, Apple Music, Deezer and more), "
+        f"open the **[Music page](/music.html)** — it shows a setup wizard with Connect buttons "
+        f"for each provider.\n\n"
+        f"Or open Music Assistant directly: [{ma_url}]({ma_url})"
+    )
+
+
 async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
     """Route music intents to HA media_player via zoe-data HA bridge."""
     try:
@@ -1011,19 +1080,165 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
 
         if intent.name == "music_play":
             query = slots.get("query", "music")
+
+            # Genre-weighted discovery for vague queries
+            _query = query.strip()
+            if not _query or _query.lower() in {"something", "music", "anything", "a song", "some music"}:
+                try:
+                    import sqlite3 as _sq
+                    _db3 = _sq.connect("data/zoe.db")
+                    # Get top-scored genre from last 30 days
+                    _rows = _db3.execute("""
+                        SELECT genre,
+                               SUM(CASE event_type
+                                   WHEN 'complete' THEN 2 WHEN 'repeat' THEN 3
+                                   WHEN 'partial' THEN 1 WHEN 'skip' THEN -2
+                                   ELSE 0 END) as score
+                        FROM music_listening_events
+                        WHERE user_id=? AND genre != '' AND ts > ?
+                        GROUP BY genre ORDER BY score DESC LIMIT 1
+                    """, (user_id, __import__("time").time() - 86400 * 30)).fetchone()
+                    _db3.close()
+                    if _rows and _rows[1] > 0:
+                        _query = _rows[0]  # use top genre as search query
+                except Exception:
+                    pass
+                if not _query:
+                    _query = "music"  # final fallback
+
             payload = {
                 "type": "service",
                 "domain": "media_player",
                 "service": "play_media",
                 "data": {
                     "entity_id": _os.environ.get("ZOE_DEFAULT_MEDIA_PLAYER", "media_player.all"),
-                    "media_content_id": query,
+                    "media_content_id": _query,
                     "media_content_type": "music",
                 },
             }
             async with _httpx.AsyncClient(timeout=8.0) as c:
                 await c.post(f"{ha_url}/execute", json=payload)
-            return f"Playing {query}."
+
+            # Fire-and-forget: 5-signal play event logger
+            async def _log_play_event() -> None:
+                import asyncio as _asyncio
+                await _asyncio.sleep(2)
+                # Snapshot what started playing
+                start_meta: dict = {}
+                _ma_url = _os.environ.get("MUSIC_ASSISTANT_URL", "http://localhost:8095")
+                _ma_tok = _os.environ.get("MUSIC_ASSISTANT_TOKEN", "")
+                _ma_hdrs = {"Authorization": f"Bearer {_ma_tok}"} if _ma_tok else {}
+
+                def _ma_extract_media(p: dict) -> dict:
+                    media = p.get("current_media") or {}
+                    artists = media.get("artists") or []
+                    return {
+                        "track_title": media.get("title") or media.get("name", ""),
+                        "artist": artists[0].get("name", "") if artists else (media.get("artist", "") or ""),
+                        "album": (media.get("album") or {}).get("name", "") if isinstance(media.get("album"), dict) else "",
+                        "source": p.get("provider", ""),
+                        "duration_seconds": float(media.get("duration", 0) or 0),
+                    }
+
+                try:
+                    async with _httpx.AsyncClient(timeout=3) as cl:
+                        r = await cl.post(f"{_ma_url}/api",
+                            json={"command": "players/all"}, headers=_ma_hdrs)
+                        if r.status_code == 200 and isinstance(r.json(), list):
+                            for p in r.json():
+                                if p.get("state") == "playing":
+                                    start_meta = _ma_extract_media(p)
+                                    break
+                except Exception:
+                    pass
+
+                # Wait to observe how much was actually played
+                await _asyncio.sleep(28)
+
+                try:
+                    async with _httpx.AsyncClient(timeout=3) as cl:
+                        r = await cl.post(f"{_ma_url}/api",
+                            json={"command": "players/all"}, headers=_ma_hdrs)
+                        if r.status_code != 200 or not isinstance(r.json(), list):
+                            raise Exception("MA unavailable")
+                        players = r.json()
+
+                    elapsed = 0.0
+                    current_title = ""
+                    for p in players:
+                        if p.get("state") in ("playing", "paused"):
+                            elapsed = float(p.get("elapsed_time", 0) or 0)
+                            item = p.get("current_item", {}) or {}
+                            track = item.get("track", {}) or {}
+                            current_title = track.get("name") or track.get("title", "")
+                            break
+
+                    duration = start_meta.get("duration_seconds", 0)
+
+                    # Ghost flush: paused track — elapsed keeps growing past end
+                    if duration > 0 and elapsed > duration * 1.1:
+                        return
+
+                    # Determine signal
+                    if duration > 0:
+                        pct = min(elapsed / duration, 1.0)
+                    else:
+                        pct = 0.5  # unknown duration → assume partial
+
+                    if pct < 0.10:
+                        return  # noise — don't log
+
+                    if current_title and start_meta.get("track_title") and current_title != start_meta["track_title"]:
+                        event_type = "skip" if pct < 0.30 else ("partial" if pct < 0.80 else "complete")
+                    elif pct < 0.30:
+                        event_type = "skip"
+                    elif pct < 0.80:
+                        event_type = "partial"
+                    else:
+                        event_type = "complete"
+
+                    # Check for repeat: same track played again in last 30 min
+                    try:
+                        import sqlite3 as _sqlite, time as _time
+                        _db = _sqlite.connect("data/zoe.db")
+                        _recent = _db.execute(
+                            "SELECT count(*) FROM music_listening_events "
+                            "WHERE user_id=? AND track_title=? AND event_type IN ('complete','partial') "
+                            "AND ts > ?",
+                            (user_id, start_meta.get("track_title", ""), _time.time() - 1800)
+                        ).fetchone()[0]
+                        _db.close()
+                        if _recent > 0 and event_type == "complete":
+                            event_type = "repeat"
+                    except Exception:
+                        pass
+
+                    from database import log_music_event as _log
+                    await _log(
+                        user_id=user_id,
+                        event_type=event_type,
+                        query=slots.get("query", ""),
+                        percent_played=round(pct, 3),
+                        duration_seconds=duration,
+                        **{k: v for k, v in start_meta.items() if k not in ("duration_seconds",)},
+                        session_id=slots.get("session_id", ""),
+                    )
+                except Exception:
+                    # Fallback: log as plain play if observation failed
+                    try:
+                        from database import log_music_event as _log
+                        await _log(user_id=user_id, event_type="complete",
+                                   query=slots.get("query", ""),
+                                   **{k: v for k, v in start_meta.items() if k != "duration_seconds"})
+                    except Exception:
+                        pass
+            try:
+                import asyncio as _asyncio
+                _asyncio.ensure_future(_log_play_event())
+            except Exception:
+                pass
+
+            return f"Playing {_query}."
 
         elif intent.name == "music_control":
             cmd = slots.get("command", "")
@@ -1049,6 +1264,13 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                     title = state.get("attributes", {}).get("media_title")
                     artist = state.get("attributes", {}).get("media_artist")
                     if title:
+                        try:
+                            import asyncio as _asyncio
+                            from database import log_music_event as _log
+                            _asyncio.ensure_future(_log(user_id=user_id, event_type="now_playing",
+                                                        track_title=title, artist=artist or ""))
+                        except Exception:
+                            pass
                         return f"Playing {title}{' by ' + artist if artist else ''}."
                 return "Nothing is playing right now."
 
@@ -1069,6 +1291,41 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 }
                 async with _httpx.AsyncClient(timeout=8.0) as c:
                     await c.post(f"{ha_url}/execute", json=payload)
+
+                # Log skip/pause events for taste learning
+                _evt_type = None
+                if cmd in ("next", "skip"):
+                    _evt_type = "skip"
+                elif cmd in ("pause", "stop"):
+                    _evt_type = "pause"
+                if _evt_type:
+                    try:
+                        import asyncio as _asyncio
+                        from database import log_music_event as _log
+                        _asyncio.ensure_future(_log(user_id=user_id, event_type=_evt_type))
+                    except Exception:
+                        pass
+
+                result = None
+                # Skip-streak mood detection
+                if cmd in ("next", "skip"):
+                    try:
+                        import sqlite3 as _sq, time as _t
+                        _db2 = _sq.connect("data/zoe.db")
+                        _recent_skips = _db2.execute(
+                            "SELECT count(*) FROM music_listening_events "
+                            "WHERE user_id=? AND event_type='skip' AND ts > ?",
+                            (user_id, _t.time() - 900)  # last 15 min
+                        ).fetchone()[0]
+                        _db2.close()
+                        if _recent_skips >= 4:
+                            label_str = {"next": "Skipped to next", "skip": "Skipped to next"}.get(cmd, cmd.title())
+                            return (
+                                label_str + ". You've skipped quite a few — want me to try a different genre or mood?"
+                            )
+                    except Exception:
+                        pass
+
                 label = {"pause": "Paused", "stop": "Stopped", "resume": "Resumed",
                          "next": "Skipped to next", "previous": "Back to previous",
                          "volume_up": "Volume up", "volume_down": "Volume down",
@@ -1089,6 +1346,13 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
             }
             async with _httpx.AsyncClient(timeout=8.0) as c:
                 await c.post(f"{ha_url}/execute", json=payload)
+            try:
+                import asyncio as _asyncio
+                from database import log_music_event as _log
+                _asyncio.ensure_future(_log(user_id=user_id, event_type="volume_change",
+                                            volume_level=level))
+            except Exception:
+                pass
             return f"Volume set to {level}%."
 
     except Exception as exc:

@@ -14,7 +14,7 @@ import httpx
 
 log = logging.getLogger(__name__)
 
-_LLM_BASE = os.environ.get("LLAMA_SERVER_URL", "http://localhost:11434")
+_LLM_BASE = os.environ.get("GEMMA_SERVER_URL", "http://localhost:11434")
 _TIMEOUT = 12.0
 _MAX_TOKENS = 80
 
