@@ -175,7 +175,24 @@ async def lifespan(app: FastAPI):
     except Exception as _pe_exc:
         logger.warning("Proactive engine failed to start (non-fatal): %s", _pe_exc)
 
+    # LiveKit voice agent: joins "zoe-voice" room as server-side participant.
+    # Only starts if LIVEKIT_API_KEY is configured; safe to skip if LiveKit is not running.
+    _livekit_agent_task = None
+    try:
+        from routers.voice_livekit import start_livekit_agent
+        _livekit_agent_task = asyncio.create_task(start_livekit_agent(), name="livekit_agent")
+        logger.info("LiveKit voice agent task started")
+    except Exception as _lk_exc:
+        logger.warning("LiveKit agent failed to start (non-fatal): %s", _lk_exc)
+
     yield
+
+    if _livekit_agent_task and not _livekit_agent_task.done():
+        _livekit_agent_task.cancel()
+        try:
+            await _livekit_agent_task
+        except asyncio.CancelledError:
+            pass
 
     try:
         from proactive.engine import stop_proactive_engine
@@ -430,6 +447,31 @@ async def journal_ws(websocket: WebSocket, user_id: str):
         broadcaster.disconnect(websocket, "all")
 
 
+async def _resolve_ws_user(session_id: str) -> str:
+    """Resolve a browser session_id to a user_id via zoe-auth HTTP.
+
+    Calls the same /api/auth/user endpoint that get_current_user uses in auth.py.
+    Falls back to 'family-admin' on any auth failure or timeout.
+    """
+    if not session_id:
+        return "family-admin"
+    try:
+        import httpx
+        auth_url = os.getenv("ZOE_AUTH_URL", "http://localhost:8002").rstrip("/")
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get(
+                f"{auth_url}/api/auth/user",
+                headers={"X-Session-ID": session_id},
+            )
+        if r.status_code == 200:
+            data = r.json()
+            uid = data.get("user_id") or data.get("id") or ""
+            return uid or "family-admin"
+    except Exception:
+        pass
+    return "family-admin"
+
+
 @app.websocket("/ws/voice/")
 async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     """Local voice session WebSocket for voice.html.
@@ -442,7 +484,7 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
     """
     await websocket.accept()
     ws_session_id = session_id or f"ws-voice-{_uuid_mod.uuid4().hex[:8]}"
-    user_id = "family-admin"
+    user_id = await _resolve_ws_user(session_id)
 
     await websocket.send_json({"type": "state", "state": "ambient"})
 
@@ -458,13 +500,17 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                 break
 
             if raw.get("bytes"):
-                # Binary audio chunk: write to temp WAV and transcribe
+                # Binary audio chunk: detect format from magic bytes, write temp file, transcribe.
+                # Browser MediaRecorder always sends WebM/opus (magic: \x1a\x45\xdf\xa3).
+                # Saving as .wav when the content is WebM causes whisper.cpp to fail.
                 audio_bytes: bytes = raw["bytes"]
                 await websocket.send_json({"type": "state", "state": "thinking"})
                 try:
                     import tempfile, os as _os
                     from routers.voice_tts import _transcribe_audio
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+                    _magic = audio_bytes[:4] if len(audio_bytes) >= 4 else b""
+                    _suffix = ".wav" if _magic == b"RIFF" else ".webm"
+                    with tempfile.NamedTemporaryFile(suffix=_suffix, delete=False) as tf:
                         tf.write(audio_bytes)
                         tmp_path = tf.name
                     try:

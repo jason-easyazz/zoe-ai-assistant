@@ -7,6 +7,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Zoe Voice</title>
 <link rel="icon" href="/favicon.ico">
+<!-- LiveKit client — loaded in <head> so it's available before inline script runs -->
+<script src="/lib/livekit/livekit-client.umd.min.js" onerror="console.warn('LiveKit client not loaded - livekit mode will fallback to local')"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
@@ -432,6 +434,12 @@ let localWS = null;
 let wsReconnectTimer = null;
 let wsReady = false;
 
+// ── LiveKit WebRTC session ────────────────────────────────────────────────
+let liveKitRoom = null;
+let localMicTrack = null;
+const _lkEncoder = new TextEncoder();
+const _lkDecoder = new TextDecoder();
+
 // ── Mic + recording state ─────────────────────────────────────────────────
 let micStream = null;
 let mediaRecorder = null;
@@ -526,6 +534,36 @@ function playAudioBase64(b64, mimeType, onDone) {
 // ── Mic capture & silence detection ──────────────────────────────────────
 async function startRecording() {
   if (isRecording || speaking) return;
+
+  // ── LiveKit mode: unmute published track + signal server via data channel ──
+  if (MODE === 'livekit' && liveKitRoom) {
+    try {
+      // Set up AudioContext + analyser from the LiveKit mic track for silence detection
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (micStream) {
+        const source = audioCtx.createMediaStreamSource(micStream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        source.connect(analyser);
+      }
+      if (localMicTrack) await localMicTrack.unmute();
+      liveKitRoom.localParticipant.publishData(
+        _lkEncoder.encode(JSON.stringify({ type: 'ptt_start' })), { reliable: true }
+      );
+      isRecording = true;
+      const pttBtn = document.getElementById('pttBtn');
+      pttBtn.classList.add('recording');
+      pttBtn.textContent = '●';
+      setOrbState('listening');
+      if (analyser) startSilenceDetection();
+    } catch(e) {
+      setStatus('Mic error: ' + e.message);
+      console.error('LiveKit mic error:', e);
+    }
+    return;
+  }
+
+  // ── Local WebSocket mode ───────────────────────────────────────────────
   try {
     if (!micStream) {
       micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -561,10 +599,25 @@ function stopRecording() {
   if (!isRecording) return;
   isRecording = false;
   clearTimeout(silenceTimer);
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  silenceTimer = null;
   const pttBtn = document.getElementById('pttBtn');
   pttBtn.classList.remove('recording');
   pttBtn.textContent = '🎤';
+
+  // ── LiveKit mode: mute track + signal server ───────────────────────────
+  if (MODE === 'livekit' && liveKitRoom) {
+    if (localMicTrack) localMicTrack.mute().catch(() => {});
+    try {
+      liveKitRoom.localParticipant.publishData(
+        _lkEncoder.encode(JSON.stringify({ type: 'ptt_stop' })), { reliable: true }
+      );
+    } catch(e) {}
+    setOrbState('thinking');
+    return;
+  }
+
+  // ── Local WebSocket mode ───────────────────────────────────────────────
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
   setOrbState('thinking');
 }
 
@@ -633,6 +686,10 @@ function toggleConvMode() {
 function showPttButton() {
   const btn = document.getElementById('pttBtn');
   btn.style.display = 'flex';
+  // Guard: attach listeners only once — showPttButton() is called on every WS reconnect
+  // and without this guard each reconnect stacks duplicate listeners causing double recordings.
+  if (btn._pttListenersAttached) return;
+  btn._pttListenersAttached = true;
 
   // Touch events for mobile hold-to-talk
   btn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); }, { passive: false });
@@ -649,10 +706,99 @@ function showPttButton() {
   btn.addEventListener('touchend', () => clearTimeout(longPressTimer), { passive: true });
 }
 
+// ── LiveKit WebRTC voice session ──────────────────────────────────────────
+async function connectLiveKitVoice() {
+  if (typeof LivekitClient === 'undefined') {
+    console.warn('LiveKit client library unavailable, falling back to local WS');
+    connectLocalVoice();
+    return;
+  }
+  try {
+    setStatus('Connecting…');
+    const resp = await fetch('/api/voice/livekit-token', {
+      headers: { 'X-Session-ID': getSessionId() },
+    });
+    if (!resp.ok) throw new Error(`Token fetch: ${resp.status}`);
+    const { token, url } = await resp.json();
+
+    const room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
+
+    // Incoming audio from zoe-agent participant → play immediately
+    room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, _pub, participant) => {
+      if (track.kind !== LivekitClient.Track.Kind.Audio) return;
+      const audioEl = track.attach();
+      audioEl.autoplay = true;
+      document.body.appendChild(audioEl);
+      speaking = true;
+      setOrbState('responding');
+      audioEl.addEventListener('ended', () => {
+        speaking = false;
+        track.detach(audioEl);
+        audioEl.remove();
+        setOrbState('ambient');
+        if (convMode) scheduleAutoListen();
+      });
+      audioEl.addEventListener('error', () => {
+        speaking = false;
+        setOrbState('ambient');
+      });
+    });
+
+    room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => {
+      track.detach();
+    });
+
+    // Data messages from server-side agent (state, transcript, agui cards)
+    room.on(LivekitClient.RoomEvent.DataReceived, (data, _participant) => {
+      try { handleVoiceEvent(JSON.parse(_lkDecoder.decode(data))); } catch(e) {}
+    });
+
+    room.on(LivekitClient.RoomEvent.ActiveSpeakersChanged, (speakers) => {
+      if (speakers.some(s => s.identity === 'zoe-agent')) setOrbState('responding');
+    });
+
+    room.on(LivekitClient.RoomEvent.Disconnected, () => {
+      wsReady = false;
+      liveKitRoom = null;
+      localMicTrack = null;
+      setStatus('Reconnecting…');
+      setTimeout(connectLiveKitVoice, 3000);
+    });
+
+    await room.connect(url, token);
+
+    // Publish mic track — start muted, PTT unmutes it
+    localMicTrack = await LivekitClient.createLocalAudioTrack({
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    });
+    await localMicTrack.mute();
+    await room.localParticipant.publishTrack(localMicTrack);
+
+    // Expose the underlying MediaStream for silence detection analyser
+    micStream = new MediaStream([localMicTrack.mediaStreamTrack]);
+
+    liveKitRoom = room;
+    wsReady = true;
+    setOrbState('ambient');
+    setStatus('');
+    showPttButton();
+  } catch(e) {
+    console.warn('LiveKit connect failed, falling back to local WS:', e);
+    setStatus('Falling back to local mode…');
+    setTimeout(connectLocalVoice, 1000);
+  }
+}
+
 // ── Start voice session ───────────────────────────────────────────────────
 function startVoice() {
   document.getElementById('tapOverlay').style.display = 'none';
-  connectLocalVoice();
+  if (MODE === 'livekit') {
+    connectLiveKitVoice();
+  } else {
+    connectLocalVoice();
+  }
 }
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────
@@ -679,8 +825,6 @@ try {
 } catch(e) {}
 </script>
 
-<!-- LiveKit client (optional; only needed for livekit mode) -->
-<script src="/lib/livekit/livekit-client.umd.min.js" onerror="console.warn('LiveKit client not loaded - using local mode')"></script>
 
 </body>
 </html>
