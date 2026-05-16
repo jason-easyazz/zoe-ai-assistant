@@ -281,11 +281,10 @@ async def lifespan(app: FastAPI):
                         if rows and rows[0]["status"] == "done":
                             await client.update_issue(issue_id, status="done")
                             logger.info("multica_poll: closed issue %s ('%s') — task done", issue_id, title[:40])
-                            # Push WebSocket notification to the owning user
+                            # Push WebSocket notification to all connected clients
                             try:
-                                uid = rows[0]["user_id"]
                                 await broadcaster.broadcast(
-                                    uid,
+                                    "all",
                                     "multica_task_done",
                                     {"multica_issue_id": str(issue_id), "title": title},
                                 )

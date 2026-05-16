@@ -301,7 +301,7 @@ async def run_measure_phase() -> dict:
                 proposal_id,
             )
             results["evaluated"] += 1
-            results[verdict + "d" if verdict == "validate" else verdict] += 1
+            results[verdict] += 1
             logger.info(
                 "evolution_measure: proposal %s → %s (before=%d after=%d)",
                 proposal_id, new_status, miss_before, miss_after,

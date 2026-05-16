@@ -119,7 +119,9 @@
     "RESTART_SERVICES.sh",
     "warmup_models.py",
     "home-profile.json",
-    "VERSION"
+    "VERSION",
+    "CAPABILITIES.md",
+    ".env.openclaw-secrets"
   ],
   "safe_to_delete_patterns": [
     "**/*.pyc",
@@ -153,5 +155,11 @@
     "primary_model": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
     "module_system": "Self-contained modules with docker-compose orchestration",
     "recent_additions": "Module system (zoe-music), MCP tool integration, voice services"
-  }
+  },
+  "approved_files": [
+    "CAPABILITIES.md",
+    "services/zoe-ui/dist/js/widgets/core/multica-board.js",
+    "services/zoe-data/proactive/triggers/evolution_weekly_digest.py",
+    ".env.openclaw-secrets"
+  ]
 }

@@ -593,6 +593,9 @@ const NAV = [
     { id: 'openclaw',   icon: '🧠', label: 'OpenClaw / ChatGPT' },
     { id: 'music',      icon: '🎵', label: 'Music' },
   ]},
+  { group: 'Intelligence', items: [
+    { id: 'evolution',  icon: '🔬', label: 'Evolution Proposals' },
+  ]},
   { group: 'Admin', admin: true, items: [
     { id: 'users',      icon: '👥', label: 'Users' },
     { id: 'system',     icon: '⚙️', label: 'System' },
@@ -943,6 +946,22 @@ function buildSections() {
       </div>
     </div>
   </div>
+
+  <!-- Evolution Proposals -->
+  <div class="section" id="sec-evolution">
+    <div class="section-title">Evolution Proposals</div>
+    <div class="section-desc">Zoe's self-improvement proposals — review and act on them here.</div>
+
+    <div class="card" id="evo-proposals-card">
+      <div class="card-header">Pending proposals</div>
+      <div id="evo-proposals-list"><div class="empty"><span class="spinner"></span></div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">All proposals</div>
+      <div id="evo-all-proposals-list"><div class="empty"><span class="spinner"></span></div></div>
+    </div>
+  </div>
   `;
 }
 
@@ -960,6 +979,7 @@ const sectionLoaders = {
   system:    loadSystemInfo,
   theme:     loadTheme,
   music:     loadMusicStatus,
+  evolution: loadEvolutionProposals,
 };
 
 /* ── Profile ──────────────────────────────────────────────── */
@@ -1689,6 +1709,96 @@ async function loadMusicStatus() {
     statusRows.innerHTML = `<div class="empty">Failed to load: ${escHtml(e.message)}</div>`;
     providersList.innerHTML = '';
   }
+}
+
+/* ── Evolution Proposals ─────────────────────────────────── */
+async function loadEvolutionProposals() {
+  const pendingEl = document.getElementById('evo-proposals-list');
+  const allEl = document.getElementById('evo-all-proposals-list');
+
+  const TYPE_LABELS = {
+    intent_gap: 'Intent gap',
+    agent_health: 'Agent health',
+    user_frustration: 'User frustration',
+    charter_gap: 'Charter gap',
+  };
+  const STATUS_COLORS = {
+    pending: '#f59e0b',
+    approved: '#3b82f6',
+    deployed: '#8b5cf6',
+    validated: '#22c55e',
+    failed: '#ef4444',
+    rejected: '#6b7280',
+  };
+
+  function renderProposalRow(p, actions = false) {
+    const typeLabel = TYPE_LABELS[p.type] || p.type || '';
+    const statusColor = STATUS_COLORS[p.status] || '#888';
+    const title = escHtml((p.title || '').substring(0, 80));
+    const desc = escHtml((p.description || '').substring(0, 120));
+    const actionsHtml = actions ? `
+      <div style="display:flex;gap:6px;margin-top:8px;">
+        <button class="btn btn-primary btn-sm" onclick="evoApprove('${p.id}')">Approve</button>
+        <button class="btn btn-ghost btn-sm" onclick="evoDeferProposal('${p.id}')">Defer</button>
+        <button class="btn btn-ghost btn-sm" style="color:#ef4444;" onclick="evoReject('${p.id}')">Reject</button>
+      </div>` : '';
+    return `
+      <div class="row" style="flex-direction:column;align-items:flex-start;gap:4px;padding:12px;">
+        <div style="display:flex;align-items:center;gap:8px;width:100%;">
+          <span style="font-size:13px;font-weight:600;flex:1;">${title}</span>
+          <span style="font-size:11px;color:${statusColor};font-weight:600;">${escHtml(p.status || '')}</span>
+        </div>
+        ${desc ? `<div style="font-size:12px;color:var(--text2);">${desc}</div>` : ''}
+        <div style="font-size:11px;color:#888;">${typeLabel}</div>
+        ${actionsHtml}
+      </div>`;
+  }
+
+  try {
+    const data = await apiCall('GET', '/api/agent/evolution/proposals');
+    const proposals = Array.isArray(data.proposals) ? data.proposals : (Array.isArray(data) ? data : []);
+
+    const pending = proposals.filter(p => p.status === 'pending');
+    const rest = proposals.filter(p => p.status !== 'pending').slice(0, 10);
+
+    if (pendingEl) {
+      pendingEl.innerHTML = pending.length
+        ? pending.map(p => renderProposalRow(p, true)).join('')
+        : '<div class="empty">No pending proposals — all caught up!</div>';
+    }
+    if (allEl) {
+      allEl.innerHTML = rest.length
+        ? rest.map(p => renderProposalRow(p, false)).join('')
+        : '<div class="empty">No proposals yet.</div>';
+    }
+  } catch (e) {
+    if (pendingEl) pendingEl.innerHTML = `<div class="empty">Failed to load: ${escHtml(e.message)}</div>`;
+    if (allEl) allEl.innerHTML = '';
+  }
+}
+
+async function evoApprove(proposalId) {
+  try {
+    await apiCall('POST', `/api/agent/evolution/proposals/${proposalId}/action`, { action: 'approve' });
+    toast('Proposal approved — queued for implementation', 'success');
+    loadEvolutionProposals();
+  } catch (e) { toast('Failed to approve: ' + e.message, 'error'); }
+}
+
+async function evoDeferProposal(proposalId) {
+  try {
+    await apiCall('POST', `/api/agent/evolution/proposals/${proposalId}/action`, { action: 'defer' });
+    toast('Proposal deferred 7 days', 'info');
+    loadEvolutionProposals();
+  } catch (e) { toast('Failed to defer: ' + e.message, 'error'); }
+}
+
+async function evoReject(proposalId) {
+  try {
+    await apiCall('POST', `/api/agent/evolution/proposals/${proposalId}/action`, { action: 'reject' });
+    toast('Proposal rejected', 'info');
+    loadEvolutionProposals();
+  } catch (e) { toast('Failed to reject: ' + e.message, 'error'); }
 }
 
 /* ── Modal helpers ────────────────────────────────────────── */
