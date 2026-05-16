@@ -1421,10 +1421,19 @@ async def _bash(command: str) -> str:
 
 
 def _ddg_search_sync(query: str, max_results: int = 5, timeout_s: float = 10.0) -> list[dict]:
-    """Synchronous DuckDuckGo HTML search with bot-detection bypass.
-    
-    Falls back through multiple endpoints: DDG HTML → DDG Lite → empty.
+    """Synchronous DuckDuckGo search using the duckduckgo-search library.
+
+    Returns dicts with keys: title, href, body (duckduckgo-search native format).
+    Falls back to HTML scraping if the library is unavailable.
     """
+    try:
+        from duckduckgo_search import DDGS
+        with DDGS(timeout=int(timeout_s)) as ddgs:
+            return list(ddgs.text(query, max_results=max_results)) or []
+    except Exception:
+        pass
+
+    # Fallback: HTML scraping path (kept for resilience)
     from urllib.request import Request, urlopen
     from urllib.parse import quote_plus
     import re
@@ -1507,9 +1516,10 @@ async def _web_search_ddg(query: str) -> str:
             return f"No current web results found for: {query}"
         lines = [f"Web search results for '{query}':"]
         for r in results:
-            title = r.get("name", "")
-            snippet = r.get("value", r.get("notes", ""))
-            url = r.get("url", "")
+            # duckduckgo-search library returns title/href/body; HTML fallback returns name/value/url
+            title = r.get("title") or r.get("name", "")
+            snippet = r.get("body") or r.get("value", r.get("notes", ""))
+            url = r.get("href") or r.get("url", "")
             line = f"- {title}: {snippet}"
             if url:
                 line += f" ({url})"
@@ -2079,10 +2089,40 @@ async def _llm_call(
         payload["tool_choice"] = tool_choice
 
     effective_timeout = timeout_s if timeout_s is not None else _llm_timeout_s(voice_mode=False)
+    _t0 = time.monotonic()
     async with httpx.AsyncClient(timeout=effective_timeout) as client:
         r = await client.post(url, json=payload)
         r.raise_for_status()
+    _latency_ms = int((time.monotonic() - _t0) * 1000)
     data = r.json()
+
+    # Record LLM call (non-blocking best-effort)
+    try:
+        _usage = data.get("usage") or {}
+        _prompt_tokens = _usage.get("prompt_tokens", 0)
+        _completion_tokens = _usage.get("completion_tokens", 0)
+        import asyncio as _asyncio, uuid as _uuid, time as _time
+        async def _log_call():
+            try:
+                from db_pool import get_db_ctx as _get_pg_db
+                async with _get_pg_db() as _db:
+                    await _db.execute(
+                        """INSERT INTO llm_call_log
+                           (id, agent_tier, model, session_id, user_id,
+                            latency_ms, prompt_tokens, completion_tokens, estimated_cost_usd, ts)
+                           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
+                        _uuid.uuid4().hex, "zoe_agent", _model_name(),
+                        None, "system",
+                        _latency_ms, _prompt_tokens, _completion_tokens,
+                        0.0,  # local LLM — always $0
+                        _time.time(),
+                    )
+            except Exception:
+                pass
+        _asyncio.ensure_future(_log_call())
+    except Exception:
+        pass
+
     choice = data["choices"][0]["message"]
 
     # Check for tool call via the proper API channel (never leaks to text)

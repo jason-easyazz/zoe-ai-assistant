@@ -1,0 +1,38 @@
+# agents_registry.yml — Zoe's known peer agents
+# Loaded at startup; hot-reloadable via POST /api/agent/registry/reload
+
+agents:
+  hermes:
+    base_url: "http://localhost:8642"
+    a2a_token: ""          # empty = Hermes uses its own auth; zoe-data calls via MCP bridge
+    description: "Hermes — GPT-5.4/Codex 128k reasoning tier"
+    model: "GPT-5.4/Codex"
+    skills:
+      - reasoning
+      - code_review
+      - long_form
+      - research
+    skills_dir: "~/.hermes/skills"
+    health_port: 8642
+
+  openclaw:
+    base_url: "http://localhost:18789"
+    a2a_token: ""          # OpenClaw uses ACP; A2A is a secondary path
+    description: "OpenClaw — Codex browser+bash agentic tier"
+    model: "Codex"
+    skills:
+      - browser_automation
+      - code_execution
+      - skill_builder
+      - file_management
+    skills_dir: "~/.openclaw/workspace/skills"
+    health_port: 18789
+
+squads:
+  zoe:
+    description: "Zoe's personal assistant squad"
+    leader: zoe-agent
+    members:
+      - hermes
+      - openclaw
+    routing: "leader delegates to members based on task type"

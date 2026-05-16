@@ -51,8 +51,19 @@ logger = logging.getLogger(__name__)
 _REQUEST_ID_CTX_VAR = None  # set after app creation to avoid import cycles
 _openclaw_bg_task = None
 _digest_bg_task = None
+_consolidation_bg_task = None
+_runtime_health_task = None
 _zoe_update_bg_task = None
+_skills_observer = None
 _memory_capture_health: dict[str, str] = {"status": "unknown", "detail": "startup pending"}
+
+# Runtime health dict — populated by _probe_runtimes() at startup; exported so
+# routers.system can read it for agent card tier status.
+_RUNTIME_HEALTH: dict[str, bool] = {
+    "local_llm": False,
+    "hermes": False,
+    "openclaw": False,
+}
 
 
 class RequestIdFilter(logging.Filter):
@@ -118,9 +129,42 @@ async def _memory_capture_retry_task() -> None:
     await _run_memory_capture_startup_probe()
 
 
+async def _probe_runtimes() -> None:
+    """Probe agent runtime ports at startup; update _RUNTIME_HEALTH."""
+    import asyncio as _asyncio
+
+    async def _check_port(port: int, timeout: float = 2.0) -> bool:
+        try:
+            reader, writer = await _asyncio.wait_for(
+                _asyncio.open_connection("127.0.0.1", port), timeout=timeout
+            )
+            writer.close()
+            await writer.wait_closed()
+            return True
+        except Exception:
+            return False
+
+    _RUNTIME_HEALTH["local_llm"] = await _check_port(11434)
+    _RUNTIME_HEALTH["hermes"] = await _check_port(8642)
+    _RUNTIME_HEALTH["openclaw"] = await _check_port(18789)
+    logger.info(
+        "Runtime health probe: local_llm=%s hermes=%s openclaw=%s",
+        _RUNTIME_HEALTH["local_llm"],
+        _RUNTIME_HEALTH["hermes"],
+        _RUNTIME_HEALTH["openclaw"],
+    )
+
+
+async def _runtime_health_refresh_loop() -> None:
+    """Re-probe runtime health every 5 minutes."""
+    while True:
+        await asyncio.sleep(300)
+        await _probe_runtimes()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task
+    global _openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task, _consolidation_bg_task, _runtime_health_task
     logger.info("Initializing zoe-data database...")
     await init_db()
     logger.info("Database initialized. zoe-data is ready.")
@@ -144,6 +188,18 @@ async def lifespan(app: FastAPI):
     _digest_bg_task = start_memory_digest_background()
     _consolidation_bg_task = start_memory_consolidation_background()
     _zoe_update_bg_task = start_zoe_update_background_tasks()
+
+    # Runtime health probe — run once immediately, then refresh every 5 min
+    await _probe_runtimes()
+    _runtime_health_task = asyncio.create_task(_runtime_health_refresh_loop(), name="runtime_health_refresh")
+
+    # Background task watchdog — detects tasks stuck in 'running' state
+    try:
+        from background_runner import _watchdog_loop
+        asyncio.create_task(_watchdog_loop(), name="task_watchdog")
+        logger.info("Background task watchdog started")
+    except Exception as _wd_exc:
+        logger.warning("Task watchdog not started (non-fatal): %s", _wd_exc)
     # Pi/Jetson Agent: warm Gemma's KV cache in background so first real query is fast
     # Check env directly to avoid circular import from routers.chat
     _pi_mode = os.environ.get("HERMES_FAST_PATH", "true").lower() != "true"
@@ -163,16 +219,73 @@ async def lifespan(app: FastAPI):
         from proactive.triggers.reminder_scan import ReminderScanTrigger
         from proactive.triggers.morning_checkin import MorningCheckInTrigger
         from proactive.triggers.evening_windown import EveningWindDownTrigger
+        from proactive.triggers.openclaw_trigger import OpenClawTrigger
         register_trigger(ReminderScanTrigger())
         register_trigger(MorningCheckInTrigger())
         register_trigger(EveningWindDownTrigger())
+        register_trigger(OpenClawTrigger())
+        # EvolutionWeeklyDigestTrigger registered after evolve-weekly-digest is built
+        try:
+            from proactive.triggers.evolution_weekly_digest import EvolutionWeeklyDigestTrigger
+            register_trigger(EvolutionWeeklyDigestTrigger())
+            logger.info("Proactive engine started (+ EvolutionWeeklyDigestTrigger registered)")
+        except ImportError:
+            logger.info(
+                "Proactive engine started (ReminderScanTrigger, MorningCheckInTrigger,"
+                " EveningWindDownTrigger, OpenClawTrigger registered)"
+            )
         start_proactive_engine()
-        logger.info(
-            "Proactive engine started (ReminderScanTrigger, MorningCheckInTrigger,"
-            " EveningWindDownTrigger registered)"
-        )
     except Exception as _pe_exc:
         logger.warning("Proactive engine failed to start (non-fatal): %s", _pe_exc)
+
+    # Skills filesystem watcher (live cache invalidation for peer agent cards)
+    try:
+        from skills_watcher import start_skills_watcher  # type: ignore[import]
+        _skills_observer = start_skills_watcher()
+        logger.info("Skills watcher started")
+    except Exception as _sw_exc:
+        _skills_observer = None
+        logger.warning("Skills watcher not started (non-fatal): %s", _sw_exc)
+
+    # Multica board polling loop (30s interval, no-op if ZOE_MULTICA=false)
+    async def _multica_poll_loop():
+        import time as _t
+        while True:
+            try:
+                await asyncio.sleep(30)
+                from multica_client import MULClient  # type: ignore[import]
+                client = MULClient()
+                if not client.is_configured():
+                    continue
+                issues = await client.list_issues(status="in_progress")
+                for issue in issues or []:
+                    # Check if linked background task completed
+                    issue_id = issue.get("id")
+                    title = issue.get("title", "")
+                    if not issue_id:
+                        continue
+                    try:
+                        from db_pool import get_db_ctx  # type: ignore[import]
+                        async with get_db_ctx() as _db:
+                            rows = await _db.fetch(
+                                """SELECT id, status FROM background_tasks
+                                   WHERE (payload->>'multica_issue_id')=$1
+                                   ORDER BY created_at DESC LIMIT 1""",
+                                str(issue_id),
+                            )
+                        if rows and rows[0]["status"] == "completed":
+                            await client.update_issue(issue_id, status="done")
+                            logger.info("multica_poll: closed issue %s ('%s') — task completed", issue_id, title[:40])
+                    except Exception as _inner_exc:
+                        logger.debug("multica_poll: inner error for issue %s: %s", issue_id, _inner_exc)
+            except asyncio.CancelledError:
+                return
+            except Exception as _exc:
+                logger.debug("multica_poll: loop error (non-fatal): %s", _exc)
+
+    if os.environ.get("ZOE_MULTICA", "false").lower() == "true":
+        asyncio.create_task(_multica_poll_loop(), name="multica_poll")
+        logger.info("Multica board polling loop started (30s interval)")
 
     # LiveKit HTTP-API mode: no server-side WebRTC agent; audio upload endpoint handles processing.
     try:
@@ -183,13 +296,21 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Stop skills watcher thread
+    try:
+        if _skills_observer is not None:
+            _skills_observer.stop()
+            _skills_observer.join(timeout=3)
+    except Exception:
+        pass
     try:
         from proactive.engine import stop_proactive_engine
         stop_proactive_engine()
     except Exception:
         pass
-    for task in (_openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task):
-        if task:
+    for task in (_openclaw_bg_task, _digest_bg_task, _zoe_update_bg_task,
+                 _consolidation_bg_task, _runtime_health_task):
+        if task and not task.done():
             task.cancel()
             try:
                 await task
@@ -289,6 +410,13 @@ try:
     logger.info("LiveKit audio upload endpoint registered")
 except Exception as _lk_router_exc:
     logger.warning("LiveKit router not loaded (non-fatal): %s", _lk_router_exc)
+
+
+@app.get("/.well-known/agent.json", include_in_schema=False)
+async def a2a_well_known():
+    """A2A v1.0 agent discovery — served inline to avoid redirect caching issues."""
+    from routers.system import _build_agent_card
+    return _build_agent_card()
 
 
 @app.get("/health")

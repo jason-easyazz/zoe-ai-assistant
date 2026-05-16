@@ -151,6 +151,47 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Multica — A2A board visibility (opt-in: ZOE_MULTICA=true) ───────────────
+  # Multica shares the zoe-database container (already running); uses its own
+  # 'multica' database. Bootstrap: docker exec zoe-database psql -U zoe -c
+  # 'CREATE DATABASE multica OWNER zoe;'  then set ZOE_MULTICA=true in .env.
+  multica-backend:
+    image: ghcr.io/multica-ai/multica-backend:latest
+    container_name: zoe-multica-backend
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: "postgresql://zoe:${POSTGRES_PASSWORD:-REDACTED}@host.docker.internal:5432/multica"
+      NODE_ENV: production
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - zoe-network
+    restart: unless-stopped
+    profiles:
+      - multica
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  multica-web:
+    image: ghcr.io/multica-ai/multica-web:latest
+    container_name: zoe-multica-web
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: "http://localhost:8080"
+    networks:
+      - zoe-network
+    restart: unless-stopped
+    profiles:
+      - multica
+    depends_on:
+      - multica-backend
+
 networks:
   zoe-network:
     name: zoe-network
