@@ -647,11 +647,10 @@ def _build_agent_card() -> dict:
             "name": "Zoe",
             "url": base_url,
         },
-        "authentication": [
-            {"schemes": ["Bearer"]},
-            {"schemes": ["ApiKey"], "headerName": "X-Session-ID"},
-            {"schemes": ["ApiKey"], "headerName": "X-Device-Token"},
-        ],
+        "authentication": {
+            "schemes": ["Bearer", "ApiKey"],
+            "apiKeyHeaders": ["X-Session-ID", "X-Device-Token"],
+        },
         "defaultInputModes": ["text"],
         "defaultOutputModes": ["text", "data"],
         "skills": skills,
@@ -731,12 +730,16 @@ async def a2a_task_stream(body: _A2ATaskRequest, user: dict = Depends(get_a2a_ca
     session_id = body.session_id or f"a2a-{body.caller}-{__import__('uuid').uuid4().hex[:8]}"
 
     async def _stream():
-        from routers.chat import _chat_stream_generator  # type: ignore[import]
-        async for chunk in _chat_stream_generator(
+        from routers.chat import chat_stream_generator  # type: ignore[import]
+        _a2a_user = {
+            "user_id": user_id,
+            "role": user.get("role", "agent"),
+            "username": user.get("username", f"a2a:{body.caller}"),
+        }
+        async for chunk in chat_stream_generator(
             message=body.task,
             session_id=session_id,
-            user_id=user_id,
-            context=body.context or {},
+            user=_a2a_user,
         ):
             yield chunk
 
@@ -849,10 +852,11 @@ async def delegate_to_agent(
     user: dict = Depends(get_a2a_caller),
 ):
     """Delegate a task to a named peer agent via A2A."""
-    agent_name = body.get("agent_name", "")
-    task = body.get("task", "")
+    # Accept both {agent_name, task} and {agent, goal} parameter styles
+    agent_name = body.get("agent_name") or body.get("agent", "")
+    task = body.get("task") or body.get("goal", "")
     if not agent_name or not task:
-        raise HTTPException(status_code=400, detail="agent_name and task are required")
+        raise HTTPException(status_code=400, detail="agent_name (or agent) and task (or goal) are required")
 
     registry = _load_registry()
     agent_info = registry.get("agents", {}).get(agent_name)

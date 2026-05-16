@@ -197,6 +197,10 @@ async def get_db_ctx():
 def _adapt_params(sql: str, params) -> tuple[str, list]:
     """Convert ? placeholders to $1, $2, $3... for asyncpg.
 
+    Also rewrites bare NOW() → NOW()::text so callers that write timestamps
+    into TEXT columns (migrated from SQLite) don't get DatatypeMismatchError.
+    Only replaces NOW() not already followed by :: to avoid double-casting.
+
     WARNING: Transition shim — replaces ALL '?' characters including those
     inside string literals. Migrate callers to explicit $N params.
     """
@@ -206,6 +210,9 @@ def _adapt_params(sql: str, params) -> tuple[str, list]:
         nonlocal i
         i += 1
         return f"${i}"
+
+    # Auto-cast NOW() → NOW()::text for TEXT timestamp columns (SQLite migration compat)
+    sql = re.sub(r"\bNOW\(\)(?!::)", "NOW()::text", sql, flags=re.IGNORECASE)
 
     converted = re.sub(r"\?", _replace, sql)
     return converted, list(params) if params is not None else []
