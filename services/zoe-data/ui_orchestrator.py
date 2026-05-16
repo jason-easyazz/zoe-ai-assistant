@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 from push import broadcaster
 
-ACTION_STATES = {"queued", "running", "success", "failed", "blocked"}
+ACTION_STATES = {"queued", "running", "success", "failed", "blocked", "skipped"}
 ALLOWED_ACTION_TYPES = {
     "navigate",
     "open_panel",

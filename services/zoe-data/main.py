@@ -443,6 +443,15 @@ async def root_health():
     }
 
 
+@app.get("/api/settings")
+async def app_settings():
+    """Public settings consumed by frontend widgets (e.g. music widget HA deep-link)."""
+    import os
+    return {
+        "homeassistant_url": os.environ.get("HA_BASE_URL", "http://homeassistant.local:8123"),
+    }
+
+
 @app.get("/metrics")
 async def prometheus_metrics():
     """Prometheus scrape endpoint.

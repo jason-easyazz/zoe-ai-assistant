@@ -53,17 +53,29 @@ def get_pool() -> asyncpg.Pool:
 
 
 class _Cursor:
-    """Buffered cursor providing aiosqlite-compatible fetchall/fetchone."""
-    __slots__ = ("_rows",)
+    """Buffered cursor providing aiosqlite-compatible fetchall/fetchone/iteration."""
+    __slots__ = ("_rows", "_idx")
 
     def __init__(self, rows: list):
         self._rows = rows
+        self._idx = 0
 
     async def fetchall(self):
         return self._rows
 
     async def fetchone(self):
         return self._rows[0] if self._rows else None
+
+    def __aiter__(self):
+        self._idx = 0
+        return self
+
+    async def __anext__(self):
+        if self._idx >= len(self._rows):
+            raise StopAsyncIteration
+        row = self._rows[self._idx]
+        self._idx += 1
+        return row
 
     @property
     def lastrowid(self):
@@ -149,6 +161,14 @@ class AsyncpgCompat:
             await self._conn.execute(sql_pg, *args)
             return _Cursor([])
 
+    async def execute_fetchall(self, sql: str, params=()) -> list:
+        """aiosqlite-compatible shorthand: execute and return all rows immediately.
+
+        Accepts ? placeholders (converted to $N) or $N placeholders directly.
+        """
+        cursor = await self._do_execute(sql, params)
+        return list(cursor._rows)
+
     async def commit(self) -> None:
         pass  # asyncpg auto-commits outside explicit transactions
 
@@ -210,6 +230,24 @@ def _adapt_params(sql: str, params) -> tuple[str, list]:
         nonlocal i
         i += 1
         return f"${i}"
+
+    # Rewrite SQLite datetime('now', '±N unit') → PostgreSQL CURRENT_TIMESTAMP ± INTERVAL.
+    # Result is cast to ::text so it compares correctly against TEXT timestamp columns.
+    # Uses CURRENT_TIMESTAMP (not NOW()) to avoid triggering the NOW()::text rewrite below.
+    # Handles: datetime('now', '-7 days'), datetime('now', '+1 day'), etc.
+    # Does NOT handle datetime('now', ?) — fix those at the call site.
+    def _rewrite_sqlite_datetime(m: re.Match) -> str:
+        sign = "-" if m.group(1) == "-" else "+"
+        return f"(CURRENT_TIMESTAMP {sign} INTERVAL '{m.group(2)} {m.group(3)}')::text"
+
+    sql = re.sub(
+        r"datetime\s*\(\s*'now'\s*,\s*'([+-]?)(\d+)\s+(\w+)'\s*\)",
+        _rewrite_sqlite_datetime,
+        sql,
+        flags=re.IGNORECASE,
+    )
+    # Rewrite bare datetime('now') → CURRENT_TIMESTAMP::text
+    sql = re.sub(r"datetime\s*\(\s*'now'\s*\)", "CURRENT_TIMESTAMP::text", sql, flags=re.IGNORECASE)
 
     # Auto-cast NOW() → NOW()::text for TEXT timestamp columns (SQLite migration compat)
     sql = re.sub(r"\bNOW\(\)(?!::)", "NOW()::text", sql, flags=re.IGNORECASE)
