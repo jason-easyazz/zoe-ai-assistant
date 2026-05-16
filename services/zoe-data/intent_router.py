@@ -1018,6 +1018,112 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
             preview = preview[:77] + "…"
         return f"Done — I forgot: \"{preview}\"."
 
+    # ── A2A Federation Status ──────────────────────────────────────────────────
+    if intent.name == "a2a_federation_status":
+        try:
+            import httpx as _httpx
+            health_url = "http://localhost:8000/api/agent/registry"
+            squad_url = "http://localhost:8000/api/agent/squad"
+            async with _httpx.AsyncClient(timeout=5) as _cli:
+                reg = (await _cli.get(health_url)).json()
+                squad = (await _cli.get(squad_url)).json()
+
+            agents = reg.get("agents", {})
+            lines = ["**Agent Federation Status**\n"]
+            for name, info in agents.items():
+                status = info.get("status", "unknown")
+                icon = "🟢" if status == "online" else "🔴"
+                lines.append(f"{icon} **{name.title()}** — {info.get('description','')[:60]} ({status})")
+
+            squads = squad.get("squads", {})
+            if squads:
+                lines.append("\n**Squad topology:**")
+                for sq_name, sq_info in squads.items():
+                    members = sq_info.get("members", [])
+                    lines.append(f"- `{sq_name}`: {', '.join(members)}")
+
+            lines.append(f"\n_Say \"delegate to hermes: [task]\" to route a task to Hermes, "
+                         f"or \"delegate to openclaw: [task]\" for OpenClaw._")
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.warning("a2a_federation_status: %s", exc)
+            return ("I couldn't reach the agent registry right now. "
+                    "Hermes runs on port 8642, OpenClaw on port 18789.")
+
+    # ── Multica Board Status ───────────────────────────────────────────────────
+    if intent.name == "board_status":
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=5) as _cli:
+                resp = await _cli.get("http://localhost:8000/api/agent/board")
+                board = resp.json()
+
+            available = board.get("available", False)
+            active = board.get("active", [])
+
+            if not available:
+                reason = board.get("reason", "Multica not configured")
+                return (
+                    f"The Multica task board is not active ({reason}). "
+                    "To enable it, set `ZOE_MULTICA=true` in `.env` and configure "
+                    "`MULTICA_BASE_URL`, `MULTICA_API_TOKEN`, `MULTICA_WORKSPACE_ID`.\n\n"
+                    "When enabled, long-running tasks like `build a widget` or `improve yourself` "
+                    "will appear here for your approval."
+                )
+
+            if not active:
+                return ("**Multica Board** — nothing active right now.\n\n"
+                        "Ask me to build something (a widget, a page, a new skill) and I'll "
+                        "create a board item for your approval before starting.")
+
+            lines = [f"**Multica Board** — {len(active)} active item(s):\n"]
+            for item in active[:5]:
+                lines.append(f"- **{item.get('title','?')}** — `{item.get('status','?')}` "
+                              f"| {item.get('description','')[:60]}")
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.warning("board_status: %s", exc)
+            return "I couldn't check the task board right now. Try again in a moment."
+
+    # ── Evolution Proposals Review ─────────────────────────────────────────────
+    if intent.name == "evolution_proposals_review":
+        try:
+            import httpx as _httpx
+            async with _httpx.AsyncClient(timeout=5) as _cli:
+                resp = await _cli.get(
+                    "http://localhost:8000/api/agent/evolution/proposals",
+                    params={"status": "pending", "limit": "5"},
+                )
+                data = resp.json()
+
+            proposals = data.get("proposals", [])
+            count = data.get("count", 0)
+
+            if not proposals:
+                return (
+                    "No pending evolution proposals right now. I'm running the NOTICE phase nightly — "
+                    "if I spot patterns that could improve things, I'll propose them here for your review."
+                )
+
+            lines = [f"**{count} pending evolution proposal{'s' if count != 1 else ''}:**\n"]
+            for p in proposals[:5]:
+                pid = p.get("id", "")
+                lines.append(
+                    f"- **{p.get('title','?')[:60]}**  \n"
+                    f"  _{p.get('description','')[:100]}_  \n"
+                    f"  [[approve]](/api/agent/evolution/proposals/{pid}/action) "
+                    f"[[defer]](/api/agent/evolution/proposals/{pid}/action) "
+                    f"[[reject]](/api/agent/evolution/proposals/{pid}/action)"
+                )
+            if count > 5:
+                lines.append(f"\n_…and {count - 5} more. Say \"show more proposals\" to see them._")
+
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.warning("evolution_proposals_review: %s", exc)
+            return ("I couldn't load the evolution proposals right now. "
+                    "They're stored at `/api/agent/evolution/proposals` if you want to check directly.")
+
     if intent.name == "portrait_reveal":
         try:
             from user_portrait import load_portrait  # type: ignore[import]

@@ -2569,6 +2569,15 @@ async def _execute_tool(db, name: str, args: dict):
 
 async def run_stdio_server():
     """Run as MCP stdio server for OpenClaw integration."""
+    # Initialize the DB pool when running standalone (mcporter/stdio mode).
+    # In FastAPI mode this is done by main.py's lifespan; here we do it ourselves.
+    try:
+        from db_pool import init_pool, close_pool
+        await init_pool()
+    except Exception as _pool_err:
+        import sys as _sys
+        print(f"[mcp_server] DB pool init failed: {_pool_err}", file=_sys.stderr)
+
     reader = asyncio.StreamReader()
     protocol = asyncio.StreamReaderProtocol(reader)
     await asyncio.get_event_loop().connect_read_pipe(lambda: protocol, sys.stdin)
