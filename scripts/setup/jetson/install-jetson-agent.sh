@@ -23,28 +23,20 @@ if [[ "$CURRENT" != "jetson" ]]; then
 fi
 echo "✅ On jetson branch"
 
-# ── 2. Symlink /home/zoe/zoe-data → repo services/zoe-data ──────────────────
-if [[ -L "$LIVE_DIR" ]]; then
-  echo "✅ $LIVE_DIR already a symlink — skipping"
-elif [[ -d "$LIVE_DIR" ]]; then
-  echo "Backing up $LIVE_DIR → ${LIVE_DIR}.bak …"
-  mv "$LIVE_DIR" "${LIVE_DIR}.bak"
-  # Preserve .env and data/ from backup
-  if [[ -f "${LIVE_DIR}.bak/.env" && ! -f "$DATA_DIR/.env" ]]; then
-    cp "${LIVE_DIR}.bak/.env" "$DATA_DIR/.env"
-    echo "  Copied .env from backup"
-  fi
-  if [[ -d "${LIVE_DIR}.bak/data" && ! -d "$DATA_DIR/data" ]]; then
-    cp -r "${LIVE_DIR}.bak/data" "$DATA_DIR/data"
-    echo "  Copied data/ from backup"
-  fi
-  ln -s "$DATA_DIR" "$LIVE_DIR"
-  echo "✅ Symlinked $LIVE_DIR → $DATA_DIR"
-else
-  echo "No existing $LIVE_DIR — creating symlink"
-  ln -s "$DATA_DIR" "$LIVE_DIR"
-  echo "✅ Symlinked $LIVE_DIR → $DATA_DIR"
+# ── 2. Verify zoe-data directory exists at canonical path ────────────────────
+# The symlink /home/zoe/zoe-data has been removed; systemd and all scripts now
+# reference $DATA_DIR directly. This step verifies the directory is in place.
+if [[ ! -d "$DATA_DIR" ]]; then
+  echo "ERROR: zoe-data directory not found at $DATA_DIR"
+  echo "  Ensure the assistant repo is checked out at $REPO_DIR"
+  exit 1
 fi
+# Remove stale symlink if it still exists from a previous install
+if [[ -L "$LIVE_DIR" ]]; then
+  echo "Removing legacy symlink $LIVE_DIR (no longer needed)"
+  rm "$LIVE_DIR"
+fi
+echo "✅ zoe-data directory confirmed at $DATA_DIR"
 
 # ── 3. Install MemPalace + ChromaDB ─────────────────────────────────────────
 echo ""

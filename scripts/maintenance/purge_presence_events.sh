@@ -4,7 +4,7 @@
 # Safe to run as a systemd timer or cron job.
 set -euo pipefail
 
-DB="${ZOE_DB_PATH:-/home/zoe/zoe-data/data/zoe.db}"
+DB="${ZOE_DB_PATH:-/home/zoe/assistant/services/zoe-data/data/zoe.db}"
 RETAIN_DAYS="${ZOE_PRESENCE_RETAIN_DAYS:-30}"
 
 if [ ! -f "$DB" ]; then

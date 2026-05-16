@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <script>
+    (function(){
+        if(localStorage.getItem('zoe_kiosk')==='1') return;
+        var p=new URLSearchParams(location.search);
+        if(p.get('kiosk')==='1') localStorage.setItem('zoe_kiosk','1');
+    })();
+    window.prompt  = function(msg, def) { return def || ''; };
+    window.alert   = function() {};
+    window.confirm = function() { return true; };
+    </script>
+    <script>
+    (function(){
+        var s=localStorage.getItem('zoe_theme')||'auto';
+        var dark=s==='dark'||(s==='auto'&&(new Date().getHours()<7||new Date().getHours()>=19));
+        if(dark) document.documentElement.classList.add('dark-mode');
+    })();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a0f">
+    <title>Zoe – Voice</title>
+    <link rel="stylesheet" href="/touch/css/touch-adapter.css">
+    <script src="/js/auth.js"></script>
+    <script src="/lib/livekit/livekit-client.umd.min.js" onerror="console.warn('LiveKit client not loaded')"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #0a0a0f;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    overflow: hidden;
+    touch-action: manipulation;
+    padding-top: var(--ta-nav-h, 64px);
+  }
+
+  /* ── Orb canvas ──────────────────────────────────────────────────── */
+  #orbCanvas {
+    position: fixed;
+    top: var(--ta-nav-h, 64px);
+    left: 0; right: 0; bottom: 0;
+    width: 100%;
+    height: calc(100% - var(--ta-nav-h, 64px));
+  }
+
+  /* ── Last transcript line — floating, minimal ────────────────────── */
+  #lastLine {
+    position: fixed;
+    bottom: 148px;
+    left: 0; right: 0;
+    text-align: center;
+    color: rgba(255,255,255,0.6);
+    font-size: 16px;
+    line-height: 1.4;
+    padding: 0 40px;
+    pointer-events: none;
+    z-index: 55;
+    transition: opacity 0.5s;
+  }
+  #lastLine.fade { opacity: 0; }
+
+  /* ── End Call button ─────────────────────────────────────────────── */
+  #endCallBtn {
+    position: fixed;
+    bottom: 52px;
+    left: 50%; transform: translateX(-50%);
+    width: 72px; height: 72px; border-radius: 50%;
+    background: #c0392b;
+    border: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 24px rgba(192,57,43,0.55);
+    z-index: 60;
+    touch-action: none;
+    transition: transform 0.12s, box-shadow 0.12s;
+  }
+  #endCallBtn:active { transform: translateX(-50%) scale(0.93); box-shadow: 0 2px 12px rgba(192,57,43,0.4); }
+  #endCallBtn svg { width: 30px; height: 30px; fill: #fff; }
+
+  /* ── AG-UI overlay (keep for information cards) ──────────────────── */
+  #aguiOverlay {
+    position: fixed; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: flex-end;
+    padding-bottom: 148px;
+    pointer-events: none;
+    z-index: 50;
+  }
+  .agui-card {
+    background: rgba(20,20,30,0.92);
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(108,99,255,0.3);
+    border-radius: 16px;
+    padding: 16px 20px;
+    max-width: min(380px, 90vw);
+    width: 100%;
+    margin-bottom: 12px;
+    pointer-events: all;
+    animation: cardIn 0.3s ease-out;
+  }
+  @keyframes cardIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .agui-card h3 { color: #fff; font-size: 15px; font-weight: 500; margin-bottom: 8px; }
+  .agui-card p  { color: rgba(255,255,255,0.7); font-size: 13px; line-height: 1.5; }
+  .agui-card .card-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .agui-card .btn-confirm {
+    flex: 1; padding: 10px; background: #6c63ff; color: #fff;
+    border: none; border-radius: 8px; font-size: 14px; cursor: pointer;
+  }
+  .agui-card .btn-cancel {
+    flex: 1; padding: 10px; background: rgba(255,255,255,0.1); color: #fff;
+    border: none; border-radius: 8px; font-size: 14px; cursor: pointer;
+  }
+
+  /* ── Elements present in DOM for JS compatibility but not shown ───── */
+  #topBar, #transcriptPanel, #statusLabel, #convBadge, #pttBtn { display: none !important; }
+  #tapOverlay { display: none !important; }
+</style>
+</head>
+<body>
+
+<!-- Full-screen orb -->
+<canvas id="orbCanvas"></canvas>
+
+<!-- Floating last-line transcript (phone-call style) -->
+<div id="lastLine"></div>
+
+<!-- End Call button -->
+<button id="endCallBtn" onclick="endCall()" title="End call">
+  <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2
+             1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1
+             C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1
+             0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1L6.6 10.8z"/>
+    <!-- rotation to show hang-up (rotated phone) -->
+    <animateTransform attributeName="transform" type="rotate"
+      from="135 12 12" to="135 12 12" dur="0" fill="freeze"/>
+  </svg>
+</button>
+
+<!-- Elements required by JS but visually suppressed -->
+<div id="topBar">
+  <button class="ctrl-btn">←</button>
+  <span id="modeLabel">voice</span>
+  <button class="ctrl-btn">≡</button>
+</div>
+<div id="transcriptPanel"></div>
+<div id="statusLabel"></div>
+<div id="convBadge">● Conversation</div>
+<button id="pttBtn" title="Hold to speak">🎤</button>
+<div id="aguiOverlay"></div>
+<div id="tapOverlay" onclick="startVoice()">
+  <div class="pulse-ring"></div>
+  <h1>Zoe</h1>
+  <p>Tap anywhere to start</p>
+</div>
+
+<!-- ── Touch panel stack (same order as all touch pages) ──────────────────── -->
+<script src="/js/websocket-sync.js"></script>
+<script src="/touch/js/gestures.js"></script>
+<script src="/touch/js/touch-menu.js"></script>
+<script src="/js/touch-ui-executor.js"></script>
+<script src="/js/orb-loader.js"></script>
+
+<script>
+// ── Touch Voice Page ──────────────────────────────────────────────────────
+// Phone-call aesthetic: no PTT, full auto-listen convMode, End Call button.
+// Based on voice.html with the following touch-specific changes:
+//   1. setStatus()          → no-op (orb colors convey state)
+//   2. addTranscriptLine()  → floating #lastLine label only
+//   3. showPttButton()      → no-op (auto-listen only)
+//   4. scheduleAutoListen() → 900ms delay (speaker echo tail)
+//   5. startRecording()     → serverBusy guard + resetTouchIdle
+//   6. stopRecording()      → resetTouchIdle
+//   7. startSilenceDetection() → track maxRecordedRms for silence filter
+//   8. sendRecordingToServer() → silence filter + serverBusy flag
+//   9. handleVoiceEvent()   → serverBusy=false on done; goodbye detection
+//  10. localWS.onclose      → navigate home (no reconnect loop)
+//  11. startVoice()         → always called immediately (kiosk, no iOS gate)
+
+// ── Touch-specific constants ──────────────────────────────────────────────
+const TOUCH_IDLE_MS  = 60000;           // 60s of no speech → auto-return home
+const TOUCH_HOME     = '/touch/dashboard.html';
+const TOUCH_AUTOLISTEN_DELAY = 900;     // ms post-playback before mic reopens
+
+// ── Mode detection ────────────────────────────────────────────────────────
+const params        = new URLSearchParams(location.search);
+const isLocal       = location.hostname === 'localhost'
+                   || location.hostname === '127.0.0.1'
+                   || location.hostname.startsWith('192.168.')
+                   || location.hostname.startsWith('10.')
+                   || /^172\.(1[6-9]|2\d|3[01])\./.test(location.hostname);
+const modePref      = params.get('mode') || 'local';
+const MODE          = modePref;
+const convFromQuery = params.get('conv') === '1';
+document.getElementById('modeLabel').textContent = 'voice · ' + MODE;
+
+// ── Orb canvas animation ──────────────────────────────────────────────────
+const canvas = document.getElementById('orbCanvas');
+const ctx    = canvas.getContext('2d');
+let orbState = 'ambient';
+let animFrame;
+let phase = 0;
+
+const ORB_COLORS = {
+  ambient:    { inner: '#4a3f8f', outer: '#6c63ff', glow: 0.15 },
+  listening:  { inner: '#1a6ba0', outer: '#4fc3f7', glow: 0.35 },
+  thinking:   { inner: '#2d6a4f', outer: '#52b788', glow: 0.25 },
+  responding: { inner: '#7b2d8b', outer: '#c77dff', glow: 0.45 },
+};
+
+function resizeCanvas() {
+  const navH = parseInt(getComputedStyle(document.documentElement)
+    .getPropertyValue('--ta-nav-h') || '64', 10);
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight - navH;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+let currentInner = '#4a3f8f', currentOuter = '#6c63ff', currentGlow = 0.15;
+let targetInner  = '#4a3f8f', targetOuter  = '#6c63ff', targetGlow  = 0.15;
+
+function hexToRgb(hex) {
+  return [parseInt(hex.slice(1,3),16), parseInt(hex.slice(3,5),16), parseInt(hex.slice(5,7),16)];
+}
+function rgbToHex(r,g,b) {
+  return '#' + [r,g,b].map(v => Math.round(v).toString(16).padStart(2,'0')).join('');
+}
+function lerpColor(a,b,t) {
+  const ra = hexToRgb(a), rb = hexToRgb(b);
+  return rgbToHex(lerp(ra[0],rb[0],t), lerp(ra[1],rb[1],t), lerp(ra[2],rb[2],t));
+}
+
+function drawOrb() {
+  animFrame = requestAnimationFrame(drawOrb);
+  phase += 0.012;
+  const t = 0.06;
+  currentInner = lerpColor(currentInner, targetInner, t);
+  currentOuter = lerpColor(currentOuter, targetOuter, t);
+  currentGlow  = lerp(currentGlow, targetGlow, t);
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const cx = W / 2, cy = H / 2;
+  const baseR = Math.min(W, H) * 0.28;
+  const pulse  = orbState === 'ambient'    ? 1 + 0.02 * Math.sin(phase) :
+                 orbState === 'listening'  ? 1 + 0.06 * Math.sin(phase * 1.8) :
+                 orbState === 'thinking'   ? 1 + 0.04 * Math.sin(phase * 3) :
+                                            1 + 0.08 * Math.sin(phase * 1.2);
+  const R = baseR * pulse;
+  const glowR = R * (1 + 2.5 * currentGlow);
+  const gGlow = ctx.createRadialGradient(cx, cy, R * 0.5, cx, cy, glowR);
+  gGlow.addColorStop(0, currentOuter + Math.round(currentGlow * 255).toString(16).padStart(2,'0'));
+  gGlow.addColorStop(1, 'transparent');
+  ctx.beginPath(); ctx.arc(cx, cy, glowR, 0, Math.PI * 2);
+  ctx.fillStyle = gGlow; ctx.fill();
+  const gOrb = ctx.createRadialGradient(cx - R*0.2, cy - R*0.3, R*0.05, cx, cy, R);
+  gOrb.addColorStop(0, currentOuter);
+  gOrb.addColorStop(0.6, currentInner);
+  gOrb.addColorStop(1, '#08080f');
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.fillStyle = gOrb; ctx.fill();
+  const gHL = ctx.createRadialGradient(cx - R*0.25, cy - R*0.3, 0, cx - R*0.1, cy - R*0.15, R * 0.5);
+  gHL.addColorStop(0, 'rgba(255,255,255,0.12)');
+  gHL.addColorStop(1, 'transparent');
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2);
+  ctx.fillStyle = gHL; ctx.fill();
+}
+
+function setOrbState(state) {
+  orbState = state;
+  const c = ORB_COLORS[state] || ORB_COLORS.ambient;
+  targetInner = c.inner;
+  targetOuter = c.outer;
+  targetGlow  = c.glow;
+}
+
+animFrame = requestAnimationFrame(drawOrb);
+
+// ── Touch: setStatus is a no-op — orb color conveys state ────────────────
+function setStatus(text) { /* suppressed in touch mode */ }
+
+// ── Touch: transcript shows as floating last-line label ───────────────────
+let _lastLineTimer = null;
+function addTranscriptLine(role, text) {
+  const el = document.getElementById('lastLine');
+  if (!el) return;
+  el.classList.remove('fade');
+  el.textContent = (role === 'user' ? 'You: ' : 'Zoe: ') + text;
+  clearTimeout(_lastLineTimer);
+  _lastLineTimer = setTimeout(() => {
+    el.classList.add('fade');
+    setTimeout(() => { if (el) el.textContent = ''; el.classList.remove('fade'); }, 500);
+  }, 8000);
+}
+
+// ── AG-UI card rendering (kept for information/confirmation cards) ─────────
+function showAguiCard(card) {
+  const overlay = document.getElementById('aguiOverlay');
+  const el = document.createElement('div');
+  el.className = 'agui-card';
+  if (card.type === 'confirmation' || card.type === 'confirm') {
+    el.innerHTML = `<h3>${card.title || 'Confirm'}</h3><p>${card.message || card.body || ''}</p>
+      <div class="card-actions">
+        <button class="btn-confirm" onclick="confirmAguiAction(this,'confirm','${card.action_id||''}')">Confirm</button>
+        <button class="btn-cancel"  onclick="this.closest('.agui-card').remove()">Cancel</button>
+      </div>`;
+  } else if (card.type === 'status' || card.type === 'info') {
+    el.innerHTML = `<h3>${card.title || 'Zoe'}</h3><p>${card.message || card.body || ''}</p>`;
+    setTimeout(() => el.remove(), 5000);
+  } else {
+    el.innerHTML = `<h3>${card.title || 'Zoe'}</h3><p>${card.message || card.body || JSON.stringify(card)}</p>`;
+    setTimeout(() => el.remove(), 8000);
+  }
+  overlay.appendChild(el);
+}
+
+async function confirmAguiAction(btn, decision, actionId) {
+  btn.closest('.agui-card').remove();
+  try {
+    await fetch('/api/chat/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-ID': getSessionId() },
+      body: JSON.stringify({ action_id: actionId, decision })
+    });
+  } catch(e) {}
+}
+
+// ── Session helpers ───────────────────────────────────────────────────────
+function getSessionId() {
+  try {
+    const s = JSON.parse(localStorage.getItem('zoe_session'));
+    return (s && s.session_id) || '';
+  } catch(e) { return ''; }
+}
+
+// ── State ─────────────────────────────────────────────────────────────────
+let localWS          = null;
+let wsReconnectTimer = null;
+let wsReady          = false;
+let liveKitRoom      = null;
+let localMicTrack    = null;
+const _lkEncoder     = new TextEncoder();
+const _lkDecoder     = new TextDecoder();
+
+let micStream     = null;
+let mediaRecorder = null;
+let audioChunks   = [];
+let isRecording   = false;
+let audioCtx      = null;
+let analyser      = null;
+let silenceTimer  = null;
+let silenceThreshold = 0.01;
+let silenceMs        = 1800;
+let maxRecordedRms   = 0;   // peak RMS during current recording (silence filter)
+let convMode         = true;   // always on in touch/phone-call mode
+let speaking         = false;
+let serverBusy       = false;  // true while server is processing a turn
+
+// ── Audio queue ───────────────────────────────────────────────────────────
+let audioQueue   = [];
+let audioPlaying = false;
+let currentAudio = null;
+let bargeInFrame = null;
+const BARGE_RMS  = 0.045;
+
+// ── Touch idle timer ──────────────────────────────────────────────────────
+let touchIdleTimer  = null;
+let autoListenTimer = null;
+
+function resetTouchIdle() {
+  clearTimeout(touchIdleTimer);
+  touchIdleTimer = setTimeout(endCall, TOUCH_IDLE_MS);
+}
+
+function endCall() {
+  convMode = false;
+  clearTimeout(touchIdleTimer);
+  clearTimeout(autoListenTimer);
+  clearTimeout(wsReconnectTimer);
+  if (isRecording) { isRecording = false; try { mediaRecorder && mediaRecorder.stop(); } catch(e) {} }
+  if (localWS) { try { localWS.onclose = null; localWS.close(); } catch(e) {} localWS = null; }
+  if (liveKitRoom) { try { liveKitRoom.disconnect(); } catch(e) {} liveKitRoom = null; }
+  window.location.assign(TOUCH_HOME);
+}
+
+// ── Beep: two-tone confirmation when conversation starts ──────────────────
+function playBeep() {
+  try {
+    const c = new (window.AudioContext || window.webkitAudioContext)();
+    [660, 880].forEach((hz, i) => {
+      const o = c.createOscillator(), g = c.createGain();
+      o.connect(g); g.connect(c.destination);
+      o.frequency.value = hz;
+      g.gain.setValueAtTime(0.3, c.currentTime + i * 0.12);
+      g.gain.exponentialRampToValueAtTime(0.001, c.currentTime + i * 0.12 + 0.1);
+      o.start(c.currentTime + i * 0.12);
+      o.stop(c.currentTime + i * 0.12 + 0.15);
+    });
+  } catch(_) {}
+}
+
+// ── Touch: scheduleAutoListen with 900ms delay (speaker echo tail) ─────────
+function scheduleAutoListen() {
+  if (!convMode || speaking || serverBusy) return;
+  clearTimeout(autoListenTimer);
+  autoListenTimer = setTimeout(() => {
+    if (convMode && !speaking && !isRecording && !serverBusy) startRecording();
+  }, TOUCH_AUTOLISTEN_DELAY);
+}
+
+// ── Touch: showPttButton is a no-op — auto-listen only ───────────────────
+function showPttButton() { /* no-op: touch mode uses auto-listen, not PTT */ }
+
+// ── Local WebSocket connection ────────────────────────────────────────────
+function connectLocalVoice() {
+  if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const wsUrl  = `${proto}://${location.host}/ws/voice/?session_id=${getSessionId()}`;
+  localWS = new WebSocket(wsUrl);
+  localWS.binaryType = 'arraybuffer';
+
+  localWS.onopen = () => {
+    wsReady = true;
+    setOrbState('ambient');
+    playBeep();
+    resetTouchIdle();
+    scheduleAutoListen();
+  };
+
+  // Touch: on disconnect navigate home instead of reconnecting
+  localWS.onclose = () => {
+    wsReady = false;
+    if (convMode) {
+      setTimeout(endCall, 5000);
+    }
+  };
+
+  localWS.onmessage = (ev) => {
+    try {
+      const msg = typeof ev.data === 'string' ? JSON.parse(ev.data) : null;
+      if (msg) handleVoiceEvent(msg);
+    } catch(e) {}
+  };
+
+  localWS.onerror = () => { wsReady = false; };
+}
+
+// ── Voice event handler ───────────────────────────────────────────────────
+const _GOODBYE_RE = /\b(bye|goodbye|that'?s all|stop listening|hang up|end call|see you|good night|take care)\b/i;
+
+function handleVoiceEvent(msg) {
+  const type = msg.type || msg.event;
+  if (type === 'state') {
+    const s = msg.state;
+    if (s === 'wake' || s === 'listening')          setOrbState('listening');
+    else if (s === 'processing' || s === 'thinking') setOrbState('thinking');
+    else if (s === 'responding' || s === 'speaking') setOrbState('responding');
+    else {
+      if (!audioPlaying) {
+        setOrbState('ambient');
+        if (convMode) scheduleAutoListen();
+      }
+    }
+  } else if (type === 'transcript') {
+    addTranscriptLine(msg.role || 'zoe', msg.text || '');
+    // Goodbye detection: user says farewell → end call after brief delay
+    if (msg.role === 'user' && _GOODBYE_RE.test(msg.text || '')) {
+      setTimeout(endCall, 2000);
+    }
+  } else if (type === 'audio') {
+    enqueueAudio(msg.audio_base64, msg.content_type || 'audio/wav');
+  } else if (type === 'text') {
+    if (!audioPlaying) setOrbState('ambient');
+  } else if (type === 'agui' || type === 'ui_component') {
+    showAguiCard(msg.data || msg);
+  } else if (type === 'done') {
+    serverBusy = false;
+    resetTouchIdle();
+    if (!audioPlaying) {
+      setOrbState('ambient');
+      if (convMode) scheduleAutoListen();
+    }
+  }
+}
+
+// ── Audio playback queue ──────────────────────────────────────────────────
+function enqueueAudio(b64, contentType) {
+  if (!b64) return;
+  audioQueue.push({ b64, contentType: contentType || 'audio/wav' });
+  if (!audioPlaying) drainAudioQueue();
+}
+
+function drainAudioQueue() {
+  if (!audioQueue.length) {
+    audioPlaying = false;
+    speaking = false;
+    currentAudio = null;
+    bargeInFrame = null;
+    setOrbState('ambient');
+    if (convMode) scheduleAutoListen();
+    return;
+  }
+  audioPlaying = true;
+  speaking = true;
+  setOrbState('responding');
+
+  const { b64, contentType } = audioQueue.shift();
+  try {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const blob = new Blob([bytes], { type: contentType });
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    currentAudio = audio;
+    audio.onended = () => { URL.revokeObjectURL(url); drainAudioQueue(); };
+    audio.onerror = () => { URL.revokeObjectURL(url); drainAudioQueue(); };
+    audio.play().catch(() => drainAudioQueue());
+  } catch(e) {
+    drainAudioQueue();
+  }
+  startBargeInWatch();
+}
+
+// ── Barge-in ─────────────────────────────────────────────────────────────
+function startBargeInWatch() {
+  if (bargeInFrame !== null) return;
+  if (!analyser) return;
+  const buf = new Float32Array(analyser.fftSize);
+  function tick() {
+    if (!audioPlaying) { bargeInFrame = null; return; }
+    analyser.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    if (Math.sqrt(sum / buf.length) > BARGE_RMS) {
+      if (currentAudio) { try { currentAudio.pause(); } catch(e) {} }
+      audioQueue = [];
+      audioPlaying = false;
+      speaking = false;
+      currentAudio = null;
+      bargeInFrame = null;
+      clearTimeout(autoListenTimer);
+      sendCancelSignal();
+      startRecording();
+      return;
+    }
+    bargeInFrame = requestAnimationFrame(tick);
+  }
+  bargeInFrame = requestAnimationFrame(tick);
+}
+
+async function sendCancelSignal() {
+  try {
+    if (MODE === 'livekit' && liveKitRoom) {
+      await fetch('/api/voice/livekit-cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Session-ID': getSessionId() },
+        body: JSON.stringify({
+          participant_identity: liveKitRoom.localParticipant?.identity || '',
+          session_id: getSessionId(),
+        }),
+      });
+    } else if (localWS && localWS.readyState === WebSocket.OPEN) {
+      localWS.send(JSON.stringify({ type: 'cancel' }));
+    }
+  } catch(e) {}
+}
+
+// ── Mic capture ───────────────────────────────────────────────────────────
+async function startRecording() {
+  if (isRecording || speaking || serverBusy) return;  // serverBusy guard added
+  resetTouchIdle();
+
+  if (MODE === 'livekit' && liveKitRoom) {
+    try {
+      if (!micStream) micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioCtx.createMediaStreamSource(micStream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      audioChunks = [];
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus' : 'audio/webm';
+      mediaRecorder = new MediaRecorder(micStream, { mimeType });
+      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+      mediaRecorder.onstop = sendLiveKitAudio;
+      mediaRecorder.start(100);
+      isRecording = true;
+      setOrbState('listening');
+      startSilenceDetection();
+    } catch(e) { console.error('LiveKit mic error:', e); }
+    return;
+  }
+
+  try {
+    if (!micStream) micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(micStream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+    audioChunks = [];
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus' : 'audio/webm';
+    mediaRecorder = new MediaRecorder(micStream, { mimeType });
+    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+    mediaRecorder.onstop = sendRecordingToServer;
+    mediaRecorder.start(100);
+    isRecording = true;
+    setOrbState('listening');
+    startSilenceDetection();
+  } catch(e) {
+    console.error('Mic error:', e);
+  }
+}
+
+function stopRecording() {
+  if (!isRecording) return;
+  isRecording = false;
+  resetTouchIdle();
+  clearTimeout(silenceTimer);
+  silenceTimer = null;
+  if (MODE === 'livekit' && liveKitRoom) {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+    setOrbState('thinking');
+    return;
+  }
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  setOrbState('thinking');
+}
+
+// ── Silence detection with peak RMS tracking (for silence filter) ─────────
+function startSilenceDetection() {
+  maxRecordedRms = 0;   // reset for this recording session
+  const buf = new Float32Array(analyser.fftSize);
+  function check() {
+    if (!isRecording) return;
+    analyser.getFloatTimeDomainData(buf);
+    let rms = 0;
+    for (let i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
+    rms = Math.sqrt(rms / buf.length);
+    maxRecordedRms = Math.max(maxRecordedRms, rms);   // track peak
+    if (rms < silenceThreshold) {
+      if (!silenceTimer) {
+        silenceTimer = setTimeout(() => {
+          if (isRecording) stopRecording();
+        }, silenceMs);
+      }
+    } else {
+      clearTimeout(silenceTimer);
+      silenceTimer = null;
+    }
+    if (isRecording) requestAnimationFrame(check);
+  }
+  requestAnimationFrame(check);
+}
+
+// ── Send to server (WS path) with pre-send silence filter ────────────────
+async function sendRecordingToServer() {
+  if (audioChunks.length === 0 || !wsReady) return;
+
+  // Pre-send silence filter: if peak RMS during recording was below threshold,
+  // this is ambient noise / accidental trigger — discard without sending.
+  // Prevents Whisper hallucinations from silent blobs.
+  if (maxRecordedRms < 0.008) {
+    audioChunks = [];
+    setOrbState('ambient');
+    resetTouchIdle();
+    if (convMode) scheduleAutoListen();
+    return;
+  }
+
+  setOrbState('thinking');
+  serverBusy = true;   // block new recordings until 'done' arrives
+  try {
+    const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+    const arrayBuf = await blob.arrayBuffer();
+    localWS.send(arrayBuf);
+  } catch(e) {
+    console.error('Failed to send audio:', e);
+    serverBusy = false;
+    setOrbState('ambient');
+  }
+  audioChunks = [];
+}
+
+// ── LiveKit: send recorded audio via HTTP POST ────────────────────────────
+async function sendLiveKitAudio() {
+  if (!audioChunks.length || !liveKitRoom) { audioChunks = []; return; }
+  if (maxRecordedRms < 0.008) {   // silence filter for LiveKit path too
+    audioChunks = [];
+    setOrbState('ambient');
+    resetTouchIdle();
+    if (convMode) scheduleAutoListen();
+    return;
+  }
+  const blob = new Blob(audioChunks, { type: 'audio/webm' });
+  audioChunks = [];
+  serverBusy = true;
+  try {
+    const fd = new FormData();
+    fd.append('audio', blob, 'ptt.webm');
+    fd.append('participant_identity', liveKitRoom.localParticipant.identity || '');
+    fd.append('session_id', getSessionId());
+    const resp = await fetch('/api/voice/livekit-audio', {
+      method: 'POST',
+      headers: { 'X-Session-ID': getSessionId() },
+      body: fd,
+    });
+    if (!resp.ok) { serverBusy = false; setOrbState('ambient'); }
+  } catch(e) {
+    serverBusy = false;
+    setOrbState('ambient');
+  }
+}
+
+// ── toggleConvMode (keyboard shortcut fallback; End Call is primary exit) ──
+function toggleConvMode() {
+  convMode = !convMode;
+  if (!convMode) endCall();  // turning off conv mode on touch = end call
+}
+
+// ── LiveKit WebRTC session (fallback path identical to voice.html) ────────
+async function connectLiveKitVoice() {
+  if (typeof LivekitClient === 'undefined') { connectLocalVoice(); return; }
+  try {
+    const resp = await fetch('/api/voice/livekit-token', {
+      headers: { 'X-Session-ID': getSessionId() },
+    });
+    if (!resp.ok) throw new Error(`Token fetch: ${resp.status}`);
+    const { token, url, livekit_available } = await resp.json();
+
+    if (livekit_available === false) {
+      connectLocalVoice();
+      return;
+    }
+
+    const room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
+
+    room.on(LivekitClient.RoomEvent.TrackSubscribed, (track) => {
+      if (track.kind !== LivekitClient.Track.Kind.Audio) return;
+      const audioEl = track.attach();
+      audioEl.autoplay = true;
+      document.body.appendChild(audioEl);
+      speaking = true;
+      setOrbState('responding');
+      audioEl.addEventListener('ended', () => {
+        speaking = false;
+        track.detach(audioEl);
+        audioEl.remove();
+        setOrbState('ambient');
+        if (convMode) scheduleAutoListen();
+      });
+      audioEl.addEventListener('error', () => { speaking = false; setOrbState('ambient'); });
+    });
+
+    room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track) => { track.detach(); });
+
+    room.on(LivekitClient.RoomEvent.DataReceived, (data) => {
+      try { handleVoiceEvent(JSON.parse(_lkDecoder.decode(data))); } catch(e) {}
+    });
+
+    room.on(LivekitClient.RoomEvent.Disconnected, () => {
+      wsReady = false;
+      liveKitRoom = null;
+      if (convMode) setTimeout(endCall, 5000);
+    });
+
+    await Promise.race([
+      room.connect(url, token),
+      new Promise((_, reject) =>
+        setTimeout(() => {
+          room.disconnect().catch(() => {});
+          reject(new Error('LiveKit timeout'));
+        }, 7000)
+      ),
+    ]);
+
+    liveKitRoom = room;
+    wsReady = true;
+    setOrbState('ambient');
+    playBeep();
+    resetTouchIdle();
+    scheduleAutoListen();
+  } catch(e) {
+    connectLocalVoice();
+  }
+}
+
+// ── Start voice session ───────────────────────────────────────────────────
+function startVoice() {
+  document.getElementById('tapOverlay').style.display = 'none';
+  if (MODE === 'livekit') {
+    connectLiveKitVoice();
+  } else {
+    connectLocalVoice();
+  }
+}
+
+// ── Keyboard shortcut: Space toggles PTT (fallback); Ctrl+C = end call ───
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && !e.repeat) {
+    if (!isRecording && !serverBusy && !speaking) startRecording();
+  }
+  if (e.code === 'KeyC' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); endCall(); }
+});
+document.addEventListener('keyup', (e) => {
+  if (e.code === 'Space') { if (isRecording) stopRecording(); }
+});
+
+// ── Auto-start immediately (kiosk — no iOS tap gate needed) ──────────────
+startVoice();
+
+// ── Broadcast channel: voice events from service worker ──────────────────
+try {
+  const bc = new BroadcastChannel('zoe-voice');
+  bc.onmessage = (ev) => handleVoiceEvent(ev.data || {});
+} catch(e) {}
+
+// ── Initialise touch nav menu ─────────────────────────────────────────────
+if (typeof TouchMenu !== 'undefined') TouchMenu.init({ page: 'voice' });
+</script>
+
+</body>
+</html>
