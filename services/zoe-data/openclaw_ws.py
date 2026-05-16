@@ -30,19 +30,32 @@ GATEWAY_TOKEN = os.environ.get("OPENCLAW_GATEWAY_TOKEN", "")
 OPENCLAW_AGENT_TIMEOUT_S = float(os.environ.get("OPENCLAW_AGENT_TIMEOUT_S", "900"))
 
 
-_ZOE_SELF_COMPACT = (
-    "Zoe can build for herself via OpenClaw skills: "
-    "zoe-widget-builder (new dashboard widgets), "
-    "zoe-page-builder (new desktop+touch pages), "
-    "zoe-capability-extender (search ClawHub or compose a new skill). "
-    "All three are admin-gated and always plan-then-confirm into a /_preview/ "
-    "staging area before touching real files. "
-    "Zoe also has a Proactive Engine: use POST /api/proactive/schedule or the "
-    "proactive_schedule MCP tool to send a push notification to a user at a "
-    "future UTC datetime; notifications deep-link into a fresh chat session. "
-    "Before saying \"I can't do X\", call the zoe_self_capabilities MCP tool to "
-    "check live state. See ZOE_SELF.md in this workspace for full architecture."
+_ZOE_SELF_COMPACT_DEFAULT = (
+    "Zoe is a personal AI companion (3-tier: Zoe Agent/Gemma4 :11434, Hermes/GPT-5.4 :8642, "
+    "OpenClaw/Codex :18789). Tools: calendar, reminders, lists, notes, people, weather, "
+    "Home Assistant, memory (MemPalace semantic + SQLite portrait), push notifications, "
+    "panel display (show_map, show_chart, show_image), web_search (DDG). "
+    "OpenClaw has full Playwright browser + bash exec + skills. "
+    "Builder skills: zoe-widget-builder, zoe-page-builder, zoe-capability-extender "
+    "(admin-gated, always stages to /_preview/ first). "
+    "Proactive Engine: POST /api/proactive/schedule or proactive_schedule MCP for future "
+    "push notifications. Before saying 'I can't do X', check zoe_self_capabilities MCP tool. "
+    "See ZOE_SELF.md for full architecture."
 )
+
+def _load_zoe_self_compact() -> str:
+    """Load compact Zoe self-description from ~/.zoe/zoe_self_compact.txt (updateable without redeploy)."""
+    _compact_path = os.path.expanduser("~/.zoe/zoe_self_compact.txt")
+    try:
+        with open(_compact_path) as _f:
+            _text = _f.read().strip()
+            if _text:
+                return _text
+    except Exception:
+        pass
+    return _ZOE_SELF_COMPACT_DEFAULT
+
+_ZOE_SELF_COMPACT = _load_zoe_self_compact()
 
 
 def _zoe_context_prefix(
@@ -66,6 +79,12 @@ def _zoe_context_prefix(
     prefix += f"[ZOE_SELF: {_ZOE_SELF_COMPACT}]\n"
     if memories:
         prefix += f"{memories}\n"
+    if name:
+        prefix += (
+            f"[VOICE: You are Zoe — warm, curious, genuinely present. "
+            f"Respond directly to {name} using the portrait and memory context above. "
+            f"Speak as someone who knows them well, not as a task executor.]\n"
+        )
     return prefix
 
 

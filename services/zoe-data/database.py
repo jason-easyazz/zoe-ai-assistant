@@ -77,6 +77,11 @@ async def init_db():
             await db.execute("ALTER TABLE music_listening_events ADD COLUMN duration_seconds REAL")
         except Exception:
             pass  # column already exists
+        # Phase 2.6: panel_id column for background task panel routing
+        try:
+            await db.execute("ALTER TABLE background_tasks ADD COLUMN panel_id TEXT")
+        except Exception:
+            pass  # column already exists (or table missing — will be created by SCHEMA)
         await db.execute(
             "INSERT OR IGNORE INTO users (id, name, role) VALUES (?, ?, ?)",
             ("family-admin", "Admin", "admin"),
@@ -444,6 +449,46 @@ CREATE TABLE IF NOT EXISTS openclaw_approvals (
 -- fresh deployments. Existing production databases may still have empty
 -- rows; a maintenance migration will drop them after the Phase-1 soak period.
 -- See docs/architecture/memory.md for the replacement design.
+
+-- User portrait: LLM-synthesized narrative understanding of each user.
+-- Generated weekly by user_portrait.run_portrait_synthesis(), stored here
+-- for fast key-lookup injection into every chat turn. Personal data stays
+-- in this runtime layer — never in model weights.
+CREATE TABLE IF NOT EXISTS user_portraits (
+    user_id TEXT PRIMARY KEY,
+    portrait_text TEXT NOT NULL,
+    portrait_version INTEGER DEFAULT 1,
+    generated_from_memory_count INTEGER DEFAULT 0,
+    last_generated DATETIME DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS background_tasks (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      TEXT NOT NULL,
+    session_id   TEXT,
+    panel_id     TEXT,
+    task         TEXT NOT NULL,
+    status       TEXT DEFAULT 'pending',
+    result       TEXT,
+    seen         INTEGER DEFAULT 0,
+    created_at   TEXT,
+    completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS open_loops (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id          TEXT NOT NULL,
+    loop_text        TEXT NOT NULL,
+    context          TEXT,
+    follow_up_hint   TEXT,
+    emotional_weight INTEGER DEFAULT 1,
+    created_at       DATETIME DEFAULT (datetime('now')),
+    follow_up_after  DATETIME,
+    resolved         BOOLEAN DEFAULT 0,
+    resolved_at      DATETIME,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
 
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);

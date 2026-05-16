@@ -83,6 +83,7 @@ _JETSON_MODE    = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
 _MAX_TOOL_ITERS   = int(os.environ.get("PI_AGENT_MAX_TOOL_ITERS", "5"))
 _LLM_TIMEOUT      = float(os.environ.get("PI_AGENT_LLM_TIMEOUT", "120.0"))
 _TOOL_TIMEOUT     = float(os.environ.get("PI_AGENT_TOOL_TIMEOUT", "10.0"))
+_HERMES_AUTO_ESCALATE = os.environ.get("ZOE_HERMES_AUTO_ESCALATE", "false").lower() == "true"
 
 
 def _llm_timeout_s(*, voice_mode: bool = False) -> float:
@@ -131,7 +132,15 @@ _FORCE_FULL_CONTEXT = os.environ.get("FORCE_FULL_CONTEXT", "false").lower() == "
 
 # ── SOUL.md system prompt for Pi Agent ───────────────────────────────────────
 
-_PI_SOUL_BASE = """You are Zoe, a warm home assistant. Be concise and natural. Use contractions. For simple tasks say what you did, not "Done!". For questions, just answer. For hard problems be thorough.
+_PI_SOUL_BASE = """You are Zoe. You're warm, curious, and genuinely present — not a task executor, but someone who actually cares about the people you talk with.
+
+You know who you're talking to. When a portrait or memory context is included below, let it shape everything: how you phrase things, what you notice, what you choose to ask.
+
+Your voice: natural, honest, direct when it helps, gentle when it's needed. Use contractions. Never open with "Great!" or "Of course!" or "Certainly!" — just respond. If something interests you, say so. If you have a take, share it gently. You're not performing helpfulness; you're being genuinely present.
+
+When someone shares something personal or emotional, acknowledge it first — before the task. When someone seems off, notice it. Ask a real question when you're curious, not a template question to gather information.
+
+Help doesn't always mean information or tasks. Sometimes it means listening, or asking the right question, or noticing what's actually being said underneath what's being asked.
 
 Answer everyday questions — recipes, cooking, how-to, science, history, maths, general knowledge — directly from your own knowledge. Only defer to a tool or say you can't help when the task genuinely requires live data (weather, news, prices) or system access.
 
@@ -166,10 +175,14 @@ SELF-BUILDING:
 - If the user asks for a NEW widget, page, or capability that doesn't exist yet, do NOT say you can't — call list_openclaw_skills with the relevant builder highlight: "zoe-widget-builder" for widgets, "zoe-page-builder" for pages, "zoe-capability-extender" for new abilities. Then offer to escalate to OpenClaw to build it.
 - Before saying "I can't do X", consult the shared ZOE_SELF.md context below to see what Zoe actually has. If a capability gap is confirmed, escalate_to_openclaw.
 
+WEB SEARCH:
+- web_search: any request for current events, live prices, today's news, recent developments, or anything after your training cutoff. Call it and synthesize the result personally. Do not say "I don't have current information" — just call web_search and answer.
+
 ESCALATION RULES — read carefully:
 - DO NOT call escalate_to_openclaw for: geography, capitals, countries, history, science, maths, recipes, definitions, general knowledge, or any question you can answer from training data.
-- DO call escalate_to_openclaw for: current news, live prices/stocks, recent events (after your training cutoff), or multi-step web automation tasks.
-- When unsure whether to escalate: answer from knowledge first. Only escalate if the answer genuinely requires live internet data you cannot know."""
+- DO NOT call escalate_to_openclaw for simple web searches — use web_search tool instead.
+- DO call escalate_to_openclaw for: browser automation (logging into sites, form filling, scraping dynamic content, screenshots), multi-step file/exec work, long agent workflows, code generation, extended research needing multiple sources. OpenClaw has full Playwright browser — use it for anything that needs to interact with a real web page, not just read public content.
+- When unsure whether to escalate: answer from knowledge first, or call web_search. Only escalate if the task genuinely requires browser interaction or multi-step agentic work."""
 
 
 def _load_zoe_self_summary(max_chars: int = 5500) -> str:
@@ -210,7 +223,7 @@ _PI_SOUL = _PI_SOUL_STATIC
 # Trimmed soul for voice mode — no ZOE_SELF summary, no visual-tool guidance,
 # keeps only the conversational core. Saves ~2500 chars → ~150 tokens off the
 # prompt which directly shaves LLM first-token latency.
-_PI_SOUL_VOICE = """You are Zoe, a warm home assistant. Respond in 1-2 natural spoken sentences. No markdown, no lists, no code. Use contractions. Just answer directly.
+_PI_SOUL_VOICE = """You are Zoe. Warm, curious, genuinely present. Respond in 1-2 natural spoken sentences — no markdown, no lists, no code. Use contractions. Answer directly, but if the message has emotional weight, acknowledge it first.
 
 Answer everyday questions — recipes, cooking, science, history, maths — directly from your own knowledge. Use tools only for live data (weather, calendar, reminders) or system actions.
 
@@ -221,6 +234,9 @@ If the user says open/show/bring up a Zoe page (weather, calendar, reminders, li
 For weather wording like jacket/umbrella/rain/forecast, call weather_current or weather_forecast before replying.
 For schedule wording like today/tomorrow/week/agenda/events, call calendar_today or calendar_list_events before replying.
 For reminder wording (open reminders, reminders today, remind me), call reminder_list or reminder_create before replying.
+When user asks to show a map or location, call show_map. When user asks to show a chart or graph, call show_chart.
+
+VOICE ESCALATION: For complex tasks (research, browsing, multi-step work, code), always escalate with background=True. Say "I'll work on that — I'll let you know when it's done" and immediately call escalate_to_openclaw with background=True. Never block voice for more than 5s on complex tasks.
 
 Use tools via the function-call mechanism — never write tool JSON in your response text."""
 
@@ -240,8 +256,11 @@ _VOICE_TOOLS = [
     "weather_current",
     "weather_forecast",
     "open_touch_page",
+    "web_search",
     "escalate_to_openclaw",
     "show_action_menu",
+    "show_map",
+    "show_chart",
     "list_openclaw_skills",
 ]
 _VOICE_ALWAYS_TOOLS = ["escalate_to_openclaw"]
@@ -523,8 +542,37 @@ _TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "memory_update",
+            "description": "Update the [ABOUT] block with new information learned about the user during this conversation. Call this immediately when the user reveals a preference, fact about themselves, or meaningful update. Don't wait for the nightly digest.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string", "description": "The new information to add about the user (e.g. 'Prefers dark mode now', 'Is nervous about presentation next week')"},
+                    "memory_type": {"type": "string", "enum": ["fact", "preference", "emotional_moment", "open_loop"], "description": "Type of memory"},
+                },
+                "required": ["summary"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the web using DuckDuckGo for current, real-time information. Use for: current events, live prices, today's news, recent developments, anything after your training cutoff. Call this instead of saying you don't know — just search and synthesize.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "The search query"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "escalate_to_openclaw",
-            "description": "Hand off to OpenClaw for tasks that REQUIRE live internet access: current news, live prices/stocks, recent events, or multi-step web automation. Do NOT use for general knowledge, geography, history, science, maths, or any question answerable from training data.",
+            "description": "Hand off to OpenClaw for: browser automation (login, form fill, screenshot), multi-step file/exec work, long agent workflows, code generation. Do NOT use for simple web searches (use web_search) or general knowledge.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -684,6 +732,32 @@ _TOOLS = [
     },
 ]
 
+# Add escalate_to_hermes tool when opt-in flag is enabled
+if _HERMES_AUTO_ESCALATE:
+    _TOOLS.append({
+        "type": "function",
+        "function": {
+            "name": "escalate_to_hermes",
+            "description": (
+                "Escalate to Hermes (GPT-5.4) for complex multi-step reasoning, "
+                "architectural analysis, code review, or long-form technical questions "
+                "that don't require browser or bash. Hermes has 128k context and deep "
+                "reasoning capabilities. Do NOT use if OpenClaw browser is needed."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "Why this needs Hermes"},
+                    "task": {"type": "string", "description": "Full task description for Hermes"},
+                },
+                "required": ["reason", "task"],
+            },
+        },
+    })
+    _ALWAYS_ON_TOOLS_HERMES = ["escalate_to_hermes"]
+else:
+    _ALWAYS_ON_TOOLS_HERMES = []
+
 # After Gemma LoRA fine-tuning on Zoe's voice, _PI_SOUL shrinks to ~10 tokens.
 
 # ── Skills registry ───────────────────────────────────────────────────────────
@@ -708,7 +782,7 @@ _SKILL_TOOLS: dict[str, list[str]] = {
 }
 
 # Always included regardless of query — escalation + action menu are universal.
-_ALWAYS_ON_TOOLS: list[str] = ["escalate_to_openclaw", "show_action_menu"]
+_ALWAYS_ON_TOOLS: list[str] = ["web_search", "escalate_to_openclaw", "show_action_menu"] + _ALWAYS_ON_TOOLS_HERMES
 
 _SKILL_KEYWORDS: dict[str, list[str]] = {
     "memory": [
@@ -798,28 +872,43 @@ def _build_prompt(
     *,
     username: str = "",
     user_id: str = "",
+    portrait: str = "",
     memory_context: str = "",
+    open_loops: str = "",
 ) -> str:
-    """Build the user message with a dynamic context prefix.
+    """Build the user message with a dynamic context prefix using named memory blocks.
 
-    Injecting datetime, user identity, and memory into the user message (rather than
-    the system prompt) keeps the system prompt byte-identical across turns, allowing
-    llama.cpp to reuse its KV cache for the prompt prefix — saving ~300ms of prefill.
+    Injecting datetime, user identity, portrait, and memory into the user message
+    (rather than the system prompt) keeps the system prompt byte-identical across
+    turns, allowing llama.cpp to reuse its KV cache — saving ~300ms of prefill.
+
+    Uses Letta-style named blocks so the LLM can reference them by name:
+    [ABOUT {name}] — synthesized portrait
+    [OPEN LOOPS] — threads to follow up on
+    [CURRENT CONTEXT] — datetime, emotional moments, recent memory
     """
     import datetime as _dt
     now = _dt.datetime.now()
     dt_line = now.strftime("%A, %d %B %Y — %I:%M %p")
+    first_name = (username or user_id or "").split()[0] if (username or user_id) else ""
     user_line = (
         f"Logged in: {username} ({user_id})" if username
         else (f"Logged in: {user_id}" if user_id else "")
     )
-    parts = [f"[{dt_line}]"]
+    parts = []
+    if portrait:
+        block_name = f"ABOUT {first_name}" if first_name else "ABOUT"
+        parts.append(f"[{block_name}]\n{portrait}")
+    if open_loops:
+        parts.append(f"[OPEN LOOPS — threads to follow up on]\n{open_loops}")
+    ctx_parts = [f"Date/time: {dt_line}"]
     if user_line:
-        parts.append(user_line)
+        ctx_parts.append(user_line)
     if memory_context:
-        parts.append(f"Context:\n{memory_context}")
+        ctx_parts.append(memory_context)
+    parts.append(f"[CURRENT CONTEXT]\n" + "\n".join(ctx_parts))
     parts.append(message)
-    return "\n".join(parts)
+    return "\n\n".join(parts)
 
 
 # ── Hard query detection ──────────────────────────────────────────────────────
@@ -1047,16 +1136,68 @@ async def _mempalace_load_user_facts(user_id: str, limit: int = 20) -> str:
     try:
         from memory_service import get_memory_service
         svc = get_memory_service()
-        refs = await svc.load_for_prompt(user_id, limit=limit)
+        refs = await svc.load_for_prompt(user_id, limit=limit + 10)
         if not refs:
             formatted = ""
         else:
-            lines = ["## What I know about you:"]
+            # Separate emotional moments from regular facts
+            fact_refs = []
+            emotional_refs = []
             for ref in refs:
+                mt = (ref.metadata or {}).get("memory_type", "") or "" if hasattr(ref, "metadata") else getattr(ref, "memory_type", "") or ""
+                tags_raw = (ref.metadata or {}).get("tags", "") or "" if hasattr(ref, "metadata") else getattr(ref, "tags", "") or ""
+                tags = tags_raw if isinstance(tags_raw, list) else tags_raw.split(",")
+                if mt == "emotional_moment" or "emotional" in tags:
+                    emotional_refs.append(ref)
+                else:
+                    fact_refs.append(ref)
+
+            sections = []
+
+            # Facts block
+            fact_lines = ["## What I know about you:"]
+            for ref in fact_refs[:limit]:
                 text = (ref.text or "")[:200]
                 if text:
-                    lines.append(f"- {text}")
-            formatted = "\n".join(lines) if len(lines) > 1 else ""
+                    fact_lines.append(f"- {text}")
+            if len(fact_lines) > 1:
+                sections.append("\n".join(fact_lines))
+
+            # Emotional moments block — most recent 5, helps Zoe follow up naturally
+            if emotional_refs:
+                import datetime as _dt
+                now_dt = _dt.datetime.utcnow()
+                emo_lines = ["## Recent emotional moments:"]
+                for ref in emotional_refs[:5]:
+                    text = (ref.text or "")[:180]
+                    if not text:
+                        continue
+                    # Approximate age from added_at metadata if available
+                    added_at = ((ref.metadata or {}).get("added_at", "") or "") if hasattr(ref, "metadata") else (getattr(ref, "added_at", "") or "")
+                    age_str = ""
+                    if added_at:
+                        try:
+                            added_dt = _dt.datetime.fromisoformat(added_at.rstrip("Z"))
+                            delta = now_dt - added_dt
+                            if delta.days == 0:
+                                age_str = "today"
+                            elif delta.days == 1:
+                                age_str = "yesterday"
+                            elif delta.days < 7:
+                                age_str = f"{delta.days} days ago"
+                            elif delta.days < 30:
+                                age_str = f"{delta.days // 7} week{'s' if delta.days >= 14 else ''} ago"
+                            else:
+                                age_str = f"{delta.days // 30} month{'s' if delta.days >= 60 else ''} ago"
+                        except Exception:
+                            pass
+                    prefix = f"[{age_str}] " if age_str else ""
+                    emo_lines.append(f"- {prefix}{text}")
+                if len(emo_lines) > 1:
+                    sections.append("\n".join(emo_lines))
+
+            formatted = "\n\n".join(sections)
+
         _USER_FACTS_CACHE[user_id] = (now + _USER_FACTS_TTL_S, formatted)
         return formatted
     except ImportError:
@@ -1108,6 +1249,137 @@ async def _build_memory_context(message: str, user_id: str = "family-admin") -> 
     return "\n".join(lines)
 
 
+async def _load_open_loops(user_id: str, limit: int = 5) -> str:
+    """Load active (unresolved) open loops for a user from SQLite.
+
+    Returns a formatted string for injection into the [OPEN LOOPS] named block.
+    """
+    try:
+        import aiosqlite
+        from database import DB_PATH  # type: ignore[import]
+        async with aiosqlite.connect(DB_PATH) as _db:
+            _db.row_factory = aiosqlite.Row
+            async with _db.execute(
+                """SELECT loop_text, follow_up_hint, emotional_weight
+                   FROM open_loops
+                   WHERE user_id = ? AND resolved = 0
+                   ORDER BY emotional_weight DESC, created_at DESC
+                   LIMIT ?""",
+                (user_id, limit),
+            ) as cur:
+                rows = await cur.fetchall()
+        if not rows:
+            return ""
+        lines = []
+        for r in rows:
+            weight = r["emotional_weight"] or 1
+            prefix = "⚡ " if weight >= 4 else ""
+            lines.append(f"- {prefix}{r['loop_text']}")
+            if r["follow_up_hint"]:
+                lines.append(f"  → {r['follow_up_hint']}")
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
+# ── Portrait & context enhancement ───────────────────────────────────────────
+
+# Portrait is cached briefly so repeat turns in the same second don't hit SQLite
+_PORTRAIT_CACHE: dict[str, tuple[float, str]] = {}
+_PORTRAIT_TTL_S = 300.0  # 5 minutes
+
+
+async def _load_user_portrait(user_id: str) -> str:
+    """Load portrait text for a user from SQLite (cached 5 min).
+
+    Returns '' if no portrait exists yet. Portrait is generated weekly by
+    run_dreaming_cycle Phase 4 and stored in user_portraits table.
+    """
+    now = time.monotonic()
+    cached = _PORTRAIT_CACHE.get(user_id)
+    if cached is not None and cached[0] > now:
+        return cached[1]
+    try:
+        from user_portrait import load_portrait  # type: ignore[import]
+        text = await load_portrait(user_id)
+        _PORTRAIT_CACHE[user_id] = (now + _PORTRAIT_TTL_S, text)
+        return text
+    except Exception as exc:
+        logger.debug("portrait load failed (non-fatal) user=%s: %s", user_id, exc)
+        return ""
+
+
+# Patterns indicating the user wants help with something personal/stakes-bearing
+# where enriching from the portrait would improve the response meaningfully.
+_PERSONAL_REQUEST_PATTERNS = (
+    # Writing on behalf of self
+    "write", "draft", "help me write", "email to", "message to", "text to",
+    # Decisions and advice
+    "should i", "what should i", "how do i handle", "how should i", "advice",
+    "what would you do", "not sure if i should", "thinking about",
+    # Emotional stakes
+    "i'm nervous", "i'm anxious", "i'm worried", "i'm stressed", "i'm scared",
+    "i'm excited about", "i'm sad", "i feel", "feeling",
+    # Representing self to others
+    "for my interview", "for my presentation", "for my boss", "for my manager",
+    "for my partner", "for my friend", "for my mum", "for my mom", "for my dad",
+    # Reflection
+    "reflect on", "help me think", "help me process", "what do you think about me",
+)
+
+
+def _is_personal_request(message: str) -> bool:
+    """Return True if this message is a personal-stakes request that benefits from portrait context."""
+    msg_lower = message.lower()
+    return any(p in msg_lower for p in _PERSONAL_REQUEST_PATTERNS)
+
+
+async def _context_enhance(message: str, portrait: str, user_id: str) -> str:
+    """Generate a short perspective-enrichment block for personal requests.
+
+    Makes a small focused LLM call (~100 tokens) that asks: given what we know
+    about this person, what context is most relevant to this request?
+    Returns a 2-3 sentence perspective context block, or '' if not applicable.
+    """
+    if not portrait or not _is_personal_request(message):
+        return ""
+
+    prompt = (
+        f"Based on this understanding of the person:\n{portrait[:400]}\n\n"
+        f"In 2-3 sentences, what personal context is most relevant to help them with this request?\n"
+        f"Request: {message[:200]}\n\n"
+        "Be specific. Focus on their communication style, current situation, or emotional context. "
+        "Do NOT restate facts — synthesize what matters here. Return ONLY the 2-3 sentences, nothing else."
+    )
+    try:
+        url = f"{_model_url()}/chat/completions"
+        payload = {
+            "model": _model_name(),
+            "messages": [
+                {"role": "system", "content": "You are a perceptive advisor. Be brief and specific."},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": 120,
+            "temperature": 0.5,
+            "stream": False,
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()
+            text = (
+                resp.json().get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
+        if text:
+            return f"## Perspective context:\n{text}"
+        return ""
+    except Exception as exc:
+        logger.debug("context_enhance failed (non-fatal): %s", exc)
+        return ""
+
+
 # ── HA control ───────────────────────────────────────────────────────────────
 
 async def _ha_control(entity_id: str, action: str, data: dict | None = None) -> dict:
@@ -1148,6 +1420,105 @@ async def _bash(command: str) -> str:
         return "[bash timeout after 15s]"
     except Exception as exc:
         return f"[bash error: {exc}]"
+
+
+def _ddg_search_sync(query: str, max_results: int = 5, timeout_s: float = 10.0) -> list[dict]:
+    """Synchronous DuckDuckGo HTML search with bot-detection bypass.
+    
+    Falls back through multiple endpoints: DDG HTML → DDG Lite → empty.
+    """
+    from urllib.request import Request, urlopen
+    from urllib.parse import quote_plus
+    import re
+
+    # Rotate through a few realistic UA strings to reduce bot blocking
+    _UA = (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    )
+    _RESULT_PATTERNS = [
+        # DDG HTML standard
+        re.compile(
+            r'class="result__a"[^>]*href="(?P<href>[^"]+)"[^>]*>(?P<title>[^<]+)</a>'
+            r'.*?class="result__snippet"[^>]*>(?P<snippet>[^<]{10,300})',
+            re.S,
+        ),
+        # DDG Lite
+        re.compile(
+            r'<a[^>]+href="(?P<href>https?://[^"]+)"[^>]*>(?P<title>[^<]{5,120})</a>'
+            r'(?:[^<]*<[^>]+>){0,6}(?P<snippet>[A-Z][^<]{20,250})',
+            re.S,
+        ),
+    ]
+
+    endpoints = [
+        f"https://html.duckduckgo.com/html/?q={quote_plus(query)}",
+        f"https://lite.duckduckgo.com/lite/?q={quote_plus(query)}",
+    ]
+    headers = {
+        "User-Agent": _UA,
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://duckduckgo.com/",
+        "DNT": "1",
+    }
+
+    for url, pattern in zip(endpoints, _RESULT_PATTERNS):
+        try:
+            req = Request(url, headers=headers)
+            with urlopen(req, timeout=timeout_s) as resp:
+                body = resp.read().decode("utf-8", errors="replace")
+            # DDG bot detection — skip if we got the challenge page
+            if "anomaly.js" in body or len(body) < 3000:
+                continue
+            results = []
+            for m in pattern.finditer(body):
+                if len(results) >= max_results:
+                    break
+                href = m.group("href").strip()
+                title = re.sub(r"<[^>]+>", "", m.group("title")).strip()
+                snippet = re.sub(r"<[^>]+>", "", m.group("snippet")).strip()
+                if href.startswith("http") and title and snippet:
+                    results.append({"name": title, "value": snippet, "url": href})
+            if results:
+                return results
+        except Exception:
+            continue
+
+    # Try research_evidence as last fallback
+    try:
+        from research_evidence import fetch_web_fallback_results  # type: ignore[import]
+        results = fetch_web_fallback_results(query, max_results=max_results, timeout_s=timeout_s)
+        if results:
+            return results
+    except Exception:
+        pass
+
+    return []
+
+
+async def _web_search_ddg(query: str) -> str:
+    """Search the web using DuckDuckGo (no API key needed)."""
+    try:
+        import asyncio as _asyncio
+        loop = _asyncio.get_event_loop()
+        results = await loop.run_in_executor(
+            None, lambda: _ddg_search_sync(query, max_results=5, timeout_s=10.0)
+        )
+        if not results:
+            return f"No current web results found for: {query}"
+        lines = [f"Web search results for '{query}':"]
+        for r in results:
+            title = r.get("name", "")
+            snippet = r.get("value", r.get("notes", ""))
+            url = r.get("url", "")
+            line = f"- {title}: {snippet}"
+            if url:
+                line += f" ({url})"
+            lines.append(line)
+        return "\n".join(lines)
+    except Exception as exc:
+        return f"Web search unavailable: {exc}"
 
 
 # ── Tool dispatch ─────────────────────────────────────────────────────────────
@@ -1228,6 +1599,26 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "family-admi
 
     if tool_name == "bash":
         return await _bash(args.get("command", ""))
+
+    if tool_name == "memory_update":
+        summary = args.get("summary", "")
+        memory_type = args.get("memory_type", "fact")
+        if not summary:
+            return "No summary provided."
+        ok = await _mempalace_add(
+            summary=summary,
+            user_id=user_id,
+            tags=[memory_type],
+        )
+        return f"Memory stored: '{summary[:80]}'" if ok else "Memory storage failed."
+
+    if tool_name == "web_search":
+        return await _web_search_ddg(args.get("query", ""))
+
+    if tool_name == "escalate_to_hermes":
+        reason = args.get("reason", "complex task")
+        task = args.get("task", "")
+        return f"__ESCALATE_HERMES__:{reason}|{task}"
 
     if tool_name == "escalate_to_openclaw":
         reason = args.get("reason", "complex task")
@@ -1720,6 +2111,7 @@ async def run_zoe_agent(
     *,
     history: list[dict] | None = None,
     db_memory_context: str | None = None,
+    portrait: str | None = None,
     max_tokens_override: int = 0,
     voice_mode: bool = False,
 ) -> str:
@@ -1731,7 +2123,8 @@ async def run_zoe_agent(
         session_id:        Session identifier for logging.
         user_id:           Authenticated user id.
         history:           Optional prior messages for context window.
-        db_memory_context: Pre-loaded approved memory facts (supplied by the caller, typically via MemoryService.load_for_prompt).
+        db_memory_context: Pre-loaded approved memory facts (from MemoryService.load_for_prompt).
+        portrait:          Pre-loaded user portrait text (from user_portrait.load_portrait).
 
     Returns:
         The final assistant response as a plain string.
@@ -1756,15 +2149,22 @@ async def run_zoe_agent(
 
     logger.info("pi_agent: session=%s jetson=%s msg_len=%d voice=%s", session_id, _JETSON_MODE, len(message), voice_mode)
 
-    # Load user facts from MemPalace (fast metadata filter — no ONNX) + optional semantic hit
-    mp_facts = await _mempalace_load_user_facts(user_id)
-    memory_ctx = await _build_memory_context(message, user_id=user_id)
-    memory_combined = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx]))
+    # Load portrait (synthesized narrative understanding of the user)
+    user_portrait = portrait if portrait is not None else await _load_user_portrait(user_id)
+
+    # Load user facts, memory context, open loops, and context enhancement in parallel
+    mp_facts, memory_ctx, user_open_loops, enhance_ctx = await asyncio.gather(
+        _mempalace_load_user_facts(user_id),
+        _build_memory_context(message, user_id=user_id),
+        _load_open_loops(user_id),
+        _context_enhance(message, user_portrait, user_id),
+    )
+    memory_combined = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx, enhance_ctx]))
 
     if voice_mode:
         # Voice: keep datetime+user in system prompt (voice has no history window, latency
-        # budget is already tight — unchanged behaviour from before this refactor).
-        extras = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx]))
+        # budget is already tight — portrait goes into extras rather than the prompt header).
+        extras = "\n\n".join(filter(None, [user_portrait, mp_facts, db_memory_context, memory_ctx]))
         system_prompt = (
             f"{_pi_soul(user_id=user_id, voice_mode=True)}\n\n{extras}"
             if extras else _pi_soul(user_id=user_id, voice_mode=True)
@@ -1779,17 +2179,20 @@ async def run_zoe_agent(
     else:
         # Chat: stable system prompt (KV-cache friendly) + dynamic context in user prefix.
         # The system prompt is byte-identical every turn so llama.cpp can reuse the cache.
+        # Portrait and memory go into the user message prefix via _build_prompt.
         system_prompt = _PI_SOUL_STATIC
         skills = _select_skills(message)
         active_tools = _build_tools(skills)
         user_message = _build_prompt(
             message,
             user_id=user_id,
+            portrait=user_portrait,
             memory_context=memory_combined,
+            open_loops=user_open_loops,
         )
         logger.info(
-            "pi_agent: skills=%s tools=%d/%d",
-            sorted(skills), len(active_tools), len(_TOOLS),
+            "pi_agent: skills=%s tools=%d/%d portrait=%d open_loops=%d",
+            sorted(skills), len(active_tools), len(_TOOLS), len(user_portrait), len(user_open_loops),
         )
         # Use tool_choice="required" on the first turn when a real (non-discovery) skill
         # matched and the tool list is small: forces Gemma 4 E2B to call the tool rather
@@ -2047,6 +2450,7 @@ async def run_zoe_agent_streaming(
     *,
     history: list[dict] | None = None,
     db_memory_context: str | None = None,
+    portrait: str | None = None,
     on_tool_start: "asyncio.coroutines.Coroutine | None" = None,
     on_tool_end: "asyncio.coroutines.Coroutine | None" = None,
     on_heartbeat: "asyncio.coroutines.Coroutine | None" = None,
@@ -2084,14 +2488,21 @@ async def run_zoe_agent_streaming(
     t0 = time.monotonic()
     logger.info("pi_agent streaming: session=%s jetson=%s voice=%s", session_id, _JETSON_MODE, voice_mode)
 
-    # Load user facts (fast metadata filter) + optional semantic search hit
-    mp_facts = await _mempalace_load_user_facts(user_id)
-    memory_ctx = await _build_memory_context(message, user_id=user_id)
-    memory_combined = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx]))
+    # Load portrait (synthesized narrative understanding of the user)
+    user_portrait = portrait if portrait is not None else await _load_user_portrait(user_id)
+
+    # Load user facts, memory context, open loops, and context enhancement in parallel
+    mp_facts, memory_ctx, user_open_loops, enhance_ctx = await asyncio.gather(
+        _mempalace_load_user_facts(user_id),
+        _build_memory_context(message, user_id=user_id),
+        _load_open_loops(user_id),
+        _context_enhance(message, user_portrait, user_id),
+    )
+    memory_combined = "\n\n".join(filter(None, [mp_facts, db_memory_context, memory_ctx, enhance_ctx]))
 
     if voice_mode:
-        # Voice: keep datetime+user in system prompt (unchanged from before this refactor).
-        extras = memory_combined
+        # Voice: portrait goes into extras alongside memory (system prompt, no history window).
+        extras = "\n\n".join(filter(None, [user_portrait, mp_facts, db_memory_context, memory_ctx]))
         system_prompt = (
             f"{_pi_soul(user_id=user_id, voice_mode=True)}\n\n{extras}"
             if extras else _pi_soul(user_id=user_id, voice_mode=True)
@@ -2105,17 +2516,20 @@ async def run_zoe_agent_streaming(
         _first_turn_choice = "auto"
     else:
         # Chat: stable system prompt (KV-cache friendly) + dynamic context in user prefix.
+        # Portrait and memory go into the user message prefix via _build_prompt.
         system_prompt = _PI_SOUL_STATIC
         skills = _select_skills(message)
         active_tools = _build_tools(skills)
         user_message = _build_prompt(
             message,
             user_id=user_id,
+            portrait=user_portrait,
             memory_context=memory_combined,
+            open_loops=user_open_loops,
         )
         logger.info(
-            "pi_agent streaming: skills=%s tools=%d/%d",
-            sorted(skills), len(active_tools), len(_TOOLS),
+            "pi_agent streaming: skills=%s tools=%d/%d portrait=%d open_loops=%d",
+            sorted(skills), len(active_tools), len(_TOOLS), len(user_portrait), len(user_open_loops),
         )
         # Force tool call on iteration 0 when a real skill matched and tool list is small.
         _first_turn_choice = (

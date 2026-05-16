@@ -6,6 +6,7 @@ Endpoints:
   GET    /api/proactive/schedule        — list scheduled (admin/self)
   DELETE /api/proactive/schedule/{id}   — cancel a scheduled nudge
   POST   /api/proactive/pending/{id}    — claim a pending notification → session
+  POST   /api/proactive/trigger-morning — manually trigger morning brief (admin/self)
 """
 from __future__ import annotations
 
@@ -13,11 +14,12 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
+import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from auth import get_current_user
-from database import get_db
+from database import DB_PATH, get_db
 from proactive.session_utils import claim_pending
 from proactive.triggers.reminders import schedule_reminder, cancel_reminder
 
@@ -104,3 +106,47 @@ async def claim_pending_endpoint(pending_id: str):
     if result is None:
         raise HTTPException(status_code=404, detail="Pending notification not found or expired")
     return result
+
+
+@router.post("/trigger-morning")
+async def trigger_morning_brief(user: dict = Depends(get_current_user)):
+    """
+    Manually trigger the morning brief for the calling user.
+    Useful for testing Phase 3.4 without waiting for the 7:30am schedule.
+    """
+    from proactive.triggers.morning_checkin import _build_morning_context, _compose_morning_message
+    from proactive.engine import fire_notification
+
+    user_id = user["user_id"]
+    username = user.get("username", "")
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    try:
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            ctx = await _build_morning_context(db, user_id, today)
+    except Exception as exc:
+        log.error("trigger-morning: context build failed: %s", exc)
+        ctx = {}
+
+    from datetime import datetime as _dt
+    import zoneinfo
+    _tz = zoneinfo.ZoneInfo("Australia/Perth")
+    day_str = _dt.now(_tz).strftime("%A, %B %d")
+    ctx["day"] = day_str
+
+    message = _compose_morning_message(ctx, username, day_str)
+
+    await fire_notification(
+        user_id=user_id,
+        message=message,
+        trigger_type="morning_checkin",
+        context={**ctx, "force_send": True},
+        item_id="morning_checkin_manual",
+    )
+
+    return {
+        "ok": True,
+        "message": message,
+        "context": {k: v for k, v in ctx.items() if k not in ("portrait_snippet",)},
+    }

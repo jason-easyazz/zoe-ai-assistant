@@ -36,20 +36,9 @@ _running: dict[int, asyncio.Task] = {}
 
 
 async def _ensure_table(db) -> None:
-    await db.execute("""
-        CREATE TABLE IF NOT EXISTS background_tasks (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id      TEXT NOT NULL,
-            session_id   TEXT,
-            task         TEXT NOT NULL,
-            status       TEXT DEFAULT 'pending',
-            result       TEXT,
-            seen         INTEGER DEFAULT 0,
-            created_at   TEXT,
-            completed_at TEXT
-        )
-    """)
-    await db.commit()
+    # Table is now created by database.py SCHEMA — this is a no-op kept for
+    # call-site compatibility during the transition period.
+    pass
 
 
 async def _get_db():
@@ -64,15 +53,20 @@ async def _get_db():
     return db
 
 
-async def enqueue_background_task(task: str, user_id: str, session_id: str | None = None) -> int:
+async def enqueue_background_task(
+    task: str,
+    user_id: str,
+    session_id: str | None = None,
+    panel_id: str | None = None,
+) -> int:
     """Insert a task row and kick off the async runner. Returns the new task id."""
     db = await _get_db()
     try:
         await _ensure_table(db)
         now = datetime.now(timezone.utc).isoformat()
         cur = await db.execute(
-            "INSERT INTO background_tasks (user_id, session_id, task, status, created_at) VALUES (?,?,?,?,?)",
-            (user_id, session_id, task, "pending", now),
+            "INSERT INTO background_tasks (user_id, session_id, panel_id, task, status, created_at) VALUES (?,?,?,?,?,?)",
+            (user_id, session_id, panel_id, task, "pending", now),
         )
         await db.commit()
         task_id: int = cur.lastrowid  # type: ignore[assignment]
@@ -80,13 +74,19 @@ async def enqueue_background_task(task: str, user_id: str, session_id: str | Non
         await db.close()
 
     # Fire off the runner coroutine
-    fut = asyncio.ensure_future(_run_task(task_id, task, user_id, session_id))
+    fut = asyncio.ensure_future(_run_task(task_id, task, user_id, session_id, panel_id=panel_id))
     _running[task_id] = fut
-    logger.info("background_runner: enqueued task #%d for user=%s", task_id, user_id)
+    logger.info("background_runner: enqueued task #%d for user=%s panel=%s", task_id, user_id, panel_id)
     return task_id
 
 
-async def _run_task(task_id: int, task: str, user_id: str, session_id: str | None) -> None:
+async def _run_task(
+    task_id: int,
+    task: str,
+    user_id: str,
+    session_id: str | None,
+    panel_id: str | None = None,
+) -> None:
     """Execute the task via OpenClaw ACP and store the result."""
     from zoe_acp_client import openclaw_acp_stream as _acp_stream
 
@@ -113,9 +113,34 @@ async def _run_task(task_id: int, task: str, user_id: str, session_id: str | Non
             result = "(No result returned)"
         await _set_status("done", result)
         logger.info("background_runner: task #%d completed (%d chars)", task_id, len(result))
+        try:
+            from push import broadcaster
+            await broadcaster.broadcast(user_id, "background_task_done", {
+                "task_id": task_id,
+                "result": result[:500],
+                "session_id": session_id,
+                "panel_id": panel_id,
+            })
+            if panel_id:
+                await broadcaster.broadcast("all", "panel:announce", {
+                    "panel_id": panel_id,
+                    "text": f"Background task complete: {result[:200]}",
+                    "task_id": task_id,
+                })
+        except Exception:
+            pass  # polling fallback still works
     except Exception as exc:
         logger.warning("background_runner: task #%d failed: %s", task_id, exc)
         await _set_status("error", f"Task failed: {exc}")
+        try:
+            from push import broadcaster
+            await broadcaster.broadcast(user_id, "background_task_error", {
+                "task_id": task_id,
+                "error": str(exc),
+                "session_id": session_id,
+            })
+        except Exception:
+            pass
     finally:
         _running.pop(task_id, None)
 

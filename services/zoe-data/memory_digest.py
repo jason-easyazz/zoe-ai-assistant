@@ -60,6 +60,28 @@ Return ONLY one JSON object, nothing else:
 """
 
 
+# ── Emotional memory extraction ───────────────────────────────────────────────
+# Identifies emotionally significant moments from conversations. Stored with
+# memory_type="emotional_moment" so the agent can surface them as relationship
+# context — the emotional arc of the user's life, not just facts about it.
+_EMOTIONAL_EXTRACTION_PROMPT = """\
+You are identifying emotionally significant moments from a conversation.
+
+Look for: strong emotions the person expressed, important personal news they shared, \
+moments where the interaction carried real emotional weight.
+
+Return ONLY a JSON array (or [] if nothing qualifies):
+  "moment": what happened, written in third-person, max 150 chars
+  "emotion": one of joy | excitement | anxiety | sadness | frustration | pride | relief | love | grief | other
+  "significance": integer 1-3  (1=minor, 2=notable, 3=major life moment)
+
+Only include moments with significance >= 2. If nothing qualifies, return [].
+
+Conversation (user turns only):
+{chat_text}
+"""
+
+
 async def run_memory_digest(user_id: str, db=None) -> dict:
     """Extract facts from today's chat history and write to MemPalace + memory_items.
 
@@ -84,16 +106,16 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
             result["skipped_reason"] = "insufficient_activity"
             return result
 
-        facts = await _extract_facts_with_gemma(chat_text)
-        result["extracted"] = len(facts)
-        if not facts:
-            return result
-
         from zoe_agent import _mempalace_load_user_facts  # type: ignore[import]
         from memory_service import MemoryServiceError, get_memory_service
-        existing_text = await _mempalace_load_user_facts(user_id, limit=100)
-        existing_lower = existing_text.lower()
         svc = get_memory_service()
+
+        facts = await _extract_facts_with_gemma(chat_text)
+        result["extracted"] = len(facts)
+
+        if facts:
+            existing_text = await _mempalace_load_user_facts(user_id, limit=100)
+            existing_lower = existing_text.lower()
 
         for item in facts:
             fact = (item.get("fact") or "").strip()
@@ -168,10 +190,83 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
                 result["new"] += 1
                 logger.info("memory_digest: stored for %s: %s", user_id, fact[:80])
 
+        # ── Emotional memory pass ──────────────────────────────────────────
+        # Runs after fact extraction — separate LLM call that looks for
+        # emotionally significant moments rather than neutral facts.
+        try:
+            emotional_new = await _emotional_memory_pass(user_id, chat_text, svc)
+            result["emotional_new"] = emotional_new
+        except Exception as exc:
+            logger.debug("memory_digest: emotional pass failed (non-fatal) user=%s: %s", user_id, exc)
+
     except Exception as exc:
         logger.error("memory_digest: failed for %s: %s", user_id, exc, exc_info=True)
         result["error"] = str(exc)
     return result
+
+
+async def _emotional_memory_pass(user_id: str, chat_text: str, svc) -> int:
+    """Extract emotionally significant moments from today's chat and store them.
+
+    Returns the number of new emotional memories stored.
+    """
+    from memory_service import MemoryServiceError  # type: ignore[import]
+
+    prompt = _EMOTIONAL_EXTRACTION_PROMPT.format(chat_text=chat_text[:3000])
+    payload = {
+        "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
+        "messages": [
+            {"role": "system", "content": "You are an empathetic listener. Return ONLY valid JSON."},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": 256,
+        "temperature": 0.2,
+        "stream": False,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
+            resp.raise_for_status()
+            raw = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "[]").strip()
+    except Exception as exc:
+        logger.debug("emotional_pass: LLM call failed: %s", exc)
+        return 0
+
+    # Parse JSON
+    try:
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
+        if start == -1 or end == 0:
+            return 0
+        moments = json.loads(raw[start:end])
+        if not isinstance(moments, list):
+            return 0
+    except (json.JSONDecodeError, ValueError):
+        return 0
+
+    stored = 0
+    for item in moments:
+        moment = (item.get("moment") or "").strip()
+        emotion = (item.get("emotion") or "other").strip().lower()
+        significance = int(item.get("significance", 1))
+        if not moment or significance < 2:
+            continue
+        try:
+            ref = await svc.ingest(
+                moment,
+                user_id=user_id,
+                source="digest",
+                memory_type="emotional_moment",
+                confidence=0.9,
+                status="approved",
+                tags=["emotional", emotion],
+            )
+            if ref is not None:
+                stored += 1
+                logger.info("emotional_pass: stored user=%s [%s] %s", user_id, emotion, moment[:60])
+        except MemoryServiceError as exc:
+            logger.debug("emotional_pass: ingest failed: %s", exc)
+    return stored
 
 
 async def _load_todays_messages(user_id: str, db=None) -> str:
@@ -828,13 +923,100 @@ async def _synthesis_pass(user_id: str) -> dict:
     return summary
 
 
-async def run_dreaming_cycle(user_id: str) -> dict:
-    """Run the full dreaming cycle for a user (all 3 passes).
+async def _extract_open_loops(user_id: str, db=None) -> dict:
+    """Extract open loops from recent messages and store in open_loops table.
+
+    An open loop is an unresolved thread: a worry, a plan, something the user
+    mentioned they're waiting on, or something emotionally significant that
+    deserves a follow-up. Runs as part of the nightly dreaming cycle.
+    """
+    import aiosqlite
+    from database import DB_PATH  # type: ignore[import]
+
+    # Load last 48h of messages for this user
+    try:
+        async with aiosqlite.connect(DB_PATH) as _db:
+            _db.row_factory = aiosqlite.Row
+            async with _db.execute(
+                """SELECT m.content, m.role FROM chat_messages m
+                   JOIN chat_sessions s ON m.session_id = s.id
+                   WHERE s.user_id = ? AND m.role = 'user'
+                     AND m.created_at > datetime('now', '-2 days')
+                   ORDER BY m.created_at DESC LIMIT 50""",
+                (user_id,),
+            ) as cur:
+                rows = await cur.fetchall()
+    except Exception as exc:
+        logger.warning("open_loops: message load failed user=%s: %s", user_id, exc)
+        return {"user_id": user_id, "extracted": 0}
+
+    if not rows:
+        return {"user_id": user_id, "extracted": 0}
+
+    messages_text = "\n".join(f"User: {r['content']}" for r in rows[:30])
+    prompt = f"""Identify open loops in these messages — unresolved threads, worries, plans, waiting situations, or emotionally significant mentions that deserve a follow-up.
+
+Messages:
+{messages_text}
+
+Return a JSON array (max 5 items) where each item has:
+- "loop_text": brief description of the open loop (1-2 sentences)
+- "follow_up_hint": what Zoe should ask/say when following up
+- "emotional_weight": 1 (low) to 5 (high)
+- "follow_up_after": ISO-8601 datetime (when to follow up, e.g. tomorrow or in 3 days)
+
+Only include genuine open loops, not resolved topics. Return [] if none found."""
+
+    try:
+        import json as _json
+        from zoe_agent import _llm_chat  # type: ignore[import]
+        response = await _llm_chat([
+            {"role": "system", "content": "You extract open loops from conversations. Return only valid JSON arrays."},
+            {"role": "user", "content": prompt},
+        ], max_tokens=500)
+        loops = _json.loads(response.strip())
+        if not isinstance(loops, list):
+            loops = []
+    except Exception as exc:
+        logger.warning("open_loops: LLM extraction failed user=%s: %s", user_id, exc)
+        return {"user_id": user_id, "extracted": 0}
+
+    stored = 0
+    try:
+        async with aiosqlite.connect(DB_PATH) as _db:
+            for loop in loops[:5]:
+                if not isinstance(loop, dict) or not loop.get("loop_text"):
+                    continue
+                await _db.execute(
+                    """INSERT INTO open_loops
+                       (user_id, loop_text, follow_up_hint, emotional_weight, follow_up_after)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        user_id,
+                        loop.get("loop_text", ""),
+                        loop.get("follow_up_hint", ""),
+                        loop.get("emotional_weight", 1),
+                        loop.get("follow_up_after"),
+                    ),
+                )
+                stored += 1
+            await _db.commit()
+    except Exception as exc:
+        logger.warning("open_loops: DB insert failed user=%s: %s", user_id, exc)
+
+    return {"user_id": user_id, "extracted": stored}
+
+
+async def run_dreaming_cycle(user_id: str, db=None) -> dict:
+    """Run the full dreaming cycle for a user.
 
     Called by nightly-training-cycle.sh after run_memory_digest.
-    Phase 1 (REM)        — runs nightly
-    Phase 2 (Deep Sleep) — runs weekly (Sunday)
-    Phase 3 (Synthesis)  — runs weekly (Sunday)
+    Phase 1 (REM)         — runs nightly: reinforce recent memories
+    Phase 1.5 (Open Loops)— runs nightly: extract unresolved threads same night they're mentioned
+    Phase 2 (Deep Sleep)  — runs weekly (Sunday): consolidation
+    Phase 3 (Synthesis)   — runs weekly (Sunday): long-term synthesis
+    Phase 4 (Portrait)    — runs weekly (Sunday): synthesizes user portrait in SQLite
+    Phase 5 (Agent Sync)  — runs weekly (Sunday): regenerate ZOE_SELF.md
     """
     import datetime
 
@@ -844,11 +1026,40 @@ async def run_dreaming_cycle(user_id: str) -> dict:
     rem = await _rem_reinforce_pass(user_id)
     result["rem"] = rem
 
+    # Phase 1.5: Open loops extraction — runs nightly so loops are detected the same
+    # day they're mentioned, not deferred until Sunday.
+    try:
+        loops_result = await _extract_open_loops(user_id, db=db)
+        result["open_loops"] = loops_result
+    except Exception as exc:
+        logger.warning("dreaming: open_loops extraction failed user=%s: %s", user_id, exc)
+        result["open_loops"] = {"status": "error", "error": str(exc)}
+
     if is_sunday:
         deep = await _deep_sleep_pass(user_id)
         result["deep_sleep"] = deep
         synth = await _synthesis_pass(user_id)
         result["synthesis"] = synth
+
+        # Phase 4: Portrait synthesis — LLM-written narrative understanding of the user.
+        # Stored in SQLite user_portraits and injected into every chat turn.
+        try:
+            from user_portrait import run_portrait_synthesis  # type: ignore[import]
+            portrait = await run_portrait_synthesis(user_id, db=db)
+            result["portrait"] = portrait
+        except Exception as exc:
+            logger.warning("dreaming: portrait synthesis failed user=%s: %s", user_id, exc)
+            result["portrait"] = {"status": "error", "error": str(exc)}
+
+        # Phase 5: Agent sync — regenerate ZOE_SELF.md and distribute to all agents.
+        # Only runs for the first user (system-wide sync, not per-user).
+        try:
+            from agent_sync import run_agent_sync  # type: ignore[import]
+            sync_result = await run_agent_sync()
+            result["agent_sync"] = sync_result
+        except Exception as exc:
+            logger.warning("dreaming: agent_sync failed: %s", exc)
+            result["agent_sync"] = {"status": "error", "error": str(exc)}
 
     logger.info("dreaming cycle complete: %s", result)
     return result

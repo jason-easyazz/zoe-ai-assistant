@@ -6,6 +6,7 @@ import re
 from typing import Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 
 from auth import get_current_user, require_admin
 from database import get_db
@@ -471,6 +472,188 @@ async def trigger_memory_digest(
         return {"results": results}
     result = await run_memory_digest(target_user, db=db)
     return result
+
+
+@router.post("/agent-sync")
+async def trigger_agent_sync(user: dict = Depends(get_current_user)):
+    """Regenerate ZOE_SELF.md and distribute to all agents (OpenClaw, Hermes, compact).
+
+    Admin-only. Runs the same sync as Phase 5 of the Sunday dreaming cycle.
+    """
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
+    from agent_sync import run_agent_sync  # type: ignore[import]
+    result = await run_agent_sync()
+    return result
+
+
+# ── A2A Agent Card ────────────────────────────────────────────────────────────
+
+# No auth required — the card is public identity info (A2A spec §2.1).
+# Exposes only capability metadata, not any user data or secrets.
+
+_agent_card_router = APIRouter(prefix="/api/agent", tags=["agent"])
+
+
+@_agent_card_router.get("/card")
+async def agent_card():
+    """
+    A2A agent identity card.
+    Returns Zoe's public capability advertisement following the Agent-to-Agent
+    (A2A) draft protocol. Useful for agent discovery and federation.
+    """
+    from pathlib import Path as _Path
+
+    # Dynamically read MCP tool count if agent_sync has already run
+    capabilities_md = _Path("/home/zoe/assistant/CAPABILITIES.md")
+    mcp_tool_count = None
+    if capabilities_md.exists():
+        try:
+            content = capabilities_md.read_text()
+            import re as _re
+            tool_lines = [l for l in content.splitlines() if l.startswith("- `")]
+            mcp_tool_count = len(tool_lines)
+        except Exception:
+            pass
+
+    card = {
+        "name": "Zoe",
+        "version": "2.0",
+        "description": (
+            "Personal AI companion with persistent memory, voice, home automation, "
+            "web capabilities, and a proactive open-loops engine for Samantha-tier continuity."
+        ),
+        "capabilities": [
+            "memory",
+            "voice",
+            "home_automation",
+            "calendar",
+            "reminders",
+            "lists",
+            "notes",
+            "people",
+            "web_search",
+            "vision",
+            "browser_automation",
+            "push_notifications",
+            "panel_display",
+            "user_portraits",
+            "open_loops",
+            "self_improvement",
+        ],
+        "protocols": ["MCP", "ACP", "A2A"],
+        "endpoints": {
+            "mcp": "/api/mcp",
+            "acp_gateway": "http://localhost:18789",
+            "chat": "/api/chat/",
+            "health": "/api/system/health",
+            "agent_sync": "/api/system/agent-sync",
+            "a2a_card": "/api/agent/card",
+            "a2a_tasks": "/api/agent/tasks",
+        },
+        "agent_tiers": [
+            {"tier": 0, "name": "intent_router", "latency_ms": "<10", "model": "regex"},
+            {"tier": 1, "name": "Zoe Agent", "model": "Gemma 4 E2B", "endpoint": ":11434"},
+            {"tier": 1.5, "name": "Hermes", "model": "GPT-5.4", "endpoint": ":8642", "context_k": 128},
+            {"tier": 2, "name": "OpenClaw", "model": "Codex", "endpoint": ":18789", "browser": True},
+        ],
+        "mcp_tools": mcp_tool_count,
+    }
+    return card
+
+
+class _A2ATaskRequest(BaseModel):
+    task: str
+    caller: str = "unknown"
+    session_id: str | None = None
+    context: dict | None = None
+    stream: bool = False
+
+
+@_agent_card_router.post("/tasks")
+async def a2a_task(body: _A2ATaskRequest, user: dict = Depends(get_current_user)):
+    """
+    A2A task intake endpoint.
+
+    Accepts a natural-language task from another agent and routes it through
+    Zoe's standard pipeline (intent router → Zoe Agent → OpenClaw escalation).
+    
+    Returns a task_id immediately. Results are available via MCP tool
+    `get_background_task_result` or by polling `/api/agent/tasks/{task_id}`.
+    
+    For streaming results, set `stream: true` to receive AG-UI SSE events
+    (same format as /api/chat/).
+    
+    Auth: X-Session-ID or X-Device-Token header required.
+    Caller identification via the `caller` field (for audit logging).
+    """
+
+    user_id = user.get("user_id", "guest")
+    session_id = body.session_id or f"a2a-{body.caller}-{__import__('uuid').uuid4().hex[:8]}"
+
+    logger.info(
+        "A2A task received: caller=%s user=%s task=%s",
+        body.caller, user_id, body.task[:80],
+    )
+
+    if body.stream:
+        # Stream: redirect caller to the standard chat SSE endpoint.
+        # Return a 307 so the A2A caller can follow it with the same auth headers.
+        from fastapi.responses import RedirectResponse
+        import urllib.parse as _up
+        params = _up.urlencode({"session_id": session_id, "a2a_caller": body.caller})
+        return RedirectResponse(
+            url=f"/api/chat/?{params}",
+            status_code=307,
+            headers={"X-A2A-Session-ID": session_id},
+        )
+    else:
+        # Non-streaming: enqueue as background task and return task_id immediately.
+        # Result is available via GET /api/agent/tasks/{task_id}.
+        from background_runner import enqueue_background_task  # type: ignore[import]
+        # signature: (task, user_id, session_id, panel_id)
+        task_id = await enqueue_background_task(
+            body.task,
+            user_id,
+            session_id,
+        )
+        return {
+            "task_id": task_id,
+            "session_id": session_id,
+            "status": "queued",
+            "caller": body.caller,
+            "result_endpoint": f"/api/agent/tasks/{task_id}",
+        }
+
+
+@_agent_card_router.get("/tasks/{task_id}")
+async def a2a_task_result(task_id: str, user: dict = Depends(get_current_user)):
+    """Poll for the result of a previously submitted A2A task."""
+
+    import aiosqlite
+    from database import DB_PATH as _DB_PATH
+
+    async with aiosqlite.connect(_DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, user_id, task, status, result, created_at, completed_at FROM background_tasks WHERE id=?",
+            (task_id,),
+        ) as cur:
+            row = await cur.fetchone()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if row["user_id"] != user.get("user_id") and user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Not your task")
+
+    return {
+        "task_id": task_id,
+        "status": row["status"],
+        "task": row["task"],
+        "result": row["result"],
+        "created_at": row["created_at"],
+        "completed_at": row["completed_at"],
+    }
 
 
 # ── Updates Hub ──────────────────────────────────────────────────────────────

@@ -220,6 +220,8 @@ def openclaw_user_message(intent: Optional[Intent], user_text: str) -> str:
             return f"{_BUILD_PAGE_OPENCLAW_MSG}\n\nOriginal request: {user_text}"
         if intent.name == "extend_capability":
             return f"{_EXTEND_CAPABILITY_OPENCLAW_MSG}\n\nOriginal request: {user_text}"
+        if intent.name == "self_improve":
+            return _SELF_IMPROVE_OPENCLAW_MSG
     # Same phrases when intent fast path is off (e.g. force_openclaw) — still expand.
     tnorm = _normalize_chat_intent_text(user_text)
     if _is_ha_full_setup_message(tnorm):
@@ -294,6 +296,34 @@ _EXTEND_CAPABILITY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Self-improvement feedback loop: review intent misses and propose new patterns.
+_SELF_IMPROVE_RE = re.compile(
+    r"\b(?:"
+    r"what\s+(?:are\s+you\s+struggling\s+with|can't\s+you\s+understand|do\s+you\s+(?:get\s+wrong|miss|struggle\s+with))"
+    r"|review\s+(?:my|your)\s+intent\s+miss(?:es)?"
+    r"|what\s+(?:patterns?|intents?)\s+(?:are\s+you\s+missing|do\s+you\s+miss)"
+    r"|improve\s+yourself"
+    r"|self[- ]improv(?:e|ement)"
+    r"|(?:analyze|analyse)\s+(?:your\s+)?(?:miss(?:es)?|mistakes?|gaps?)"
+    r"|what\s+(?:questions?|requests?)\s+(?:do\s+you|have\s+you)\s+(?:mis(?:s(?:ed)?)?|failed)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Intent-miss self-improvement task for OpenClaw
+_SELF_IMPROVE_OPENCLAW_MSG = (
+    "[ZOE_SELF_IMPROVE: intent-miss review]\n"
+    "Read ~/training/data/intent-misses.jsonl (last 7 days of misses).\n"
+    "Use the self-improvement skill. Analyze the most common miss patterns.\n"
+    "Propose 3-5 new regex patterns for intent_router.py based on what you find.\n"
+    "Format each proposal as:\n"
+    "  Pattern: <regex>\n"
+    "  Intent: <intent_name>\n"
+    "  Example phrases: <2-3 examples it would match>\n"
+    "  Rationale: <why this is worth adding>\n"
+    "Be concise and practical. Only propose patterns with 3+ occurrences in the miss log."
+)
+
 # "forget that" / "never mind what I said" — retract the last memory written.
 _FORGET_LAST_RE = re.compile(
     r"^(?:please\s+)?"
@@ -303,6 +333,38 @@ _FORGET_LAST_RE = re.compile(
     r"|delete\s+that(?:\s+memory)?"
     r"|never\s+mind\s+(?:what\s+i\s+(?:just\s+)?said|that))"
     r"\.?\s*$",
+    re.IGNORECASE,
+)
+
+# ── Portrait intents ───────────────────────────────────────────────────────────
+# "how well do you know me" / "what do you understand about me" → reveal portrait
+_PORTRAIT_REVEAL_RE = re.compile(
+    r"(?:how\s+well\s+do\s+you\s+know\s+me"
+    r"|what\s+do\s+you\s+(?:really\s+)?(?:know|understand|think)\s+about\s+me"
+    r"|what'?s?\s+your\s+understanding\s+of\s+me"
+    r"|describe\s+(?:me|who\s+i\s+am)\s+(?:to\s+me|back\s+to\s+me)?"
+    r"|how\s+well\s+(?:do\s+you\s+)?understand\s+me"
+    r"|what\s+do\s+you\s+see\s+when\s+you\s+think\s+of\s+me)",
+    re.IGNORECASE,
+)
+
+# "update your understanding" / "rebuild your portrait of me" → regenerate portrait now
+_PORTRAIT_REFRESH_RE = re.compile(
+    r"(?:update\s+your\s+(?:understanding|knowledge|portrait|model)\s+of\s+me"
+    r"|rebuild\s+(?:your\s+)?(?:portrait|model|understanding)\s+of\s+me"
+    r"|re(?:generate|build|create)\s+my\s+portrait"
+    r"|you\s+(?:have\s+me\s+wrong|don'?t\s+(?:know|understand)\s+me\s+(?:well|properly|correctly)))",
+    re.IGNORECASE,
+)
+
+
+# "Let's talk / let's chat / open voice mode" → navigate browser to voice conversation page.
+# Uses search() not match() so it works on short STT utterances like "hey zoe let's talk".
+_LETS_TALK_RE = re.compile(
+    r"\b(let'?s\s+(?:talk|chat|have\s+a\s+(?:conversation|chat))"
+    r"|let\s+us\s+(?:talk|chat)"
+    r"|(?:open|start|switch\s+to)\s+(?:voice|conversation)\s+mode"
+    r"|i\s+want\s+to\s+(?:talk|chat))\b",
     re.IGNORECASE,
 )
 
@@ -318,6 +380,12 @@ def detect_intent(text: str, log_miss: bool = True) -> Optional[Intent]:
     # Matched very early so it never collides with other verbs.
     if _FORGET_LAST_RE.match(t):
         return Intent("memory_forget_last", {})
+
+    # Portrait intents — how well Zoe knows the user, and rebuilding understanding.
+    if _PORTRAIT_REVEAL_RE.search(t):
+        return Intent("portrait_reveal", {})
+    if _PORTRAIT_REFRESH_RE.search(t):
+        return Intent("portrait_refresh", {})
 
     # Connect ChatGPT / OpenAI to OpenClaw — admin-gated, handled via AG-UI OAuth flow.
     if _CONNECT_CHATGPT_RE.match(t):
@@ -337,6 +405,13 @@ def detect_intent(text: str, log_miss: bool = True) -> Optional[Intent]:
         return Intent("build_page", {})
     if _EXTEND_CAPABILITY_RE.match(t):
         return Intent("extend_capability", {})
+    if _SELF_IMPROVE_RE.search(t):
+        return Intent("self_improve", {})
+
+    # "Let's talk" → navigate the browser panel to voice.html?conv=1 (conversation mode).
+    # Placed before greetings so "let's chat" doesn't become a greeting.
+    if _LETS_TALK_RE.search(t):
+        return Intent("lets_talk", {})
 
     # === GREETINGS — morning/evening check-ins ===
     if re.match(r"^(?:good\s+)?morning(?:\s+zoe)?\.?$", t) or t in {
@@ -825,6 +900,11 @@ async def _run_mcporter(cmd: str) -> Optional[str]:
 
 
 async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optional[str]:
+    if intent.name == "lets_talk":
+        # Navigation is handled by _broadcast_intent_nav via _INTENT_PANEL_NAV in chat.py.
+        # Return a short TTS reply confirming we're opening voice mode.
+        return "Sure, let's talk."
+
     if intent.name == "music_setup":
         return await _execute_music_setup(user_id)
 
@@ -890,6 +970,44 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
         if len(preview) > 80:
             preview = preview[:77] + "…"
         return f"Done — I forgot: \"{preview}\"."
+
+    if intent.name == "portrait_reveal":
+        try:
+            from user_portrait import load_portrait  # type: ignore[import]
+            portrait = await load_portrait(user_id)
+        except Exception as exc:
+            logger.debug("portrait_reveal: load failed: %s", exc)
+            portrait = ""
+        if not portrait:
+            return (
+                "I don't have a deep portrait of you yet — that takes a few weeks of "
+                "conversations for me to put together. The more we talk, the better I'll understand you. "
+                "I do have some facts stored — try asking what I know about you."
+            )
+        return f"Here's how I understand you:\n\n{portrait}"
+
+    if intent.name == "portrait_refresh":
+        try:
+            from user_portrait import run_portrait_synthesis  # type: ignore[import]
+            result = await run_portrait_synthesis(user_id)
+            status = result.get("status", "unknown")
+            if status == "ok":
+                chars = result.get("chars", 0)
+                count = result.get("memory_count", 0)
+                return (
+                    f"I've updated my understanding of you — synthesised from {count} memories "
+                    f"({chars} characters). It'll shape our conversations from now on."
+                )
+            elif status == "too_few_memories":
+                return (
+                    "I don't have enough memories stored yet to build a proper portrait. "
+                    "Keep talking to me and I'll build a richer picture over time."
+                )
+            else:
+                return "I tried to update my understanding but hit an issue. I'll try again tonight."
+        except Exception as exc:
+            logger.warning("portrait_refresh: failed: %s", exc)
+            return "Something went wrong updating my understanding — I'll try again tonight."
 
     # Timer and recipe intents need panel navigation — emit a nav action so the cooking
     # page opens and the timer/recipe widget is pre-filled.  The text response is spoken

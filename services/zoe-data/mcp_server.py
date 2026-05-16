@@ -309,6 +309,49 @@ TOOLS = [
         ),
         "inputSchema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "web_search",
+        "description": (
+            "Search the web using DuckDuckGo for current, real-time information. "
+            "Use for current events, live prices, today's news, recent developments, "
+            "or anything after your training cutoff. No API key required."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "zoe_sync_knowledge",
+        "description": (
+            "Regenerate ZOE_SELF.md and distribute to all agents (OpenClaw workspace, "
+            "Hermes SOUL.md, compact context file). Call this after adding new tools or "
+            "making architectural changes so all agents learn about them immediately."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "graphify_search",
+        "description": (
+            "Search Zoe's graphify knowledge graph wiki for architecture and code information. "
+            "Useful for understanding how specific components work, finding code relationships, "
+            "or looking up capability details. Returns relevant wiki page snippets. "
+            "If the wiki hasn't been built yet, run zoe_sync_knowledge first."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query — e.g. 'chat router', 'memory service', 'intent_router escalation'",
+                },
+            },
+            "required": ["query"],
+        },
+    },
     # --- Journal tools ---
     {
         "name": "journal_create_entry",
@@ -830,6 +873,27 @@ TOOLS = [
             "required": ["memory_id"],
         },
     },
+    # === USER PORTRAIT ===
+    {
+        "name": "user_portrait_get",
+        "description": (
+            "Retrieve the synthesized narrative portrait for a user — a 250-400 word "
+            "document describing who they are, their communication style, emotional patterns, "
+            "current life context, and their relationship with Zoe. Use this when you need "
+            "deep personal context to write something on their behalf, give meaningful advice, "
+            "or understand how to respond to them. Returns empty string if no portrait exists yet."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "string",
+                    "description": "User id to load portrait for. Defaults to the calling user.",
+                },
+            },
+            "required": [],
+        },
+    },
     # === PROACTIVE ENGINE ===
     {
         "name": "proactive_schedule",
@@ -976,8 +1040,8 @@ async def _execute_tool(db, name: str, args: dict):
         args["list_type"] = _LIST_TYPE_ALIASES.get(args["list_type"], args["list_type"])
 
     if name == "calendar_list_events":
-        sql = "SELECT id, title, start_date, start_time, end_time, category, location, all_day FROM events WHERE deleted=0"
-        params = []
+        sql = "SELECT id, title, start_date, start_time, end_time, category, location, all_day FROM events WHERE deleted=0 AND user_id=?"
+        params = [user_id]
         if args.get("start_date"):
             sql += " AND start_date >= ?"
             params.append(args["start_date"])
@@ -1009,8 +1073,8 @@ async def _execute_tool(db, name: str, args: dict):
     elif name == "calendar_today":
         today = date.today().isoformat()
         cursor = await db.execute(
-            "SELECT id, title, start_time, end_time, category, location FROM events WHERE start_date=? AND deleted=0 ORDER BY start_time",
-            (today,),
+            "SELECT id, title, start_time, end_time, category, location FROM events WHERE start_date=? AND user_id=? AND deleted=0 ORDER BY start_time",
+            (today, user_id),
         )
         rows = await cursor.fetchall()
         return {"date": today, "events": [dict(r) for r in rows]}
@@ -1127,8 +1191,8 @@ async def _execute_tool(db, name: str, args: dict):
     elif name == "people_search":
         q = args["query"]
         cursor = await db.execute(
-            "SELECT id, name, relationship, birthday, phone, email FROM people WHERE name LIKE ? AND deleted=0 LIMIT 10",
-            (f"%{q}%",),
+            "SELECT id, name, relationship, birthday, phone, email FROM people WHERE name LIKE ? AND user_id=? AND deleted=0 LIMIT 10",
+            (f"%{q}%", user_id),
         )
         rows = await cursor.fetchall()
         return {"people": [dict(r) for r in rows]}
@@ -1180,8 +1244,8 @@ async def _execute_tool(db, name: str, args: dict):
     elif name == "note_search":
         q = args["query"]
         cursor = await db.execute(
-            "SELECT id, title, content, category, created_at FROM notes WHERE (title LIKE ? OR content LIKE ?) AND deleted=0 LIMIT 10",
-            (f"%{q}%", f"%{q}%"),
+            "SELECT id, title, content, category, created_at FROM notes WHERE (title LIKE ? OR content LIKE ?) AND user_id=? AND deleted=0 LIMIT 10",
+            (f"%{q}%", f"%{q}%", user_id),
         )
         rows = await cursor.fetchall()
         return {"notes": [dict(r) for r in rows]}
@@ -1453,6 +1517,49 @@ async def _execute_tool(db, name: str, args: dict):
             "count": len(skills),
             "skills_dir": used_dir or skills_dirs[0],
         }
+
+    elif name == "web_search":
+        query = args.get("query", "")
+        if not query:
+            return {"error": "query is required"}
+        try:
+            import asyncio as _asyncio
+            from research_evidence import fetch_web_fallback_results  # type: ignore[import]
+            loop = _asyncio.get_event_loop()
+            results = await loop.run_in_executor(
+                None, lambda: fetch_web_fallback_results(query, max_results=5, timeout_s=8.0)
+            )
+            return {
+                "query": query,
+                "results": [
+                    {
+                        "title": r.get("name", ""),
+                        "snippet": r.get("value", r.get("notes", "")),
+                        "url": r.get("url", ""),
+                    }
+                    for r in (results or [])
+                ],
+            }
+        except Exception as exc:
+            return {"error": f"Web search failed: {exc}", "query": query}
+
+    elif name == "zoe_sync_knowledge":
+        try:
+            from agent_sync import run_agent_sync  # type: ignore[import]
+            result = await run_agent_sync()
+            return result
+        except Exception as exc:
+            return {"error": f"Agent sync failed: {exc}"}
+
+    elif name == "graphify_search":
+        query = args.get("query", "").strip()
+        if not query:
+            return {"error": "query is required"}
+        try:
+            from agent_sync import graphify_search  # type: ignore[import]
+            return graphify_search(query)
+        except Exception as exc:
+            return {"error": f"Graphify search failed: {exc}"}
 
     elif name == "zoe_self_capabilities":
         import datetime
@@ -1737,7 +1844,7 @@ async def _execute_tool(db, name: str, args: dict):
     # === CALENDAR CRUD ===
     elif name == "calendar_update_event":
         eid = args["event_id"]
-        cursor = await db.execute("SELECT id FROM events WHERE id=? AND deleted=0", (eid,))
+        cursor = await db.execute("SELECT id FROM events WHERE id=? AND user_id=? AND deleted=0", (eid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Event {eid} not found"}
         updates, params = [], []
@@ -1751,18 +1858,18 @@ async def _execute_tool(db, name: str, args: dict):
         if not updates:
             return {"error": "No fields to update"}
         updates.append("updated_at=datetime('now')")
-        params.append(eid)
-        await db.execute(f"UPDATE events SET {','.join(updates)} WHERE id=?", params)
+        params.extend([eid, user_id])
+        await db.execute(f"UPDATE events SET {','.join(updates)} WHERE id=? AND user_id=?", params)
         await db.commit()
         await _notify_ui("calendar", "event_updated", {"id": eid})
         return {"id": eid, "status": "updated"}
 
     elif name == "calendar_delete_event":
         eid = args["event_id"]
-        cursor = await db.execute("SELECT id FROM events WHERE id=? AND deleted=0", (eid,))
+        cursor = await db.execute("SELECT id FROM events WHERE id=? AND user_id=? AND deleted=0", (eid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Event {eid} not found"}
-        await db.execute("UPDATE events SET deleted=1, updated_at=datetime('now') WHERE id=?", (eid,))
+        await db.execute("UPDATE events SET deleted=1, updated_at=datetime('now') WHERE id=? AND user_id=?", (eid, user_id))
         await db.commit()
         await _notify_ui("calendar", "event_deleted", {"id": eid})
         return {"id": eid, "status": "deleted"}
@@ -1770,7 +1877,7 @@ async def _execute_tool(db, name: str, args: dict):
     # === REMINDER CRUD ===
     elif name == "reminder_update":
         rid = args["reminder_id"]
-        cursor = await db.execute("SELECT id FROM reminders WHERE id=? AND deleted=0", (rid,))
+        cursor = await db.execute("SELECT id FROM reminders WHERE id=? AND user_id=? AND deleted=0", (rid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Reminder {rid} not found"}
         updates, params = [], []
@@ -1781,18 +1888,18 @@ async def _execute_tool(db, name: str, args: dict):
         if not updates:
             return {"error": "No fields to update"}
         updates.append("updated_at=datetime('now')")
-        params.append(rid)
-        await db.execute(f"UPDATE reminders SET {','.join(updates)} WHERE id=?", params)
+        params.extend([rid, user_id])
+        await db.execute(f"UPDATE reminders SET {','.join(updates)} WHERE id=? AND user_id=?", params)
         await db.commit()
         await _notify_ui("reminders", "reminder_updated", {"id": rid})
         return {"id": rid, "status": "updated"}
 
     elif name == "reminder_delete":
         rid = args["reminder_id"]
-        cursor = await db.execute("SELECT id FROM reminders WHERE id=? AND deleted=0", (rid,))
+        cursor = await db.execute("SELECT id FROM reminders WHERE id=? AND user_id=? AND deleted=0", (rid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Reminder {rid} not found"}
-        await db.execute("UPDATE reminders SET deleted=1, is_active=0, updated_at=datetime('now') WHERE id=?", (rid,))
+        await db.execute("UPDATE reminders SET deleted=1, is_active=0, updated_at=datetime('now') WHERE id=? AND user_id=?", (rid, user_id))
         await db.commit()
         await _notify_ui("reminders", "reminder_deleted", {"id": rid})
         # Cancel any unfired proactive_scheduled job linked to this reminder.
@@ -1853,7 +1960,7 @@ async def _execute_tool(db, name: str, args: dict):
     # === NOTE CRUD ===
     elif name == "note_update":
         nid = args["note_id"]
-        cursor = await db.execute("SELECT id FROM notes WHERE id=? AND deleted=0", (nid,))
+        cursor = await db.execute("SELECT id FROM notes WHERE id=? AND user_id=? AND deleted=0", (nid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Note {nid} not found"}
         updates, params = [], []
@@ -1864,18 +1971,18 @@ async def _execute_tool(db, name: str, args: dict):
         if not updates:
             return {"error": "No fields to update"}
         updates.append("updated_at=datetime('now')")
-        params.append(nid)
-        await db.execute(f"UPDATE notes SET {','.join(updates)} WHERE id=?", params)
+        params.extend([nid, user_id])
+        await db.execute(f"UPDATE notes SET {','.join(updates)} WHERE id=? AND user_id=?", params)
         await db.commit()
         await _notify_ui("notes", "note_updated", {"id": nid})
         return {"id": nid, "status": "updated"}
 
     elif name == "note_delete":
         nid = args["note_id"]
-        cursor = await db.execute("SELECT id FROM notes WHERE id=? AND deleted=0", (nid,))
+        cursor = await db.execute("SELECT id FROM notes WHERE id=? AND user_id=? AND deleted=0", (nid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Note {nid} not found"}
-        await db.execute("UPDATE notes SET deleted=1, updated_at=datetime('now') WHERE id=?", (nid,))
+        await db.execute("UPDATE notes SET deleted=1, updated_at=datetime('now') WHERE id=? AND user_id=?", (nid, user_id))
         await db.commit()
         await _notify_ui("notes", "note_deleted", {"id": nid})
         return {"id": nid, "status": "deleted"}
@@ -1883,7 +1990,7 @@ async def _execute_tool(db, name: str, args: dict):
     # === PEOPLE CRUD ===
     elif name == "people_update":
         pid = args["person_id"]
-        cursor = await db.execute("SELECT id FROM people WHERE id=? AND deleted=0", (pid,))
+        cursor = await db.execute("SELECT id FROM people WHERE id=? AND user_id=? AND deleted=0", (pid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Person {pid} not found"}
         updates, params = [], []
@@ -1894,18 +2001,18 @@ async def _execute_tool(db, name: str, args: dict):
         if not updates:
             return {"error": "No fields to update"}
         updates.append("updated_at=datetime('now')")
-        params.append(pid)
-        await db.execute(f"UPDATE people SET {','.join(updates)} WHERE id=?", params)
+        params.extend([pid, user_id])
+        await db.execute(f"UPDATE people SET {','.join(updates)} WHERE id=? AND user_id=?", params)
         await db.commit()
         await _notify_ui("all", "people:updated", {"id": pid})
         return {"id": pid, "status": "updated"}
 
     elif name == "people_delete":
         pid = args["person_id"]
-        cursor = await db.execute("SELECT id FROM people WHERE id=? AND deleted=0", (pid,))
+        cursor = await db.execute("SELECT id FROM people WHERE id=? AND user_id=? AND deleted=0", (pid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Person {pid} not found"}
-        await db.execute("UPDATE people SET deleted=1, updated_at=datetime('now') WHERE id=?", (pid,))
+        await db.execute("UPDATE people SET deleted=1, updated_at=datetime('now') WHERE id=? AND user_id=?", (pid, user_id))
         await db.commit()
         await _notify_ui("all", "people:deleted", {"id": pid})
         return {"id": pid, "status": "deleted"}
@@ -2273,6 +2380,20 @@ async def _execute_tool(db, name: str, args: dict):
             return {"id": scheduled_id, "send_at": send_at_str, "status": "scheduled"}
         except Exception as _pe:
             return {"error": f"proactive_schedule failed: {_pe}"}
+
+    # === USER PORTRAIT ================================================
+    elif name == "user_portrait_get":
+        target_uid = (args.get("user_id") or "").strip() or user_id
+        try:
+            from user_portrait import load_portrait  # type: ignore[import]
+            portrait = await load_portrait(target_uid)
+            return {
+                "user_id": target_uid,
+                "portrait": portrait,
+                "has_portrait": bool(portrait),
+            }
+        except Exception as exc:
+            return {"error": f"portrait load failed: {exc}"}
 
     # === MEMORY TOOLS ================================================
     elif name in {"memory_add", "memory_search", "memory_list", "memory_review", "memory_forget"}:

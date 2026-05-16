@@ -36,6 +36,7 @@ from routers.system import (
     start_openclaw_background_tasks,
     start_memory_digest_background,
     start_memory_consolidation_background,
+    _agent_card_router,
 )
 from system_updates import start_zoe_update_background_tasks
 from routers.openclaw import router as openclaw_router
@@ -175,24 +176,14 @@ async def lifespan(app: FastAPI):
     except Exception as _pe_exc:
         logger.warning("Proactive engine failed to start (non-fatal): %s", _pe_exc)
 
-    # LiveKit voice agent: joins "zoe-voice" room as server-side participant.
-    # Only starts if LIVEKIT_API_KEY is configured; safe to skip if LiveKit is not running.
-    _livekit_agent_task = None
+    # LiveKit HTTP-API mode: no server-side WebRTC agent; audio upload endpoint handles processing.
     try:
         from routers.voice_livekit import start_livekit_agent
-        _livekit_agent_task = asyncio.create_task(start_livekit_agent(), name="livekit_agent")
-        logger.info("LiveKit voice agent task started")
+        start_livekit_agent()  # synchronous no-op that just logs
     except Exception as _lk_exc:
-        logger.warning("LiveKit agent failed to start (non-fatal): %s", _lk_exc)
+        logger.warning("LiveKit setup (non-fatal): %s", _lk_exc)
 
     yield
-
-    if _livekit_agent_task and not _livekit_agent_task.done():
-        _livekit_agent_task.cancel()
-        try:
-            await _livekit_agent_task
-        except asyncio.CancelledError:
-            pass
 
     try:
         from proactive.engine import stop_proactive_engine
@@ -273,6 +264,7 @@ app.include_router(journal_router)
 app.include_router(transactions_router)
 app.include_router(weather_router)
 app.include_router(system_router)
+app.include_router(_agent_card_router)
 app.include_router(notifications_router)
 app.include_router(chat_router)
 app.include_router(ui_router)
@@ -287,8 +279,18 @@ app.include_router(panel_auth_router)
 app.include_router(capability_matrix_router)
 app.include_router(music_router)
 
+from routers.portrait import router as portrait_router
+app.include_router(portrait_router)
+
 from routers.ha_control import router as ha_control_router
 app.include_router(ha_control_router)
+
+try:
+    from routers.voice_livekit import router as voice_livekit_router
+    app.include_router(voice_livekit_router)
+    logger.info("LiveKit audio upload endpoint registered")
+except Exception as _lk_router_exc:
+    logger.warning("LiveKit router not loaded (non-fatal): %s", _lk_router_exc)
 
 
 @app.get("/health")
@@ -478,15 +480,19 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
 
     Accepts text and binary (audio) messages:
     - Text JSON {"type": "text", "message": "..."} → routed through zoe_agent
+    - Text JSON {"type": "cancel"} → sets cancel flag for in-flight pipeline
     - Binary → transcribed via faster-whisper then routed as text
-    Emits {"type": "state", "state": "..."} and {"type": "transcript", ...}
-    and {"type": "done"} events.
+    Emits {"type": "state"}, {"type": "transcript"}, {"type": "audio"}, {"type": "done"}.
     """
     await websocket.accept()
     ws_session_id = session_id or f"ws-voice-{_uuid_mod.uuid4().hex[:8]}"
     user_id = await _resolve_ws_user(session_id)
 
     await websocket.send_json({"type": "state", "state": "ambient"})
+
+    # Mutable cancel flag — text handler sets it; streaming pipeline checks it
+    # between sentence boundaries. True mid-stream cancel requires task refactor (future).
+    _ws_cancelled: list[bool] = [False]
 
     try:
         while True:
@@ -536,40 +542,117 @@ async def websocket_voice(websocket: WebSocket, session_id: str = Query("")):
                     msg = __import__("json").loads(text_data)
                     if msg.get("type") == "text":
                         message_text = msg.get("message", "").strip()
+                    elif msg.get("type") == "cancel":
+                        _ws_cancelled[0] = True
+                        continue
                 except Exception:
                     pass
 
             if not message_text:
                 continue
 
+            # Reset cancel flag at the start of each new pipeline
+            _ws_cancelled[0] = False
+
             await websocket.send_json({"type": "state", "state": "thinking"})
-            response = "Sorry, I had trouble with that."
-            try:
-                from zoe_agent import run_zoe_agent
-                response = await run_zoe_agent(
-                    message_text,
-                    ws_session_id,
-                    user_id,
-                    voice_mode=True,
-                )
-            except Exception as _exc:
-                logger.error("Voice WS agent error: %s", _exc)
-            await websocket.send_json({"type": "state", "state": "responding"})
-            await websocket.send_json({"type": "transcript", "role": "zoe", "text": response})
-            # Synthesize TTS and send audio so the client can play without an extra HTTP call
+
+            # ── Streaming LLM + per-sentence TTS ────────────────────────────────
+            # Track LLM output and TTS output separately so fallback only re-runs
+            # what actually failed (avoids double-transcript if LLM works but TTS is down).
+            _stream_llm_reply = ""   # filled once LLM streaming completes
+            _stream_tts_ok = False   # True if at least one audio chunk was sent
             try:
                 import base64 as _b64
-                from routers.voice_tts import synthesize as _synth
-                _tts_resp = await _synth({"text": response}, caller={"source": "ws", "user_id": user_id})
-                await websocket.send_json({
-                    "type": "audio",
-                    "audio_base64": _b64.b64encode(_tts_resp.body).decode("ascii"),
-                    "content_type": _tts_resp.media_type,
-                    "text": response,
-                })
-            except Exception as _tts_exc:
-                logger.warning("Voice WS TTS failed: %s", _tts_exc)
-                await websocket.send_json({"type": "text", "content": response})
+                from zoe_agent import run_zoe_agent_streaming  # type: ignore
+                from routers.voice_tts import _extract_complete_sentences, _synthesize_kokoro_sidecar  # type: ignore
+
+                token_buf = ""
+                full_reply: list[str] = []
+                tts_started = False
+
+                async for delta in run_zoe_agent_streaming(
+                    message_text, ws_session_id, user_id=user_id, voice_mode=True
+                ):
+                    if _ws_cancelled[0]:
+                        break
+                    token_buf += delta
+                    sentences, token_buf = _extract_complete_sentences(token_buf)
+                    for sentence in sentences:
+                        if _ws_cancelled[0]:
+                            break
+                        full_reply.append(sentence)
+                        if not tts_started:
+                            await websocket.send_json({"type": "state", "state": "responding"})
+                            tts_started = True
+                        wav = await _synthesize_kokoro_sidecar(sentence)
+                        if wav:
+                            _stream_tts_ok = True
+                            await websocket.send_json({
+                                "type": "audio",
+                                "audio_base64": _b64.b64encode(wav).decode("ascii"),
+                                "content_type": "audio/wav",
+                            })
+
+                # Flush any remaining text that didn't end with punctuation
+                if not _ws_cancelled[0] and token_buf.strip():
+                    full_reply.append(token_buf.strip())
+                    if not tts_started:
+                        await websocket.send_json({"type": "state", "state": "responding"})
+                    wav = await _synthesize_kokoro_sidecar(token_buf.strip())
+                    if wav:
+                        _stream_tts_ok = True
+                        await websocket.send_json({
+                            "type": "audio",
+                            "audio_base64": _b64.b64encode(wav).decode("ascii"),
+                            "content_type": "audio/wav",
+                        })
+
+                _stream_llm_reply = " ".join(p.strip() for p in full_reply if p.strip())
+                if _stream_llm_reply:
+                    await websocket.send_json({"type": "transcript", "role": "zoe", "text": _stream_llm_reply})
+
+            except Exception as _stream_exc:
+                logger.error("Voice WS streaming error: %s", _stream_exc, exc_info=True)
+
+            if not _ws_cancelled[0]:
+                if not _stream_llm_reply:
+                    # LLM streaming failed entirely → full single-shot fallback
+                    try:
+                        import base64 as _b64
+                        from zoe_agent import run_zoe_agent  # type: ignore
+                        from routers.voice_tts import synthesize as _synth  # type: ignore
+                        _fallback_response = await run_zoe_agent(
+                            message_text, ws_session_id, user_id, voice_mode=True
+                        )
+                        await websocket.send_json({"type": "state", "state": "responding"})
+                        await websocket.send_json({"type": "transcript", "role": "zoe", "text": _fallback_response})
+                        try:
+                            _tts_resp = await _synth({"text": _fallback_response}, caller={"source": "ws", "user_id": user_id})
+                            await websocket.send_json({
+                                "type": "audio",
+                                "audio_base64": _b64.b64encode(_tts_resp.body).decode("ascii"),
+                                "content_type": _tts_resp.media_type,
+                                "text": _fallback_response,
+                            })
+                        except Exception as _tts_exc:
+                            logger.warning("Voice WS TTS fallback failed: %s", _tts_exc)
+                            await websocket.send_json({"type": "text", "content": _fallback_response})
+                    except Exception as _fallback_exc:
+                        logger.error("Voice WS fallback error: %s", _fallback_exc)
+
+                elif not _stream_tts_ok:
+                    # LLM worked but Kokoro TTS was down → try synthesize (has Edge TTS fallback)
+                    try:
+                        import base64 as _b64
+                        from routers.voice_tts import synthesize as _synth  # type: ignore
+                        _tts_resp = await _synth({"text": _stream_llm_reply}, caller={"source": "ws", "user_id": user_id})
+                        await websocket.send_json({
+                            "type": "audio",
+                            "audio_base64": _b64.b64encode(_tts_resp.body).decode("ascii"),
+                            "content_type": _tts_resp.media_type,
+                        })
+                    except Exception as _tts_exc:
+                        logger.warning("Voice WS TTS synthesize fallback failed: %s", _tts_exc)
 
             await websocket.send_json({"type": "done"})
             await websocket.send_json({"type": "state", "state": "ambient"})

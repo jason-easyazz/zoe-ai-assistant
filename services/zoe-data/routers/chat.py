@@ -37,6 +37,7 @@ _INTENT_PANEL_NAV = {
     "timer_create":      ("/touch/cooking.html",  "new_timer"),
     "recipe_search":     ("/touch/cooking.html",  "recipe_search"),
     "reminder_create":   (None,                   None),  # handled as toast
+    "lets_talk":         ("/touch/voice.html?conv=1", None),  # open touch phone-call voice mode
 }
 
 # Intents that show a full-screen interactive action-form overlay on the touch panel
@@ -293,6 +294,7 @@ _OPENCLAW_DELEGATION_INTENTS: frozenset[str] = frozenset({
     "build_widget",
     "build_page",
     "extend_capability",
+    "self_improve",  # reviews intent-miss log and proposes new patterns
     # connect_chatgpt is handled by execute_intent (Tier-0 Python) — no LLM needed
 })
 
@@ -1175,7 +1177,7 @@ async def _stream_openclaw_assistant_ag(
     # builder intent (for builders, preview iframe is the only component we want).
     if not all_actions and intent_name not in _BUILDER_INTENTS:
         try:
-            extracted = await auto_extract_components(clean_text)
+            extracted = auto_extract_components(clean_text)
             for comp in extracted:
                 yield recorder.emit(enc, CustomEvent(name="zoe.ui_component", value=comp))
         except Exception as _aex:
@@ -1547,7 +1549,11 @@ async def chat_stream_generator(
                             },
                         )
                     )
-                    _oc_intent_fallback_mem = await _mempalace_load_user_facts(user_id)
+                    _oc_portrait, _oc_intent_fallback_mem = await asyncio.gather(
+                        _safe_load_portrait(user_id),
+                        _mempalace_load_user_facts(user_id),
+                    )
+                    _oc_full_mem = "\n\n".join(filter(None, [_oc_portrait, _oc_intent_fallback_mem]))
                     task = asyncio.create_task(
                         run_openclaw_agent(
                             oc_message,
@@ -1555,7 +1561,7 @@ async def chat_stream_generator(
                             user_id,
                             user_role=user_role,
                             username=username,
-                            memories=_oc_intent_fallback_mem or None,
+                            memories=_oc_full_mem or None,
                         )
                     )
                     async for hb in _iter_openclaw_heartbeats(emit, task):
@@ -1621,6 +1627,14 @@ async def chat_stream_generator(
                 # Pi Agent loads MemPalace facts internally. We also load a copy here
                 # so that if Pi escalates to OpenClaw, the context prefix isn't blank.
                 pi_db_memory = await _mempalace_load_user_facts(user_id)
+                # Load user portrait (synthesized narrative understanding of the user).
+                # Fast SQLite key-lookup — non-fatal if table not yet populated.
+                pi_portrait = ""
+                try:
+                    from user_portrait import load_portrait  # type: ignore[import]
+                    pi_portrait = await load_portrait(user_id) or ""
+                except Exception as _pe:
+                    logger.debug("chat: portrait load failed (non-fatal): %s", _pe)
                 # Apply openclaw_user_message expansion so Pi Agent has the same rich context
                 # as the OpenClaw path (includes HA device state bootstrap text when intent matched).
                 expanded_msg = openclaw_user_message(intent, message_for_processing) if intent else message_for_processing
@@ -1630,8 +1644,9 @@ async def chat_stream_generator(
                     user_id,
                     history=prior_history or None,
                     db_memory_context=pi_db_memory or None,
+                    portrait=pi_portrait or None,
                 ):
-                    if chunk.startswith("__ESCALATE__:") or chunk.startswith("__ESCALATE_BG__:"):
+                    if chunk.startswith("__ESCALATE__:") or chunk.startswith("__ESCALATE_BG__:") or chunk.startswith("__ESCALATE_HERMES__:"):
                         escalate_signal = chunk
                         break
                     if chunk.startswith("__UI__:"):
@@ -1665,11 +1680,23 @@ async def chat_stream_generator(
 
                 if escalate_signal:
                     is_background = escalate_signal.startswith("__ESCALATE_BG__:")
+                    is_hermes = escalate_signal.startswith("__ESCALATE_HERMES__:")
                     _, escalate_body = escalate_signal.split(":", 1)
                     reason, _, oc_task = escalate_body.partition("|")
                     oc_task_text = oc_task or message_for_processing
 
-                    if is_background:
+                    if is_hermes:
+                        # Escalate to Hermes Tier 1.5 for deep reasoning
+                        logger.info("chat: Pi Agent escalating to Hermes — reason=%s", reason.strip())
+                        async for chunk in _hermes_stream_generator(
+                            oc_task_text, session_id, user_id,
+                            username=user.get("username", ""),
+                            portrait=pi_portrait or "",
+                            facts=pi_db_memory or "",
+                        ):
+                            yield chunk
+                        response_text = oc_task_text  # approximate for memory persistence
+                    elif is_background:
                         # Queue as a background task and ack immediately
                         logger.info("chat: Pi Agent background escalation — reason=%s", reason.strip())
                         try:
@@ -1719,13 +1746,14 @@ async def chat_stream_generator(
                             role="assistant",
                         ))
                         gateway_session_key = f"agent:main:zoe_{user_id}_{session_id}"
-                        # Prepend user context + approved memory facts so OpenClaw has the same
-                        # context it would get via openclaw_cli (avoids a memory-blind escalation).
+                        # Prepend user context + portrait + approved memory facts so OpenClaw
+                        # has the same deep context it would get via openclaw_cli.
+                        _oc_memories = "\n\n".join(filter(None, [pi_portrait or None, pi_db_memory or None]))
                         oc_prefixed = _zoe_context_prefix(
                             user_id,
                             user_role=user_role,
                             username=username,
-                            memories=pi_db_memory or None,
+                            memories=_oc_memories or None,
                         ) + oc_task_text
                         oc_full = ""
                         async for oc_chunk in _acp_stream(oc_prefixed, gateway_session_key):
@@ -1750,7 +1778,7 @@ async def chat_stream_generator(
                         else:
                             # Auto-extract rich components from plain text
                             try:
-                                extracted = await auto_extract_components(response_text)
+                                extracted = auto_extract_components(response_text)
                                 for _comp in extracted:
                                     yield emit(CustomEvent(name="zoe.ui_component", value=_comp))
                             except Exception as _aex:
@@ -1785,7 +1813,11 @@ async def chat_stream_generator(
                         },
                     )
                 )
-                oc_db_memory = await _mempalace_load_user_facts(user_id)
+                _oc2_portrait, oc_db_memory = await asyncio.gather(
+                    _safe_load_portrait(user_id),
+                    _mempalace_load_user_facts(user_id),
+                )
+                _oc2_full_mem = "\n\n".join(filter(None, [_oc2_portrait, oc_db_memory]))
                 task = asyncio.create_task(
                     run_openclaw_agent(
                         oc_message,
@@ -1793,7 +1825,7 @@ async def chat_stream_generator(
                         user_id,
                         user_role=user_role,
                         username=username,
-                        memories=oc_db_memory or None,
+                        memories=_oc2_full_mem or None,
                     )
                 )
                 async for hb in _iter_openclaw_heartbeats(emit, task):
@@ -1847,8 +1879,36 @@ async def chat_stream_generator(
 _HERMES_API_URL = os.environ.get("HERMES_API_URL", "http://127.0.0.1:8642")
 _HERMES_MODEL   = os.environ.get("HERMES_MODEL", "hermes-agent")
 
+_ZOE_SOUL_HERMES = (
+    "You are Zoe — a warm, curious, genuinely present AI companion. "
+    "You know the person you're talking to well. You speak naturally, "
+    "not as a task executor but as someone who cares about them. "
+    "Draw on the context provided to give responses that feel personal and considered."
+)
 
-async def _hermes_stream_generator(message: str, session_id: str, user_id: str):
+def _load_zoe_self_compact_for_chat() -> str:
+    """Load compact Zoe self-description from file; falls back to empty string."""
+    try:
+        _p = os.path.expanduser("~/.zoe/zoe_self_compact.txt")
+        with open(_p) as _f:
+            return _f.read().strip()
+    except Exception:
+        return ""
+
+
+async def _safe_load_portrait(user_id: str) -> str:
+    """Load portrait for context injection; returns '' on any error or missing table."""
+    try:
+        from user_portrait import load_portrait  # type: ignore[import]
+        return await load_portrait(user_id) or ""
+    except Exception:
+        return ""
+
+
+async def _hermes_stream_generator(
+    message: str, session_id: str, user_id: str,
+    *, username: str = "", portrait: str = "", facts: str = "",
+):
     """Stream a response from the Hermes Agent gateway using AG-UI SSE events."""
     import aiohttp
     enc = EventEncoder()
@@ -1864,9 +1924,21 @@ async def _hermes_stream_generator(message: str, session_id: str, user_id: str):
 
     full_text = []
     try:
+        _zoe_compact = _load_zoe_self_compact_for_chat()
+        _ctx_parts = [_ZOE_SOUL_HERMES]
+        if _zoe_compact:
+            _ctx_parts.append(f"[System context: {_zoe_compact}]")
+        if username:
+            _ctx_parts.append(f"[Talking to: {username}]")
+        if portrait:
+            _ctx_parts.append(f"[About this person: {portrait}]")
+        if facts:
+            _ctx_parts.append(f"[Memory context:\n{facts}]")
+        _ctx_prefix = "\n".join(_ctx_parts) + "\n\n"
+        _enhanced_message = _ctx_prefix + message
         payload = {
             "model": _HERMES_MODEL,
-            "messages": [{"role": "user", "content": message}],
+            "messages": [{"role": "user", "content": _enhanced_message}],
             "stream": True,
         }
         async with aiohttp.ClientSession() as session:
@@ -1936,8 +2008,17 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
     if stream:
         # Hermes Agent path — direct OpenAI-compat streaming to localhost:8642
         if force_agent == "hermes":
+            _h_portrait, _h_facts = await asyncio.gather(
+                _safe_load_portrait(user_id),
+                _mempalace_load_user_facts(user_id),
+            )
             return StreamingResponse(
-                _hermes_stream_generator(message, session_id, user_id),
+                _hermes_stream_generator(
+                    message, session_id, user_id,
+                    username=user.get("username", ""),
+                    portrait=_h_portrait,
+                    facts=_h_facts,
+                ),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
@@ -2076,19 +2157,40 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
 
         response_text = ""
         try:
-            # Pi Agent loads MemPalace facts directly; non-streaming path passes None
-            ns_db_memory = await _mempalace_load_user_facts(user_id)
+            # Load portrait + facts concurrently for all non-streaming branches
+            ns_portrait, ns_db_memory = await asyncio.gather(
+                _safe_load_portrait(user_id),
+                _mempalace_load_user_facts(user_id),
+            )
+            ns_full_mem = "\n\n".join(filter(None, [ns_portrait, ns_db_memory]))
             if _USE_ZOE_AGENT:
                 # Use original (pre-suffix) message for agent so fast-path checks work
                 _agent_msg = _original_message_for_agent if is_voice_mode else message_for_processing
                 expanded_msg = openclaw_user_message(intent, _agent_msg) if intent else _agent_msg
                 response_text = await run_zoe_agent(
-                    expanded_msg, session_id, user_id, db_memory_context=None,
+                    expanded_msg, session_id, user_id,
+                    portrait=ns_portrait,
+                    db_memory_context=None,
                     max_tokens_override=voice_max_tokens,
                     voice_mode=is_voice_mode,
                 )
-                # If Pi Agent signals escalation, route to OpenClaw
-                if response_text.startswith("__ESCALATE__:"):
+                # If Pi Agent signals escalation, route accordingly
+                if response_text.startswith("__ESCALATE_HERMES__:"):
+                    _, escalate_body = response_text.split(":", 1)
+                    _, _, hermes_task = escalate_body.partition("|")
+                    import aiohttp
+                    _h2_ctx = "\n\n".join(filter(None, [_ZOE_SOUL_HERMES, ns_portrait]))
+                    _h2_msg = (_h2_ctx + "\n\n" if _h2_ctx else "") + (hermes_task or message_for_processing)
+                    payload = {"model": _HERMES_MODEL, "messages": [{"role": "user", "content": _h2_msg}], "stream": False}
+                    try:
+                        async with aiohttp.ClientSession() as _hses:
+                            async with _hses.post(f"{_HERMES_API_URL}/v1/chat/completions", json=payload, timeout=aiohttp.ClientTimeout(total=120)) as _hr:
+                                _hj = await _hr.json()
+                        response_text = _hj.get("choices", [{}])[0].get("message", {}).get("content", "") or "(no response)"
+                    except Exception as _he:
+                        logger.warning("Hermes non-stream escalation failed: %s", _he)
+                        response_text = "I couldn't reach Hermes right now. Please try again."
+                elif response_text.startswith("__ESCALATE__:"):
                     _, escalate_body = response_text.split(":", 1)
                     _, _, oc_task = escalate_body.partition("|")
                     response_text = await run_openclaw_agent(
@@ -2097,7 +2199,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                         user_id,
                         user_role=user.get("role"),
                         username=user.get("username"),
-                        memories=ns_db_memory or None,
+                        memories=ns_full_mem or None,
                     )
             else:
                 oc_message = openclaw_user_message(intent, message_for_processing)
@@ -2107,7 +2209,7 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
                     user_id,
                     user_role=user.get("role"),
                     username=user.get("username"),
-                    memories=ns_db_memory or None,
+                    memories=ns_full_mem or None,
                 )
         except Exception as exc:
             if task_class != "research":

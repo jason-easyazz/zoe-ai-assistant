@@ -2457,26 +2457,32 @@ async def voice_command(
                             continue
                         if delta.startswith("__ESCALATE__:") or delta.startswith("__ESCALATE_BG__:"):
                             try:
-                                from openclaw_ws import openclaw_cli
+                                is_bg = delta.startswith("__ESCALATE_BG__:")
                                 _, body = delta.split(":", 1)
                                 reason, _, oc_task = body.partition("|")
                                 oc_prompt = (oc_task or text).strip()
-                                logger.info("voice/command stream escalation -> OpenClaw reason=%s", reason or "unspecified")
-                                try:
-                                    await _bc_stream.broadcast("all", "voice:responding", {
-                                        "panel_id": panel_id,
-                                        "text": "Give me a second - this one may take a little longer. I will come back with the result.",
-                                    })
-                                except Exception:
-                                    pass
-                                delta = (
-                                    await asyncio.wait_for(
-                                        openclaw_cli(oc_prompt, session_id, user_id=effective_user),
-                                        timeout=openclaw_voice_timeout,
-                                    )
-                                ).strip()
-                                if not delta:
-                                    continue
+                                logger.info("voice/command stream escalation -> OpenClaw background=%s reason=%s", is_bg, reason or "unspecified")
+                                if is_bg:
+                                    from background_runner import enqueue_background_task
+                                    asyncio.ensure_future(enqueue_background_task(oc_prompt, effective_user, session_id))
+                                    delta = "I'll work on that in the background and let you know when it's done."
+                                else:
+                                    from openclaw_ws import openclaw_cli
+                                    try:
+                                        await _bc_stream.broadcast("all", "voice:responding", {
+                                            "panel_id": panel_id,
+                                            "text": "Give me a second - this one may take a little longer. I will come back with the result.",
+                                        })
+                                    except Exception:
+                                        pass
+                                    delta = (
+                                        await asyncio.wait_for(
+                                            openclaw_cli(oc_prompt, session_id, user_id=effective_user),
+                                            timeout=openclaw_voice_timeout,
+                                        )
+                                    ).strip()
+                                    if not delta:
+                                        continue
                             except Exception as esc_exc:
                                 logger.warning("voice/command OpenClaw escalation failed: %s", esc_exc)
                                 delta = "I couldn't complete that advanced request right now. Please try again."
@@ -2554,27 +2560,33 @@ async def voice_command(
                     continue
                 if delta.startswith("__ESCALATE__:") or delta.startswith("__ESCALATE_BG__:"):
                     try:
-                        from openclaw_ws import openclaw_cli
                         from push import broadcaster as _bc_escalate
+                        is_bg = delta.startswith("__ESCALATE_BG__:")
                         _, body = delta.split(":", 1)
                         reason, _, oc_task = body.partition("|")
                         oc_prompt = (oc_task or text).strip()
-                        logger.info("voice/command escalation -> OpenClaw reason=%s", reason or "unspecified")
-                        try:
-                            await _bc_escalate.broadcast("all", "voice:responding", {
-                                "panel_id": panel_id,
-                                "text": "Give me a second - this one may take a little longer. I will come back with the result.",
-                            })
-                        except Exception:
-                            pass
-                        delta = (
-                            await asyncio.wait_for(
-                                openclaw_cli(oc_prompt, session_id, user_id=effective_user),
-                                timeout=openclaw_voice_timeout,
-                            )
-                        ).strip()
-                        if not delta:
-                            continue
+                        logger.info("voice/command escalation -> OpenClaw background=%s reason=%s", is_bg, reason or "unspecified")
+                        if is_bg:
+                            from background_runner import enqueue_background_task
+                            asyncio.ensure_future(enqueue_background_task(oc_prompt, effective_user, session_id))
+                            delta = "I'll work on that in the background and let you know when it's done."
+                        else:
+                            from openclaw_ws import openclaw_cli
+                            try:
+                                await _bc_escalate.broadcast("all", "voice:responding", {
+                                    "panel_id": panel_id,
+                                    "text": "Give me a second - this one may take a little longer. I will come back with the result.",
+                                })
+                            except Exception:
+                                pass
+                            delta = (
+                                await asyncio.wait_for(
+                                    openclaw_cli(oc_prompt, session_id, user_id=effective_user),
+                                    timeout=openclaw_voice_timeout,
+                                )
+                            ).strip()
+                            if not delta:
+                                continue
                     except Exception as esc_exc:
                         logger.warning("voice/command OpenClaw escalation failed: %s", esc_exc)
                         delta = "I couldn't complete that advanced request right now. Please try again."
@@ -3249,11 +3261,15 @@ async def chatgpt_auth_status():
 
 
 @router.get("/livekit-token")
-async def get_livekit_token(user: dict = Depends(get_current_user)):
+async def get_livekit_token(request: Request, user: dict = Depends(get_current_user)):
     """Mint a LiveKit join token for the voice page.
 
     Returns {"token": "<jwt>", "url": "<ws url>"}.  The token is a standard
     HS256 JWT with LiveKit video-grant claims — no livekit-api package required.
+
+    The LiveKit URL is derived from the browser's request origin so LAN clients
+    get ws(s)://<lan-host>/livekit/ and remote clients get the configured LIVEKIT_URL.
+    Nginx proxies /livekit/ → host.docker.internal:7880 on both HTTP and HTTPS.
     """
     import time as _time
     import uuid as _uuid
@@ -3261,10 +3277,34 @@ async def get_livekit_token(user: dict = Depends(get_current_user)):
 
     api_key = os.environ.get("LIVEKIT_API_KEY", "").strip()
     api_secret = os.environ.get("LIVEKIT_API_SECRET", "").strip()
-    livekit_url = os.environ.get("LIVEKIT_URL", "ws://127.0.0.1:7880").strip()
 
     if not api_key or not api_secret:
         raise HTTPException(status_code=503, detail="LiveKit credentials not configured")
+
+    # Derive the LiveKit URL from the browser's request host.
+    # nginx passes the original Host header and X-Forwarded-Proto so we can reconstruct
+    # the correct ws(s)://<browser-host>/livekit/ URL.  This works for LAN IPs, the
+    # Cloudflare domain, and any other hostname without extra config.
+    env_url = os.environ.get("LIVEKIT_URL", "").strip()
+    # Prefer Origin header (sent by browsers on cross-origin fetches; not sent same-origin)
+    origin = request.headers.get("origin", "")
+    if origin:
+        ws_scheme = "wss" if origin.startswith("https") else "ws"
+        host = origin.split("://", 1)[-1].rstrip("/")
+        livekit_url = f"{ws_scheme}://{host}/livekit/"
+    else:
+        # For same-origin fetches use the Host + X-Forwarded-Proto headers that
+        # nginx forwards from the browser.  Falls back to env_url if no Host.
+        fwd_proto = request.headers.get("x-forwarded-proto", "")
+        host_hdr = request.headers.get("host", "")
+        if host_hdr and host_hdr not in ("localhost:8000", "127.0.0.1:8000"):
+            ws_scheme = "wss" if fwd_proto == "https" else "ws"
+            livekit_url = f"{ws_scheme}://{host_hdr}/livekit/"
+        elif env_url:
+            livekit_url = env_url.rstrip("/") + "/"
+        else:
+            scheme = "wss" if request.url.scheme == "https" else "ws"
+            livekit_url = f"{scheme}://{request.url.netloc}/livekit/"
 
     user_id = user.get("user_id", "voice-guest")
     now = int(_time.time())
@@ -3281,7 +3321,27 @@ async def get_livekit_token(user: dict = Depends(get_current_user)):
         },
     }
     token = _jwt.encode(payload, api_secret, algorithm="HS256")
-    return {"token": token, "url": livekit_url}
+
+    # Tell the client whether LiveKit WebRTC is likely reachable.
+    # Without a TURN server, only LAN clients can connect. We detect "LAN" as
+    # requests coming from a private-range IP in the X-Forwarded-For chain.
+    import ipaddress as _ip
+    _cf_ip = (
+        request.headers.get("cf-connecting-ip", "")
+        or (request.headers.get("x-forwarded-for", "").split(",")[0].strip())
+        or (request.client.host if request.client else "")
+    )
+    def _is_private(addr: str) -> bool:
+        try:
+            return _ip.ip_address(addr).is_private
+        except Exception:
+            return False
+    livekit_lan_only = not bool(os.environ.get("LIVEKIT_TURN_URL", ""))
+    livekit_available = (not livekit_lan_only) or _is_private(_cf_ip)
+
+    logger.debug("livekit-token: user=%s url=%s origin=%s lan_ip=%s lk_avail=%s",
+                 user_id, livekit_url, origin, _cf_ip, livekit_available)
+    return {"token": token, "url": livekit_url, "livekit_available": livekit_available}
 
 
 # ── Voice confirmation state ───────────────────────────────────────────────
