@@ -201,12 +201,12 @@ async def _save_portrait(user_id: str, portrait_text: str, memory_count: int, db
         await db.execute(
             """INSERT INTO user_portraits (user_id, portrait_text, portrait_version,
                    generated_from_memory_count, last_generated)
-               VALUES (?, ?, 1, ?, datetime('now'))
+               VALUES (?, ?, 1, ?, NOW())
                ON CONFLICT(user_id) DO UPDATE SET
                    portrait_text = excluded.portrait_text,
                    portrait_version = user_portraits.portrait_version + 1,
                    generated_from_memory_count = excluded.generated_from_memory_count,
-                   last_generated = datetime('now')""",
+                   last_generated = NOW()""",
             (user_id, portrait_text, memory_count),
         )
         await db.commit()

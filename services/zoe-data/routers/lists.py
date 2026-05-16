@@ -197,7 +197,7 @@ async def update_list(
         row = await cursor.fetchone()
         return _row_to_dict(row)
 
-    updates.append("updated_at = datetime('now')")
+    updates.append("updated_at = NOW()")
     params.append(list_id)
     await db.execute(
         f"UPDATE lists SET {', '.join(updates)} WHERE id = ?",
@@ -242,7 +242,7 @@ async def delete_list(
         raise HTTPException(status_code=404, detail="List not found")
 
     await db.execute(
-        "UPDATE lists SET deleted = 1, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE lists SET deleted = 1, updated_at = NOW() WHERE id = ?",
         (list_id,),
     )
     await db.commit()
@@ -429,7 +429,7 @@ async def update_item(
         row = await cursor.fetchone()
         return _row_to_dict(row)
 
-    updates.append("updated_at = datetime('now')")
+    updates.append("updated_at = NOW()")
     params.extend([item_id, list_id])
     await db.execute(
         f"UPDATE list_items SET {', '.join(updates)} WHERE id = ? AND list_id = ?",
@@ -491,7 +491,7 @@ async def delete_item(
         raise HTTPException(status_code=404, detail="Item not found")
 
     await db.execute(
-        "UPDATE list_items SET deleted = 1, updated_at = datetime('now') WHERE id = ? AND list_id = ?",
+        "UPDATE list_items SET deleted = 1, updated_at = NOW() WHERE id = ? AND list_id = ?",
         (item_id, list_id),
     )
     await db.commit()

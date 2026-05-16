@@ -8,13 +8,12 @@ import json
 import random
 import sys
 import uuid
-import aiosqlite
 import httpx
 from datetime import date, datetime, timedelta
 import os
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get("ZOE_DATA_DB", os.path.join(_BASE_DIR, "zoe.db"))
+DB_PATH = os.environ.get("ZOE_DATA_DB", os.path.join(_BASE_DIR, "data", "zoe.db"))
 OPENWEATHERMAP_API_KEY = os.environ.get("OPENWEATHERMAP_API_KEY", "")
 _BROADCAST_URL = "http://127.0.0.1:8000/api/internal/broadcast"
 _OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW", "http://127.0.0.1:18789")
@@ -926,23 +925,16 @@ TOOLS = [
 ]
 
 
-async def get_db():
-    db = await aiosqlite.connect(DB_PATH)
-    db.row_factory = aiosqlite.Row
-    await db.execute("PRAGMA journal_mode=WAL")
-    await db.execute("PRAGMA foreign_keys=ON")
-    return db
+from db_compat import get_compat_db as _pg_get_db  # noqa: E402
 
 
 async def handle_tool(name: str, args: dict) -> str:
-    db = await get_db()
-    try:
-        result = await _execute_tool(db, name, args)
-        return json.dumps(result, default=str)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
-    finally:
-        await db.close()
+    async with _pg_get_db() as db:
+        try:
+            result = await _execute_tool(db, name, args)
+            return json.dumps(result, default=str)
+        except Exception as e:
+            return json.dumps({"error": str(e)})
 
 
 _LIST_TYPE_ALIASES = {
@@ -1064,7 +1056,6 @@ async def _execute_tool(db, name: str, args: dict):
              args.get("end_time"), args.get("category", "general"), args.get("location"),
              1 if args.get("all_day") else 0, "family"),
         )
-        await db.commit()
         result = {"id": eid, "title": args["title"], "start_date": args["start_date"],
                   "start_time": args.get("start_time"), "category": args.get("category", "general")}
         await _notify_ui("calendar", "event_created", result)
@@ -1136,7 +1127,6 @@ async def _execute_tool(db, name: str, args: dict):
             "INSERT INTO list_items (id, list_id, text, quantity, category) VALUES (?,?,?,?,?)",
             (item_id, list_id, args["text"], args.get("quantity"), args.get("category")),
         )
-        await db.commit()
         result = {"item_id": item_id, "list": ln, "list_id": list_id, "text": args["text"], "status": "added"}
         await _notify_ui("lists", "list_updated", {"action": "item_added", "list_id": list_id, "item": {"id": item_id, "text": args["text"]}})
         return result
@@ -1153,8 +1143,7 @@ async def _execute_tool(db, name: str, args: dict):
         if not row:
             return {"error": f"Item '{text}' not found in {lt} lists"}
         item_id = row["id"]
-        await db.execute("UPDATE list_items SET completed=1, updated_at=datetime('now') WHERE id=?", (item_id,))
-        await db.commit()
+        await db.execute("UPDATE list_items SET completed=1, updated_at=NOW() WHERE id=?", (item_id,))
         await _notify_ui("lists", "list_updated", {"action": "item_completed", "list_id": row["list_id"], "item_id": item_id})
         return {"item_id": item_id, "text": text, "status": "completed"}
 
@@ -1165,7 +1154,6 @@ async def _execute_tool(db, name: str, args: dict):
             (rid, user_id, args["title"], args.get("due_date"), args.get("due_time"),
              args.get("priority", "normal"), args.get("category", "general"), "personal"),
         )
-        await db.commit()
         result = {"id": rid, "title": args["title"], "due_date": args.get("due_date"),
                   "due_time": args.get("due_time"), "priority": args.get("priority", "normal")}
         await _notify_ui("reminders", "reminder_created", result)
@@ -1204,7 +1192,6 @@ async def _execute_tool(db, name: str, args: dict):
             (pid, user_id, args["name"], args.get("relationship"), args.get("birthday"),
              args.get("phone"), args.get("email"), args.get("notes"), "family"),
         )
-        await db.commit()
         result = {"id": pid, "name": args["name"], "relationship": args.get("relationship")}
         await _notify_ui("all", "people:created", result)
         # Mirror to MemPalace so OpenClaw-authored contacts show up in
@@ -1227,7 +1214,6 @@ async def _execute_tool(db, name: str, args: dict):
             "INSERT INTO notes (id, user_id, title, content, category, visibility) VALUES (?,?,?,?,?,?)",
             (nid, user_id, args.get("title"), args["content"], args.get("category", "general"), "personal"),
         )
-        await db.commit()
         result = {"id": nid, "title": args.get("title"), "category": args.get("category", "general")}
         await _notify_ui("notes", "note_created", result)
         try:
@@ -1265,11 +1251,10 @@ async def _execute_tool(db, name: str, args: dict):
         uid = args.get("user_id", user_id)
         layout_payload = json.dumps(args.get("layout", []))
         await db.execute(
-            "INSERT INTO dashboard_layouts (user_id, layout, updated_at) VALUES (?, ?, datetime('now')) "
-            "ON CONFLICT(user_id) DO UPDATE SET layout = excluded.layout, updated_at = datetime('now')",
+            "INSERT INTO dashboard_layouts (user_id, layout, updated_at) VALUES (?, ?, NOW()) "
+            "ON CONFLICT(user_id) DO UPDATE SET layout = excluded.layout, updated_at = NOW()",
             (uid, layout_payload),
         )
-        await db.commit()
         return {"status": "ok"}
 
     elif name == "dashboard_add_widget":
@@ -1312,11 +1297,10 @@ async def _execute_tool(db, name: str, args: dict):
             max_y += 2
             added.append(wid)
         await db.execute(
-            "INSERT INTO dashboard_layouts (user_id, layout, updated_at) VALUES (?, ?, datetime('now')) "
-            "ON CONFLICT(user_id) DO UPDATE SET layout = excluded.layout, updated_at = datetime('now')",
+            "INSERT INTO dashboard_layouts (user_id, layout, updated_at) VALUES (?, ?, NOW()) "
+            "ON CONFLICT(user_id) DO UPDATE SET layout = excluded.layout, updated_at = NOW()",
             (uid, json.dumps(current)),
         )
-        await db.commit()
         return {"status": "ok", "added": added}
 
     elif name == "dashboard_available_widgets":
@@ -1665,7 +1649,6 @@ async def _execute_tool(db, name: str, args: dict):
             (eid, user_id, args["content"], args.get("title"), args.get("mood"),
              args.get("mood_score"), tags_json),
         )
-        await db.commit()
         result = {"id": eid, "title": args.get("title"), "mood": args.get("mood")}
         await _notify_ui("journal", "entry_created", result)
         try:
@@ -1779,7 +1762,6 @@ async def _execute_tool(db, name: str, args: dict):
              args.get("category", "general"), args.get("payment_method"),
              "completed", "family"),
         )
-        await db.commit()
         result = {"id": tid, "description": args["description"], "amount": args["amount"],
                   "type": tx_type, "transaction_date": tx_date}
         await _notify_ui("transactions", "transaction_created", result)
@@ -1857,10 +1839,9 @@ async def _execute_tool(db, name: str, args: dict):
             params.append(1 if args["all_day"] else 0)
         if not updates:
             return {"error": "No fields to update"}
-        updates.append("updated_at=datetime('now')")
+        updates.append("updated_at=NOW()")
         params.extend([eid, user_id])
         await db.execute(f"UPDATE events SET {','.join(updates)} WHERE id=? AND user_id=?", params)
-        await db.commit()
         await _notify_ui("calendar", "event_updated", {"id": eid})
         return {"id": eid, "status": "updated"}
 
@@ -1869,8 +1850,7 @@ async def _execute_tool(db, name: str, args: dict):
         cursor = await db.execute("SELECT id FROM events WHERE id=? AND user_id=? AND deleted=0", (eid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Event {eid} not found"}
-        await db.execute("UPDATE events SET deleted=1, updated_at=datetime('now') WHERE id=? AND user_id=?", (eid, user_id))
-        await db.commit()
+        await db.execute("UPDATE events SET deleted=1, updated_at=NOW() WHERE id=? AND user_id=?", (eid, user_id))
         await _notify_ui("calendar", "event_deleted", {"id": eid})
         return {"id": eid, "status": "deleted"}
 
@@ -1887,10 +1867,9 @@ async def _execute_tool(db, name: str, args: dict):
                 params.append(args[field])
         if not updates:
             return {"error": "No fields to update"}
-        updates.append("updated_at=datetime('now')")
+        updates.append("updated_at=NOW()")
         params.extend([rid, user_id])
         await db.execute(f"UPDATE reminders SET {','.join(updates)} WHERE id=? AND user_id=?", params)
-        await db.commit()
         await _notify_ui("reminders", "reminder_updated", {"id": rid})
         return {"id": rid, "status": "updated"}
 
@@ -1899,18 +1878,16 @@ async def _execute_tool(db, name: str, args: dict):
         cursor = await db.execute("SELECT id FROM reminders WHERE id=? AND user_id=? AND deleted=0", (rid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Reminder {rid} not found"}
-        await db.execute("UPDATE reminders SET deleted=1, is_active=0, updated_at=datetime('now') WHERE id=? AND user_id=?", (rid, user_id))
-        await db.commit()
+        await db.execute("UPDATE reminders SET deleted=1, is_active=0, updated_at=NOW() WHERE id=? AND user_id=?", (rid, user_id))
         await _notify_ui("reminders", "reminder_deleted", {"id": rid})
         # Cancel any unfired proactive_scheduled job linked to this reminder.
         try:
             from proactive.triggers.reminders import cancel_reminder as _cancel_reminder
-            async with aiosqlite.connect(DB_PATH) as _pdb:
-                _pdb.row_factory = aiosqlite.Row
-                async with _pdb.execute(
+            async with _pg_get_db() as _pdb:
+                _cur = await _pdb.execute(
                     "SELECT id FROM proactive_scheduled WHERE item_id=? AND fired=0", (rid,)
-                ) as _cur:
-                    _sched_rows = await _cur.fetchall()
+                )
+                _sched_rows = await _cur.fetchall()
             for _sr in _sched_rows:
                 await _cancel_reminder(_sr["id"])
         except Exception:
@@ -1935,22 +1912,20 @@ async def _execute_tool(db, name: str, args: dict):
         new_time_str = new_time_local.strftime("%H:%M")
         snoozed_until_iso = new_time_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
         await db.execute(
-            "UPDATE reminders SET due_date=?, due_time=?, snoozed_until=?, acknowledged=0, updated_at=datetime('now') WHERE id=?",
+            "UPDATE reminders SET due_date=?, due_time=?, snoozed_until=?, acknowledged=0, updated_at=NOW() WHERE id=?",
             (new_date, new_time_str, snoozed_until_iso, rid),
         )
-        await db.commit()
         result = {"id": rid, "snoozed_until": snoozed_until_iso}
         await _notify_ui("reminders", "reminder_snoozed", result)
         # Cancel existing scheduled job(s) for this reminder; ReminderScanTrigger
         # will pick it up again after snoozed_until passes.
         try:
             from proactive.triggers.reminders import cancel_reminder as _cancel_reminder
-            async with aiosqlite.connect(DB_PATH) as _pdb:
-                _pdb.row_factory = aiosqlite.Row
-                async with _pdb.execute(
+            async with _pg_get_db() as _pdb:
+                _cur = await _pdb.execute(
                     "SELECT id FROM proactive_scheduled WHERE item_id=? AND fired=0", (rid,)
-                ) as _cur:
-                    _sched_rows = await _cur.fetchall()
+                )
+                _sched_rows = await _cur.fetchall()
             for _sr in _sched_rows:
                 await _cancel_reminder(_sr["id"])
         except Exception:
@@ -1970,10 +1945,9 @@ async def _execute_tool(db, name: str, args: dict):
                 params.append(args[field])
         if not updates:
             return {"error": "No fields to update"}
-        updates.append("updated_at=datetime('now')")
+        updates.append("updated_at=NOW()")
         params.extend([nid, user_id])
         await db.execute(f"UPDATE notes SET {','.join(updates)} WHERE id=? AND user_id=?", params)
-        await db.commit()
         await _notify_ui("notes", "note_updated", {"id": nid})
         return {"id": nid, "status": "updated"}
 
@@ -1982,8 +1956,7 @@ async def _execute_tool(db, name: str, args: dict):
         cursor = await db.execute("SELECT id FROM notes WHERE id=? AND user_id=? AND deleted=0", (nid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Note {nid} not found"}
-        await db.execute("UPDATE notes SET deleted=1, updated_at=datetime('now') WHERE id=? AND user_id=?", (nid, user_id))
-        await db.commit()
+        await db.execute("UPDATE notes SET deleted=1, updated_at=NOW() WHERE id=? AND user_id=?", (nid, user_id))
         await _notify_ui("notes", "note_deleted", {"id": nid})
         return {"id": nid, "status": "deleted"}
 
@@ -2000,10 +1973,9 @@ async def _execute_tool(db, name: str, args: dict):
                 params.append(args[field])
         if not updates:
             return {"error": "No fields to update"}
-        updates.append("updated_at=datetime('now')")
+        updates.append("updated_at=NOW()")
         params.extend([pid, user_id])
         await db.execute(f"UPDATE people SET {','.join(updates)} WHERE id=? AND user_id=?", params)
-        await db.commit()
         await _notify_ui("all", "people:updated", {"id": pid})
         return {"id": pid, "status": "updated"}
 
@@ -2012,8 +1984,7 @@ async def _execute_tool(db, name: str, args: dict):
         cursor = await db.execute("SELECT id FROM people WHERE id=? AND user_id=? AND deleted=0", (pid, user_id))
         if not await cursor.fetchone():
             return {"error": f"Person {pid} not found"}
-        await db.execute("UPDATE people SET deleted=1, updated_at=datetime('now') WHERE id=? AND user_id=?", (pid, user_id))
-        await db.commit()
+        await db.execute("UPDATE people SET deleted=1, updated_at=NOW() WHERE id=? AND user_id=?", (pid, user_id))
         await _notify_ui("all", "people:deleted", {"id": pid})
         return {"id": pid, "status": "deleted"}
 
@@ -2023,11 +1994,10 @@ async def _execute_tool(db, name: str, args: dict):
         await db.execute(
             """INSERT INTO notifications (
                 id, user_id, title, message, type, delivered, created_at
-            ) VALUES (?,?,?,?,?,0,datetime('now'))""",
+            ) VALUES (?,?,?,?,?,0,NOW())""",
             (nid, user_id, args["title"], args["message"],
              args.get("type", "info")),
         )
-        await db.commit()
         result = {"id": nid, "title": args["title"], "message": args["message"],
                   "type": args.get("type", "info")}
         await _notify_ui("all", "notification_created", result)
@@ -2181,7 +2151,6 @@ async def _execute_tool(db, name: str, args: dict):
                VALUES (?, ?, ?, ?, 'pending', ?)""",
             (challenge_id, panel_id, user_id, action_context, expires_at),
         )
-        await db.commit()
         await _notify_ui("all", "panel_pin_request", {
             "panel_id": panel_id,
             "challenge_id": challenge_id,
@@ -2310,43 +2279,50 @@ async def _execute_tool(db, name: str, args: dict):
         limit = min(int(args.get("limit", 10)), 50)
 
         # Build WHERE clause for base table filters.
+        # Use explicit $N params for PostgreSQL tsvector FTS.
+        pg_params: list = [query]  # $1 = tsquery text
+        param_idx = 2  # next placeholder index
         conditions = []
-        params: list = [query]  # FTS match param first
         if room:
-            conditions.append("m.room = ?")
-            params.append(room)
+            conditions.append(f"m.room = ${param_idx}")
+            pg_params.append(room)
+            param_idx += 1
         if speaker_id:
-            conditions.append("m.speaker_id = ?")
-            params.append(speaker_id)
+            conditions.append(f"m.speaker_id = ${param_idx}")
+            pg_params.append(speaker_id)
+            param_idx += 1
         if date_from:
-            conditions.append("m.timestamp >= ?")
-            params.append(date_from)
+            conditions.append(f"m.timestamp >= ${param_idx}")
+            pg_params.append(date_from)
+            param_idx += 1
         if date_to:
-            conditions.append("m.timestamp <= ?")
-            params.append(date_to)
-        params.append(limit)
+            conditions.append(f"m.timestamp <= ${param_idx}")
+            pg_params.append(date_to)
+            param_idx += 1
+        pg_params.append(limit)
+        limit_idx = param_idx
 
         where = ("AND " + " AND ".join(conditions)) if conditions else ""
         sql = f"""
             SELECT m.id, m.timestamp, m.panel_id, m.room, m.speaker_id, m.transcript
-            FROM ambient_memory_fts f
-            JOIN ambient_memory m ON m.id = f.rowid
-            WHERE ambient_memory_fts MATCH ?
+            FROM ambient_memory m
+            WHERE m.search_vector @@ plainto_tsquery('english', $1)
             {where}
-            ORDER BY rank
-            LIMIT ?
+            ORDER BY ts_rank(m.search_vector, plainto_tsquery('english', $1)) DESC
+            LIMIT ${limit_idx}
         """
         try:
-            async with db.execute(sql, params) as cur:
-                rows = await cur.fetchall()
+            from db_pool import get_db_ctx as _raw_pg_get_db
+            async with _raw_pg_get_db() as _raw_conn:
+                rows = await _raw_conn.fetch(sql, *pg_params)
             results = [
                 {
-                    "id": r[0],
-                    "timestamp": r[1],
-                    "panel_id": r[2],
-                    "room": r[3],
-                    "speaker_id": r[4],
-                    "transcript": r[5],
+                    "id": r["id"],
+                    "timestamp": str(r["timestamp"]) if r["timestamp"] else None,
+                    "panel_id": r["panel_id"],
+                    "room": r["room"],
+                    "speaker_id": r["speaker_id"],
+                    "transcript": r["transcript"],
                 }
                 for r in rows
             ]

@@ -1,7 +1,8 @@
 """
 APScheduler wrapper (Tier 1 — precision scheduling).
 
-Uses SQLite job store so jobs survive service restarts.
+Uses PostgreSQL job store (via SQLAlchemy psycopg2) so jobs survive service restarts.
+Falls back to SQLite if POSTGRES_APSCHEDULER_URL is not set.
 """
 from __future__ import annotations
 
@@ -21,6 +22,14 @@ log = logging.getLogger(__name__)
 _scheduler: AsyncIOScheduler | None = None
 
 
+def _jobstore_url() -> str:
+    """Prefer PostgreSQL jobstore; fall back to SQLite for local dev."""
+    pg_url = os.environ.get("POSTGRES_APSCHEDULER_URL", "")
+    if pg_url:
+        return pg_url
+    return f"sqlite:///{DB_PATH}"
+
+
 def get_scheduler() -> AsyncIOScheduler:
     global _scheduler
     if _scheduler is None:
@@ -33,7 +42,7 @@ def start_scheduler() -> AsyncIOScheduler:
     if _scheduler is not None:
         return _scheduler
 
-    jobstore_url = f"sqlite:///{DB_PATH}"
+    jobstore_url = _jobstore_url()
     _scheduler = AsyncIOScheduler(
         jobstores={"default": SQLAlchemyJobStore(url=jobstore_url)},
         job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 300},

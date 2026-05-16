@@ -18,9 +18,8 @@ import zoneinfo
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import aiosqlite
 
-from database import DB_PATH
+from db_compat import get_compat_db as _get_compat_db
 from proactive.composer import compose_message
 from proactive.session_utils import create_pending
 from proactive.scheduler import start_scheduler, stop_scheduler
@@ -78,7 +77,7 @@ async def fire_notification(
         log.info("Quiet hours active — deferring notification for user %s", user_id)
         # Mark the scheduled row as fired so reminder_scan can reschedule it.
         if pending_id:
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with _get_compat_db() as db:
                 await db.execute(
                     "UPDATE proactive_scheduled SET fired = 1 WHERE id = ?", (pending_id,)
                 )
@@ -120,7 +119,7 @@ async def fire_notification(
 
     # Mark the proactive_scheduled row as fired (Tier 1 jobs only).
     if pending_id:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _get_compat_db() as db:
             await db.execute(
                 "UPDATE proactive_scheduled SET fired = 1 WHERE id = ?", (pending_id,)
             )
@@ -143,8 +142,7 @@ async def _slow_loop() -> None:
         await asyncio.sleep(SLOW_LOOP_INTERVAL)
         if _is_in_quiet_hours():
             continue
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
+        async with _get_compat_db() as db:
             for trigger in _slow_triggers:
                 try:
                     results = await trigger.check(db)
@@ -165,7 +163,7 @@ async def _cleanup_expired_pending() -> None:
     while True:
         await asyncio.sleep(3600)
         try:
-            async with aiosqlite.connect(DB_PATH) as db:
+            async with _get_compat_db() as db:
                 async with db.execute(
                     "DELETE FROM proactive_pending WHERE claimed = 0 AND expires_at < ?",
                     (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),),

@@ -420,13 +420,13 @@ async def update_preferences(payload: WeatherPreferences, user: dict = Depends(g
         """INSERT INTO weather_preferences (
             user_id, latitude, longitude, city, country,
             temperature_unit, use_current_location, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
         ON CONFLICT(user_id) DO UPDATE SET
             latitude=excluded.latitude, longitude=excluded.longitude,
             city=excluded.city, country=excluded.country,
             temperature_unit=excluded.temperature_unit,
             use_current_location=excluded.use_current_location,
-            updated_at=datetime('now')
+            updated_at=NOW()
         """,
         (user_id, payload.latitude, payload.longitude, payload.city, payload.country,
          payload.temperature_unit, 1 if payload.use_current_location else 0),
@@ -470,11 +470,11 @@ async def update_default_location(payload: dict, user: dict = Depends(require_ad
     }
     await db.execute(
         """INSERT INTO system_preferences (key, value, updated_by, updated_at)
-           VALUES (?, ?, ?, datetime('now'))
+           VALUES (?, ?, ?, NOW())
            ON CONFLICT(key) DO UPDATE SET
              value=excluded.value,
              updated_by=excluded.updated_by,
-             updated_at=datetime('now')
+             updated_at=NOW()
         """,
         [SYSTEM_WEATHER_DEFAULT_KEY, json.dumps(value), user.get("user_id", "admin")],
     )

@@ -15,9 +15,8 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
-import aiosqlite
 
-from database import DB_PATH
+from db_compat import get_compat_db as _get_compat_db
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +37,7 @@ async def create_pending(
     expires = (
         datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _get_compat_db() as db:
         await db.execute(
             """INSERT INTO proactive_pending
                (id, user_id, message, trigger_type, item_id, trigger_context, expires_at)
@@ -57,8 +56,7 @@ async def claim_pending(pending_id: str) -> dict | None:
     with the notification text.  Returns {"session_id": ..., "message": ...}
     or None if not found / already claimed / expired.
     """
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with _get_compat_db() as db:
         async with db.execute(
             "SELECT * FROM proactive_pending WHERE id = ? AND claimed = 0",
             (pending_id,),

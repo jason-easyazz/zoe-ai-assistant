@@ -8,19 +8,6 @@ Enables "fire and forget" tasks:
   4. This module runs the task via OpenClaw ACP, stores result
   5. Next chat load: /api/chat/tasks/pending returns results
   6. Frontend injects them as proactive Zoe messages
-
-Database schema (created on first use):
-  CREATE TABLE background_tasks (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id    TEXT NOT NULL,
-      session_id TEXT,
-      task       TEXT NOT NULL,
-      status     TEXT DEFAULT 'pending',   -- pending|running|done|error
-      result     TEXT,
-      seen       INTEGER DEFAULT 0,
-      created_at TEXT,
-      completed_at TEXT
-  )
 """
 from __future__ import annotations
 
@@ -35,24 +22,6 @@ logger = logging.getLogger(__name__)
 _running: dict[int, asyncio.Task] = {}
 
 
-async def _ensure_table(db) -> None:
-    # Table is now created by database.py SCHEMA — this is a no-op kept for
-    # call-site compatibility during the transition period.
-    pass
-
-
-async def _get_db():
-    """Open the Zoe database directly (mirrors database.py pattern)."""
-    import aiosqlite
-    import os
-    db_path = os.environ.get("ZOE_DATA_DB", os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "zoe.db"
-    ))
-    db = await aiosqlite.connect(db_path)
-    await db.execute("PRAGMA journal_mode=WAL")
-    return db
-
-
 async def enqueue_background_task(
     task: str,
     user_id: str,
@@ -60,18 +29,15 @@ async def enqueue_background_task(
     panel_id: str | None = None,
 ) -> int:
     """Insert a task row and kick off the async runner. Returns the new task id."""
-    db = await _get_db()
-    try:
-        await _ensure_table(db)
-        now = datetime.now(timezone.utc).isoformat()
-        cur = await db.execute(
-            "INSERT INTO background_tasks (user_id, session_id, panel_id, task, status, created_at) VALUES (?,?,?,?,?,?)",
-            (user_id, session_id, panel_id, task, "pending", now),
+    from db_pool import get_db, get_db_ctx
+    now = datetime.now(timezone.utc).isoformat()
+    async with get_db_ctx() as db:
+        row = await db.fetchrow(
+            """INSERT INTO background_tasks (user_id, session_id, panel_id, task, status, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6) RETURNING id""",
+            user_id, session_id, panel_id, task, "pending", now,
         )
-        await db.commit()
-        task_id: int = cur.lastrowid  # type: ignore[assignment]
-    finally:
-        await db.close()
+        task_id: int = row["id"]
 
     # Fire off the runner coroutine
     fut = asyncio.ensure_future(_run_task(task_id, task, user_id, session_id, panel_id=panel_id))
@@ -89,18 +55,15 @@ async def _run_task(
 ) -> None:
     """Execute the task via OpenClaw ACP and store the result."""
     from zoe_acp_client import openclaw_acp_stream as _acp_stream
+    from db_pool import get_db, get_db_ctx
 
     async def _set_status(status: str, result: str | None = None) -> None:
-        db = await _get_db()
-        try:
-            now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
+        async with get_db_ctx() as db:
             await db.execute(
-                "UPDATE background_tasks SET status=?, result=?, completed_at=? WHERE id=?",
-                (status, result, now if status in ("done", "error") else None, task_id),
+                "UPDATE background_tasks SET status=$1, result=$2, completed_at=$3 WHERE id=$4",
+                status, result, now if status in ("done", "error") else None, task_id,
             )
-            await db.commit()
-        finally:
-            await db.close()
 
     await _set_status("running")
     try:
@@ -147,31 +110,29 @@ async def _run_task(
 
 async def get_pending_tasks(user_id: str) -> list[dict]:
     """Return completed-but-unseen tasks for a user, then mark them seen."""
-    db = await _get_db()
-    try:
-        await _ensure_table(db)
-        rows = await db.execute(
-            "SELECT id, task, result, created_at, completed_at FROM background_tasks "
-            "WHERE user_id=? AND status='done' AND seen=0 ORDER BY completed_at ASC",
-            (user_id,),
+    from db_pool import get_db, get_db_ctx
+    async with get_db_ctx() as db:
+        rows = await db.fetch(
+            """SELECT id, task, result, created_at, completed_at
+               FROM background_tasks
+               WHERE user_id=$1 AND status='done' AND seen=0
+               ORDER BY completed_at ASC""",
+            user_id,
         )
-        tasks = await rows.fetchall()
-        if tasks:
-            ids = [str(r[0]) for r in tasks]
+        if rows:
+            ids = [r["id"] for r in rows]
             await db.execute(
-                f"UPDATE background_tasks SET seen=1 WHERE id IN ({','.join(ids)})"
+                f"UPDATE background_tasks SET seen=1 WHERE id = ANY($1::int[])",
+                ids,
             )
-            await db.commit()
-    finally:
-        await db.close()
 
     return [
         {
-            "id": r[0],
-            "task": r[1],
-            "result": r[2] or "",
-            "created_at": r[3],
-            "completed_at": r[4],
+            "id": r["id"],
+            "task": r["task"],
+            "result": r["result"] or "",
+            "created_at": r["created_at"],
+            "completed_at": r["completed_at"],
         }
-        for r in tasks
+        for r in rows
     ]

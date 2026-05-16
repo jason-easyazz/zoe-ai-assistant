@@ -6,7 +6,6 @@ import json
 import os
 import logging
 from pathlib import Path
-import aiosqlite
 from fastapi import APIRouter, Depends, Request
 from auth import get_current_user
 from database import get_db
@@ -70,7 +69,7 @@ async def subscribe(request: Request, user: dict = Depends(get_current_user)):
         await db.execute(
             """INSERT OR REPLACE INTO push_subscriptions
                (user_id, endpoint, keys_p256dh, keys_auth, created_at)
-               VALUES (?, ?, ?, ?, datetime('now'))""",
+               VALUES (?, ?, ?, ?, NOW())""",
             (
                 user_id,
                 subscription.get("endpoint", ""),
@@ -130,7 +129,6 @@ async def send_push_to_user(
         payload_data.update({k: v for k, v in extra.items() if k != "url"})
 
     async for db in get_db():
-        db.row_factory = aiosqlite.Row
         async with db.execute(
             "SELECT endpoint, keys_p256dh, keys_auth FROM push_subscriptions WHERE user_id = ?",
             (user_id,),

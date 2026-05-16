@@ -330,7 +330,7 @@ async def update_entry(
     if not updates:
         return _row_to_dict(row)
 
-    updates.append("updated_at = datetime('now')")
+    updates.append("updated_at = NOW()")
     params.append(entry_id)
     await db.execute(
         f"UPDATE journal_entries SET {', '.join(updates)} WHERE id = ?",
@@ -366,7 +366,7 @@ async def delete_entry(
         raise HTTPException(status_code=404, detail="Entry not found")
 
     await db.execute(
-        "UPDATE journal_entries SET deleted = 1, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE journal_entries SET deleted = 1, updated_at = NOW() WHERE id = ?",
         [entry_id],
     )
     await db.commit()

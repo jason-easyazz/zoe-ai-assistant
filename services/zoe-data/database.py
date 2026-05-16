@@ -1,11 +1,26 @@
-import aiosqlite
+"""
+database.py — Database layer for zoe-data.
+
+PostgreSQL via asyncpg (Phase 4 migration complete).
+Schema is managed by Alembic; init_db() calls init_pool() and runs
+alembic upgrade head on startup to ensure schema is current.
+The legacy SQLite SCHEMA string is kept as a reference comment only.
+"""
 import json
 import os
 import uuid
 from contextlib import asynccontextmanager
 
+from db_pool import get_db, get_db_ctx, init_pool, close_pool  # noqa: F401 — re-exported
+
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get("ZOE_DATA_DB", os.path.join(_BASE_DIR, "zoe.db"))
+
+# Keep DB_PATH for scripts/migrations that still need the SQLite file path
+# (e.g. migrate_sqlite_to_postgres.py). Not used at runtime by the app.
+DB_PATH = os.environ.get("ZOE_DATA_DB", os.path.join(_BASE_DIR, "data", "zoe.db"))
+
+POSTGRES_URL = os.environ.get("POSTGRES_URL", "")
+
 
 async def log_music_event(
     user_id: str,
@@ -24,79 +39,53 @@ async def log_music_event(
     """Record a music playback event for taste learning. Never raises."""
     import time as _time
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with get_db_ctx() as db:
             await db.execute(
                 """INSERT INTO music_listening_events
                    (user_id, event_type, track_title, artist, album, genre,
                     source, query, volume_level, session_id, ts,
                     percent_played, duration_seconds)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (user_id, event_type, track_title, artist, album, genre,
-                 source, query, volume_level, session_id, _time.time(),
-                 percent_played, duration_seconds),
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)""",
+                user_id, event_type, track_title, artist, album, genre,
+                source, query, volume_level, session_id, _time.time(),
+                percent_played, duration_seconds,
             )
-            await db.commit()
     except Exception:
         pass  # logging must never crash a music command
 
 
-async def get_db():
-    db = await aiosqlite.connect(DB_PATH)
-    db.row_factory = aiosqlite.Row
-    await db.execute("PRAGMA journal_mode=WAL")
-    await db.execute("PRAGMA foreign_keys=ON")
-    try:
-        yield db
-    finally:
-        await db.close()
-
 async def init_db():
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute("PRAGMA journal_mode=WAL")
-        await db.execute("PRAGMA foreign_keys=ON")
-        await db.executescript(SCHEMA)
-        # Idempotent column adds for older deployments.
-        try:
-            await db.execute("ALTER TABLE panels ADD COLUMN allow_guest INTEGER NOT NULL DEFAULT 1")
-        except Exception:
-            pass  # column already exists
-        try:
-            await db.execute("ALTER TABLE chat_sessions ADD COLUMN metadata TEXT")
-        except Exception:
-            pass  # column already exists
-        try:
-            await db.execute("ALTER TABLE proactive_scheduled ADD COLUMN item_id TEXT DEFAULT ''")
-        except Exception:
-            pass  # column already exists
-        try:
-            await db.execute("ALTER TABLE music_listening_events ADD COLUMN percent_played REAL")
-        except Exception:
-            pass  # column already exists
-        try:
-            await db.execute("ALTER TABLE music_listening_events ADD COLUMN duration_seconds REAL")
-        except Exception:
-            pass  # column already exists
-        # Phase 2.6: panel_id column for background task panel routing
-        try:
-            await db.execute("ALTER TABLE background_tasks ADD COLUMN panel_id TEXT")
-        except Exception:
-            pass  # column already exists (or table missing — will be created by SCHEMA)
+    """Initialize the PostgreSQL connection pool and ensure schema is current.
+
+    Schema is managed by Alembic migrations (alembic/versions/). This function
+    runs `alembic upgrade head` to bring the database to the latest revision.
+    Seed data (default user, capability matrix, people field definitions) is
+    inserted with ON CONFLICT DO NOTHING for idempotency.
+    """
+    # Initialise the asyncpg connection pool
+    await init_pool()
+
+    # Schema is managed by Alembic; run `alembic upgrade head` as a separate
+    # deployment step (see deploy/migrate.sh), NOT at service startup.
+    # This avoids psycopg2/asyncio thread executor deadlocks on startup.
+
+    # Seed data — idempotent via ON CONFLICT DO NOTHING
+    async with get_db_ctx() as db:
         await db.execute(
-            "INSERT OR IGNORE INTO users (id, name, role) VALUES (?, ?, ?)",
-            ("family-admin", "Admin", "admin"),
+            "INSERT INTO users (id, name, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+            "family-admin", "Admin", "admin",
         )
         try:
             from guest_policy import default_capability_matrix
             for _role, _matrix in default_capability_matrix().items():
                 await db.execute(
-                    """INSERT OR IGNORE INTO role_capability_matrix (role, matrix_json)
-                       VALUES (?, ?)""",
-                    (_role, json.dumps(_matrix)),
+                    """INSERT INTO role_capability_matrix (role, matrix_json)
+                       VALUES ($1, $2) ON CONFLICT DO NOTHING""",
+                    _role, json.dumps(_matrix),
                 )
         except Exception:
-            # Non-fatal on startup: table and API handlers still exist.
             pass
+
         default_fields = [
             ("nickname", "Nickname", "text", 0, None, "person", 10, "family"),
             ("pronouns", "Pronouns", "text", 0, None, "person", 20, "family"),
@@ -111,656 +100,18 @@ async def init_db():
         ]
         for item in default_fields:
             await db.execute(
-                """INSERT OR IGNORE INTO people_field_definitions
+                """INSERT INTO people_field_definitions
                    (id, field_key, label, field_type, required, options_json, scope, sort_order, visibility)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (str(uuid.uuid4()), *item),
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT DO NOTHING""",
+                str(uuid.uuid4()), *item,
             )
-        await db.commit()
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Legacy SQLite SCHEMA kept as reference for migration scripts only.
+# Not used at runtime. Do not add new tables here — use Alembic migrations.
+# ──────────────────────────────────────────────────────────────────────────────
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'member',
-    pin_hash TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS events (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    start_date TEXT NOT NULL,
-    start_time TEXT,
-    end_date TEXT,
-    end_time TEXT,
-    duration INTEGER,
-    category TEXT DEFAULT 'general',
-    location TEXT,
-    all_day INTEGER DEFAULT 0,
-    recurring TEXT,
-    metadata TEXT,
-    visibility TEXT NOT NULL DEFAULT 'family',
-    deleted INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS lists (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    list_type TEXT NOT NULL DEFAULT 'shopping',
-    description TEXT,
-    visibility TEXT NOT NULL DEFAULT 'family',
-    deleted INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS list_items (
-    id TEXT PRIMARY KEY,
-    list_id TEXT NOT NULL,
-    text TEXT NOT NULL,
-    completed INTEGER DEFAULT 0,
-    priority TEXT DEFAULT 'normal',
-    category TEXT,
-    quantity TEXT,
-    sort_order INTEGER DEFAULT 0,
-    parent_id TEXT,
-    assigned_to TEXT,
-    deleted INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (list_id) REFERENCES lists(id) ON DELETE CASCADE,
-    FOREIGN KEY (assigned_to) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS people (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    name TEXT NOT NULL,
-    relationship TEXT,
-    email TEXT,
-    phone TEXT,
-    birthday TEXT,
-    notes TEXT,
-    preferences TEXT,
-    visibility TEXT NOT NULL DEFAULT 'family',
-    deleted INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS people_field_definitions (
-    id TEXT PRIMARY KEY,
-    field_key TEXT NOT NULL UNIQUE,
-    label TEXT NOT NULL,
-    field_type TEXT NOT NULL DEFAULT 'text',
-    required INTEGER NOT NULL DEFAULT 0,
-    options_json TEXT,
-    scope TEXT NOT NULL DEFAULT 'person',
-    sort_order INTEGER NOT NULL DEFAULT 100,
-    visibility TEXT NOT NULL DEFAULT 'family',
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS people_field_values (
-    id TEXT PRIMARY KEY,
-    person_id TEXT NOT NULL,
-    field_key TEXT NOT NULL,
-    value_json TEXT,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(person_id, field_key),
-    FOREIGN KEY (person_id) REFERENCES people(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS reminders (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    description TEXT,
-    reminder_type TEXT DEFAULT 'one-time',
-    category TEXT DEFAULT 'general',
-    priority TEXT DEFAULT 'normal',
-    due_date TEXT,
-    due_time TEXT,
-    recurring_pattern TEXT,
-    is_active INTEGER DEFAULT 1,
-    acknowledged INTEGER DEFAULT 0,
-    snoozed_until TEXT,
-    visibility TEXT NOT NULL DEFAULT 'personal',
-    deleted INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS notes (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    title TEXT,
-    content TEXT NOT NULL,
-    category TEXT DEFAULT 'general',
-    tags TEXT,
-    visibility TEXT NOT NULL DEFAULT 'personal',
-    deleted INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS journal_entries (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    title TEXT,
-    content TEXT NOT NULL,
-    mood TEXT,
-    mood_score INTEGER,
-    tags TEXT,
-    weather TEXT,
-    location TEXT,
-    photos TEXT,
-    privacy_level TEXT DEFAULT 'personal',
-    visibility TEXT NOT NULL DEFAULT 'personal',
-    deleted INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS transactions (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    description TEXT NOT NULL,
-    amount REAL NOT NULL,
-    type TEXT NOT NULL DEFAULT 'expense',
-    transaction_date TEXT NOT NULL,
-    payment_method TEXT,
-    status TEXT DEFAULT 'completed',
-    person_id TEXT,
-    calendar_event_id TEXT,
-    metadata TEXT,
-    visibility TEXT NOT NULL DEFAULT 'family',
-    deleted INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS weather_preferences (
-    user_id TEXT PRIMARY KEY,
-    latitude REAL,
-    longitude REAL,
-    city TEXT,
-    country TEXT,
-    temperature_unit TEXT DEFAULT 'celsius',
-    use_current_location INTEGER DEFAULT 0,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS system_preferences (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_by TEXT,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS display_preferences (
-    device_id TEXT PRIMARY KEY,
-    enabled INTEGER DEFAULT 1,
-    day_brightness INTEGER DEFAULT 100,
-    night_enabled INTEGER DEFAULT 1,
-    night_start TEXT DEFAULT '22:00',
-    night_end TEXT DEFAULT '06:30',
-    night_brightness INTEGER DEFAULT 15,
-    idle_enabled INTEGER DEFAULT 1,
-    idle_seconds INTEGER DEFAULT 120,
-    idle_brightness INTEGER DEFAULT 30,
-    off_enabled INTEGER DEFAULT 1,
-    off_seconds INTEGER DEFAULT 900,
-    pi_host TEXT,
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS update_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    component TEXT NOT NULL,
-    version_before TEXT,
-    version_after TEXT,
-    ok INTEGER NOT NULL DEFAULT 0,
-    log_excerpt TEXT,
-    initiated_by TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS trust_allowlist (
-    id TEXT PRIMARY KEY,
-    tool_pattern TEXT NOT NULL,
-    description TEXT,
-    added_by TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS trust_audit (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tool_name TEXT NOT NULL,
-    action TEXT NOT NULL,
-    user_id TEXT,
-    allowed INTEGER NOT NULL,
-    reason TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS notifications (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    type TEXT NOT NULL,
-    title TEXT,
-    message TEXT,
-    data TEXT,
-    delivered INTEGER DEFAULT 0,
-    action_taken TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS chat_sessions (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    title TEXT NOT NULL DEFAULT 'New Chat',
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS chat_messages (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
-    content TEXT NOT NULL,
-    metadata TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS dashboard_layouts (
-    user_id TEXT PRIMARY KEY,
-    layout JSON NOT NULL,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS user_preferences (
-    user_id TEXT PRIMARY KEY,
-    prefs TEXT NOT NULL DEFAULT '{}',
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS chat_ag_ui_runs (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    run_id TEXT NOT NULL,
-    events TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS openclaw_run_state (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    mode TEXT NOT NULL DEFAULT 'chat',
-    status TEXT NOT NULL DEFAULT 'running',
-    request_text TEXT,
-    response_text TEXT,
-    metadata TEXT,
-    started_at TEXT NOT NULL DEFAULT (datetime('now')),
-    finished_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS openclaw_approvals (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    request_text TEXT NOT NULL,
-    normalized_action TEXT,
-    risk_level TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    reason TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    resolved_at TEXT
-);
-
--- memory_items / memory_links / memory_audit tables retired.
---
--- These tables backed the old SQLite mirror of the semantic memory store.
--- Phase-1 of the memory rollout moved every writer and reader onto MemPalace
--- via memory_service.MemoryService, so the tables are no longer created on
--- fresh deployments. Existing production databases may still have empty
--- rows; a maintenance migration will drop them after the Phase-1 soak period.
--- See docs/architecture/memory.md for the replacement design.
-
--- User portrait: LLM-synthesized narrative understanding of each user.
--- Generated weekly by user_portrait.run_portrait_synthesis(), stored here
--- for fast key-lookup injection into every chat turn. Personal data stays
--- in this runtime layer — never in model weights.
-CREATE TABLE IF NOT EXISTS user_portraits (
-    user_id TEXT PRIMARY KEY,
-    portrait_text TEXT NOT NULL,
-    portrait_version INTEGER DEFAULT 1,
-    generated_from_memory_count INTEGER DEFAULT 0,
-    last_generated DATETIME DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS background_tasks (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id      TEXT NOT NULL,
-    session_id   TEXT,
-    panel_id     TEXT,
-    task         TEXT NOT NULL,
-    status       TEXT DEFAULT 'pending',
-    result       TEXT,
-    seen         INTEGER DEFAULT 0,
-    created_at   TEXT,
-    completed_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS open_loops (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id          TEXT NOT NULL,
-    loop_text        TEXT NOT NULL,
-    context          TEXT,
-    follow_up_hint   TEXT,
-    emotional_weight INTEGER DEFAULT 1,
-    created_at       DATETIME DEFAULT (datetime('now')),
-    follow_up_after  DATETIME,
-    resolved         BOOLEAN DEFAULT 0,
-    resolved_at      DATETIME,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id);
-CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
-CREATE INDEX IF NOT EXISTS idx_chat_ag_ui_runs_session ON chat_ag_ui_runs(session_id);
-CREATE INDEX IF NOT EXISTS idx_openclaw_run_state_session ON openclaw_run_state(session_id);
-CREATE INDEX IF NOT EXISTS idx_openclaw_approvals_user_status ON openclaw_approvals(user_id, status);
-
-CREATE INDEX IF NOT EXISTS idx_events_date ON events(start_date);
-CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id);
-CREATE INDEX IF NOT EXISTS idx_list_items_list ON list_items(list_id);
-CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(due_date);
-CREATE INDEX IF NOT EXISTS idx_reminders_user ON reminders(user_id);
-CREATE INDEX IF NOT EXISTS idx_notes_user ON notes(user_id);
-CREATE INDEX IF NOT EXISTS idx_journal_user ON journal_entries(user_id);
-CREATE INDEX IF NOT EXISTS idx_journal_date ON journal_entries(created_at);
-CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(transaction_date);
-CREATE INDEX IF NOT EXISTS idx_people_field_values_person ON people_field_values(person_id);
--- memory_items indexes removed alongside the retired tables above.
-
-CREATE TABLE IF NOT EXISTS push_subscriptions (
-    user_id TEXT NOT NULL,
-    endpoint TEXT NOT NULL,
-    keys_p256dh TEXT NOT NULL,
-    keys_auth TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (user_id, endpoint)
-);
-
-CREATE TABLE IF NOT EXISTS chat_feedback (
-    id TEXT PRIMARY KEY,
-    interaction_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    feedback_type TEXT NOT NULL,
-    corrected_response TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_feedback_interaction ON chat_feedback(interaction_id);
-
-CREATE TABLE IF NOT EXISTS ui_panel_sessions (
-    panel_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    chat_session_id TEXT,
-    page TEXT,
-    ui_context TEXT,
-    is_foreground INTEGER DEFAULT 1,
-    last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_ui_panel_user ON ui_panel_sessions(user_id);
-
-CREATE TABLE IF NOT EXISTS ui_actions (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    panel_id TEXT,
-    chat_session_id TEXT,
-    idempotency_key TEXT,
-    action_type TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'queued',
-    requires_confirmation INTEGER DEFAULT 0,
-    confirmation_token TEXT,
-    retry_count INTEGER DEFAULT 0,
-    max_retries INTEGER DEFAULT 2,
-    error_code TEXT,
-    error_message TEXT,
-    requested_by TEXT NOT NULL DEFAULT 'system',
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    acked_at TEXT
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ui_actions_idempotency
-    ON ui_actions(user_id, idempotency_key)
-    WHERE idempotency_key IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_ui_actions_status ON ui_actions(status);
-CREATE INDEX IF NOT EXISTS idx_ui_actions_user_panel ON ui_actions(user_id, panel_id);
-
-CREATE TABLE IF NOT EXISTS ui_action_ledger (
-    id TEXT PRIMARY KEY,
-    action_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    panel_id TEXT,
-    event_type TEXT NOT NULL,
-    event_data TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (action_id) REFERENCES ui_actions(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_ui_ledger_action ON ui_action_ledger(action_id);
-
--- Touch Presence Platform: registered panels (Raspberry Pi kiosks, etc.)
-CREATE TABLE IF NOT EXISTS panels (
-    panel_id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    location TEXT,
-    ip_address TEXT,
-    panel_type TEXT DEFAULT 'kiosk',
-    os TEXT,
-    notes TEXT,
-    is_active INTEGER DEFAULT 1,
-    allow_guest INTEGER NOT NULL DEFAULT 1,
-    last_seen_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- Per-panel user binding: lets a touch panel show only selected users on its
--- login screen, optionally auto-selecting a default user (skips the picker).
---   binding_type 'default' → auto-select (at most one row per panel_id)
---   binding_type 'allowed' → included in the picker
-CREATE TABLE IF NOT EXISTS panel_user_bindings (
-    panel_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    binding_type TEXT NOT NULL DEFAULT 'allowed',
-    priority INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (panel_id, user_id),
-    FOREIGN KEY (panel_id) REFERENCES panels(panel_id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_panel_user_bindings_panel ON panel_user_bindings(panel_id);
-CREATE INDEX IF NOT EXISTS idx_panel_user_bindings_type ON panel_user_bindings(panel_id, binding_type);
-
--- Device tokens for Pi daemons (voice, presence sensors).
--- Tokens are hashed before storage (SHA-256); the raw token is issued once.
-CREATE TABLE IF NOT EXISTS device_tokens (
-    id TEXT PRIMARY KEY,
-    panel_id TEXT NOT NULL,
-    token_hash TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'voice-daemon',
-    scopes TEXT DEFAULT '["voice"]',
-    expires_at TEXT,
-    revoked INTEGER DEFAULT 0,
-    revoked_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (panel_id) REFERENCES panels(panel_id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_device_tokens_panel ON device_tokens(panel_id);
-CREATE INDEX IF NOT EXISTS idx_device_tokens_hash ON device_tokens(token_hash);
-
--- Panel presence events (motion, face recognition, occupancy from Pi camera).
-CREATE TABLE IF NOT EXISTS panel_presence_events (
-    id TEXT PRIMARY KEY,
-    panel_id TEXT NOT NULL,
-    event_type TEXT NOT NULL,
-    payload TEXT,
-    confidence REAL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (panel_id) REFERENCES panels(panel_id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_presence_panel_time ON panel_presence_events(panel_id, created_at);
-
--- PIN auth challenges for high-privilege panel actions.
-CREATE TABLE IF NOT EXISTS panel_auth_challenges (
-    challenge_id TEXT PRIMARY KEY,
-    panel_id TEXT NOT NULL,
-    user_id TEXT,
-    action_context TEXT,
-    pin_hash TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',
-    expires_at TEXT NOT NULL,
-    resolved_at TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_challenges_panel ON panel_auth_challenges(panel_id, status);
-
--- Fixed-role capability matrix edited via settings (admin/user/guest).
-CREATE TABLE IF NOT EXISTS role_capability_matrix (
-    role TEXT PRIMARY KEY,
-    matrix_json TEXT NOT NULL,
-    updated_by TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- Ambient memory: always-on VAD captures room speech even without wake word.
--- Raw audio is never stored — only the Whisper transcript text.
--- Privacy: per-panel toggle in settings; ambient_capture_enabled env var defaults off.
-CREATE TABLE IF NOT EXISTS ambient_memory (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    panel_id TEXT,
-    room TEXT,
-    transcript TEXT NOT NULL,
-    speaker_id TEXT,
-    duration_seconds REAL,
-    source TEXT DEFAULT 'ambient',  -- 'ambient' | 'wake_word' | 'call'
-    embedding BLOB                  -- optional semantic embedding for MemPalace search
-);
-CREATE INDEX IF NOT EXISTS idx_ambient_panel_time ON ambient_memory(panel_id, timestamp);
-CREATE INDEX IF NOT EXISTS idx_ambient_speaker ON ambient_memory(speaker_id);
--- FTS5 virtual table for full-text search over ambient transcripts ("What did Brad say?")
-CREATE VIRTUAL TABLE IF NOT EXISTS ambient_memory_fts
-    USING fts5(transcript, content='ambient_memory', content_rowid='id');
--- Triggers to keep FTS5 external-content table in sync with ambient_memory.
--- Without these the FTS index stays empty and all text searches return nothing.
-CREATE TRIGGER IF NOT EXISTS ambient_memory_ai AFTER INSERT ON ambient_memory BEGIN
-    INSERT INTO ambient_memory_fts(rowid, transcript) VALUES (new.id, new.transcript);
-END;
-CREATE TRIGGER IF NOT EXISTS ambient_memory_ad AFTER DELETE ON ambient_memory BEGIN
-    INSERT INTO ambient_memory_fts(ambient_memory_fts, rowid, transcript)
-        VALUES('delete', old.id, old.transcript);
-END;
-CREATE TRIGGER IF NOT EXISTS ambient_memory_au AFTER UPDATE ON ambient_memory BEGIN
-    INSERT INTO ambient_memory_fts(ambient_memory_fts, rowid, transcript)
-        VALUES('delete', old.id, old.transcript);
-    INSERT INTO ambient_memory_fts(rowid, transcript) VALUES (new.id, new.transcript);
-END;
-
--- Speaker profiles: resemblyzer 256-dim embeddings for voice identification on the Pi.
--- Enrollment via POST /api/voice/enroll; real-time ID via POST /api/voice/identify.
-CREATE TABLE IF NOT EXISTS speaker_profiles (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    display_name TEXT NOT NULL,
-    embedding_blob BLOB NOT NULL,   -- 256-float32 resemblyzer embedding, serialised as bytes
-    enrolled_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    sample_count INTEGER DEFAULT 0, -- number of utterances used for this embedding
-    panel_id TEXT,                  -- panel where enrollment was performed
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_speaker_profiles_user ON speaker_profiles(user_id);
-
--- Proactive engine: pending notifications waiting for user to tap (4hr TTL).
--- Session is created lazily on tap via /api/proactive/pending/{id}.
-CREATE TABLE IF NOT EXISTS proactive_pending (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    message TEXT NOT NULL,
-    trigger_type TEXT NOT NULL,
-    item_id TEXT DEFAULT '',
-    trigger_context TEXT DEFAULT '{}',
-    expires_at TEXT NOT NULL,
-    claimed INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-CREATE INDEX IF NOT EXISTS idx_proactive_pending_user ON proactive_pending(user_id, claimed);
-CREATE INDEX IF NOT EXISTS idx_proactive_pending_expires ON proactive_pending(expires_at);
-
--- Agent-scheduled one-shot nudges (Pi Agent, Hermes, OpenClaw via REST).
-CREATE TABLE IF NOT EXISTS proactive_scheduled (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    message TEXT NOT NULL,
-    trigger_type TEXT DEFAULT 'scheduled',
-    send_at TEXT NOT NULL,
-    apscheduler_job_id TEXT,
-    fired INTEGER DEFAULT 0,
-    item_id TEXT DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
-);
-CREATE INDEX IF NOT EXISTS idx_proactive_scheduled_user ON proactive_scheduled(user_id, fired);
-
--- Music taste learning: raw playback events consolidated nightly into MemPalace preferences.
-CREATE TABLE IF NOT EXISTS music_listening_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id TEXT NOT NULL,
-    event_type TEXT NOT NULL,       -- 'play', 'skip', 'skip_fast', 'volume_change', 'now_playing', 'repeat'
-    track_title TEXT,
-    artist TEXT,
-    album TEXT,
-    genre TEXT,
-    source TEXT,                    -- 'spotify', 'youtube_music', 'radio', etc.
-    query TEXT,                     -- original search query e.g. "some jazz"
-    volume_level INTEGER,           -- for volume_change events
-    session_id TEXT,
-    ts REAL NOT NULL,               -- unix timestamp
-    percent_played REAL,            -- 0.0-1.0, null if unknown
-    duration_seconds REAL,          -- track duration in seconds
-    created_at TEXT DEFAULT (datetime('now'))
-);
-CREATE INDEX IF NOT EXISTS idx_mle_user_ts ON music_listening_events(user_id, ts);
-CREATE INDEX IF NOT EXISTS idx_mle_user_event ON music_listening_events(user_id, event_type);
+-- LEGACY SQLITE SCHEMA — for reference only. Runtime uses PostgreSQL via Alembic.
+-- See alembic/versions/0001_initial_schema.py for the live PostgreSQL DDL.
 """

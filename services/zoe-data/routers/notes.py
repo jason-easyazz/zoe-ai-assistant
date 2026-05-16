@@ -178,7 +178,7 @@ async def update_note(
     if not updates:
         return _row_to_dict(row)
 
-    updates.append("updated_at = datetime('now')")
+    updates.append("updated_at = NOW()")
     params.append(note_id)
     await db.execute(
         f"UPDATE notes SET {', '.join(updates)} WHERE id = ?",
@@ -215,7 +215,7 @@ async def delete_note(
         raise HTTPException(status_code=404, detail="Note not found")
 
     await db.execute(
-        "UPDATE notes SET deleted = 1, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE notes SET deleted = 1, updated_at = NOW() WHERE id = ?",
         [note_id],
     )
     await db.commit()

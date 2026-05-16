@@ -75,7 +75,7 @@ async def create_notification(
     user_id = user["user_id"]
     nid = str(uuid.uuid4())
     await db.execute(
-        "INSERT INTO notifications (id, user_id, type, title, message, delivered, created_at) VALUES (?,?,?,?,?,0,datetime('now'))",
+        "INSERT INTO notifications (id, user_id, type, title, message, delivered, created_at) VALUES (?,?,?,?,?,0,NOW())",
         (nid, user_id, payload.get("type", "info"), payload.get("title", ""), payload.get("message", "")),
     )
     await db.commit()

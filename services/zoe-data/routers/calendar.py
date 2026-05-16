@@ -201,7 +201,7 @@ async def update_event(
         row = await cursor.fetchone()
         return _row_to_event(row)
 
-    updates.append("updated_at = datetime('now')")
+    updates.append("updated_at = NOW()")
     params.extend([event_id])
     sql = f"UPDATE events SET {', '.join(updates)} WHERE id = ?"
     await db.execute(sql, params)
@@ -234,7 +234,7 @@ async def delete_event(
         raise HTTPException(status_code=404, detail="Event not found")
 
     await db.execute(
-        "UPDATE events SET deleted = 1, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE events SET deleted = 1, updated_at = NOW() WHERE id = ?",
         [event_id],
     )
     await db.commit()

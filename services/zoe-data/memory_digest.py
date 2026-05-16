@@ -930,13 +930,11 @@ async def _extract_open_loops(user_id: str, db=None) -> dict:
     mentioned they're waiting on, or something emotionally significant that
     deserves a follow-up. Runs as part of the nightly dreaming cycle.
     """
-    import aiosqlite
-    from database import DB_PATH  # type: ignore[import]
+    from db_compat import get_compat_db as _get_compat_db
 
     # Load last 48h of messages for this user
     try:
-        async with aiosqlite.connect(DB_PATH) as _db:
-            _db.row_factory = aiosqlite.Row
+        async with _get_compat_db() as _db:
             async with _db.execute(
                 """SELECT m.content, m.role FROM chat_messages m
                    JOIN chat_sessions s ON m.session_id = s.id
@@ -983,7 +981,7 @@ Only include genuine open loops, not resolved topics. Return [] if none found.""
 
     stored = 0
     try:
-        async with aiosqlite.connect(DB_PATH) as _db:
+        async with _get_compat_db() as _db:
             for loop in loops[:5]:
                 if not isinstance(loop, dict) or not loop.get("loop_text"):
                     continue
