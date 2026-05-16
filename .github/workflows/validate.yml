@@ -8,13 +8,16 @@ jobs:
   validate:
     runs-on: ubuntu-latest
 
+    env:
+      CI_DB_PASSWORD: ${{ secrets.POSTGRES_CI_PASSWORD || 'ci-postgres-pw' }}
+
     services:
       postgres:
         image: pgvector/pgvector:pg17
         env:
           POSTGRES_DB: zoe
           POSTGRES_USER: zoe
-          POSTGRES_PASSWORD: REDACTED
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_CI_PASSWORD || 'ci-postgres-pw' }}
         ports:
           - 5432:5432
         options: >-
@@ -50,20 +53,20 @@ jobs:
       - name: Run Alembic migrations on CI PostgreSQL
         run: |
           cd services/zoe-data
-          POSTGRES_URL=postgresql://zoe:REDACTED@localhost:5432/zoe \
+          POSTGRES_URL=postgresql://zoe:${CI_DB_PASSWORD}@localhost:5432/zoe \
             python3 -c "
           import os
-          os.environ['POSTGRES_URL'] = 'postgresql://zoe:REDACTED@localhost:5432/zoe'
+          os.environ['POSTGRES_URL'] = f'postgresql://zoe:{os.environ[\"CI_DB_PASSWORD\"]}@localhost:5432/zoe'
           from alembic.config import Config
           from alembic import command as alembic_cmd
           cfg = Config('alembic.ini')
-          cfg.set_main_option('sqlalchemy.url', 'postgresql+psycopg2://zoe:REDACTED@localhost:5432/zoe')
+          cfg.set_main_option('sqlalchemy.url', f'postgresql+psycopg2://zoe:{os.environ[\"CI_DB_PASSWORD\"]}@localhost:5432/zoe')
           cfg.set_main_option('script_location', 'alembic')
           alembic_cmd.upgrade(cfg, 'head')
           print('Alembic migrations OK')
           "
         env:
-          POSTGRES_URL: postgresql://zoe:REDACTED@localhost:5432/zoe
+          POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
 
       - name: Python syntax check (all zoe-data modules)
         run: |
@@ -88,6 +91,6 @@ jobs:
             --override-ini="asyncio_mode=auto"
         env:
           PYTHONPATH: ${{ github.workspace }}/services/zoe-data
-          POSTGRES_URL: postgresql://zoe:REDACTED@localhost:5432/zoe
+          POSTGRES_URL: postgresql://zoe:${{ env.CI_DB_PASSWORD }}@localhost:5432/zoe
           ZOE_DATA_DB: ":memory:"
           ZOE_MEMORY_STARTUP_STRICT: "false"

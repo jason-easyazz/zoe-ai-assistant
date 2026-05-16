@@ -137,7 +137,7 @@ services:
     environment:
       POSTGRES_DB: zoe
       POSTGRES_USER: zoe
-      POSTGRES_PASSWORD: REDACTED
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
@@ -161,12 +161,12 @@ services:
     ports:
       - "8080:8080"
     environment:
-      DATABASE_URL: "postgresql://zoe:${POSTGRES_PASSWORD:-REDACTED}@host.docker.internal:5432/multica?sslmode=disable"
+      DATABASE_URL: "postgresql://zoe:${POSTGRES_PASSWORD}@host.docker.internal:5432/multica?sslmode=disable"
       PORT: "8080"
       # development required — dev verification code is silently ignored when APP_ENV=production
       APP_ENV: development
-      JWT_SECRET: "${MULTICA_JWT_SECRET:-REDACTED}"
-      MULTICA_DEV_VERIFICATION_CODE: "${MULTICA_DEV_CODE:-REDACTED}"
+      JWT_SECRET: "${MULTICA_JWT_SECRET}"
+      MULTICA_DEV_VERIFICATION_CODE: "${MULTICA_DEV_CODE}"
       FRONTEND_ORIGIN: "http://localhost:3000"
       MULTICA_APP_URL: "http://localhost:3000"
       ALLOW_SIGNUP: "true"
