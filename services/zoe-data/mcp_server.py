@@ -351,6 +351,30 @@ TOOLS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "a2a_delegate",
+        "description": (
+            "Delegate a task to a named peer agent via A2A federation. "
+            "Use agent_name='hermes' for 128k reasoning/code-review tasks, "
+            "'openclaw' for browser automation or long agentic workflows. "
+            "Returns the task result or a task_id for async polling."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "agent_name": {
+                    "type": "string",
+                    "description": "Name of the peer agent to delegate to (hermes or openclaw)",
+                    "enum": ["hermes", "openclaw"],
+                },
+                "task": {
+                    "type": "string",
+                    "description": "Natural-language task description to delegate",
+                },
+            },
+            "required": ["agent_name", "task"],
+        },
+    },
     # --- Journal tools ---
     {
         "name": "journal_create_entry",
@@ -1508,24 +1532,54 @@ async def _execute_tool(db, name: str, args: dict):
             return {"error": "query is required"}
         try:
             import asyncio as _asyncio
-            from research_evidence import fetch_web_fallback_results  # type: ignore[import]
             loop = _asyncio.get_event_loop()
-            results = await loop.run_in_executor(
-                None, lambda: fetch_web_fallback_results(query, max_results=5, timeout_s=8.0)
-            )
+
+            def _ddgs_search():
+                from duckduckgo_search import DDGS
+                with DDGS(timeout=8) as ddgs:
+                    return list(ddgs.text(query, max_results=5)) or []
+
+            results = await loop.run_in_executor(None, _ddgs_search)
             return {
                 "query": query,
                 "results": [
                     {
-                        "title": r.get("name", ""),
-                        "snippet": r.get("value", r.get("notes", "")),
-                        "url": r.get("url", ""),
+                        # duckduckgo-search library returns title/href/body
+                        "title": r.get("title", ""),
+                        "snippet": r.get("body", ""),
+                        "url": r.get("href", ""),
                     }
                     for r in (results or [])
                 ],
             }
         except Exception as exc:
             return {"error": f"Web search failed: {exc}", "query": query}
+
+    elif name == "a2a_delegate":
+        agent_name = args.get("agent_name", "")
+        task = args.get("task", "")
+        if not agent_name or not task:
+            return {"error": "agent_name and task are required"}
+        try:
+            import yaml as _yaml
+            import os as _os
+            _reg_path = _os.path.join(_os.path.dirname(__file__), "agents_registry.yml")
+            with open(_reg_path) as _f:
+                _reg = _yaml.safe_load(_f)
+            _info = _reg.get("agents", {}).get(agent_name)
+            if not _info:
+                return {"error": f"Unknown agent: {agent_name}"}
+            from a2a_client import get_a2a_client  # type: ignore[import]
+            _client = get_a2a_client()
+            result = await _client.submit_task(
+                base_url=_info["base_url"],
+                task=task,
+                caller="zoe-mcp",
+                token=_info.get("a2a_token", ""),
+            )
+            return result
+        except Exception as exc:
+            return {"error": f"A2A delegate failed: {exc}"}
 
     elif name == "zoe_sync_knowledge":
         try:

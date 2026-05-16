@@ -188,3 +188,32 @@ async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
+
+
+_ZOE_A2A_TOKEN = os.environ.get("ZOE_A2A_TOKEN", "")
+
+
+async def get_a2a_caller(request: Request) -> dict:
+    """A2A-aware auth dependency.
+
+    Accepts either:
+    1. ``Authorization: Bearer <ZOE_A2A_TOKEN>`` header (inbound A2A agents)
+    2. ``X-Session-ID`` / ``X-Device-Token`` (UI and voice daemon paths)
+
+    Returns a user dict. External A2A agents get ``user_id="a2a-agent"``,
+    ``role="agent"`` so they can submit tasks but not access personal data.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer ") and _ZOE_A2A_TOKEN:
+        token = auth_header[len("Bearer "):]
+        if token == _ZOE_A2A_TOKEN:
+            return {
+                "user_id": "a2a-agent",
+                "role": "agent",
+                "username": "a2a-agent",
+                "permissions": ["chat", "tasks"],
+            }
+        raise HTTPException(status_code=401, detail="Invalid A2A bearer token")
+
+    # Fall through to standard session/device-token auth
+    return await get_current_user(request)

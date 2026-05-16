@@ -781,6 +781,53 @@ def detect_intent(text: str, log_miss: bool = True) -> Optional[Intent]:
         _up  = re.search(r'\b(up|raise|louder|increase|boost|higher)\b', t, re.IGNORECASE)
         return Intent("music_control", {"command": "volume_up" if _up else "volume_down"})
 
+    # ── A2A Federation ────────────────────────────────────────────────────────
+    _A2A_RE = re.compile(
+        r'\b(?:call|ask|delegate\s+to|send\s+to|route\s+to|use)\b.{0,20}\b(?:agent|hermes|openclaw)\b'
+        r'|which\s+agents?\s+(?:do\s+you|are|can)\b'
+        r'|(?:show|list|what\s+are)\s+(?:my|your|the)?\s*(?:agents?|federation|peers?)\b'
+        r'|(?:agent|federation)\s+(?:status|registry|health|card)\b'
+        r'|what\s+agents?\s+(?:do\s+you\s+know|have\s+you|are\s+available)\b'
+        r'|a2a\s+(?:status|health|check|federation)\b'
+        r'|(?:hermes|openclaw)\s+(?:status|online|running|connected|health)\b'
+        r'|are\s+(?:hermes|openclaw|peer\s+agents?)\s+(?:online|running|connected|available)\b'
+        r'|list\s+(?:connected|registered|known|peer)\s+agents?\b',
+        re.I,
+    )
+    if _A2A_RE.search(t):
+        return Intent("a2a_federation_status", {})
+
+    # ── Multica board visibility ───────────────────────────────────────────────
+    _BOARD_RE = re.compile(
+        r"what'?s?\s+on\s+(?:the\s+)?(?:multica\s+)?board\b"
+        r"|show\s+(?:the\s+)?(?:multica\s+)?(?:active\s+)?(?:board|tasks?)\b"
+        r"|open\s+(?:the\s+)?(?:multica\s+)?(?:task\s+)?board\b"
+        r"|show\s+(?:me\s+)?multica\b"
+        r"|what\s+is\s+(?:openclaw|hermes|the\s+agent)\s+(?:doing|working\s+on|running)\b"
+        r"|any\s+(?:active\s+)?(?:agent\s+)?tasks?\s+(?:running|pending|in\s+progress)\b"
+        r"|board\s+(?:status|view|items?)\b",
+        re.I,
+    )
+    if _BOARD_RE.search(t):
+        return Intent("board_status", {})
+
+    # ── Evolution proposals ────────────────────────────────────────────────────
+    _EVOLVE_REVIEW_RE = re.compile(
+        r'what\s+(?:needs?|could)\s+(?:be\s+)?improv(?:ing|ed|ement)\b'
+        r'|show\s+(?:improvement\s+)?proposals?\b'
+        r'|review\s+proposals?\b'
+        r'|what\s+(?:are|is)\s+(?:you\s+)?struggling\s+with\b'
+        r'|what\s+(?:have\s+you\s+)?noticed\s+(?:that\s+needs|needs?)\s+fix\b'
+        r'|evolution\s+(?:proposals?|review|status)\b'
+        r'|(?:what|show)\s+(?:improvements?|ideas?)\s+(?:has\s+)?(?:zoe|you)\s+(?:proposed|noticed|suggested)\b'
+        r'|pending\s+proposals?\b'
+        r"|zoe'?s?\s+(?:self.?improv\w+|improvement\s+ideas?)\b"
+        r"|what\s+(?:does\s+)?(?:zoe|you)\s+want\s+to\s+change\b",
+        re.I,
+    )
+    if _EVOLVE_REVIEW_RE.search(t):
+        return Intent("evolution_proposals_review", {})
+
     if log_miss:
         logger.info("intent_miss: %s", text)
         # Write to intent-misses file for weekly self-review (PII stripped)
@@ -1203,20 +1250,22 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
             _query = query.strip()
             if not _query or _query.lower() in {"something", "music", "anything", "a song", "some music"}:
                 try:
-                    import sqlite3 as _sq
-                    _db3 = _sq.connect("data/zoe.db")
+                    import psycopg2 as _pg3, time as _t3
+                    _conn3 = _pg3.connect(os.environ.get("POSTGRES_URL", "postgresql://zoe:zoe-db-2026-prod@localhost:5432/zoe"))
+                    _cur3 = _conn3.cursor()
                     # Get top-scored genre from last 30 days
-                    _rows = _db3.execute("""
+                    _cur3.execute("""
                         SELECT genre,
                                SUM(CASE event_type
                                    WHEN 'complete' THEN 2 WHEN 'repeat' THEN 3
                                    WHEN 'partial' THEN 1 WHEN 'skip' THEN -2
                                    ELSE 0 END) as score
                         FROM music_listening_events
-                        WHERE user_id=? AND genre != '' AND ts > ?
+                        WHERE user_id=%s AND genre != '' AND ts > %s
                         GROUP BY genre ORDER BY score DESC LIMIT 1
-                    """, (user_id, __import__("time").time() - 86400 * 30)).fetchone()
-                    _db3.close()
+                    """, (user_id, _t3.time() - 86400 * 30))
+                    _rows = _cur3.fetchone()
+                    _conn3.close()
                     if _rows and _rows[1] > 0:
                         _query = _rows[0]  # use top genre as search query
                 except Exception:
@@ -1317,15 +1366,17 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
 
                     # Check for repeat: same track played again in last 30 min
                     try:
-                        import sqlite3 as _sqlite, time as _time
-                        _db = _sqlite.connect("data/zoe.db")
-                        _recent = _db.execute(
+                        import psycopg2 as _pg2, time as _time
+                        _conn2 = _pg2.connect(os.environ.get("POSTGRES_URL", "postgresql://zoe:zoe-db-2026-prod@localhost:5432/zoe"))
+                        _cur2 = _conn2.cursor()
+                        _cur2.execute(
                             "SELECT count(*) FROM music_listening_events "
-                            "WHERE user_id=? AND track_title=? AND event_type IN ('complete','partial') "
-                            "AND ts > ?",
+                            "WHERE user_id=%s AND track_title=%s AND event_type IN ('complete','partial') "
+                            "AND ts > %s",
                             (user_id, start_meta.get("track_title", ""), _time.time() - 1800)
-                        ).fetchone()[0]
-                        _db.close()
+                        )
+                        _recent = _cur2.fetchone()[0]
+                        _conn2.close()
                         if _recent > 0 and event_type == "complete":
                             event_type = "repeat"
                     except Exception:
@@ -1428,14 +1479,16 @@ async def _execute_music_intent(intent: Intent, user_id: str) -> Optional[str]:
                 # Skip-streak mood detection
                 if cmd in ("next", "skip"):
                     try:
-                        import sqlite3 as _sq, time as _t
-                        _db2 = _sq.connect("data/zoe.db")
-                        _recent_skips = _db2.execute(
+                        import psycopg2 as _pg, time as _t
+                        _conn = _pg.connect(os.environ.get("POSTGRES_URL", "postgresql://zoe:zoe-db-2026-prod@localhost:5432/zoe"))
+                        _cur = _conn.cursor()
+                        _cur.execute(
                             "SELECT count(*) FROM music_listening_events "
-                            "WHERE user_id=? AND event_type='skip' AND ts > ?",
+                            "WHERE user_id=%s AND event_type='skip' AND ts > %s",
                             (user_id, _t.time() - 900)  # last 15 min
-                        ).fetchone()[0]
-                        _db2.close()
+                        )
+                        _recent_skips = _cur.fetchone()[0]
+                        _conn.close()
                         if _recent_skips >= 4:
                             label_str = {"next": "Skipped to next", "skip": "Skipped to next"}.get(cmd, cmd.title())
                             return (

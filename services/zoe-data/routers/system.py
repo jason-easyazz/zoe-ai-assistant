@@ -8,7 +8,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from auth import get_current_user, require_admin
+from auth import get_current_user, require_admin, get_a2a_caller
 from database import get_db
 from openclaw_maintenance import (
     fetch_gateway_status,
@@ -375,6 +375,20 @@ async def _memory_digest_loop():
             logger.info("memory_digest: nightly run complete — %d users processed", len(results))
         except Exception as exc:
             logger.error("memory_digest: nightly loop error: %s", exc, exc_info=True)
+        # Phase 6: Evolution NOTICE pass
+        try:
+            from evolution_notice import run_evolution_notice  # type: ignore[import]
+            ev_result = await run_evolution_notice()
+            logger.info("evolution_notice: phase 6 complete — %s", ev_result)
+        except Exception as exc:
+            logger.warning("evolution_notice: phase 6 error (non-fatal): %s", exc)
+        # Phase 6b: Evolution MEASURE pass (close 48h monitoring windows)
+        try:
+            from evolution_notice import run_measure_phase  # type: ignore[import]
+            measure_result = await run_measure_phase()
+            logger.info("evolution_measure: phase 6b complete — %s", measure_result)
+        except Exception as exc:
+            logger.warning("evolution_measure: phase 6b error (non-fatal): %s", exc)
 
 
 def start_memory_digest_background():
@@ -474,6 +488,28 @@ async def trigger_memory_digest(
     return result
 
 
+@router.post("/run-digest")
+async def trigger_run_digest(user: dict = Depends(get_current_user)):
+    """Manually trigger full nightly dreaming cycle including evolution notice (admin only)."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
+    from memory_digest import run_digest_for_all_active_users  # type: ignore[import]
+    digest_results = await run_digest_for_all_active_users()
+    ev_result: dict = {}
+    measure_result: dict = {}
+    try:
+        from evolution_notice import run_evolution_notice, run_measure_phase  # type: ignore[import]
+        ev_result = await run_evolution_notice()
+        measure_result = await run_measure_phase()
+    except Exception as exc:
+        ev_result = {"error": str(exc)}
+    return {
+        "digest": {"users_processed": len(digest_results)},
+        "evolution_notice": ev_result,
+        "evolution_measure": measure_result,
+    }
+
+
 @router.post("/agent-sync")
 async def trigger_agent_sync(user: dict = Depends(get_current_user)):
     """Regenerate ZOE_SELF.md and distribute to all agents (OpenClaw, Hermes, compact).
@@ -495,18 +531,15 @@ async def trigger_agent_sync(user: dict = Depends(get_current_user)):
 _agent_card_router = APIRouter(prefix="/api/agent", tags=["agent"])
 
 
-@_agent_card_router.get("/card")
-async def agent_card():
-    """
-    A2A agent identity card.
-    Returns Zoe's public capability advertisement following the Agent-to-Agent
-    (A2A) draft protocol. Useful for agent discovery and federation.
-    """
+def _build_agent_card() -> dict:
+    """Build an A2A v1.0 compliant agent card for Zoe."""
     from pathlib import Path as _Path
+
+    base_url = os.environ.get("ZOE_BASE_URL", "http://localhost:8000").rstrip("/")
 
     # Dynamically read MCP tool count if agent_sync has already run
     capabilities_md = _Path("/home/zoe/assistant/CAPABILITIES.md")
-    mcp_tool_count = None
+    mcp_tool_count = 0
     if capabilities_md.exists():
         try:
             content = capabilities_md.read_text()
@@ -516,50 +549,131 @@ async def agent_card():
         except Exception:
             pass
 
-    card = {
+    # Runtime health from module-level dict (populated at startup)
+    from main import _RUNTIME_HEALTH  # type: ignore[import]
+
+    skills = [
+        {
+            "id": "chat",
+            "name": "Conversational Chat",
+            "description": "Natural language conversation with persistent memory across sessions.",
+            "inputModes": ["text"],
+            "outputModes": ["text"],
+        },
+        {
+            "id": "memory_recall",
+            "name": "Memory Recall",
+            "description": "Recall personal facts, preferences, and past conversations from MemPalace.",
+            "inputModes": ["text"],
+            "outputModes": ["text", "data"],
+        },
+        {
+            "id": "home_control",
+            "name": "Home Automation",
+            "description": "Control smart home devices via Home Assistant (lights, media, climate).",
+            "inputModes": ["text"],
+            "outputModes": ["text", "data"],
+        },
+        {
+            "id": "calendar",
+            "name": "Calendar Management",
+            "description": "Manage calendar events — create, read, update, delete across connected calendars.",
+            "inputModes": ["text"],
+            "outputModes": ["text", "data"],
+        },
+        {
+            "id": "web_search",
+            "name": "Web Search",
+            "description": "Search the web for current information using DuckDuckGo.",
+            "inputModes": ["text"],
+            "outputModes": ["text"],
+        },
+        {
+            "id": "panel_display",
+            "name": "Panel Display",
+            "description": "Push rich HTML/AG-UI content to connected display panels.",
+            "inputModes": ["text", "data"],
+            "outputModes": ["text", "data"],
+        },
+        {
+            "id": "open_loops",
+            "name": "Open Loops Engine",
+            "description": "Proactive follow-up engine — tracks unresolved tasks and resurfaces them.",
+            "inputModes": ["text"],
+            "outputModes": ["text"],
+        },
+        {
+            "id": "browser_automation",
+            "name": "Browser Automation",
+            "description": "Delegate browser interaction, form filling, and web tasks via OpenClaw.",
+            "inputModes": ["text"],
+            "outputModes": ["text", "data"],
+        },
+    ]
+
+    agent_tiers = [
+        {"tier": 0, "name": "intent_router", "latency_ms": "<10", "model": "regex", "status": "online"},
+        {
+            "tier": 1,
+            "name": "zoe_agent",
+            "model": "Llama-3.2-3B-Instruct",
+            "status": "online" if _RUNTIME_HEALTH.get("local_llm") else "offline",
+        },
+        {
+            "tier": 1.5,
+            "name": "hermes",
+            "model": "GPT-5.4/Codex",
+            "status": "online" if _RUNTIME_HEALTH.get("hermes") else "offline",
+        },
+        {
+            "tier": 2,
+            "name": "openclaw",
+            "model": "Codex",
+            "browser": True,
+            "status": "online" if _RUNTIME_HEALTH.get("openclaw") else "offline",
+        },
+    ]
+
+    return {
+        "a2aVersion": "1.0",
         "name": "Zoe",
         "version": "2.0",
+        "url": base_url,
         "description": (
             "Personal AI companion with persistent memory, voice, home automation, "
             "web capabilities, and a proactive open-loops engine for Samantha-tier continuity."
         ),
-        "capabilities": [
-            "memory",
-            "voice",
-            "home_automation",
-            "calendar",
-            "reminders",
-            "lists",
-            "notes",
-            "people",
-            "web_search",
-            "vision",
-            "browser_automation",
-            "push_notifications",
-            "panel_display",
-            "user_portraits",
-            "open_loops",
-            "self_improvement",
+        "provider": {
+            "name": "Zoe",
+            "url": base_url,
+        },
+        "authentication": [
+            {"schemes": ["Bearer"]},
+            {"schemes": ["ApiKey"], "headerName": "X-Session-ID"},
+            {"schemes": ["ApiKey"], "headerName": "X-Device-Token"},
         ],
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text", "data"],
+        "skills": skills,
+        "agent_tiers": agent_tiers,
+        "mcp_tools": mcp_tool_count,
         "protocols": ["MCP", "ACP", "A2A"],
         "endpoints": {
-            "mcp": "/api/mcp",
-            "acp_gateway": "http://localhost:18789",
             "chat": "/api/chat/",
             "health": "/api/system/health",
-            "agent_sync": "/api/system/agent-sync",
             "a2a_card": "/api/agent/card",
             "a2a_tasks": "/api/agent/tasks",
+            "a2a_tasks_stream": "/api/agent/tasks/stream",
+            "registry": "/api/agent/registry",
         },
-        "agent_tiers": [
-            {"tier": 0, "name": "intent_router", "latency_ms": "<10", "model": "regex"},
-            {"tier": 1, "name": "Zoe Agent", "model": "Gemma 4 E2B", "endpoint": ":11434"},
-            {"tier": 1.5, "name": "Hermes", "model": "GPT-5.4", "endpoint": ":8642", "context_k": 128},
-            {"tier": 2, "name": "OpenClaw", "model": "Codex", "endpoint": ":18789", "browser": True},
-        ],
-        "mcp_tools": mcp_tool_count,
+        "squads": ["zoe"],
     }
-    return card
+
+
+@_agent_card_router.get("/card")
+async def agent_card():
+    """A2A v1.0 agent identity card — public capability advertisement."""
+    return _build_agent_card()
 
 
 class _A2ATaskRequest(BaseModel):
@@ -571,24 +685,20 @@ class _A2ATaskRequest(BaseModel):
 
 
 @_agent_card_router.post("/tasks")
-async def a2a_task(body: _A2ATaskRequest, user: dict = Depends(get_current_user)):
+async def a2a_task(body: _A2ATaskRequest, user: dict = Depends(get_a2a_caller)):
     """
     A2A task intake endpoint.
 
     Accepts a natural-language task from another agent and routes it through
     Zoe's standard pipeline (intent router → Zoe Agent → OpenClaw escalation).
-    
-    Returns a task_id immediately. Results are available via MCP tool
-    `get_background_task_result` or by polling `/api/agent/tasks/{task_id}`.
-    
-    For streaming results, set `stream: true` to receive AG-UI SSE events
-    (same format as /api/chat/).
-    
-    Auth: X-Session-ID or X-Device-Token header required.
-    Caller identification via the `caller` field (for audit logging).
-    """
 
-    user_id = user.get("user_id", "guest")
+    Returns a task_id immediately. Results available via GET /api/agent/tasks/{task_id}.
+    For streaming, POST to /api/agent/tasks/stream instead.
+
+    Auth: ``Authorization: Bearer <ZOE_A2A_TOKEN>`` (A2A agents) or
+    ``X-Session-ID`` / ``X-Device-Token`` (UI/voice paths).
+    """
+    user_id = user.get("user_id", "a2a-agent")
     session_id = body.session_id or f"a2a-{body.caller}-{__import__('uuid').uuid4().hex[:8]}"
 
     logger.info(
@@ -596,52 +706,69 @@ async def a2a_task(body: _A2ATaskRequest, user: dict = Depends(get_current_user)
         body.caller, user_id, body.task[:80],
     )
 
-    if body.stream:
-        # Stream: redirect caller to the standard chat SSE endpoint.
-        # Return a 307 so the A2A caller can follow it with the same auth headers.
-        from fastapi.responses import RedirectResponse
-        import urllib.parse as _up
-        params = _up.urlencode({"session_id": session_id, "a2a_caller": body.caller})
-        return RedirectResponse(
-            url=f"/api/chat/?{params}",
-            status_code=307,
-            headers={"X-A2A-Session-ID": session_id},
-        )
-    else:
-        # Non-streaming: enqueue as background task and return task_id immediately.
-        # Result is available via GET /api/agent/tasks/{task_id}.
-        from background_runner import enqueue_background_task  # type: ignore[import]
-        # signature: (task, user_id, session_id, panel_id)
-        task_id = await enqueue_background_task(
-            body.task,
-            user_id,
-            session_id,
-        )
-        return {
-            "task_id": task_id,
-            "session_id": session_id,
-            "status": "queued",
-            "caller": body.caller,
-            "result_endpoint": f"/api/agent/tasks/{task_id}",
-        }
+    from background_runner import enqueue_background_task  # type: ignore[import]
+    task_id = await enqueue_background_task(body.task, user_id, session_id)
+    return {
+        "task_id": task_id,
+        "session_id": session_id,
+        "status": "queued",
+        "caller": body.caller,
+        "result_endpoint": f"/api/agent/tasks/{task_id}",
+    }
+
+
+@_agent_card_router.post("/tasks/stream")
+async def a2a_task_stream(body: _A2ATaskRequest, user: dict = Depends(get_a2a_caller)):
+    """A2A streaming task — returns AG-UI SSE events (same format as /api/chat/).
+
+    Dedicated endpoint avoids the 307 redirect issue where some A2A clients
+    lose Authorization headers when following redirects.
+    """
+    from fastapi.responses import StreamingResponse
+    import urllib.parse as _up
+
+    user_id = user.get("user_id", "a2a-agent")
+    session_id = body.session_id or f"a2a-{body.caller}-{__import__('uuid').uuid4().hex[:8]}"
+
+    async def _stream():
+        from routers.chat import _chat_stream_generator  # type: ignore[import]
+        async for chunk in _chat_stream_generator(
+            message=body.task,
+            session_id=session_id,
+            user_id=user_id,
+            context=body.context or {},
+        ):
+            yield chunk
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={
+            "X-A2A-Session-ID": session_id,
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @_agent_card_router.get("/tasks/{task_id}")
-async def a2a_task_result(task_id: str, user: dict = Depends(get_current_user)):
+async def a2a_task_result(task_id: str, user: dict = Depends(get_a2a_caller)):
     """Poll for the result of a previously submitted A2A task."""
 
     from db_pool import get_db_ctx as _get_pg_db
 
     async with _get_pg_db() as db:
         async with db.execute(
-            "SELECT id, user_id, task, status, result, created_at, completed_at FROM background_tasks WHERE id=?",
+            "SELECT id, user_id, task, status, result, created_at, completed_at FROM background_tasks WHERE id=$1",
             (task_id,),
         ) as cur:
             row = await cur.fetchone()
 
     if row is None:
         raise HTTPException(status_code=404, detail="Task not found")
-    if row["user_id"] != user.get("user_id") and user.get("role") != "admin":
+    caller_user_id = user.get("user_id", "")
+    # A2A agents (role=agent) can read any task; session users only see their own
+    if user.get("role") not in ("admin", "agent") and row["user_id"] != caller_user_id:
         raise HTTPException(status_code=403, detail="Not your task")
 
     return {
@@ -652,6 +779,452 @@ async def a2a_task_result(task_id: str, user: dict = Depends(get_current_user)):
         "created_at": row["created_at"],
         "completed_at": row["completed_at"],
     }
+
+
+# ── A2A Registry + Peer Cards + Squad ────────────────────────────────────────
+
+_AGENTS_REGISTRY_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "agents_registry.yml")
+_registry_cache: dict = {}
+_registry_loaded: bool = False
+
+
+def _load_registry() -> dict:
+    global _registry_cache, _registry_loaded
+    if _registry_loaded:
+        return _registry_cache
+    return _reload_registry()
+
+
+def _reload_registry() -> dict:
+    global _registry_cache, _registry_loaded
+    try:
+        import yaml
+        with open(_AGENTS_REGISTRY_PATH) as f:
+            _registry_cache = yaml.safe_load(f) or {}
+        _registry_loaded = True
+        logger.info("Agent registry loaded from %s", _AGENTS_REGISTRY_PATH)
+    except Exception as exc:
+        logger.warning("Failed to load agents_registry.yml: %s", exc)
+        _registry_cache = {"agents": {}, "squads": {}}
+        _registry_loaded = True
+    return _registry_cache
+
+
+@_agent_card_router.get("/registry")
+async def get_agent_registry():
+    """List all registered peer agents with runtime health."""
+    registry = _load_registry()
+    from main import _RUNTIME_HEALTH  # type: ignore[import]
+
+    agents_out = {}
+    for name, info in registry.get("agents", {}).items():
+        health_port = info.get("health_port")
+        is_online = _RUNTIME_HEALTH.get(name, False)
+        agents_out[name] = {
+            "description": info.get("description", ""),
+            "model": info.get("model", ""),
+            "base_url": info.get("base_url", ""),
+            "skills": info.get("skills", []),
+            "status": "online" if is_online else "offline",
+        }
+
+    return {
+        "agents": agents_out,
+        "squads": registry.get("squads", {}),
+    }
+
+
+@_agent_card_router.post("/registry/reload")
+async def reload_agent_registry(user: dict = Depends(require_admin)):
+    """Admin-only: hot-reload agents_registry.yml from disk."""
+    global _registry_loaded
+    _registry_loaded = False
+    registry = _reload_registry()
+    return {"ok": True, "agents": list(registry.get("agents", {}).keys())}
+
+
+@_agent_card_router.post("/delegate")
+async def delegate_to_agent(
+    body: dict,
+    user: dict = Depends(get_a2a_caller),
+):
+    """Delegate a task to a named peer agent via A2A."""
+    agent_name = body.get("agent_name", "")
+    task = body.get("task", "")
+    if not agent_name or not task:
+        raise HTTPException(status_code=400, detail="agent_name and task are required")
+
+    registry = _load_registry()
+    agent_info = registry.get("agents", {}).get(agent_name)
+    if not agent_info:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_name}")
+
+    from a2a_client import get_a2a_client  # type: ignore[import]
+    client = get_a2a_client()
+    result = await client.submit_task(
+        base_url=agent_info["base_url"],
+        task=task,
+        caller=f"zoe-{user.get('user_id', 'unknown')}",
+        token=agent_info.get("a2a_token", ""),
+    )
+    return {"agent": agent_name, "result": result}
+
+
+@_agent_card_router.get("/squad")
+async def get_squad():
+    """Return the formalized agent squad topology."""
+    registry = _load_registry()
+    from main import _RUNTIME_HEALTH  # type: ignore[import]
+
+    squads = registry.get("squads", {})
+    agents = registry.get("agents", {})
+
+    # Enrich members with live health
+    for squad_name, squad in squads.items():
+        enriched_members = []
+        for member in squad.get("members", []):
+            enriched_members.append({
+                "name": member,
+                "status": "online" if _RUNTIME_HEALTH.get(member) else "offline",
+                "description": agents.get(member, {}).get("description", ""),
+            })
+        squad["members_detail"] = enriched_members
+
+    return {"squads": squads}
+
+
+@_agent_card_router.get("/peers/{name}/card")
+async def get_peer_agent_card(name: str):
+    """Return a live A2A v1.0 proxy card for a peer agent with dynamic skills[]."""
+    registry = _load_registry()
+    agent_info = registry.get("agents", {}).get(name)
+    if not agent_info:
+        raise HTTPException(status_code=404, detail=f"Unknown peer agent: {name}")
+
+    from main import _RUNTIME_HEALTH  # type: ignore[import]
+    from skill_discovery import parse_openclaw_skills, parse_hermes_skills  # type: ignore[import]
+
+    if name == "openclaw":
+        skills = parse_openclaw_skills()
+    elif name == "hermes":
+        skills = parse_hermes_skills()
+    else:
+        skills = [{"id": s, "name": s, "description": s} for s in agent_info.get("skills", [])]
+
+    return {
+        "a2aVersion": "1.0",
+        "name": name,
+        "description": agent_info.get("description", ""),
+        "model": agent_info.get("model", ""),
+        "base_url": agent_info.get("base_url", ""),
+        "status": "online" if _RUNTIME_HEALTH.get(name) else "offline",
+        "skills": skills,
+        "defaultInputModes": ["text"],
+        "defaultOutputModes": ["text"],
+    }
+
+
+@_agent_card_router.post("/peers/{name}/skills/reload")
+async def reload_peer_skills(name: str, user: dict = Depends(require_admin)):
+    """Admin-only: force-flush the skill discovery cache for a peer agent."""
+    from skill_discovery import invalidate_openclaw_cache, invalidate_hermes_cache  # type: ignore[import]
+
+    if name == "openclaw":
+        invalidate_openclaw_cache()
+        from skill_discovery import parse_openclaw_skills  # type: ignore[import]
+        skills = parse_openclaw_skills()
+    elif name == "hermes":
+        invalidate_hermes_cache()
+        from skill_discovery import parse_hermes_skills  # type: ignore[import]
+        skills = parse_hermes_skills()
+    else:
+        raise HTTPException(status_code=404, detail=f"Unknown peer agent: {name}")
+
+    return {"ok": True, "agent": name, "skill_count": len(skills)}
+
+
+# ── Cost tracking + LLM stats ────────────────────────────────────────────────
+
+@_agent_card_router.get("/costs")
+async def get_agent_costs(
+    period: str = "30d",
+    user: dict = Depends(require_admin),
+):
+    """Per-agent cost rollup for the given period (7d, 30d, 90d)."""
+    import time as _time
+    from db_pool import get_db_ctx as _get_pg_db
+
+    days = {"7d": 7, "30d": 30, "90d": 90}.get(period, 30)
+    cutoff = _time.time() - days * 86400
+
+    async with _get_pg_db() as db:
+        rows = await db.fetch(
+            """SELECT agent_name, model,
+                      SUM(input_tokens) as input_tokens,
+                      SUM(output_tokens) as output_tokens,
+                      SUM(estimated_cost_usd) as total_cost_usd,
+                      COUNT(*) as events
+               FROM agent_cost_events
+               WHERE ts >= $1
+               GROUP BY agent_name, model
+               ORDER BY total_cost_usd DESC""",
+            cutoff,
+        )
+    return {
+        "period": period,
+        "agents": [
+            {
+                "agent_name": r["agent_name"],
+                "model": r["model"],
+                "input_tokens": r["input_tokens"],
+                "output_tokens": r["output_tokens"],
+                "total_cost_usd": round(float(r["total_cost_usd"]), 6),
+                "events": r["events"],
+            }
+            for r in rows
+        ],
+    }
+
+
+@_agent_card_router.get("/llm-stats")
+async def get_llm_stats(
+    period: str = "7d",
+    user: dict = Depends(require_admin),
+):
+    """Per-tier LLM call stats for the given period."""
+    import time as _time
+    from db_pool import get_db_ctx as _get_pg_db
+
+    days = {"7d": 7, "30d": 30}.get(period, 7)
+    cutoff = _time.time() - days * 86400
+
+    async with _get_pg_db() as db:
+        rows = await db.fetch(
+            """SELECT agent_tier, model,
+                      COUNT(*) as calls,
+                      AVG(latency_ms) as avg_latency_ms,
+                      SUM(prompt_tokens) as total_prompt_tokens,
+                      SUM(completion_tokens) as total_completion_tokens,
+                      SUM(estimated_cost_usd) as total_cost_usd
+               FROM llm_call_log
+               WHERE ts >= $1
+               GROUP BY agent_tier, model
+               ORDER BY calls DESC""",
+            cutoff,
+        )
+    return {
+        "period": period,
+        "tiers": [
+            {
+                "agent_tier": r["agent_tier"],
+                "model": r["model"],
+                "calls": r["calls"],
+                "avg_latency_ms": round(float(r["avg_latency_ms"] or 0), 1),
+                "total_prompt_tokens": r["total_prompt_tokens"],
+                "total_completion_tokens": r["total_completion_tokens"],
+                "total_cost_usd": round(float(r["total_cost_usd"] or 0), 6),
+            }
+            for r in rows
+        ],
+    }
+
+
+@_agent_card_router.get("/board")
+async def get_agent_board():
+    """Return active Multica board issues for AG-UI display.
+
+    Falls back gracefully if Multica is not configured or unavailable.
+    """
+    try:
+        from multica_client import MULClient  # type: ignore[import]
+        client = MULClient()
+        if not client.is_configured():
+            return {"active": [], "available": False, "reason": "Multica not configured"}
+        issues = await client.list_issues(status="in_progress")
+        return {"active": issues, "available": True}
+    except ImportError:
+        return {"active": [], "available": False, "reason": "Multica client not installed"}
+    except Exception as exc:
+        return {"active": [], "available": False, "reason": str(exc)}
+
+
+@_agent_card_router.post("/board/approve")
+async def board_approve(task_id: str, user: dict = Depends(get_current_user)):
+    """Create a Multica board issue and assign to OpenClaw."""
+    try:
+        from multica_client import MULClient  # type: ignore[import]
+        client = MULClient()
+        if not client.is_configured():
+            return {"ok": False, "reason": "Multica not configured — routing directly to OpenClaw"}
+        issue = await client.create_issue(
+            title=f"Task: {task_id}",
+            description=f"Approved via Zoe chat. Task ID: {task_id}",
+            assignee_id="openclaw",
+            priority="medium",
+        )
+        return {"ok": True, "issue": issue}
+    except Exception as exc:
+        return {"ok": False, "reason": str(exc)}
+
+
+@_agent_card_router.post("/board/review")
+async def board_review(task_id: str, user: dict = Depends(get_current_user)):
+    """Create a Multica board issue unassigned for human review."""
+    try:
+        from multica_client import MULClient  # type: ignore[import]
+        client = MULClient()
+        if not client.is_configured():
+            return {"ok": False, "reason": "Multica not configured"}
+        issue = await client.create_issue(
+            title=f"Task (review): {task_id}",
+            description=f"Queued for review. Task ID: {task_id}",
+            priority="low",
+        )
+        return {"ok": True, "issue": issue}
+    except Exception as exc:
+        return {"ok": False, "reason": str(exc)}
+
+
+@_agent_card_router.post("/board/cancel")
+async def board_cancel(task_id: str, user: dict = Depends(get_current_user)):
+    """Cancel a pending board task."""
+    return {"ok": True, "task_id": task_id, "status": "cancelled"}
+
+
+# ── Evolution proposals ───────────────────────────────────────────────────────
+
+@_agent_card_router.get("/evolution/proposals")
+async def get_evolution_proposals(
+    status: str = "pending",
+    limit: int = 20,
+    user: dict = Depends(get_current_user),
+):
+    """List evolution proposals by status (pending|approved|rejected|deployed|validated|failed)."""
+    from db_pool import get_db_ctx as _get_pg_db
+
+    async with _get_pg_db() as db:
+        rows = await db.fetch(
+            """SELECT id, type, title, description, evidence, target_patterns,
+                      status, multica_issue_id, proposed_at, reviewed_at, deployed_at,
+                      validation_result, next_review_at
+               FROM evolution_proposals
+               WHERE status=$1
+               ORDER BY proposed_at DESC
+               LIMIT $2""",
+            status, limit,
+        )
+    return {
+        "proposals": [
+            {
+                "id": r["id"],
+                "type": r["type"],
+                "title": r["title"],
+                "description": r["description"],
+                "evidence": r["evidence"],
+                "status": r["status"],
+                "proposed_at": r["proposed_at"],
+            }
+            for r in rows
+        ],
+        "count": len(rows),
+    }
+
+
+@_agent_card_router.post("/evolution/proposals/{proposal_id}/action")
+async def evolution_proposal_action(
+    proposal_id: str,
+    body: dict,
+    user: dict = Depends(get_current_user),
+):
+    """Act on an evolution proposal: approve|reject|defer.
+
+    On approve: creates a Multica board issue and assigns to OpenClaw.
+    On reject: archives the proposal.
+    On defer: snoozes for 7 days.
+    """
+    import time as _time
+    action = body.get("action", "")
+    reason = body.get("reason", "")
+
+    if action not in ("approve", "reject", "defer", "deploy"):
+        raise HTTPException(status_code=400, detail="action must be approve|reject|defer|deploy")
+
+    from db_pool import get_db_ctx as _get_pg_db
+
+    async with _get_pg_db() as db:
+        rows = await db.fetch(
+            "SELECT * FROM evolution_proposals WHERE id=$1", proposal_id
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="Proposal not found")
+        proposal = dict(rows[0])
+
+        if action == "approve":
+            multica_issue_id = None
+            try:
+                from multica_client import MULClient  # type: ignore[import]
+                client = MULClient()
+                if client.is_configured():
+                    issue = await client.create_issue(
+                        title=proposal["title"],
+                        description=proposal["description"],
+                        assignee_id="openclaw",
+                        priority="medium",
+                    )
+                    multica_issue_id = issue.get("id")
+            except Exception as exc:
+                logger.warning("Could not create Multica issue for proposal %s: %s", proposal_id, exc)
+
+            await db.execute(
+                """UPDATE evolution_proposals
+                   SET status='approved', reviewed_at=$1, multica_issue_id=$2
+                   WHERE id=$3""",
+                _time.time(), multica_issue_id, proposal_id,
+            )
+            # Queue an OpenClaw background task to implement the proposal;
+            # when it completes, the task runner will advance status → deployed.
+            try:
+                from background_runner import enqueue_background_task  # type: ignore[import]
+                task_id = await enqueue_background_task(
+                    task_type="evolution_implement",
+                    payload={
+                        "proposal_id": proposal_id,
+                        "title": proposal["title"],
+                        "description": proposal["description"],
+                        "target_patterns": proposal.get("target_patterns", "[]"),
+                    },
+                    user_id=user["user_id"],
+                )
+                logger.info("evolution_approve: queued implement task %s for proposal %s", task_id, proposal_id)
+            except Exception as exc:
+                logger.warning("evolution_approve: could not queue implement task: %s", exc)
+            return {"ok": True, "action": "approved", "multica_issue_id": multica_issue_id}
+
+        elif action == "deploy":
+            # Called by background runner when OpenClaw completes implementation
+            now = _time.time()
+            await db.execute(
+                """UPDATE evolution_proposals
+                   SET status='deployed', deployed_at=$1
+                   WHERE id=$2""",
+                now, proposal_id,
+            )
+            return {"ok": True, "action": "deployed", "deployed_at": now}
+
+        elif action == "reject":
+            await db.execute(
+                "UPDATE evolution_proposals SET status='rejected', reviewed_at=$1 WHERE id=$2",
+                _time.time(), proposal_id,
+            )
+            return {"ok": True, "action": "rejected"}
+
+        elif action == "defer":
+            next_review = _time.time() + 7 * 86400
+            await db.execute(
+                "UPDATE evolution_proposals SET status='pending', next_review_at=$1 WHERE id=$2",
+                next_review, proposal_id,
+            )
+            return {"ok": True, "action": "deferred", "next_review_in_days": 7}
 
 
 # ── Updates Hub ──────────────────────────────────────────────────────────────

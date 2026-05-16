@@ -298,6 +298,16 @@ _OPENCLAW_DELEGATION_INTENTS: frozenset[str] = frozenset({
     # connect_chatgpt is handled by execute_intent (Tier-0 Python) — no LLM needed
 })
 
+# Long-running intents that should route through the Multica board when available.
+# These get an AG-UI approval card before being queued; openclaw_user_message() is
+# NOT called for these — the raw user message is used as the board issue description.
+_MULTICA_BOARD_INTENTS: frozenset[str] = frozenset({
+    "build_widget",
+    "build_page",
+    "extend_capability",
+    "self_improve",
+})
+
 
 def _build_calendar_form_props(slots: dict) -> dict:
     import datetime
@@ -386,6 +396,46 @@ _WHATSAPP_FLOW_ENABLED = os.environ.get("WHATSAPP_FLOW_ENABLED", "true").lower()
 _OPENCLAW_GW = os.environ.get("ZOE_OPENCLAW_GW",
     os.environ.get("OPENCLAW_GATEWAY_URL", "http://127.0.0.1:18789"))
 _BROWSER_BROKER = create_default_browser_broker(_OPENCLAW_GW)
+
+# ── Frustration signal detection ──────────────────────────────────────────────
+# Lightweight in-memory tracker: session_id → list of (normalized_msg, ts) tuples
+# Not persisted — session-scoped only. Proposals written via evolution_notice.
+_frustration_tracker: dict[str, list[tuple[str, float]]] = {}
+_FRUSTRATION_WINDOW_S = 1800  # 30 minute session window
+_FRUSTRATION_THRESHOLD = 3    # same message N times = frustration signal
+
+
+def _normalize_for_frustration(text: str) -> str:
+    """Strip punctuation and lowercase for cosine similarity comparison."""
+    return re.sub(r'[^\w\s]', '', text.lower().strip())
+
+
+def _check_frustration(session_id: str, user_id: str, message: str) -> None:
+    """Check if user has sent similar messages repeatedly. Fire-and-forget via asyncio."""
+    import asyncio as _asyncio
+    norm = _normalize_for_frustration(message)
+    if len(norm) < 10:
+        return  # too short to be meaningful
+
+    now = time.time()
+    entries = [
+        (m, t) for m, t in _frustration_tracker.get(session_id, [])
+        if now - t < _FRUSTRATION_WINDOW_S
+    ]
+    entries.append((norm, now))
+    _frustration_tracker[session_id] = entries
+
+    # Count similar entries (simple: exact match after normalization)
+    similar = sum(1 for m, _ in entries if m == norm)
+    if similar >= _FRUSTRATION_THRESHOLD:
+        async def _record():
+            try:
+                from evolution_notice import record_frustration_signal  # type: ignore[import]
+                await record_frustration_signal(user_id, norm, session_id, similar)
+            except Exception:
+                pass
+        _asyncio.ensure_future(_record())
+
 
 # ── ChatGPT / OpenAI Codex device-code OAuth constants ────────────────────────
 _CODEX_CLIENT_ID    = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -1197,6 +1247,8 @@ async def chat_stream_generator(
     await _ensure_user_and_chat_session(session_id, user_id)
     # Persist user turn immediately — enables history for Pi Agent on the NEXT request
     await _save_chat_message(session_id, "user", message)
+    # Frustration signal detection (non-blocking, session-scoped)
+    _check_frustration(session_id, user_id, message)
     enc = EventEncoder()
     recorder = AgRunRecorder()
     run_id, assistant_message_id = new_run_ids()
@@ -1452,6 +1504,36 @@ async def chat_stream_generator(
                 yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
                 await _record_run_state(run_id, session_id, user_id, mode="chat", status="completed", request_text=message, response_text="chatgpt_connect_flow")
                 return
+
+            # ── Multica board routing for long-running intents ────────────────
+            # Board-routed intents get an AG-UI approval card; openclaw_user_message()
+            # is NOT called — the raw user_text is used as the board issue description.
+            if intent.name in _MULTICA_BOARD_INTENTS:
+                try:
+                    from multica_client import MULClient  # type: ignore[import]
+                    _mul = MULClient()
+                    if _mul.is_configured():
+                        import uuid as _uuid2
+                        _board_task_id = _uuid2.uuid4().hex[:12]
+                        _card_text = (
+                            f"**Task ready for board**\n\n"
+                            f"**{message_for_processing[:80]}**\n\n"
+                            f"Est. 5–15 min · Will appear on the Multica board.\n\n"
+                            f"[Start now](/api/agent/board/approve?task_id={_board_task_id}) | "
+                            f"[Review first](/api/agent/board/review?task_id={_board_task_id}) | "
+                            f"[Cancel](/api/agent/board/cancel?task_id={_board_task_id})"
+                        )
+                        yield emit(TextMessageStartEvent(type=EventType.TEXT_MESSAGE_START, message_id=assistant_message_id, role="assistant"))
+                        async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, _card_text):
+                            yield line
+                        yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
+                        yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
+                        asyncio.ensure_future(_save_chat_message(session_id, "assistant", _card_text))
+                        return
+                except ImportError:
+                    pass  # Multica not installed — fall through to standard OpenClaw path
+                except Exception as _mul_exc:
+                    logger.warning("Multica board routing failed, falling through: %s", _mul_exc)
 
             result = await execute_intent(intent, user_id)
 

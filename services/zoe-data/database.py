@@ -62,6 +62,16 @@ async def init_db():
     Seed data (default user, capability matrix, people field definitions) is
     inserted with ON CONFLICT DO NOTHING for idempotency.
     """
+    # Guard: warn if the stale root-level zoe.db still exists (it should be archived)
+    _stale = os.path.join(_BASE_DIR, "zoe.db")
+    if os.path.exists(_stale):
+        import logging as _log
+        _log.getLogger(__name__).warning(
+            "Stale SQLite file detected at %s — this file is no longer the active "
+            "database (PostgreSQL is). Archive it to docs/archive/ to suppress this warning.",
+            _stale,
+        )
+
     # Initialise the asyncpg connection pool
     await init_pool()
 

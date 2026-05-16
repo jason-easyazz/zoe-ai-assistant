@@ -33,8 +33,8 @@ _MAX_COMPACT_CHARS = 500
 async def _collect_mcp_tools() -> list[str]:
     """Collect MCP tool names from mcp_server.py's _TOOLS list."""
     try:
-        from mcp_server import _TOOLS  # type: ignore[import]
-        return [t.get("name", "") for t in _TOOLS if t.get("name")]
+        from mcp_server import TOOLS  # type: ignore[import]
+        return [t.get("name", "") for t in TOOLS if t.get("name")]
     except Exception:
         return []
 
