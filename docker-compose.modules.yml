@@ -129,6 +129,28 @@ services:
       retries: 5
       start_period: 60s
 
+  zoe-database:
+    image: pgvector/pgvector:pg17
+    container_name: zoe-database
+    env_file:
+      - ./services/zoe-data/.env
+    environment:
+      POSTGRES_DB: zoe
+      POSTGRES_USER: zoe
+      POSTGRES_PASSWORD: zoe-db-2026-prod
+    ports:
+      - "5432:5432"
+    volumes:
+      - zoe-database-data:/var/lib/postgresql/data
+    networks:
+      - zoe-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zoe"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 networks:
   zoe-network:
     name: zoe-network
@@ -137,3 +159,4 @@ volumes:
   agent0-data: null
   agent0-memory: null
   agent0-logs: null
+  zoe-database-data: null

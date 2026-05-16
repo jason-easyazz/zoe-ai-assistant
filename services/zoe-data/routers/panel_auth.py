@@ -210,7 +210,7 @@ async def update_panel(panel_id: str, payload: dict, admin: dict = Depends(_requ
     if not fields:
         return {"ok": True, "panel_id": panel_id, "updated": []}
 
-    fields.append("updated_at = datetime('now')")
+    fields.append("updated_at = NOW()")
     values.append(panel_id)
     await db.execute(f"UPDATE panels SET {', '.join(fields)} WHERE panel_id = ?", tuple(values))
     await db.commit()
@@ -289,7 +289,7 @@ async def set_panel_bindings(panel_id: str, payload: dict, admin: dict = Depends
         )
     if "allow_guest" in payload:
         await db.execute(
-            "UPDATE panels SET allow_guest = ?, updated_at = datetime('now') WHERE panel_id = ?",
+            "UPDATE panels SET allow_guest = ?, updated_at = NOW() WHERE panel_id = ?",
             (1 if payload["allow_guest"] else 0, panel_id),
         )
     await db.commit()
@@ -559,11 +559,11 @@ async def submit_pin(payload: dict, db=Depends(get_db)):
                 try:
                     await db.execute(
                         """INSERT INTO ui_panel_sessions (panel_id, user_id, last_seen_at, updated_at)
-                           VALUES (?, ?, datetime('now'), datetime('now'))
+                           VALUES (?, ?, NOW(), NOW())
                            ON CONFLICT(panel_id) DO UPDATE SET
                              user_id=excluded.user_id,
-                             last_seen_at=datetime('now'),
-                             updated_at=datetime('now')""",
+                             last_seen_at=NOW(),
+                             updated_at=NOW()""",
                         (p_id, resolved_user_id),
                     )
                     await db.commit()

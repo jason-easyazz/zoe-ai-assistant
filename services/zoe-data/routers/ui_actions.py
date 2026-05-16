@@ -39,7 +39,7 @@ async def bind_panel(
 
     if is_foreground:
         await db.execute(
-            "UPDATE ui_panel_sessions SET is_foreground = 0, updated_at = datetime('now') WHERE user_id = ?",
+            "UPDATE ui_panel_sessions SET is_foreground = 0, updated_at = NOW() WHERE user_id = ?",
             (user_id,),
         )
 
@@ -52,8 +52,8 @@ async def bind_panel(
              page=excluded.page,
              ui_context=excluded.ui_context,
              is_foreground=excluded.is_foreground,
-             last_seen_at=datetime('now'),
-             updated_at=datetime('now')""",
+             last_seen_at=NOW(),
+             updated_at=NOW()""",
         (panel_id, user_id, chat_session_id, page, ui_context, is_foreground),
     )
     await db.commit()
@@ -155,14 +155,14 @@ async def ack_ui_action(
     error_code = payload.get("error_code")
     error_message = payload.get("error_message")
     retries = payload.get("retry_count")
-    now_sql = "datetime('now')"
+    now_sql = "NOW()"
     acked_at = now_sql if status in {"success", "failed", "blocked"} else None
 
     await db.execute(
         """UPDATE ui_actions
            SET status = ?, error_code = ?, error_message = ?, retry_count = COALESCE(?, retry_count),
-               updated_at = datetime('now'),
-               acked_at = CASE WHEN ? IS NOT NULL THEN datetime('now') ELSE acked_at END
+               updated_at = NOW(),
+               acked_at = CASE WHEN ? IS NOT NULL THEN NOW() ELSE acked_at END
            WHERE id = ? AND user_id = ?""",
         (status, error_code, error_message, retries, acked_at, real_id, user_id),
     )
@@ -218,8 +218,8 @@ async def sync_ui_state(
              page=excluded.page,
              ui_context=excluded.ui_context,
              is_foreground=excluded.is_foreground,
-             last_seen_at=datetime('now'),
-             updated_at=datetime('now')""",
+             last_seen_at=NOW(),
+             updated_at=NOW()""",
         (panel_id, user_id, chat_session_id, page, ui_context, is_foreground),
     )
     await db.commit()
@@ -308,7 +308,7 @@ async def retry_ui_action(
                retry_count = retry_count + 1,
                error_code = NULL,
                error_message = NULL,
-               updated_at = datetime('now')
+               updated_at = NOW()
            WHERE id = ?""",
         (action_id,),
     )
@@ -356,7 +356,7 @@ async def requeue_stale_actions(
     for r in rows:
         await db.execute(
             """UPDATE ui_actions
-               SET status='queued', retry_count=retry_count+1, updated_at=datetime('now')
+               SET status='queued', retry_count=retry_count+1, updated_at=NOW()
                WHERE id=?""",
             (r["id"],),
         )

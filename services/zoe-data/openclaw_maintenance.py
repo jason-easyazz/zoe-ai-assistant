@@ -181,7 +181,7 @@ async def maybe_create_update_notification(db, user_id: str, current: str | None
     payload = json.dumps({"kind": "openclaw_update", "latest": latest, "current": current or ""})
     await db.execute(
         """INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 0, datetime('now'))""",
+           VALUES (?, ?, ?, ?, ?, ?, 0, NOW())""",
         (nid, user_id, "info", title, message, payload),
     )
     await db.commit()

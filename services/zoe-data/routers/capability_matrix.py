@@ -97,11 +97,11 @@ async def update_capability_matrix_role(
     safe = _validate_matrix_shape(matrix, defaults[role])
     await db.execute(
         """INSERT INTO role_capability_matrix (role, matrix_json, updated_by, updated_at)
-           VALUES (?, ?, ?, datetime('now'))
+           VALUES (?, ?, ?, NOW())
            ON CONFLICT(role) DO UPDATE SET
               matrix_json=excluded.matrix_json,
               updated_by=excluded.updated_by,
-              updated_at=datetime('now')""",
+              updated_at=NOW()""",
         (role, json.dumps(safe), admin.get("user_id")),
     )
     await db.commit()
@@ -117,11 +117,11 @@ async def reset_capability_matrix_defaults(
     for role in FIXED_ROLES:
         await db.execute(
             """INSERT INTO role_capability_matrix (role, matrix_json, updated_by, updated_at)
-               VALUES (?, ?, ?, datetime('now'))
+               VALUES (?, ?, ?, NOW())
                ON CONFLICT(role) DO UPDATE SET
                   matrix_json=excluded.matrix_json,
                   updated_by=excluded.updated_by,
-                  updated_at=datetime('now')""",
+                  updated_at=NOW()""",
             (role, json.dumps(defaults[role]), admin.get("user_id")),
         )
     await db.commit()

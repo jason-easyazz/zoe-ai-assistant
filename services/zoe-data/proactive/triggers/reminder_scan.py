@@ -23,8 +23,6 @@ import re
 import zoneinfo
 from datetime import datetime, timedelta, timezone, date
 
-import aiosqlite
-
 from proactive.triggers.base import ProactiveTrigger, TriggerResult
 
 log = logging.getLogger(__name__)
@@ -105,7 +103,7 @@ class ReminderScanTrigger(ProactiveTrigger):
 
     trigger_type = "reminder_scan"
 
-    async def check(self, db: aiosqlite.Connection) -> list[TriggerResult]:
+    async def check(self, db) -> list[TriggerResult]:
         from proactive.triggers.reminders import schedule_reminder  # deferred
 
         now_utc = datetime.now(timezone.utc)
@@ -114,7 +112,6 @@ class ReminderScanTrigger(ProactiveTrigger):
         # Fetch active, unacknowledged, non-deleted reminders that have a due_time
         # and are not currently snoozed.
         now_iso = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-        db.row_factory = aiosqlite.Row
         async with db.execute(
             """SELECT id, user_id, title, due_date, due_time, snoozed_until
                FROM reminders

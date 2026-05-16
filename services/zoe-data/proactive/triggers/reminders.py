@@ -12,9 +12,8 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
-import aiosqlite
 
-from database import DB_PATH
+from db_compat import get_compat_db as _get_compat_db
 from proactive.scheduler import register_job, cancel_job
 
 log = logging.getLogger(__name__)
@@ -53,7 +52,7 @@ async def schedule_reminder(
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     send_str = send_at.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    async with aiosqlite.connect(DB_PATH) as db:
+    async with _get_compat_db() as db:
         await db.execute(
             """INSERT INTO proactive_scheduled
                (id, user_id, message, trigger_type, send_at, apscheduler_job_id, fired, item_id)
@@ -74,8 +73,7 @@ async def schedule_reminder(
 
 async def cancel_reminder(scheduled_id: str) -> bool:
     """Cancel a scheduled reminder by its proactive_scheduled.id."""
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with _get_compat_db() as db:
         async with db.execute(
             "SELECT apscheduler_job_id FROM proactive_scheduled WHERE id = ?",
             (scheduled_id,),
@@ -95,8 +93,7 @@ async def cancel_reminder(scheduled_id: str) -> bool:
 async def reschedule_reminder(scheduled_id: str, new_send_at: datetime) -> bool:
     """Snooze / reschedule a reminder. Returns True on success."""
     # Read BEFORE cancelling (cancel deletes the DB row).
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with _get_compat_db() as db:
         async with db.execute(
             "SELECT user_id, message, item_id FROM proactive_scheduled WHERE id = ?",
             (scheduled_id,),

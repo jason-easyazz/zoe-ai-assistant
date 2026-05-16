@@ -74,9 +74,9 @@ async def _upsert_custom_fields(db, person_id: str, custom_fields: Optional[dict
         payload = json.dumps(value)
         await db.execute(
             """INSERT INTO people_field_values (id, person_id, field_key, value_json, updated_at)
-               VALUES (?, ?, ?, ?, datetime('now'))
+               VALUES (?, ?, ?, ?, NOW())
                ON CONFLICT(person_id, field_key)
-               DO UPDATE SET value_json=excluded.value_json, updated_at=datetime('now')""",
+               DO UPDATE SET value_json=excluded.value_json, updated_at=NOW()""",
             (str(uuid.uuid4()), person_id, field_key, payload),
         )
 
@@ -321,7 +321,7 @@ async def update_person(
         return _row_to_person(dict(row))
 
     params.append(person_id)
-    sql = f"UPDATE people SET {', '.join(updates)}, updated_at = datetime('now') WHERE id = ?"
+    sql = f"UPDATE people SET {', '.join(updates)}, updated_at = NOW() WHERE id = ?"
     await db.execute(sql, params)
     await db.commit()
 
@@ -355,7 +355,7 @@ async def delete_person(
         raise HTTPException(status_code=404, detail="Person not found")
 
     await db.execute(
-        "UPDATE people SET deleted = 1, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE people SET deleted = 1, updated_at = NOW() WHERE id = ?",
         (person_id,),
     )
     await db.commit()
@@ -453,7 +453,7 @@ async def update_people_field(
             params.append(value)
     if not updates:
         return {"ok": True, "updated": False}
-    updates.append("updated_at = datetime('now')")
+    updates.append("updated_at = NOW()")
     params.append(field_key)
     cursor = await db.execute(
         f"UPDATE people_field_definitions SET {', '.join(updates)} WHERE field_key = ?",

@@ -908,7 +908,7 @@ async def _write_update_history(
         await db.execute(
             """INSERT INTO update_history
                (component, version_before, version_after, ok, log_excerpt, initiated_by, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
+               VALUES (?, ?, ?, ?, ?, ?, NOW())""",
             (
                 component,
                 version_before,
@@ -952,7 +952,7 @@ async def _check_and_notify_zoe_release(db: Any) -> None:
         await db.execute(
             """INSERT INTO notifications
                (user_id, type, title, message, data, delivered, created_at)
-               VALUES (?, ?, ?, ?, ?, 0, datetime('now'))""",
+               VALUES (?, ?, ?, ?, ?, 0, NOW())""",
             (
                 "system",
                 "zoe_update",

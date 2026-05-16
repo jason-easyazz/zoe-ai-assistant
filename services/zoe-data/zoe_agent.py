@@ -1255,10 +1255,8 @@ async def _load_open_loops(user_id: str, limit: int = 5) -> str:
     Returns a formatted string for injection into the [OPEN LOOPS] named block.
     """
     try:
-        import aiosqlite
-        from database import DB_PATH  # type: ignore[import]
-        async with aiosqlite.connect(DB_PATH) as _db:
-            _db.row_factory = aiosqlite.Row
+        from db_compat import get_compat_db as _get_compat_db
+        async with _get_compat_db() as _db:
             async with _db.execute(
                 """SELECT loop_text, follow_up_hint, emotional_weight
                    FROM open_loops

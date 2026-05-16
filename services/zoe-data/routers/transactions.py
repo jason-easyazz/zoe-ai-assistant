@@ -220,7 +220,7 @@ async def update_transaction(
     if not updates:
         return _row_to_dict(row)
 
-    updates.append("updated_at = datetime('now')")
+    updates.append("updated_at = NOW()")
     params.append(transaction_id)
     await db.execute(
         f"UPDATE transactions SET {', '.join(updates)} WHERE id = ?",
@@ -255,7 +255,7 @@ async def delete_transaction(
         raise HTTPException(status_code=404, detail="Transaction not found")
 
     await db.execute(
-        "UPDATE transactions SET deleted = 1, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE transactions SET deleted = 1, updated_at = NOW() WHERE id = ?",
         [transaction_id],
     )
     await db.commit()
@@ -284,7 +284,7 @@ async def toggle_transaction_status(
 
     new_status = "completed" if row["status"] == "pending" else "pending"
     await db.execute(
-        "UPDATE transactions SET status = ?, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE transactions SET status = ?, updated_at = NOW() WHERE id = ?",
         [new_status, transaction_id],
     )
     await db.commit()

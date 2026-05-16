@@ -8,6 +8,21 @@ jobs:
   validate:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: zoe
+          POSTGRES_USER: zoe
+          POSTGRES_PASSWORD: zoe-db-ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U zoe"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -20,7 +35,8 @@ jobs:
       - name: Install slim CI deps
         run: |
           pip install --quiet \
-            aiosqlite fastapi httpx "apscheduler==3.10.4" "sqlalchemy>=2.0,<3.0" \
+            aiosqlite asyncpg psycopg2-binary alembic \
+            fastapi httpx "apscheduler==3.10.4" "sqlalchemy>=2.0,<3.0" \
             pydantic pywebpush py-vapid cryptography \
             "ag-ui-protocol==0.1.14" websockets python-jose passlib \
             python-multipart uvicorn prometheus-client
@@ -30,6 +46,24 @@ jobs:
 
       - name: Validate critical files
         run: python3 tools/audit/validate_critical_files.py
+
+      - name: Run Alembic migrations on CI PostgreSQL
+        run: |
+          cd services/zoe-data
+          POSTGRES_URL=postgresql://zoe:zoe-db-ci@localhost:5432/zoe \
+            python3 -c "
+          import os
+          os.environ['POSTGRES_URL'] = 'postgresql://zoe:zoe-db-ci@localhost:5432/zoe'
+          from alembic.config import Config
+          from alembic import command as alembic_cmd
+          cfg = Config('alembic.ini')
+          cfg.set_main_option('sqlalchemy.url', 'postgresql+psycopg2://zoe:zoe-db-ci@localhost:5432/zoe')
+          cfg.set_main_option('script_location', 'alembic')
+          alembic_cmd.upgrade(cfg, 'head')
+          print('Alembic migrations OK')
+          "
+        env:
+          POSTGRES_URL: postgresql://zoe:zoe-db-ci@localhost:5432/zoe
 
       - name: Python syntax check (all zoe-data modules)
         run: |
@@ -54,5 +88,6 @@ jobs:
             --override-ini="asyncio_mode=auto"
         env:
           PYTHONPATH: ${{ github.workspace }}/services/zoe-data
+          POSTGRES_URL: postgresql://zoe:zoe-db-ci@localhost:5432/zoe
           ZOE_DATA_DB: ":memory:"
           ZOE_MEMORY_STARTUP_STRICT: "false"

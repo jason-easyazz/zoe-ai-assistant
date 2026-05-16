@@ -2987,9 +2987,9 @@ async def voice_ambient(payload: dict, caller: dict = Depends(_require_voice_aut
 
     # Store in ambient_memory table.
     try:
-        import aiosqlite
-        from database import DB_PATH
-        async with aiosqlite.connect(DB_PATH) as db:
+        from db_compat import get_compat_db as _get_compat_db
+        
+        async with _get_compat_db() as db:
             await db.execute(
                 """INSERT INTO ambient_memory (panel_id, room, transcript, duration_seconds, source)
                    VALUES (?, ?, ?, ?, 'ambient')""",
@@ -3049,8 +3049,7 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
     """
     from database import get_db
     import uuid as _uuid
-    import aiosqlite
-    from database import DB_PATH
+    from db_compat import get_compat_db as _get_compat_db
 
     b64 = str((payload or {}).get("audio_base64", "")).strip()
     user_id = str((payload or {}).get("user_id", caller.get("user_id", "unknown")))
@@ -3082,7 +3081,7 @@ async def voice_enroll(payload: dict, caller: dict = Depends(_require_voice_auth
 
     profile_id = str(_uuid.uuid4())
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _get_compat_db() as db:
             # Check if user already has a profile — update sample_count and average embedding.
             async with db.execute(
                 "SELECT id, embedding_blob, sample_count FROM speaker_profiles WHERE user_id=?",
@@ -3128,8 +3127,7 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
     - { "audio_base64": "...", "panel_id": "..." }  — raw WAV bytes; server computes embedding
     Returns best-match profile with confidence score.
     """
-    import aiosqlite
-    from database import DB_PATH
+    from db_compat import get_compat_db as _get_compat_db
 
     payload = payload or {}
 
@@ -3167,7 +3165,7 @@ async def voice_identify(payload: dict, caller: dict = Depends(_require_voice_au
             raise HTTPException(status_code=503, detail="resemblyzer not available")
 
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _get_compat_db() as db:
             async with db.execute(
                 "SELECT id, user_id, display_name, embedding_blob FROM speaker_profiles"
             ) as cur:
@@ -3216,11 +3214,10 @@ async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
 
     Used by the settings page Voice Identity section to show who is enrolled.
     """
-    import aiosqlite
-    from database import DB_PATH
+    from db_compat import get_compat_db as _get_compat_db
 
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _get_compat_db() as db:
             async with db.execute(
                 "SELECT id, user_id, display_name, sample_count, panel_id FROM speaker_profiles ORDER BY display_name"
             ) as cur:
@@ -3241,11 +3238,10 @@ async def voice_profiles(caller: dict = Depends(_require_voice_auth)):
 @router.delete("/profiles/{profile_id}")
 async def voice_profile_delete(profile_id: str, caller: dict = Depends(_require_voice_auth)):
     """Delete an enrolled speaker profile."""
-    import aiosqlite
-    from database import DB_PATH
+    from db_compat import get_compat_db as _get_compat_db
 
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with _get_compat_db() as db:
             await db.execute("DELETE FROM speaker_profiles WHERE id=?", (profile_id,))
             await db.commit()
         return {"ok": True, "deleted": profile_id}

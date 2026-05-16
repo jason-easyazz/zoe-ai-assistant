@@ -132,12 +132,10 @@ async def lifespan(app: FastAPI):
         logger.warning("MemPalace migration (non-fatal): %s", _mig_exc)
     # Load device tokens into memory so voice daemons can authenticate.
     try:
-        import aiosqlite
-        from database import DB_PATH
         from routers.panel_auth import load_device_tokens
-        async with aiosqlite.connect(DB_PATH) as _db:
-            _db.row_factory = aiosqlite.Row
-            await load_device_tokens(_db)
+        from db_pool import get_db_ctx as _get_pg_db
+        async with _get_pg_db() as _db_conn:
+            await load_device_tokens(_db_conn)
     except Exception as _exc:
         logger.warning("Could not pre-load device tokens: %s", _exc)
     await _run_memory_capture_startup_probe()

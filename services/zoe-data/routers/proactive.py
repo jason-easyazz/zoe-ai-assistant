@@ -14,12 +14,12 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from auth import get_current_user
-from database import DB_PATH, get_db
+from database import get_db
+from db_pool import get_db_ctx
 from proactive.session_utils import claim_pending
 from proactive.triggers.reminders import schedule_reminder, cancel_reminder
 
@@ -122,8 +122,7 @@ async def trigger_morning_brief(user: dict = Depends(get_current_user)):
     today = datetime.now(timezone.utc).date().isoformat()
 
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
+        async with get_db_ctx() as db:
             ctx = await _build_morning_context(db, user_id, today)
     except Exception as exc:
         log.error("trigger-morning: context build failed: %s", exc)

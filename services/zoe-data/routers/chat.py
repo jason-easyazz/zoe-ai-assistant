@@ -678,11 +678,11 @@ async def _ensure_user_and_chat_session(session_id: str, user_id: str) -> None:
     """Create users row and chat_sessions row if missing (UI sends client session ids before POST /sessions/)."""
     async for db in get_db():
         await db.execute(
-            "INSERT OR IGNORE INTO users (id, name, role) VALUES (?, ?, ?)",
+            "INSERT INTO users (id, name, role) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
             (user_id, user_id, "member"),
         )
         await db.execute(
-            "INSERT OR IGNORE INTO chat_sessions (id, user_id, title) VALUES (?, ?, ?)",
+            "INSERT INTO chat_sessions (id, user_id, title) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
             (session_id, user_id, "New Chat"),
         )
         await db.commit()
@@ -701,8 +701,8 @@ async def _save_chat_message(session_id: str, role: str, content: str) -> None:
     try:
         async for db in get_db():
             await db.execute(
-                "INSERT OR IGNORE INTO chat_messages (id, session_id, role, content) "
-                "VALUES (?, ?, ?, ?)",
+                "INSERT INTO chat_messages (id, session_id, role, content) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
                 (uuid.uuid4().hex, session_id, role, content.strip()),
             )
             await db.commit()
@@ -1073,7 +1073,7 @@ async def _resolve_approval(user_id: str, approval_id: str) -> dict | None:
             return None
         row = dict(rows[0])
         await db.execute(
-            "UPDATE openclaw_approvals SET status='approved', resolved_at=datetime('now') WHERE id = ?",
+            "UPDATE openclaw_approvals SET status='approved', resolved_at=NOW() WHERE id = ?",
             (approval_id,),
         )
         await db.commit()
@@ -1086,12 +1086,12 @@ async def _record_run_state(run_id: str, session_id: str, user_id: str, mode: st
         await db.execute(
             """INSERT INTO openclaw_run_state
                (id, session_id, user_id, mode, status, request_text, response_text, metadata, finished_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IN ('completed','error','cancelled') THEN datetime('now') ELSE NULL END)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? IN ('completed','error','cancelled') THEN NOW() ELSE NULL END)
                ON CONFLICT(id) DO UPDATE SET
                  status=excluded.status,
                  response_text=COALESCE(excluded.response_text, response_text),
                  metadata=COALESCE(excluded.metadata, metadata),
-                 finished_at=CASE WHEN excluded.status IN ('completed','error','cancelled') THEN datetime('now') ELSE finished_at END""",
+                 finished_at=CASE WHEN excluded.status IN ('completed','error','cancelled') THEN NOW() ELSE finished_at END""",
             (
                 run_id,
                 session_id,
@@ -2321,11 +2321,11 @@ async def save_message(session_id: str, request: Request, user: dict = Depends(g
     metadata = json.dumps(body.get("metadata")) if body.get("metadata") else None
     async for db in get_db():
         await db.execute(
-            "INSERT OR IGNORE INTO users (id, name, role) VALUES (?, ?, ?)",
+            "INSERT INTO users (id, name, role) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
             (user_id, user_id, "member"),
         )
         await db.execute(
-            "INSERT OR IGNORE INTO chat_sessions (id, user_id, title) VALUES (?, ?, ?)",
+            "INSERT INTO chat_sessions (id, user_id, title) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
             (session_id, user_id, "New Chat"),
         )
         owner = await db.execute_fetchall(
@@ -2356,13 +2356,13 @@ async def save_message(session_id: str, request: Request, user: dict = Depends(g
 
         if new_title:
             await db.execute(
-                """UPDATE chat_sessions SET updated_at = datetime('now'), title = ?
+                """UPDATE chat_sessions SET updated_at = NOW(), title = ?
                    WHERE id = ? AND user_id = ?""",
                 (new_title, session_id, user_id),
             )
         else:
             await db.execute(
-                "UPDATE chat_sessions SET updated_at = datetime('now') WHERE id = ? AND user_id = ?",
+                "UPDATE chat_sessions SET updated_at = NOW() WHERE id = ? AND user_id = ?",
                 (session_id, user_id),
             )
         await db.commit()
@@ -2480,7 +2480,7 @@ async def cancel_latest_run(session_id: str, user: dict = Depends(get_current_us
     async for db in get_db():
         await db.execute(
             """UPDATE openclaw_run_state
-               SET status='cancelled', finished_at=datetime('now')
+               SET status='cancelled', finished_at=NOW()
                WHERE id = (
                  SELECT id FROM openclaw_run_state
                  WHERE session_id = ? AND user_id = ?

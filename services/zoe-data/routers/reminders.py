@@ -40,7 +40,7 @@ def _visibility_filter_sql() -> str:
 async def _create_notification(db, user_id: str, notif_type: str, title: str, message: str, data: dict):
     await db.execute(
         """INSERT INTO notifications (id, user_id, type, title, message, data, delivered, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 0, datetime('now'))""",
+           VALUES (?, ?, ?, ?, ?, ?, 0, NOW())""",
         (
             str(uuid.uuid4()),
             user_id,
@@ -189,7 +189,7 @@ async def update_reminder(
     if not updates:
         return _row_to_dict(row)
 
-    updates.append("updated_at = datetime('now')")
+    updates.append("updated_at = NOW()")
     params.append(reminder_id)
     await db.execute(
         f"UPDATE reminders SET {', '.join(updates)} WHERE id = ?",
@@ -224,7 +224,7 @@ async def delete_reminder(
         raise HTTPException(status_code=404, detail="Reminder not found")
 
     await db.execute(
-        "UPDATE reminders SET deleted = 1, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE reminders SET deleted = 1, updated_at = NOW() WHERE id = ?",
         [reminder_id],
     )
     await db.commit()
@@ -232,10 +232,8 @@ async def delete_reminder(
     # Cancel any unfired APScheduler jobs for this reminder.
     try:
         from proactive.triggers.reminders import cancel_reminder as _cancel_reminder
-        from database import DB_PATH as _DB_PATH
-        import aiosqlite as _aiosqlite
-        async with _aiosqlite.connect(_DB_PATH) as _pdb:
-            _pdb.row_factory = _aiosqlite.Row
+        from db_pool import get_db_ctx as _get_pg_db
+        async with _get_pg_db() as _pdb:
             async with _pdb.execute(
                 "SELECT id FROM proactive_scheduled WHERE item_id=? AND fired=0",
                 (reminder_id,),
@@ -271,7 +269,7 @@ async def snooze_reminder(
 
     snoozed_until = (datetime.utcnow() + timedelta(minutes=body.snooze_minutes)).isoformat() + "Z"
     await db.execute(
-        "UPDATE reminders SET snoozed_until = ?, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE reminders SET snoozed_until = ?, updated_at = NOW() WHERE id = ?",
         [snoozed_until, reminder_id],
     )
     await _create_notification(
@@ -311,7 +309,7 @@ async def acknowledge_reminder(
         raise HTTPException(status_code=404, detail="Reminder not found")
 
     await db.execute(
-        "UPDATE reminders SET acknowledged = 1, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE reminders SET acknowledged = 1, updated_at = NOW() WHERE id = ?",
         [reminder_id],
     )
     await _create_notification(

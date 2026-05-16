@@ -266,8 +266,8 @@ async def put_openclaw_preferences(
 
     await db.execute(
         """INSERT INTO user_preferences (user_id, prefs, updated_at)
-           VALUES (?, ?, datetime('now'))
-           ON CONFLICT(user_id) DO UPDATE SET prefs = excluded.prefs, updated_at = datetime('now')""",
+           VALUES (?, ?, NOW())
+           ON CONFLICT(user_id) DO UPDATE SET prefs = excluded.prefs, updated_at = NOW()""",
         (user_id, json.dumps(merged)),
     )
     await db.commit()
@@ -630,11 +630,9 @@ async def a2a_task(body: _A2ATaskRequest, user: dict = Depends(get_current_user)
 async def a2a_task_result(task_id: str, user: dict = Depends(get_current_user)):
     """Poll for the result of a previously submitted A2A task."""
 
-    import aiosqlite
-    from database import DB_PATH as _DB_PATH
+    from db_pool import get_db_ctx as _get_pg_db
 
-    async with aiosqlite.connect(_DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    async with _get_pg_db() as db:
         async with db.execute(
             "SELECT id, user_id, task, status, result, created_at, completed_at FROM background_tasks WHERE id=?",
             (task_id,),
@@ -827,7 +825,7 @@ async def put_display_preferences(
                 night_enabled, night_start, night_end, night_brightness,
                 idle_enabled, idle_seconds, idle_brightness,
                 off_enabled, off_seconds, pi_host, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
            ON CONFLICT(device_id) DO UPDATE SET
                 enabled=excluded.enabled,
                 day_brightness=excluded.day_brightness,
@@ -841,7 +839,7 @@ async def put_display_preferences(
                 off_enabled=excluded.off_enabled,
                 off_seconds=excluded.off_seconds,
                 pi_host=excluded.pi_host,
-                updated_at=datetime('now')""",
+                updated_at=NOW()""",
         (
             device_id,
             1 if merged["enabled"] else 0,
