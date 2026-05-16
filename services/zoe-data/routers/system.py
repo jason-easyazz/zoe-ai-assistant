@@ -897,6 +897,33 @@ async def get_squad():
     return {"squads": squads}
 
 
+@_agent_card_router.get("/runtimes")
+async def get_agent_runtimes():
+    """Return live runtime health for all agent endpoints with last-probe timestamp."""
+    from main import _RUNTIME_HEALTH, _RUNTIME_LAST_PROBED  # type: ignore[import]
+    return {
+        "last_probed": _RUNTIME_LAST_PROBED or None,
+        "refresh_interval_s": 300,
+        "runtimes": {
+            "local_llm": {
+                "port": 11434,
+                "description": "llama-server (Gemma 4 E2B, fast-path agent)",
+                "online": _RUNTIME_HEALTH.get("local_llm", False),
+            },
+            "hermes": {
+                "port": 8642,
+                "description": "Hermes Agent (GPT-5.4/Codex)",
+                "online": _RUNTIME_HEALTH.get("hermes", False),
+            },
+            "openclaw": {
+                "port": 18789,
+                "description": "OpenClaw Gateway (Codex mini, browser/exec)",
+                "online": _RUNTIME_HEALTH.get("openclaw", False),
+            },
+        },
+    }
+
+
 @_agent_card_router.get("/peers/{name}/card")
 async def get_peer_agent_card(name: str):
     """Return a live A2A v1.0 proxy card for a peer agent with dynamic skills[]."""
@@ -1063,7 +1090,6 @@ async def board_approve(task_id: str, user: dict = Depends(get_current_user)):
         issue = await client.create_issue(
             title=f"Task: {task_id}",
             description=f"Approved via Zoe chat. Task ID: {task_id}",
-            assignee_id="openclaw",
             priority="medium",
         )
         return {"ok": True, "issue": issue}
@@ -1172,7 +1198,6 @@ async def evolution_proposal_action(
                     issue = await client.create_issue(
                         title=proposal["title"],
                         description=proposal["description"],
-                        assignee_id="openclaw",
                         priority="medium",
                     )
                     multica_issue_id = issue.get("id")
@@ -1189,15 +1214,14 @@ async def evolution_proposal_action(
             # when it completes, the task runner will advance status → deployed.
             try:
                 from background_runner import enqueue_background_task  # type: ignore[import]
+                _task_desc = (
+                    f"Implement evolution proposal {proposal_id}: "
+                    f"{proposal['title']}. "
+                    f"{proposal['description']}"
+                )
                 task_id = await enqueue_background_task(
-                    task_type="evolution_implement",
-                    payload={
-                        "proposal_id": proposal_id,
-                        "title": proposal["title"],
-                        "description": proposal["description"],
-                        "target_patterns": proposal.get("target_patterns", "[]"),
-                    },
-                    user_id=user["user_id"],
+                    _task_desc,
+                    user["user_id"],
                 )
                 logger.info("evolution_approve: queued implement task %s for proposal %s", task_id, proposal_id)
             except Exception as exc:

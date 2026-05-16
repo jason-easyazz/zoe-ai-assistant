@@ -1,5 +1,27 @@
 # agents_registry.yml — Zoe's known peer agents
 # Loaded at startup; hot-reloadable via POST /api/agent/registry/reload
+#
+# ── Multica agent registration (manual UI step) ───────────────────────────────
+# Multica's /api/runtimes is read-only (GET only). Runtimes and agents must be
+# created via the Multica web UI at http://localhost:3000.
+#
+# To register OpenClaw in Multica:
+#   1. Open http://localhost:3000 → Settings → Runtimes → New Runtime
+#   2. Type: openclaw_gateway  URL: http://localhost:18789
+#   3. Save — note the runtime ID
+#   4. Settings → Agents → New Agent → select the runtime above
+#   5. Record the agent ID below as multica_agent_id
+#
+# To register Hermes in Multica:
+#   1. Open http://localhost:3000 → Settings → Runtimes → New Runtime
+#   2. Type: hermes  URL: http://localhost:8642
+#   3. Save — note the runtime ID
+#   4. Settings → Agents → New Agent → select the runtime above
+#   5. Record the agent ID below as multica_agent_id
+#
+# Once registered, set multica_agent_id values below and run:
+#   POST /api/agent/registry/reload
+# ─────────────────────────────────────────────────────────────────────────────
 
 agents:
   hermes:
@@ -14,6 +36,7 @@ agents:
       - research
     skills_dir: "~/.hermes/skills"
     health_port: 8642
+    multica_agent_id: ""   # set after manual Multica registration (see instructions above)
 
   openclaw:
     base_url: "http://localhost:18789"
@@ -27,6 +50,7 @@ agents:
       - file_management
     skills_dir: "~/.openclaw/workspace/skills"
     health_port: 18789
+    multica_agent_id: ""   # set after manual Multica registration (see instructions above)
 
 squads:
   zoe:
