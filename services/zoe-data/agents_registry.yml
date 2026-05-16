@@ -36,7 +36,8 @@ agents:
       - research
     skills_dir: "~/.hermes/skills"
     health_port: 8642
-    multica_agent_id: ""   # set after manual Multica registration (see instructions above)
+    multica_agent_id: "019ae0a7-62f1-47fe-9d46-75fd0ae5d570"
+    multica_runtime_id: "8d7f863d-0550-4741-8078-150e965268a9"
 
   openclaw:
     base_url: "http://localhost:18789"
@@ -50,7 +51,8 @@ agents:
       - file_management
     skills_dir: "~/.openclaw/workspace/skills"
     health_port: 18789
-    multica_agent_id: ""   # set after manual Multica registration (see instructions above)
+    multica_agent_id: "e2a566ab-613c-4a80-a299-965b7effaca8"
+    multica_runtime_id: "cb4305d1-381a-4e91-9a66-46c4c0197ab9"
 
 squads:
   zoe:
