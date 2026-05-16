@@ -1022,28 +1022,48 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
     if intent.name == "a2a_federation_status":
         try:
             import httpx as _httpx
-            health_url = "http://localhost:8000/api/agent/registry"
-            squad_url = "http://localhost:8000/api/agent/squad"
             async with _httpx.AsyncClient(timeout=5) as _cli:
-                reg = (await _cli.get(health_url)).json()
-                squad = (await _cli.get(squad_url)).json()
+                reg_resp, squad_resp, runtime_resp = await asyncio.gather(
+                    _cli.get("http://localhost:8000/api/agent/registry"),
+                    _cli.get("http://localhost:8000/api/agent/squad"),
+                    _cli.get("http://localhost:8000/api/agent/runtimes"),
+                    return_exceptions=True,
+                )
+            reg = reg_resp.json() if not isinstance(reg_resp, Exception) else {}
+            squad = squad_resp.json() if not isinstance(squad_resp, Exception) else {}
+            runtimes = runtime_resp.json() if not isinstance(runtime_resp, Exception) else {}
 
             agents = reg.get("agents", {})
-            lines = ["**Agent Federation Status**\n"]
-            for name, info in agents.items():
-                status = info.get("status", "unknown")
-                icon = "🟢" if status == "online" else "🔴"
-                lines.append(f"{icon} **{name.title()}** — {info.get('description','')[:60]} ({status})")
+            rt = runtimes.get("runtimes", {})
+            last_probed = runtimes.get("last_probed", "")
 
+            lines = ["**Agent Federation**\n"]
+
+            # Per-agent status line using runtimes endpoint for accuracy
+            for name, info in agents.items():
+                rt_entry = rt.get(name, {})
+                online = rt_entry.get("online", info.get("status") == "online")
+                status_label = "online" if online else "offline"
+                desc = info.get("description", "")[:70]
+                lines.append(f"- **{name.title()}** [{status_label}] — {desc}")
+
+            # Squad topology
             squads = squad.get("squads", {})
             if squads:
-                lines.append("\n**Squad topology:**")
+                lines.append("\n**Squad:**")
                 for sq_name, sq_info in squads.items():
-                    members = sq_info.get("members", [])
-                    lines.append(f"- `{sq_name}`: {', '.join(members)}")
+                    members_detail = sq_info.get("members_detail", [])
+                    member_str = ", ".join(
+                        f"{m['name']} ({m.get('status','?')})" for m in members_detail
+                    ) if members_detail else ", ".join(sq_info.get("members", []))
+                    lines.append(f"- `{sq_name}`: {member_str}")
 
-            lines.append(f"\n_Say \"delegate to hermes: [task]\" to route a task to Hermes, "
-                         f"or \"delegate to openclaw: [task]\" for OpenClaw._")
+            if last_probed:
+                lines.append(f"\n_Last health probe: {last_probed[:19].replace('T',' ')} UTC_")
+
+            lines.append(
+                '\nTo delegate: "delegate to hermes: [task]" or "delegate to openclaw: [task]"'
+            )
             return "\n".join(lines)
         except Exception as exc:
             logger.warning("a2a_federation_status: %s", exc)

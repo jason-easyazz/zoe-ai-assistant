@@ -64,6 +64,8 @@ _RUNTIME_HEALTH: dict[str, bool] = {
     "hermes": False,
     "openclaw": False,
 }
+# Timestamp of the last probe (ISO string); exposed via GET /api/agent/runtimes
+_RUNTIME_LAST_PROBED: str = ""
 
 
 class RequestIdFilter(logging.Filter):
@@ -147,6 +149,9 @@ async def _probe_runtimes() -> None:
     _RUNTIME_HEALTH["local_llm"] = await _check_port(11434)
     _RUNTIME_HEALTH["hermes"] = await _check_port(8642)
     _RUNTIME_HEALTH["openclaw"] = await _check_port(18789)
+    global _RUNTIME_LAST_PROBED
+    from datetime import datetime, timezone
+    _RUNTIME_LAST_PROBED = datetime.now(timezone.utc).isoformat()
     logger.info(
         "Runtime health probe: local_llm=%s hermes=%s openclaw=%s",
         _RUNTIME_HEALTH["local_llm"],
@@ -268,14 +273,24 @@ async def lifespan(app: FastAPI):
                         from db_pool import get_db_ctx  # type: ignore[import]
                         async with get_db_ctx() as _db:
                             rows = await _db.fetch(
-                                """SELECT id, status FROM background_tasks
+                                """SELECT id, status, user_id FROM background_tasks
                                    WHERE (payload->>'multica_issue_id')=$1
                                    ORDER BY created_at DESC LIMIT 1""",
                                 str(issue_id),
                             )
-                        if rows and rows[0]["status"] == "completed":
+                        if rows and rows[0]["status"] == "done":
                             await client.update_issue(issue_id, status="done")
-                            logger.info("multica_poll: closed issue %s ('%s') — task completed", issue_id, title[:40])
+                            logger.info("multica_poll: closed issue %s ('%s') — task done", issue_id, title[:40])
+                            # Push WebSocket notification to the owning user
+                            try:
+                                uid = rows[0]["user_id"]
+                                await broadcaster.broadcast(
+                                    uid,
+                                    "multica_task_done",
+                                    {"multica_issue_id": str(issue_id), "title": title},
+                                )
+                            except Exception as _push_exc:
+                                logger.debug("multica_poll: ws push failed: %s", _push_exc)
                     except Exception as _inner_exc:
                         logger.debug("multica_poll: inner error for issue %s: %s", issue_id, _inner_exc)
             except asyncio.CancelledError:
