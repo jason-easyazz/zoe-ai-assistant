@@ -2005,6 +2005,9 @@ async def _hermes_stream_generator(
     yield enc.encode(TextMessageStartEvent(type=EventType.TEXT_MESSAGE_START, message_id=assistant_message_id, role="assistant"))
 
     full_text = []
+    _t0 = asyncio.get_event_loop().time()
+    _hermes_error: bool = False
+    _hermes_prompt_tokens: int = 0
     try:
         _zoe_compact = _load_zoe_self_compact_for_chat()
         _ctx_parts = [_ZOE_SOUL_HERMES]
@@ -2018,6 +2021,7 @@ async def _hermes_stream_generator(
             _ctx_parts.append(f"[Memory context:\n{facts}]")
         _ctx_prefix = "\n".join(_ctx_parts) + "\n\n"
         _enhanced_message = _ctx_prefix + message
+        _hermes_prompt_tokens = len(_enhanced_message) // 4
         payload = {
             "model": _HERMES_MODEL,
             "messages": [{"role": "user", "content": _enhanced_message}],
@@ -2050,6 +2054,7 @@ async def _hermes_stream_generator(
                     except (json.JSONDecodeError, IndexError, KeyError):
                         continue
     except Exception as exc:
+        _hermes_error = True
         error_token = f"\n\n*[Hermes Agent error: {exc}]*"
         full_text.append(error_token)
         yield enc.encode(TextMessageChunkEvent(
@@ -2057,6 +2062,31 @@ async def _hermes_stream_generator(
             message_id=assistant_message_id,
             delta=error_token,
         ))
+
+    # Log to llm_call_log so evolution_notice can include Hermes in health checks.
+    # latency_ms < 0 is used as the error signal by evolution_notice.py.
+    _latency_ms = int((asyncio.get_event_loop().time() - _t0) * 1000)
+    _completion_tokens = len("".join(full_text)) // 4
+    async def _log_hermes_call():
+        try:
+            from db_pool import get_db_ctx as _get_pg_db  # type: ignore[import]
+            import uuid as _uuid, time as _time
+            async with _get_pg_db() as _db:
+                await _db.execute(
+                    """INSERT INTO llm_call_log
+                       (id, agent_tier, model, session_id, user_id,
+                        latency_ms, prompt_tokens, completion_tokens, estimated_cost_usd, ts)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)""",
+                    _uuid.uuid4().hex, "hermes", _HERMES_MODEL,
+                    session_id, user_id,
+                    _latency_ms if not _hermes_error else -1,
+                    _hermes_prompt_tokens, _completion_tokens,
+                    0.0,
+                    _time.time(),
+                )
+        except Exception:
+            pass
+    asyncio.ensure_future(_log_hermes_call())
 
     yield enc.encode(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
     yield enc.encode(RunFinishedEvent(type=EventType.RUN_FINISHED, run_id=run_id, thread_id=session_id))

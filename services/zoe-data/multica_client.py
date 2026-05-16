@@ -3,6 +3,12 @@
 Gracefully no-ops when MULTICA_BASE_URL is unset or Multica is unavailable.
 All public methods return empty dicts/lists on error rather than raising,
 so callers don't need to handle Multica outages.
+
+API notes (verified against Multica server/cmd/server/router.go):
+  - Issues live at /api/issues  (NOT /api/v1/workspaces/{id}/issues)
+  - Workspace is passed via X-Workspace-ID header, not the URL path
+  - UpdateIssue is PUT, not PATCH
+  - Assignee fields are assignee_id (UUID) + assignee_type — never a string name
 """
 from __future__ import annotations
 
@@ -36,27 +42,25 @@ class MULClient:
         return {
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
+            "X-Workspace-ID": self._workspace,
         }
 
     async def create_issue(
         self,
         title: str,
         description: str = "",
-        assignee_id: str | None = None,
         priority: str = "medium",
     ) -> dict:
         """Create a Multica board issue. Returns the created issue dict."""
         if not self.is_configured():
             logger.debug("Multica not configured — skipping create_issue")
             return {}
-        url = f"{self._base}/api/v1/workspaces/{self._workspace}/issues"
+        url = f"{self._base}/api/issues"
         payload: dict[str, Any] = {
             "title": title,
             "description": description,
             "priority": priority,
         }
-        if assignee_id:
-            payload["assigneeId"] = assignee_id
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 resp = await client.post(url, json=payload, headers=self._headers())
@@ -70,7 +74,7 @@ class MULClient:
         """Fetch a single issue by ID."""
         if not self.is_configured():
             return {}
-        url = f"{self._base}/api/v1/workspaces/{self._workspace}/issues/{issue_id}"
+        url = f"{self._base}/api/issues/{issue_id}"
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
                 resp = await client.get(url, headers=self._headers())
@@ -84,7 +88,7 @@ class MULClient:
         """List issues in the workspace, optionally filtered by status."""
         if not self.is_configured():
             return []
-        url = f"{self._base}/api/v1/workspaces/{self._workspace}/issues"
+        url = f"{self._base}/api/issues"
         params = {}
         if status:
             params["status"] = status
@@ -102,10 +106,10 @@ class MULClient:
         """Update the status of an issue."""
         if not self.is_configured():
             return {}
-        url = f"{self._base}/api/v1/workspaces/{self._workspace}/issues/{issue_id}"
+        url = f"{self._base}/api/issues/{issue_id}"
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-                resp = await client.patch(
+                resp = await client.put(
                     url, json={"status": status}, headers=self._headers()
                 )
                 resp.raise_for_status()

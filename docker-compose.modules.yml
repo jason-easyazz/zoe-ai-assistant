@@ -161,8 +161,19 @@ services:
     ports:
       - "8080:8080"
     environment:
-      DATABASE_URL: "postgresql://zoe:${POSTGRES_PASSWORD:-REDACTED}@host.docker.internal:5432/multica"
-      NODE_ENV: production
+      DATABASE_URL: "postgresql://zoe:${POSTGRES_PASSWORD:-REDACTED}@host.docker.internal:5432/multica?sslmode=disable"
+      PORT: "8080"
+      # development required — dev verification code is silently ignored when APP_ENV=production
+      APP_ENV: development
+      JWT_SECRET: "${MULTICA_JWT_SECRET:-REDACTED}"
+      MULTICA_DEV_VERIFICATION_CODE: "${MULTICA_DEV_CODE:-REDACTED}"
+      FRONTEND_ORIGIN: "http://localhost:3000"
+      MULTICA_APP_URL: "http://localhost:3000"
+      ALLOW_SIGNUP: "true"
+      LOCAL_UPLOAD_DIR: "/data/uploads"
+      LOCAL_UPLOAD_BASE_URL: "http://localhost:8080"
+    volumes:
+      - multica-uploads:/data/uploads
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -175,7 +186,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 60s
 
   multica-web:
     image: ghcr.io/multica-ai/multica-web:latest
@@ -184,6 +195,7 @@ services:
       - "3000:3000"
     environment:
       NEXT_PUBLIC_API_URL: "http://localhost:8080"
+      NEXT_PUBLIC_WS_URL: "ws://localhost:8080"
     networks:
       - zoe-network
     restart: unless-stopped
@@ -201,3 +213,4 @@ volumes:
   agent0-memory: null
   agent0-logs: null
   zoe-database-data: null
+  multica-uploads: null

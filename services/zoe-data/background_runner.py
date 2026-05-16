@@ -113,6 +113,29 @@ async def _run_task(
             result = "(No result returned)"
         await _set_status("done", result)
         logger.info("background_runner: task #%d completed (%d chars)", task_id, len(result))
+
+        # Auto-deploy the linked evolution proposal when the task completes.
+        # Task descriptions for approved proposals follow the pattern:
+        #   "Implement evolution proposal <UUID>: <title>..."
+        import re as _re
+        _proposal_match = _re.match(
+            r"Implement evolution proposal ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+            task,
+        )
+        if _proposal_match:
+            _proposal_id = _proposal_match.group(1)
+            try:
+                async with get_db_ctx() as _db:
+                    await _db.execute(
+                        """UPDATE evolution_proposals
+                           SET status='deployed', deployed_at=$1
+                           WHERE id=$2 AND status='approved'""",
+                        time.time(), _proposal_id,
+                    )
+                logger.info("background_runner: task #%d → proposal %s status=deployed", task_id, _proposal_id)
+            except Exception as _pe:
+                logger.debug("background_runner: could not mark proposal deployed: %s", _pe)
+
         # Estimate output tokens from output length (rough: ~4 chars/token)
         _est_tokens = len(result) // 4
         await _record_cost_event(
@@ -191,11 +214,17 @@ async def _watchdog_loop() -> None:
     Every 60 seconds, any task that has been running longer than the timeout
     is transitioned to 'blocked' with blocker_reason='watchdog_timeout'.
     A WebSocket push is sent to the owning user.
+
+    Every ~7 days, old done/error rows older than 30 days are deleted to
+    prevent unbounded table growth.
     """
     from db_pool import get_db_ctx
     from datetime import timezone, timedelta
 
     timeout_s = float(os.environ.get("ZOE_TASK_TIMEOUT_S", "900"))
+    _CLEANUP_INTERVAL_S = 7 * 86400  # weekly
+    _RETENTION_DAYS = 30
+    _last_cleanup = 0.0
 
     while True:
         await asyncio.sleep(60)
@@ -232,6 +261,22 @@ async def _watchdog_loop() -> None:
                             })
                         except Exception:
                             pass
+
+                # Weekly cleanup: delete old done/error rows
+                _now = time.time()
+                if _now - _last_cleanup >= _CLEANUP_INTERVAL_S:
+                    purge_before = (
+                        datetime.now(timezone.utc) - timedelta(days=_RETENTION_DAYS)
+                    ).isoformat()
+                    await db.execute(
+                        """DELETE FROM background_tasks
+                           WHERE status IN ('done', 'error', 'blocked')
+                             AND created_at < $1""",
+                        purge_before,
+                    )
+                    _last_cleanup = _now
+                    logger.info("Watchdog: purged old background_tasks rows (>%dd)", _RETENTION_DAYS)
+
         except asyncio.CancelledError:
             raise
         except Exception as exc:

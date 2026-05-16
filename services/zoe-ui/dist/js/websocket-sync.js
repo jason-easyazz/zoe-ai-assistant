@@ -376,6 +376,18 @@ window.ZoeWebSockets = {
             }
         });
 
+        // ── Multica board task completion ─────────────────────────────────
+        this.push.on('multica_task_done', (data) => {
+            const payload = unwrapPayload(data);
+            const title = payload.title || 'Board task';
+            if (typeof window._zoeShowNotification === 'function') {
+                window._zoeShowNotification(`Board task done: ${title}`, 'success');
+            } else {
+                // Fallback: dispatch a custom event that chat.html can listen for
+                document.dispatchEvent(new CustomEvent('zoe:multica_task_done', { detail: payload }));
+            }
+        });
+
         this.push.connect();
         console.log('[ZoeWS] Panel push channel connected, panel_id:', panelId);
     }

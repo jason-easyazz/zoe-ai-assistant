@@ -5809,6 +5809,14 @@
                 setTimeout(() => toast.remove(), 300);
             }, 3000);
         }
+        // Expose globally so websocket-sync.js push handlers can show toasts
+        window._zoeShowNotification = showNotification;
+
+        // Handle multica_task_done events from the push WebSocket
+        document.addEventListener('zoe:multica_task_done', (e) => {
+            const title = (e.detail && e.detail.title) ? e.detail.title : 'board task';
+            showNotification(`Board task complete: ${title}`, 'success');
+        });
 
         // Feedback Actions
         function copyMessage(btn) {
