@@ -10,6 +10,12 @@ homeassistant:
   currency: AUD
   country: AU
   time_zone: Australia/Perth
+  auth_providers:
+    - type: homeassistant
+    - type: oidc
+      client_id: !secret ha_oidc_client_id
+      client_secret: !secret ha_oidc_client_secret
+      discovery_url: http://authentik-server:9000/auth/application/o/home-assistant/.well-known/openid-configuration
 
 http:
   use_x_forwarded_for: true

@@ -6,7 +6,6 @@ Rate limiting, audit logging, and advanced security measures
 import time
 import hashlib
 import secrets
-import sqlite3
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass

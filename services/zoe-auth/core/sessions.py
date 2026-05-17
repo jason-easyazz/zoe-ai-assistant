@@ -5,7 +5,6 @@ Supports different session types with varying security levels
 
 import secrets
 import json
-import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, asdict
@@ -591,11 +590,22 @@ class EnhancedSessionManager:
         try:
             with auth_db.get_connection() as conn:
                 conn.execute("""
-                    INSERT OR REPLACE INTO auth_sessions 
+                    INSERT INTO auth_sessions 
                     (session_id, user_id, session_type, auth_method, device_info,
                      created_at, last_activity, expires_at, is_active, 
                      permissions_cache, role_cache, metadata)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (session_id) DO UPDATE SET
+                        user_id = EXCLUDED.user_id,
+                        session_type = EXCLUDED.session_type,
+                        auth_method = EXCLUDED.auth_method,
+                        device_info = EXCLUDED.device_info,
+                        last_activity = EXCLUDED.last_activity,
+                        expires_at = EXCLUDED.expires_at,
+                        is_active = EXCLUDED.is_active,
+                        permissions_cache = EXCLUDED.permissions_cache,
+                        role_cache = EXCLUDED.role_cache,
+                        metadata = EXCLUDED.metadata
                 """, (
                     session.session_id, session.user_id, session.session_type.value,
                     session.auth_method.value, json.dumps(session.device_info),
@@ -682,7 +692,7 @@ class EnhancedSessionManager:
                     deleted = cursor.rowcount
                     if deleted > 0:
                         logger.info(f"Cleaned up {deleted} expired sessions from database")
-                except sqlite3.OperationalError:
+                except Exception:
                     pass  # Table doesn't exist in this database
                 
                 # Clean up auth_sessions table (main zoe.db)
@@ -694,7 +704,7 @@ class EnhancedSessionManager:
                     deleted = cursor.rowcount
                     if deleted > 0:
                         logger.info(f"Cleaned up {deleted} expired auth_sessions from database")
-                except sqlite3.OperationalError:
+                except Exception:
                     pass  # Table doesn't exist in this database
                     
         except Exception as e:

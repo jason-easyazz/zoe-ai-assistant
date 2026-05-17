@@ -6,7 +6,6 @@ Secure handling of 4-8 digit PIN codes with advanced security features
 import argon2
 import secrets
 import re
-import sqlite3
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple, Any
 import logging
@@ -90,10 +89,19 @@ class PasscodeManager:
             # Store in database
             with auth_db.get_connection() as conn:
                 conn.execute("""
-                    INSERT OR REPLACE INTO passcodes 
+                    INSERT INTO passcodes 
                     (user_id, passcode_hash, algorithm, salt, created_at, expires_at, 
                      failed_attempts, max_attempts, is_active)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        passcode_hash = EXCLUDED.passcode_hash,
+                        algorithm = EXCLUDED.algorithm,
+                        salt = EXCLUDED.salt,
+                        created_at = EXCLUDED.created_at,
+                        expires_at = EXCLUDED.expires_at,
+                        failed_attempts = EXCLUDED.failed_attempts,
+                        max_attempts = EXCLUDED.max_attempts,
+                        is_active = EXCLUDED.is_active
                 """, (
                     user_id, passcode_hash, "argon2", salt,
                     datetime.now().isoformat(),
@@ -386,20 +394,8 @@ class PasscodeManager:
             logger.error(f"Error checking passcode history: {e}")
             return False
 
-    def _store_passcode_history(self, conn: sqlite3.Connection, user_id: str, passcode_hash: str):
+    def _store_passcode_history(self, conn, user_id: str, passcode_hash: str):
         """Store passcode in history for reuse prevention"""
-        # Create history table if it doesn't exist
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS passcode_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                passcode_hash TEXT NOT NULL,
-                salt TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-            )
-        """)
-        
         # Add current passcode to history
         conn.execute("""
             INSERT INTO passcode_history (user_id, passcode_hash, salt, created_at)

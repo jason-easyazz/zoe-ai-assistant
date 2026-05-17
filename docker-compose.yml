@@ -39,9 +39,12 @@ services:
     networks:
     - zoe-network
     restart: unless-stopped
+    depends_on:
+    - zoe-database
     environment:
     - PYTHONUNBUFFERED=1
     - DATABASE_PATH=/app/data/zoe.db
+    - POSTGRES_URL=postgresql://zoe:${POSTGRES_PASSWORD}@zoe-database:5432/zoe
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 30s

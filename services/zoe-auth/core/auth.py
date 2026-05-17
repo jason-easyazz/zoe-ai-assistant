@@ -5,7 +5,6 @@ Orchestrates password, passcode, and multi-factor authentication
 
 import bcrypt
 import secrets
-import sqlite3
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
@@ -296,7 +295,7 @@ class AuthManager:
                 conn.execute("""
                     UPDATE users 
                     SET password_hash = ?, updated_at = ?, failed_login_attempts = 0, 
-                        locked_until = NULL, settings = json_set(COALESCE(settings, '{}'), '$.force_password_change', true)
+                        locked_until = NULL, settings = jsonb_set(COALESCE(settings::jsonb, '{}'::jsonb), '{force_password_change}', 'true'::jsonb)::text
                     WHERE user_id = ?
                 """, (temp_password_hash, datetime.now().isoformat(), user_id))
 
@@ -550,19 +549,8 @@ class AuthManager:
             
         return False
 
-    def _store_password_history(self, conn: sqlite3.Connection, user_id: str, password_hash: str):
+    def _store_password_history(self, conn, user_id: str, password_hash: str):
         """Store password in history"""
-        # Create table if not exists
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS password_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                password_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-            )
-        """)
-        
         # Add to history
         conn.execute("""
             INSERT INTO password_history (user_id, password_hash, created_at)

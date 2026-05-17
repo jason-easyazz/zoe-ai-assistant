@@ -4,7 +4,6 @@ Advanced permission management with inheritance and caching
 """
 
 import json
-import sqlite3
 import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple, Any, Union
@@ -604,9 +603,10 @@ class RBACManager:
             with auth_db.get_connection() as conn:
                 for perm_id, name, resource, action in default_permissions:
                     conn.execute("""
-                        INSERT OR IGNORE INTO permissions 
+                        INSERT INTO permissions 
                         (permission_id, name, description, resource, action, created_at)
                         VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT DO NOTHING
                     """, (perm_id, name, name, resource, action, datetime.now().isoformat()))
 
         except Exception as e:

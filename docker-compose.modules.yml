@@ -172,6 +172,10 @@ services:
       ALLOW_SIGNUP: "true"
       LOCAL_UPLOAD_DIR: "/data/uploads"
       LOCAL_UPLOAD_BASE_URL: "http://localhost:8080"
+      # Uncomment after creating Multica OIDC app in Authentik:
+      # OAUTH_CLIENT_ID: ${MULTICA_OIDC_CLIENT_ID}
+      # OAUTH_CLIENT_SECRET: ${MULTICA_OIDC_CLIENT_SECRET}
+      # OAUTH_DISCOVERY_URL: http://authentik-server:9000/auth/application/o/multica/.well-known/openid-configuration
     volumes:
       - multica-uploads:/data/uploads
     extra_hosts:
@@ -204,6 +208,62 @@ services:
     depends_on:
       - multica-backend
 
+  authentik-redis:
+    image: redis:7-alpine
+    container_name: authentik-redis
+    command: --save 60 1 --loglevel warning
+    volumes:
+      - authentik-redis-data:/data
+    networks: [zoe-network]
+    restart: unless-stopped
+    profiles: ["authentik"]
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2024.12
+    container_name: authentik-server
+    command: server
+    environment:
+      AUTHENTIK_REDIS__HOST: authentik-redis
+      AUTHENTIK_POSTGRESQL__HOST: zoe-database
+      AUTHENTIK_POSTGRESQL__USER: zoe
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_WEB__PATH_PREFIX: "/auth"
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+    volumes:
+      - authentik-media:/media
+      - authentik-templates:/templates
+    networks: [zoe-network]
+    depends_on:
+      - zoe-database
+      - authentik-redis
+    restart: unless-stopped
+    profiles: ["authentik"]
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2024.12
+    container_name: authentik-worker
+    command: worker
+    environment:
+      AUTHENTIK_REDIS__HOST: authentik-redis
+      AUTHENTIK_POSTGRESQL__HOST: zoe-database
+      AUTHENTIK_POSTGRESQL__USER: zoe
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD}
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_WEB__PATH_PREFIX: "/auth"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - authentik-media:/media
+      - authentik-certs:/certs
+    networks: [zoe-network]
+    depends_on:
+      - authentik-redis
+      - zoe-database
+    restart: unless-stopped
+    profiles: ["authentik"]
+
 networks:
   zoe-network:
     name: zoe-network
@@ -214,3 +274,7 @@ volumes:
   agent0-logs: null
   zoe-database-data: null
   multica-uploads: null
+  authentik-redis-data: null
+  authentik-media: null
+  authentik-templates: null
+  authentik-certs: null
