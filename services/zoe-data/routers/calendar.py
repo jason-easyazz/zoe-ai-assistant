@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 
 
 def _row_to_event(row) -> dict:
-    """Convert aiosqlite Row to dict, parsing metadata JSON."""
+    """Convert asyncpg Row to dict, parsing metadata JSON."""
     d = dict(row)
     if d.get("metadata") is not None and isinstance(d["metadata"], str):
         try:

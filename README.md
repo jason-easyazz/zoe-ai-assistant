@@ -43,19 +43,21 @@ Then ensure host-native services are running (`zoe-data`, OpenClaw gateway, llam
 - API docs: `http://localhost:8000/docs`
 - Health: `http://localhost:8000/health`
 
-## Touchscreen (Raspberry Pi at `192.168.1.61`)
+## Touchscreen
 
-Touchscreen setup is managed from main:
+Zoe supports a touch panel kiosk running on a separate device (previously a Raspberry Pi, now any Linux device running the kiosk stack).
 
 - Device profile: `docs/guides/TOUCHSCREEN_DEVICE_STACK_192.168.1.61.md`
 - Installer/templates: `scripts/setup/touchscreen/`
+
+> **Note:** The Raspberry Pi 5 touchscreen target was retired April 2026. The installer scripts remain available for any compatible Linux host.
 
 Example install command:
 
 ```bash
 scripts/setup/touchscreen/install_touchscreen.sh \
-  --host 192.168.1.61 \
-  --user pi \
+  --host <TOUCH_PANEL_IP> \
+  --user <USER> \
   --server-url https://192.168.1.218 \
   --panel-id zoe-touch-pi
 ```

@@ -1,34 +1,62 @@
 I need to continue working on my Zoe AI Assistant.
 
-Current state from my system:
+Current architecture (as of May 2026):
 ```
 📍 Location: /home/zoe/assistant
 🐙 GitHub: https://github.com/jason-easyazz/zoe-ai-assistant
-🐳 Containers Running: zoe-ui,zoe-core,zoe-ollama,zoe-redis
-🧠 AI Model: llama3.2:3b (loaded in zoe-ollama)
-🌐 Web UI: http://192.168.1.60:8080 (working)
-🔌 API: http://192.168.1.60:8000 (working)
-💾 Database Stats: 4 conversations, 1 events
-📝 Last Commit: 220e9cb 📚 Added permanent project instructions and continuity system
-⏰ State Generated: Wed 20 Aug 21:47:18 AWST 2025
+
+🖥️  Host-native services (NOT Docker):
+    - zoe-data: FastAPI + OpenClaw gateway on :8000
+    - llama-server (llama.cpp): LLM inference on :11434
+    - OpenClaw: agent / tool execution gateway
+    - kokoro-tts: GPU TTS sidecar on :10201
+
+🐳  Docker services (docker-compose.yml):
+    - zoe-ui: Nginx frontend (HTTP :80 / HTTPS :443)
+    - zoe-auth: Auth service on :8002
+    - homeassistant: HA on :8123
+    - homeassistant-mcp-bridge: HA <-> MCP bridge
+    - wyoming-piper: TTS fallback on :10200
+    - zoe-orbit (optional): tablet UI
+    - zoe-keeper (optional): watchdog
+
+🧠  LLM: llama.cpp host-native llama-server (GPU-accelerated on Jetson Orin NX)
+    - Model: config-driven via ZOE_MODEL_NAME env var (do not hardcode)
+    - Ollama: RETIRED. Do not reference.
+
+💾  Database: PostgreSQL (asyncpg) — host-native or Docker zoe-database
+    - SQLite is RETIRED for primary data. zoe-data uses PostgreSQL exclusively.
+    - Schema managed by Alembic; migrations in services/zoe-data/alembic/
+    - Some modules (orbit, music-assistant) still use their own local SQLite.
+
+🔐  Auth: zoe-auth service (SQLite-backed, Docker, port :8002)
+
+🤖  Agent stack: OpenClaw + skills at .openclaw/workspace/skills/
+    - Intent routing: services/zoe-data/intent_router.py
+    - Chat router: services/zoe-data/routers/chat.py (AG-UI SSE)
+
+🏠  Hardware: NVIDIA Jetson Orin NX 16GB (primary/only production target)
+    - Raspberry Pi 5: RETIRED April 2026
+
+🌐  Endpoints:
+    - Web UI: https://localhost (or http://localhost)
+    - API: http://localhost:8000
+    - API docs: http://localhost:8000/docs
+    - Health: http://localhost:8000/health
 ```
 
-System Architecture:
-- Docker containers with zoe- prefix
-- Single docker-compose.yml
-- SQLite database at data/zoe.db
-- Services: FastAPI backend, Nginx frontend, Ollama AI, Redis cache
+RETIRED (do not reference):
+- zoe-core, zoe-ollama, zoe-redis, zoe-llamacpp containers
+- LiteLLM, Ollama — replaced by host-native llama-server
+- SQLite for primary app data — replaced by PostgreSQL
+- Raspberry Pi 5 hardware support
 
 Please:
-1. Load the Zoe project documents from your knowledge
-2. Acknowledge the current state above
-3. Show available enhancement options
-4. Provide complete scripts with GitHub auto-sync
+1. Acknowledge the current architecture above
+2. Show what you can help with
+3. Reference docs/guides/ for operational details
 
 All scripts should:
 - Start with: cd /home/zoe/assistant
-- End with: git push
-- Include full file contents
-- Test immediately after changes
-
-What would you like me to work on next?
+- Follow .cursorrules for file organization
+- Include error handling and rollback steps

@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/reminders", tags=["reminders"])
 
 
 def _row_to_dict(row) -> dict:
-    """Convert aiosqlite Row to dict."""
+    """Convert asyncpg Row to dict."""
     if row is None:
         return None
     d = dict(row)

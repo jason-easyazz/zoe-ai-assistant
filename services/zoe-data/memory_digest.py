@@ -87,7 +87,7 @@ async def run_memory_digest(user_id: str, db=None) -> dict:
 
     Args:
         user_id: The user to run the digest for.
-        db:      aiosqlite database connection (optional — opens its own if None).
+        db:      asyncpg database connection (optional — opens its own if None).
 
     Returns:
         dict with keys: user_id, extracted, new, skipped_duplicates, error (if any).

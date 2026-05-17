@@ -22,7 +22,7 @@ def _normalize_list_type(lt: str) -> str:
 
 
 def _row_to_dict(row) -> dict:
-    """Convert aiosqlite Row to dict."""
+    """Convert asyncpg Row to dict."""
     if row is None:
         return None
     return dict(row)

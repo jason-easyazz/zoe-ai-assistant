@@ -8,6 +8,14 @@ data/*.db-wal
 # But DO track schema files
 !data/schema/
 !data/schema/*.sql
+# Service-local database files (auth, modules)
+services/zoe-auth/*.db
+services/zoe-auth/*.db-shm
+services/zoe-auth/*.db-wal
+modules/orbit/data/*.db
+modules/orbit/data/*.db-shm
+modules/orbit/data/*.db-wal
+
 
 # Wyoming voice models (large; install via scripts/setup)
 data/wyoming/

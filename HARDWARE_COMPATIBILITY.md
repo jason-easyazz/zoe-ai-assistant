@@ -10,7 +10,7 @@ Zoe AI Assistant is designed to run across multiple ARM64 platforms with adaptiv
 
 | Feature | Jetson Orin NX 16GB | Raspberry Pi 5 16GB | Mac Mini M4* |
 |---------|---------------------|---------------------|--------------|
-| **Status** | ✅ Primary (Production) | ✅ Tested (Ready) | 📝 Planned |
+| **Status** | ✅ Primary (Production) | 🚫 Retired (Apr 2026) | 📝 Planned |
 | **Architecture** | ARM64 + NVIDIA GPU | ARM64 CPU-only | ARM64 CPU-only |
 | **Memory** | 16GB Unified | 16GB LPDDR4X | 16GB+ |
 | **LLM Inference** | GPU-accelerated | CPU-only | CPU-only |
@@ -23,6 +23,8 @@ Zoe AI Assistant is designed to run across multiple ARM64 platforms with adaptiv
 | **Power Usage** | 15-25W | 5-10W | 10-20W (est) |
 
 \* Mac Mini M4 support is planned but untested. ARM64 architecture should be compatible.
+
+> **Note (Apr 2026):** Raspberry Pi 5 support has been retired. Pi-specific scripts and configs are archived under `docs/archive/retired-2026-04-18/`. The Jetson Orin NX is the sole current production target.
 
 ---
 
@@ -68,7 +70,9 @@ docker-compose -f docker-compose.yml -f docker-compose.jetson.yml up -d
 
 ---
 
-### Raspberry Pi 5 16GB
+### Raspberry Pi 5 16GB *(Retired April 2026)*
+
+> Pi 5 support is retired. Scripts and configs archived at `docs/archive/retired-2026-04-18/`. Content below is kept for historical reference only.
 
 **Hardware:**
 - CPU: 4-core ARM Cortex-A76 @ 2.4GHz
@@ -248,7 +252,7 @@ vcgencmd measure_temp
 | Docker Images | ~15GB | All services combined |
 | Models (Jetson) | ~10-20GB | Depends on models downloaded |
 | Models (Pi) | ~5-10GB | Smaller models |
-| Databases | <1GB | zoe.db, memory.db, training.db |
+| Databases | <1GB | PostgreSQL (primary), plus module-local SQLite files |
 | Logs | ~1-2GB | Varies with usage |
 | **Total (Jetson)** | **~30-40GB** | Recommended: 128GB+ SSD |
 | **Total (Pi)** | **~20-30GB** | Recommended: 64GB+ SD/SSD |
@@ -307,7 +311,7 @@ docker run --rm --runtime nvidia nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi
 - Reduce `num_gpu` layers
 - Monitor with `nvidia-smi`
 
-### Pi Issues
+### Pi Issues *(Historical -- Pi retired Apr 2026)*
 
 **Slow inference:**
 - Check CPU governor is set to `performance`
@@ -342,16 +346,15 @@ If you successfully run Zoe on a platform not listed here, please open an issue 
 ## Recommendations
 
 **For Production Use:**
-- **Primary**: Jetson Orin NX (best performance)
-- **Edge/Remote**: Raspberry Pi 5 (low power, portable)
+- **Primary**: Jetson Orin NX (sole current production target)
 
 **For Development:**
-- **Any platform works** - Pi is great for testing resource constraints
 - **Mac M4** - Coming soon, ideal for developers
+- Any ARM64 host running `llama-server` should work for basic dev
 
 **For Home Use:**
-- **Jetson** if you want the best experience
-- **Pi** if you want low power consumption
+- **Jetson** -- best performance, current recommendation
+- Raspberry Pi 5 support was retired April 2026
 
 ---
 
