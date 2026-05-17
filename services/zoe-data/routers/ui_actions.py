@@ -107,6 +107,18 @@ async def get_pending_ui_actions(
     # Fall back to the caller's user_id if the panel has no registered session yet.
     panel_user_id = panel_row["user_id"] if panel_row else user["user_id"]
 
+    # Auto-expire queued actions older than 1 hour — these are stale (e.g. ack
+    # was lost during page navigation) and should not be re-delivered on boot.
+    await db.execute(
+        """UPDATE ui_actions
+           SET status = 'failed', error_code = 'stale', error_message = 'Auto-expired: queued >1 hour without ack',
+               updated_at = NOW()
+           WHERE user_id = ? AND panel_id = ? AND status = 'queued'
+             AND created_at < NOW() - INTERVAL '1 hour'""",
+        (panel_user_id, panel_id),
+    )
+    await db.commit()
+
     cursor = await db.execute(
         """SELECT id, panel_id, chat_session_id, action_type, payload, status, requires_confirmation,
                   confirmation_token, retry_count, max_retries, created_at, updated_at

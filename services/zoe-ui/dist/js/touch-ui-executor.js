@@ -967,7 +967,9 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 if (actionIsVoiceTriggered(action, payload)) armAutoHomeTimer('voice:navigate');
                 else disarmAutoHomeTimer('non-voice:navigate');
                 showToast(`Navigating to ${page}`);
-                setTimeout(() => { window.location.href = page; }, 150);
+                // 800 ms delay — long enough for the ack fetch (keepalive) to fire before the
+                // page unloads, preventing the action from staying stuck in 'queued' status.
+                setTimeout(() => { window.location.href = page; }, 800);
                 return { status: 'success' };
             }
 
@@ -1028,7 +1030,8 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
                 else disarmAutoHomeTimer(`non-voice:${actionType}`);
                 const label = payload.label || url;
                 showToast(String(label).slice(0, 120));
-                setTimeout(() => { window.location.assign(url); }, 200);
+                // 800 ms delay — lets the ack (keepalive) complete before page unloads.
+                setTimeout(() => { window.location.assign(url); }, 800);
                 return { status: 'success' };
             }
 
@@ -1286,15 +1289,28 @@ body.light-mode #zvo-header { border-bottom-color: rgba(0,0,0,0.07); }
     }
 
     async function ackAction(actionId, result) {
-        await api(`/api/ui/actions/${actionId}/ack`, {
-            method: 'POST',
-            body: JSON.stringify({
-                status: result.status,
-                error_code: result.error_code || null,
-                error_message: result.error_message || null,
-                ui_context: buildContext(),
-            }),
+        // keepalive: true ensures this fetch completes even if the page navigates away,
+        // which is critical for navigate/panel_navigate actions that change the page
+        // before the ack response can arrive.
+        const body = JSON.stringify({
+            status: result.status,
+            error_code: result.error_code || null,
+            error_message: result.error_message || null,
+            ui_context: buildContext(),
         });
+        const session = getSession();
+        const headers = { 'Content-Type': 'application/json' };
+        if (session && session.session_id) headers['X-Session-ID'] = session.session_id;
+        try {
+            await fetch(`/api/ui/actions/${actionId}/ack`, {
+                method: 'POST',
+                headers,
+                body,
+                keepalive: true,
+            });
+        } catch (_) {
+            // Non-fatal — action may stay queued but panel will auto-expire it server-side.
+        }
     }
 
     async function pollActions() {

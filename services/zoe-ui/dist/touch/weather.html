@@ -936,8 +936,21 @@
                 fetch('/api/weather/current'),
                 fetch('/api/weather/forecast'),
             ]);
-            if (curRes.ok)  renderCurrent(await curRes.json());
-            if (fcRes.ok)   renderForecast(await fcRes.json());
+            if (curRes.ok) {
+                let curData;
+                try { curData = await curRes.json(); } catch (_) { curData = null; }
+                if (curData) renderCurrent(curData);
+                else document.getElementById('heroSection').innerHTML = `
+                    <div class="weather-error"><div class="err-icon">🌐</div><div>Weather data unavailable</div></div>`;
+            } else if (curRes.status === 401 || curRes.status === 403) {
+                // Session expired — redirect to login (preserve destination).
+                try { sessionStorage.setItem('zoe_redirect_after_login', window.location.pathname + window.location.search); } catch (_) {}
+                window.location.assign('/touch/index.html');
+                return;
+            }
+            if (fcRes.ok) {
+                try { renderForecast(await fcRes.json()); } catch (_) {}
+            }
             _lastFetch = Date.now();
         } catch (err) {
             console.warn('[Weather] fetch failed:', err);
@@ -945,6 +958,7 @@
                 <div class="weather-error">
                     <div class="err-icon">⚡</div>
                     <div>Could not load weather</div>
+                    <div style="font-size:11px;opacity:0.6;margin-top:4px">Check your connection</div>
                 </div>`;
         }
     }
