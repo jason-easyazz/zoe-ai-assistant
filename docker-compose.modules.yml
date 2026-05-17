@@ -216,6 +216,7 @@ services:
       - authentik-redis-data:/data
     networks: [zoe-network]
     restart: unless-stopped
+    mem_limit: 768m
     profiles: ["authentik"]
 
   authentik-server:
@@ -242,6 +243,7 @@ services:
       - zoe-database
       - authentik-redis
     restart: unless-stopped
+    mem_limit: 768m
     profiles: ["authentik"]
 
   authentik-worker:
@@ -268,6 +270,7 @@ services:
       - authentik-redis
       - zoe-database
     restart: unless-stopped
+    mem_limit: 768m
     profiles: ["authentik"]
 
 networks:
