@@ -109,12 +109,16 @@ async def get_pending_ui_actions(
 
     # Auto-expire queued actions older than 1 hour — these are stale (e.g. ack
     # was lost during page navigation) and should not be re-delivered on boot.
+    # Use CURRENT_TIMESTAMP (not NOW()) because _adapt_params rewrites NOW() →
+    # NOW()::text, which makes "NOW()::text - INTERVAL '1 hour'" invalid SQL.
+    # Cast created_at to timestamptz for comparison (column may be TEXT).
     await db.execute(
         """UPDATE ui_actions
-           SET status = 'failed', error_code = 'stale', error_message = 'Auto-expired: queued >1 hour without ack',
+           SET status = 'failed', error_code = 'stale',
+               error_message = 'Auto-expired: queued >1 hour without ack',
                updated_at = NOW()
            WHERE user_id = ? AND panel_id = ? AND status = 'queued'
-             AND created_at < NOW() - INTERVAL '1 hour'""",
+             AND created_at::timestamptz < CURRENT_TIMESTAMP - INTERVAL '1 hour'""",
         (panel_user_id, panel_id),
     )
     await db.commit()
