@@ -103,7 +103,7 @@ async def get_system_status(
         ui_actions_pending = row[0] if row else 0
         cursor = await db.execute(
             """SELECT COUNT(*) FROM ui_panel_sessions
-               WHERE last_seen_at >= datetime('now', '-30 seconds')"""
+               WHERE last_seen_at::timestamptz >= CURRENT_TIMESTAMP - INTERVAL '30 seconds'"""
         )
         row = await cursor.fetchone()
         panels_online = row[0] if row else 0

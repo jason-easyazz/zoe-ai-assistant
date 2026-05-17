@@ -61,8 +61,8 @@ async def save_layout(request: Request, user: dict = Depends(get_current_user)):
     layout = json.dumps(body.get("layout", []))
     async for db in get_db():
         await db.execute(
-            "INSERT INTO dashboard_layouts (user_id, layout, updated_at) VALUES (?, ?, NOW()) "
-            "ON CONFLICT(user_id) DO UPDATE SET layout = excluded.layout, updated_at = NOW()",
+            "INSERT INTO dashboard_layouts (user_id, layout, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(user_id) DO UPDATE SET layout = excluded.layout, updated_at = CURRENT_TIMESTAMP",
             (user_id, layout),
         )
         await db.commit()
@@ -107,8 +107,8 @@ async def add_widgets(request: Request, user: dict = Depends(get_current_user)):
             added.append(wid)
 
         await db.execute(
-            "INSERT INTO dashboard_layouts (user_id, layout, updated_at) VALUES (?, ?, NOW()) "
-            "ON CONFLICT(user_id) DO UPDATE SET layout = excluded.layout, updated_at = NOW()",
+            "INSERT INTO dashboard_layouts (user_id, layout, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(user_id) DO UPDATE SET layout = excluded.layout, updated_at = CURRENT_TIMESTAMP",
             (user_id, json.dumps(current)),
         )
         await db.commit()
@@ -125,7 +125,7 @@ async def remove_widget(widget_id: str, user: dict = Depends(get_current_user)):
         current = json.loads(row["layout"])
         updated = [w for w in current if w.get("id") != widget_id]
         await db.execute(
-            "UPDATE dashboard_layouts SET layout = ?, updated_at = NOW() WHERE user_id = ?",
+            "UPDATE dashboard_layouts SET layout = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
             (json.dumps(updated), user_id),
         )
         await db.commit()

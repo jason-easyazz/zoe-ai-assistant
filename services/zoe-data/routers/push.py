@@ -67,9 +67,12 @@ async def subscribe(request: Request, user: dict = Depends(get_current_user)):
     user_id = user["user_id"]
     async for db in get_db():
         await db.execute(
-            """INSERT OR REPLACE INTO push_subscriptions
+            """INSERT INTO push_subscriptions
                (user_id, endpoint, keys_p256dh, keys_auth, created_at)
-               VALUES (?, ?, ?, ?, NOW())""",
+               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT (user_id, endpoint) DO UPDATE SET
+                   keys_p256dh = EXCLUDED.keys_p256dh,
+                   keys_auth = EXCLUDED.keys_auth""",
             (
                 user_id,
                 subscription.get("endpoint", ""),

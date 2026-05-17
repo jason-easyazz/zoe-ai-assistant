@@ -136,8 +136,9 @@ async def ack_ui_action(
     await require_feature_access(db, user, feature="ui_actions", action="ack")
     user_id = user["user_id"]
     status = payload.get("status")
-    if status not in ACTION_STATES:
-        raise HTTPException(status_code=400, detail="Invalid action status")
+    if not status or status not in ACTION_STATES:
+        # Unknown or missing status — treat as a no-op ack to be idempotent.
+        return {"status": "already_acked", "action_id": action_id}
 
     # Accept ack by DB uuid (id) OR by idempotency_key — the SSE broadcast uses the
     # idempotency_key as its action id, while the DB stores a separate UUID.
@@ -148,7 +149,9 @@ async def ack_ui_action(
     )
     existing = await cursor.fetchone()
     if not existing:
-        raise HTTPException(status_code=404, detail="Action not found")
+        # Action doesn't exist (stale/already-processed) — return 200 to be idempotent.
+        # The SSE client may retry acks for actions that were already cleaned up.
+        return {"status": "already_acked", "action_id": action_id}
 
     # Use the real DB id for the update (in case we matched on idempotency_key)
     real_id = existing["id"]
@@ -347,9 +350,9 @@ async def requeue_stale_actions(
            FROM ui_actions
            WHERE user_id = ?
              AND status = 'running'
-             AND updated_at < datetime('now', ?)
+             AND updated_at::timestamptz < CURRENT_TIMESTAMP - (? * INTERVAL '1 second')
              AND retry_count < max_retries""",
-        (user_id, f"-{timeout_seconds} seconds"),
+        (user_id, timeout_seconds),
     )
     rows = await cursor.fetchall()
     action_ids = [r["id"] for r in rows]
