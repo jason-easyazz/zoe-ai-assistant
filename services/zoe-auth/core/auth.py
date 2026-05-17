@@ -96,7 +96,7 @@ class AuthManager:
             # Create user record
             with auth_db.get_connection() as conn:
                 conn.execute("""
-                    INSERT INTO users 
+                    INSERT INTO auth_users 
                     (user_id, username, email, password_hash, role, is_active, is_verified, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
@@ -253,7 +253,7 @@ class AuthManager:
             # Update password
             with auth_db.get_connection() as conn:
                 conn.execute("""
-                    UPDATE users 
+                    UPDATE auth_users 
                     SET password_hash = ?, updated_at = ?, failed_login_attempts = 0, locked_until = NULL
                     WHERE user_id = ?
                 """, (new_password_hash, datetime.now().isoformat(), user_id))
@@ -293,7 +293,7 @@ class AuthManager:
             # Update user with temporary password and force change
             with auth_db.get_connection() as conn:
                 conn.execute("""
-                    UPDATE users 
+                    UPDATE auth_users 
                     SET password_hash = ?, updated_at = ?, failed_login_attempts = 0, 
                         locked_until = NULL, settings = jsonb_set(COALESCE(settings::jsonb, '{}'::jsonb), '{force_password_change}', 'true'::jsonb)::text
                     WHERE user_id = ?
@@ -329,7 +329,7 @@ class AuthManager:
 
             with auth_db.get_connection() as conn:
                 conn.execute("""
-                    UPDATE users 
+                    UPDATE auth_users 
                     SET failed_login_attempts = 0, locked_until = NULL
                     WHERE user_id = ?
                 """, (user_id,))
@@ -400,12 +400,12 @@ class AuthManager:
                 query = """
                     SELECT user_id, username, email, role, is_active, is_verified, 
                            created_at, last_login, failed_login_attempts, locked_until
-                    FROM users
+                    FROM auth_users
                 """
                 params = []
                 
                 if active_only:
-                    query += " WHERE is_active = 1"
+                    query += " WHERE is_active = 1 AND user_id != 'system'"
                     
                 query += " ORDER BY created_at DESC"
                 
@@ -477,7 +477,7 @@ class AuthManager:
         try:
             with auth_db.get_connection() as conn:
                 cursor = conn.execute("""
-                    SELECT 1 FROM users 
+                    SELECT 1 FROM auth_users 
                     WHERE username = ? OR email = ?
                 """, (username, email))
                 return cursor.fetchone() is not None

@@ -673,8 +673,8 @@ async def setup_initial_password(request: InitialPasswordSetupRequest, http_requ
             new_hash = bcrypt.hashpw(request.new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
             
             conn.execute(
-                "UPDATE users SET password_hash = ?, updated_at = ? WHERE user_id = ?",
-                (new_hash, datetime.utcnow(), user_id)
+                "UPDATE auth_users SET password_hash = ?, updated_at = ? WHERE user_id = ?",
+                (new_hash, datetime.utcnow().isoformat(), user_id)
             )
             
             logger.info(f"Initial password set for user: {request.username}")

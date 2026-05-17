@@ -254,7 +254,7 @@ class RBACManager:
 
             with auth_db.get_connection() as conn:
                 conn.execute("""
-                    UPDATE users 
+                    UPDATE auth_users 
                     SET role = ?, updated_at = ?
                     WHERE user_id = ?
                 """, (role, datetime.now().isoformat(), user_id))
