@@ -45,15 +45,65 @@ _SKIP_PREFIXES = (
 
 
 _TEMPLATE_PATTERNS: list[tuple[str, str, float]] = [
+    # Explicit memory commands
     (r"(?:please\s+)?remember\s+(?:that\s+|this\s+)?(.{5,280})", "User asked me to remember: {0}", 0.95),
     (r"don'?t\s+forget\s+(?:that\s+)?(.{5,220})", "Important note: {0}", 0.9),
+
+    # Preferences
     (r"i\s+(?:prefer|like|love|enjoy)\s+(.{3,120})", "Preference: user likes {0}", 0.78),
     (r"i\s+(?:don'?t\s+like|dislike|hate)\s+(.{3,120})", "Preference: user dislikes {0}", 0.78),
     (r"my\s+favou?rite\s+(?:\w+\s+)?is\s+(.{2,90})", "Favourite: {0}", 0.8),
+
+    # Location / employer / origin
     (r"i\s+live\s+in\s+(.{2,80})", "User lives in {0}", 0.8),
     (r"i\s+work\s+(?:at|for)\s+(.{2,80})", "User works at/for {0}", 0.8),
     (r"i(?:'m|\s+am)\s+from\s+(.{2,80})", "User is from {0}", 0.78),
     (r"my\s+(?:lucky\s+)?number\s+is\s+(\d+)", "User's lucky number is {0}", 0.85),
+
+    # User's own name and age
+    (r"my\s+name\s+is\s+([A-Za-z][A-Za-z' -]{1,60})", "User's name is {0}", 0.92),
+    (r"(?:people\s+)?call\s+me\s+([A-Za-z][A-Za-z' -]{1,40})", "User goes by {0}", 0.88),
+    (r"i(?:'m|\s+am)\s+(\d{1,3})\s+years?\s+old", "User is {0} years old", 0.88),
+
+    # Profession / identity
+    (r"i(?:'m|\s+am)\s+a(?:n)?\s+([\w][\w\s]{3,60}?)(?:\s*[.,;!?]|$)", "User's job/role: {0}", 0.75),
+
+    # Pets — "my dog's name is X" / "my dog is named X" / "my dog is called X"
+    (
+        r"my\s+(dog|cat|pet|bird|fish|rabbit|hamster|horse|pup(?:py)?|kitten|parrot|turtle|snake|lizard|ferret|guinea\s+pig)"
+        r"(?:'s\s+name\s+is\s+|\s+is\s+named\s+|\s+is\s+called\s+|\s+is\s+)([A-Za-z][A-Za-z' -]{1,50})",
+        "User's {0} is named {1}", 0.88,
+    ),
+    # "I have a dog named Teddy" / "I have a dog called Teddy"
+    (
+        r"i\s+have\s+a(?:n)?\s+(dog|cat|pet|bird|fish|rabbit|hamster|horse|pup(?:py)?|kitten|parrot|turtle|snake|lizard|ferret|guinea\s+pig)"
+        r"\s+(?:named|called)\s+([A-Za-z][A-Za-z' -]{1,50})",
+        "User has a {0} named {1}", 0.88,
+    ),
+
+    # Family relationships — "my wife is Sarah" / "my wife's name is Sarah"
+    (
+        r"my\s+(wife|husband|partner|girlfriend|boyfriend|son|daughter|kid|child|brother|sister"
+        r"|mom|dad|father|mother|grandma|grandpa|grandfather|grandmother|aunt|uncle|niece|nephew|friend)"
+        r"(?:'s\s+name\s+is\s+|\s+is\s+named\s+|\s+is\s+called\s+)\s*([A-Za-z][A-Za-z' -]{1,60})",
+        "User's {0} is named {1}", 0.87,
+    ),
+    # "my wife is [name]" (without "named/called" — lower confidence, name heuristic)
+    (
+        r"my\s+(wife|husband|partner|girlfriend|boyfriend|son|daughter|brother|sister|dad|mom|father|mother)\s+is\s+"
+        r"([A-Z][A-Za-z]{1,40})\b(?!\s+(?:a|an|the|very|really|so|going|trying))",
+        "User's {0} is {1}", 0.78,
+    ),
+
+    # General "my X is Y" for named things the user cares about
+    (
+        r"my\s+([\w]{3,30})\s+is\s+named\s+([A-Za-z][A-Za-z' -]{1,60})",
+        "User's {0} is named {1}", 0.84,
+    ),
+
+    # Birthday / anniversary
+    (r"my\s+birthday\s+is\s+(.{3,60})", "User's birthday is {0}", 0.85),
+    (r"i\s+was\s+born\s+(?:on\s+)?(.{3,60})", "User was born on {0}", 0.82),
 ]
 
 
@@ -192,6 +242,12 @@ async def extract_and_ingest(
         )
         if ref is not None:
             saved += 1
+    if saved > 0:
+        try:
+            from zoe_agent import _invalidate_user_facts_cache
+            _invalidate_user_facts_cache(user_id)
+        except Exception:
+            pass
     return saved
 
 

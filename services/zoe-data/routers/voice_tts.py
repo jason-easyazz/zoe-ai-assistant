@@ -781,6 +781,69 @@ async def _broadcast_list_ui(
         logger.debug("voice list ui enqueue failed (non-fatal): %s", exc)
 
 
+async def _broadcast_lets_talk_ui(panel_id: str, turn_key: Optional[str] = None) -> None:
+    """Navigate the touch panel browser to voice conversation mode.
+
+    Navigation target is /touch/voice.html (no ?conv=1) so the executor's
+    same-URL check always fires when already on the voice page, preventing
+    re-navigation loops when the queued action isn't acked in time.
+
+    The auto-start listening signal is sent as a separate transient push event
+    (voice:start_conversation) which the voice page handles directly — it is
+    never enqueued in the DB, so it cannot create a replay loop.
+    """
+    delivery_key = turn_key or str(time.monotonic_ns())
+    # Navigation: no ?conv=1 so the action is skipped when panel is already on voice page.
+    nav_action = {
+        "id": f"voice_letstalk_nav_{panel_id}_{delivery_key}",
+        "action_type": "panel_navigate",
+        "payload": {
+            "url": "/touch/voice.html",
+            "label": "Opening voice",
+            "panel_id": panel_id,
+        },
+    }
+    try:
+        from push import broadcaster
+        # Broadcast nav action (handled by touch-ui-executor).
+        await broadcaster.broadcast("all", "ui_action", {"action": nav_action})
+        # Also broadcast a transient start-conversation signal — NOT enqueued in DB.
+        # The voice page handles this to begin auto-listening after a short delay.
+        await broadcaster.broadcast("all", "voice:start_conversation", {
+            "panel_id": panel_id,
+            "delay_ms": 2500,   # wait for TTS echo to settle before opening mic
+        })
+    except Exception as exc:
+        logger.debug("voice lets_talk ui broadcast failed (non-fatal): %s", exc)
+    try:
+        from database import get_db as _get_db
+        from ui_orchestrator import enqueue_ui_action as _enqueue_ui_action
+        async for _db in _get_db():
+            _panel_user_id = "family-admin"
+            try:
+                _cur = await _db.execute(
+                    "SELECT user_id FROM ui_panel_sessions WHERE panel_id = ? ORDER BY last_seen_at DESC LIMIT 1",
+                    (panel_id,),
+                )
+                _row = await _cur.fetchone()
+                if _row and _row["user_id"]:
+                    _panel_user_id = str(_row["user_id"])
+            except Exception:
+                pass
+            await _enqueue_ui_action(
+                _db,
+                user_id=_panel_user_id,
+                panel_id=panel_id,
+                action_type="panel_navigate",
+                payload=nav_action["payload"],
+                requested_by="voice",
+                idempotency_key=f"voice_letstalk_nav_{panel_id}_{delivery_key}",
+            )
+            break
+    except Exception as exc:
+        logger.debug("voice lets_talk ui enqueue failed (non-fatal): %s", exc)
+
+
 def _parse_voice_form_field(text: str, panel_type: str) -> dict:
     """Extract field updates from a voice utterance directed at the active action form.
 
@@ -1090,9 +1153,14 @@ async def _resolve_recent_panel_session_user(panel_id: str, db) -> Optional[str]
             return None
 
         raw_last_seen = str(row["last_seen_at"]).strip()
+        # Normalise timezone suffixes before parsing:
+        # "+00" (PostgreSQL shorthand) → "+00:00" required by fromisoformat.
+        # Also handle "Z" → "+00:00".
+        import re as _re
+        normalised = _re.sub(r"([+-]\d{2})$", r"\1:00", raw_last_seen.replace("Z", "+00:00"))
         parsed: Optional[datetime] = None
         try:
-            parsed = datetime.fromisoformat(raw_last_seen.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(normalised)
         except Exception:
             try:
                 parsed = datetime.strptime(raw_last_seen, "%Y-%m-%d %H:%M:%S")
@@ -1551,6 +1619,50 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         raise HTTPException(status_code=500, detail="Transcription failed") from exc
 
 
+async def _schedule_voice_chat_save(
+    session_id: str, user_text: str, reply: str, user_id: str
+) -> None:
+    """Fire-and-forget: persist both turns of a voice exchange to chat_messages.
+
+    Called from every exit path in voice_command so the full transcript ends up
+    in the DB regardless of which fast-path handled the turn. The nightly digest
+    and _load_voice_history both read from chat_messages, so this is the single
+    fix that unblocks multi-turn context, transcript search, and nightly extraction.
+    """
+    if not session_id or user_id in ("guest", "voice-daemon", ""):
+        return
+    try:
+        from chat import _save_chat_message as _svc  # lazy — avoids circular import
+        if user_text:
+            asyncio.ensure_future(_svc(session_id, "user", user_text))
+        if reply:
+            asyncio.ensure_future(_svc(session_id, "assistant", reply))
+    except Exception:
+        pass
+
+
+async def _run_voice_memory_passes(
+    user_text: str, reply: str, user_id: str, session_id: str
+) -> None:
+    """Run both memory extraction passes for a completed voice exchange.
+
+    Standalone (non-nested) version so it can be called from any early-return
+    path — not just the main LLM path at the bottom of voice_command.
+    """
+    try:
+        from memory_extractor import extract_and_ingest as _mi
+        from memory_digest import run_turn_digest as _td
+        await asyncio.gather(
+            _mi(user_text, reply, user_id=user_id, session_id=session_id,
+                source="voice_regex", auto_approve=True),
+            _td(user_id, user_text, reply, session_id=session_id,
+                source="voice_turn_digest"),
+            return_exceptions=True,
+        )
+    except Exception:
+        pass
+
+
 @router.post("/command")
 async def voice_command(
     payload: dict,
@@ -1625,8 +1737,22 @@ async def voice_command(
     if effective_user == "voice-daemon":
         effective_user = _panel_default_user or "guest"
 
-    logger.info("voice/command panel=%s session=%s user=%s len=%d",
-                panel_id, session_id, effective_user, len(text))
+    logger.info(
+        "voice/command panel=%s session=%s user=%s len=%d "
+        "[identity: identified=%s bound=%s panel_recent=%s panel_default=%s scope_user=%s has_scope=%s]",
+        panel_id, session_id, effective_user, len(text),
+        identified_user_id, _bound_user, _panel_recent_user, _panel_default_user,
+        _scope_identity_user, _has_scope_identity,
+    )
+
+    # Persist user turn to chat_messages immediately so all downstream paths
+    # (nightly digest, _load_voice_history, multi-turn context) have the transcript.
+    if text and effective_user not in ("guest", "voice-daemon", ""):
+        try:
+            from chat import _save_chat_message as _svc_user_turn
+            asyncio.ensure_future(_svc_user_turn(session_id, "user", text))
+        except Exception:
+            pass
 
     # ── Active action-form panel: route voice to field-filling ─────────────
     # When the touch panel has an action form open (calendar_event or shopping_list),
@@ -1850,6 +1976,8 @@ async def voice_command(
                     await _bc_conf.broadcast("all", "voice:done", {"panel_id": panel_id})
                 except Exception:
                     pass
+                await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+                asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                 return {"ok": True, "panel_id": panel_id, "reply": reply_text,
                         "audio_base64": audio_b64_conf, "content_type": ct_conf}
             elif _contains_decision_keyword(lc, _CANCEL_KEYWORDS):
@@ -2014,6 +2142,8 @@ async def voice_command(
                         turn_key=_turn_key,
                     )
                     _list_audio = await synthesize({"text": reply_text}, caller=caller)
+                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+                    asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -2064,6 +2194,8 @@ async def voice_command(
                         turn_key=_turn_key,
                     )
                     _cal_audio = await synthesize({"text": reply_text}, caller=caller)
+                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+                    asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -2091,6 +2223,8 @@ async def voice_command(
                     reply_text = _rem_reply or "I set that reminder."
                     await _broadcast_reminder_ui(panel_id=panel_id, summary=reply_text, turn_key=_turn_key)
                     _rem_audio = await synthesize({"text": reply_text}, caller=caller)
+                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+                    asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
                     return {
                         "ok": True,
                         "panel_id": panel_id,
@@ -2190,6 +2324,8 @@ async def voice_command(
                     await _broadcast_weather_ui(panel_id, _pub_reply, turn_key=_turn_key)
                 if _pub_intent.name in {"calendar_show", "daily_briefing"}:
                     await _broadcast_calendar_ui(panel_id, _pub_reply, turn_key=_turn_key)
+                if _pub_intent.name == "lets_talk":
+                    await _broadcast_lets_talk_ui(panel_id, turn_key=_turn_key)
                 try:
                     from voice_metrics import voice_stage_seconds, voice_turn_count, voice_intent_hit_count
                     voice_stage_seconds.labels(stage="llm_first_token").observe(0.0)
@@ -2221,6 +2357,8 @@ async def voice_command(
                     resource="intent_fast",
                     action=_pub_intent.name,
                 )
+                await _schedule_voice_chat_save(session_id, text, _pub_reply, effective_user)
+                asyncio.ensure_future(_run_voice_memory_passes(text, _pub_reply, effective_user, session_id))
                 return {
                     "ok": True, "panel_id": panel_id,
                     "reply": _pub_reply,
@@ -2244,6 +2382,8 @@ async def voice_command(
             if _weather_fb_reply:
                 await _broadcast_weather_ui(panel_id, _weather_fb_reply, turn_key=_turn_key)
                 _weather_fb_audio = await synthesize({"text": _weather_fb_reply}, caller=caller)
+                await _schedule_voice_chat_save(session_id, text, _weather_fb_reply, effective_user)
+                asyncio.ensure_future(_run_voice_memory_passes(text, _weather_fb_reply, effective_user, session_id))
                 return {
                     "ok": True,
                     "panel_id": panel_id,
@@ -2269,6 +2409,11 @@ async def voice_command(
             _scope_allowed = True
             if _scope.intent_name:
                 _scope_allowed = await _can_use_voice_intent(db, _voice_policy_user, _scope.intent_name)
+            logger.info(
+                "voice/scope panel=%s scope=%s intent=%s allowed=%s ident=%s policy_role=%s",
+                panel_id, _scope.scope, _scope.intent_name, _scope_allowed,
+                _ident_for_scope, _voice_policy_user.get("role"),
+            )
             if _scope.intent_name and not _scope_allowed and not (_scope.scope == "user_scoped" and not _ident_for_scope):
                 _record_guest_policy(
                     "blocked",
@@ -2833,6 +2978,13 @@ async def voice_command(
     except Exception:
         pass
 
+    # Persist assistant turn + extract facts from this voice exchange.
+    # _schedule_voice_chat_save handles the DB write; _run_voice_memory_passes
+    # handles both regex and LLM extraction passes in the background.
+    if reply_text and effective_user and effective_user not in ("guest", "voice-daemon"):
+        await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+        asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+
     return {
         "ok": True,
         "panel_id": panel_id,
@@ -2843,7 +2995,7 @@ async def voice_command(
 
 
 @router.post("/turn")
-async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth)):
+async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth), db=Depends(get_db)):
     """Combined STT + LLM + TTS in a single HTTP call.
 
     Accepts raw audio (base64 WAV), transcribes it, sends the transcript through
@@ -2930,7 +3082,7 @@ async def voice_turn(payload: dict, caller: dict = Depends(_require_voice_auth))
     if (payload or {}).get("identified_user_id"):
         command_payload["identified_user_id"] = payload["identified_user_id"]
 
-    result = await voice_command(command_payload, caller=caller, stream=False)
+    result = await voice_command(command_payload, caller=caller, stream=False, db=db)
     result["text"] = transcript
     t_total = time.monotonic() - t_turn_start
     try:
@@ -3360,6 +3512,7 @@ async def get_livekit_token(request: Request, user: dict = Depends(get_current_u
             "room": "zoe-voice",
             "canPublish": True,
             "canSubscribe": True,
+            "canPublishData": True,
         },
     }
     token = _jwt.encode(payload, api_secret, algorithm="HS256")

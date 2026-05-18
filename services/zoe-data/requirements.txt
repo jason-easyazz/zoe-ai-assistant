@@ -35,6 +35,11 @@ resemblyzer>=0.1.3
 # LiveKit WebRTC server-side agent (joins room, STT+LLM+TTS, publishes audio)
 livekit>=0.14
 # A2A federation + skill discovery + web search
-duckduckgo-search>=6.0
+ddgs>=6.0
+cloakbrowser>=0.3.28
 watchdog>=4.0
 PyYAML>=6.0
+# CloakBrowser — stealth Chromium for bot-blocked web search fallback (optional).
+# Install with: pip install cloakbrowser
+# The binary auto-downloads (~200MB) to ~/.cloakbrowser/ on first launch.
+# cloakbrowser>=0.3.25

@@ -752,6 +752,34 @@ TOOLS = [
         },
     },
     {
+        "name": "panel_ssh_exec",
+        "description": (
+            "Run a shell command on a registered touch panel via SSH. "
+            "Use for diagnostics, service restarts, config reads, and log tailing. "
+            "Looks up IP/credentials from the panel registry — never hardcode an IP. "
+            "Returns stdout, stderr and exit code. "
+            "Example: panel_ssh_exec(panel_id='zoe-touch-pi', command='systemctl status zoe-kiosk')"
+        ),
+        "inputSchema": {
+            "type": "object",
+            "required": ["panel_id", "command"],
+            "properties": {
+                "panel_id": {
+                    "type": "string",
+                    "description": "Registered panel ID (e.g. 'zoe-touch-pi'). Use GET /api/panels to discover.",
+                },
+                "command": {
+                    "type": "string",
+                    "description": "Shell command to execute on the panel via SSH.",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Execution timeout in seconds (default 30, max 120).",
+                },
+            },
+        },
+    },
+    {
         "name": "media_get_now_playing",
         "description": "Get the currently playing media from Home Assistant media player entities.",
         "inputSchema": {
@@ -944,6 +972,58 @@ TOOLS = [
                 },
             },
             "required": ["message", "send_at"],
+        },
+    },
+    # ── Multica Board Tools ──────────────────────────────────────────────────
+    {
+        "name": "list_board_issues",
+        "description": "List issues on the Multica task board. Filter by status (todo, in_progress, done). Use to check what needs attention before deciding what to fix.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "description": "Filter by status: 'todo', 'in_progress', or 'done'. Default: 'todo'."},
+                "limit": {"type": "integer", "description": "Max issues to return (1-100). Default: 50."},
+            },
+        },
+    },
+    {
+        "name": "update_board_issue",
+        "description": "Update a Multica board issue's status or description. Use after fixing a problem to close the issue.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "issue_id": {"type": "string", "description": "The Multica issue UUID to update."},
+                "status": {"type": "string", "description": "New status: 'todo', 'in_progress', or 'done'."},
+                "description": {"type": "string", "description": "Updated description text (appended context, fix notes, etc.)."},
+            },
+            "required": ["issue_id"],
+        },
+    },
+    {
+        "name": "create_evolution_proposal",
+        "description": "Create a new evolution proposal in the DB and sync it to the Multica board. Use when you detect a pattern or improvement that should be reviewed.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Short title for the proposal."},
+                "description": {"type": "string", "description": "Detailed description of the proposed change and why."},
+                "evidence": {"type": "string", "description": "Evidence or examples supporting the proposal."},
+                "proposal_type": {"type": "string", "description": "Type: 'intent_pattern', 'agent_health', 'user_frustration', or 'code_improvement'. Default: 'intent_pattern'."},
+            },
+            "required": ["title", "description"],
+        },
+    },
+    {
+        "name": "flag_needs_human_review",
+        "description": "Flag a board issue as needing human review and send a push notification. Use when you encounter something that requires credentials, human judgment, or touches security/auth/database/docker.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "issue_id": {"type": "string", "description": "The Multica issue UUID (optional — can flag without an issue)."},
+                "reason": {"type": "string", "description": "Clear, concise reason why human review is needed."},
+                "urgency": {"type": "string", "description": "'normal' or 'high'. High sends an urgent (🔴) notification."},
+            },
+            "required": ["reason"],
         },
     },
 ]
@@ -1531,29 +1611,34 @@ async def _execute_tool(db, name: str, args: dict):
         if not query:
             return {"error": "query is required"}
         try:
-            import asyncio as _asyncio
-            loop = _asyncio.get_event_loop()
-
-            def _ddgs_search():
-                from duckduckgo_search import DDGS
-                with DDGS(timeout=8) as ddgs:
-                    return list(ddgs.text(query, max_results=5)) or []
-
-            results = await loop.run_in_executor(None, _ddgs_search)
-            return {
-                "query": query,
-                "results": [
-                    {
-                        # duckduckgo-search library returns title/href/body
-                        "title": r.get("title", ""),
-                        "snippet": r.get("body", ""),
-                        "url": r.get("href", ""),
-                    }
-                    for r in (results or [])
-                ],
-            }
+            # Fast path: ddgs primary (~3-5s), CloakBrowser stealth fallback.
+            import sys as _sys, os as _os
+            _zd = _os.path.dirname(_os.path.abspath(__file__))
+            if _zd not in _sys.path:
+                _sys.path.insert(0, _zd)
+            from zoe_agent import _web_search_ddg  # type: ignore[import]
+            caller_user_id = args.get("_user_id", "")
+            result_text = await _web_search_ddg(query, user_id=caller_user_id)
+            return {"query": query, "raw": result_text}
         except Exception as exc:
             return {"error": f"Web search failed: {exc}", "query": query}
+
+    elif name == "deep_web_research":
+        query = args.get("query", "")
+        if not query:
+            return {"error": "query is required"}
+        try:
+            # Full pipeline: CloakBrowser + Google Maps + postcode gate filling (~60s).
+            import sys as _sys, os as _os
+            _zd = _os.path.dirname(_os.path.abspath(__file__))
+            if _zd not in _sys.path:
+                _sys.path.insert(0, _zd)
+            from zoe_agent import _web_research  # type: ignore[import]
+            caller_user_id = args.get("_user_id", "")
+            result_text = await _web_research(query, user_id=caller_user_id)
+            return {"query": query, "raw": result_text}
+        except Exception as exc:
+            return {"error": f"Deep research failed: {exc}", "query": query}
 
     elif name == "a2a_delegate":
         agent_name = args.get("agent_name", "")
@@ -2282,6 +2367,64 @@ async def _execute_tool(db, name: str, args: dict):
         )
         return {"ok": True, "action": "panel_show_media", "panel_id": panel_id, "queued": msg}
 
+    elif name == "panel_ssh_exec":
+        target_panel_id = str(args.get("panel_id") or "").strip()
+        command = str(args.get("command") or "").strip()
+        timeout = min(int(args.get("timeout") or 30), 120)
+        if not target_panel_id or not command:
+            return {"error": "panel_id and command are required"}
+
+        row = await (await db.execute(
+            "SELECT ip_address, ssh_user, ssh_key_path, ssh_port FROM panels WHERE panel_id = ?",
+            (target_panel_id,),
+        )).fetchone()
+        if not row:
+            return {"error": f"Panel '{target_panel_id}' not found in registry. Call GET /api/panels to list panels."}
+
+        ip = row["ip_address"]
+        ssh_user = row["ssh_user"] or "pi"
+        ssh_key_path = row["ssh_key_path"] or os.path.expanduser("~/.ssh/zoe_pi_key")
+        ssh_port = str(row["ssh_port"] or 22)
+
+        if not ip:
+            return {"error": f"Panel '{target_panel_id}' has no ip_address in registry"}
+
+        ssh_args = [
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=10",
+            "-o", "BatchMode=yes",
+            "-p", ssh_port,
+        ]
+        if os.path.exists(ssh_key_path):
+            ssh_args += ["-i", ssh_key_path]
+
+        ssh_args += [f"{ssh_user}@{ip}", command]
+        logger.info("panel_ssh_exec: panel=%s ip=%s cmd=%r", target_panel_id, ip, command[:120])
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *ssh_args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            return {
+                "panel_id": target_panel_id,
+                "command": command,
+                "exit_code": proc.returncode,
+                "stdout": stdout_b.decode(errors="replace").strip(),
+                "stderr": stderr_b.decode(errors="replace").strip(),
+            }
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return {"error": f"SSH command timed out after {timeout}s", "panel_id": target_panel_id}
+        except Exception as exc:
+            return {"error": f"SSH exec failed: {exc}", "panel_id": target_panel_id}
+
     elif name == "media_get_now_playing":
         entity_id = str(args.get("entity_id") or "").strip()
         _ha_bridge = os.environ.get("ZOE_HA_BRIDGE_URL", "http://127.0.0.1:8007")
@@ -2562,6 +2705,108 @@ async def _execute_tool(db, name: str, args: dict):
             except MemoryServiceError as exc:
                 return {"error": str(exc)}
             return {"id": mem_id, "status": "rejected"}
+
+    # === MULTICA BOARD TOOLS ============================================
+    elif name == "list_board_issues":
+        try:
+            from multica_client import get_multica_client  # type: ignore[import]
+            mc = get_multica_client()
+            if not mc.is_configured():
+                return {"error": "Multica not configured"}
+            status_filter = args.get("status", "todo")
+            issues = await mc.list_issues(status=status_filter)
+            limit = min(int(args.get("limit", 50)), 100)
+            issues = issues[:limit]
+            return {"issues": issues, "count": len(issues)}
+        except Exception as exc:
+            return {"error": f"list_board_issues failed: {exc}"}
+
+    elif name == "update_board_issue":
+        try:
+            from multica_client import get_multica_client  # type: ignore[import]
+            mc = get_multica_client()
+            if not mc.is_configured():
+                return {"error": "Multica not configured"}
+            issue_id = (args.get("issue_id") or "").strip()
+            if not issue_id:
+                return {"error": "issue_id required"}
+            update: dict = {}
+            if args.get("status"):
+                update["status"] = args["status"]
+            if args.get("description"):
+                update["description"] = args["description"]
+            if not update:
+                return {"error": "At least one of status or description required"}
+            await mc.update_issue(issue_id, **update)
+            return {"ok": True, "issue_id": issue_id, "updated": update}
+        except Exception as exc:
+            return {"error": f"update_board_issue failed: {exc}"}
+
+    elif name == "create_evolution_proposal":
+        try:
+            from multica_client import sync_evolution_proposal_to_multica  # type: ignore[import]
+            import time as _time
+            title = (args.get("title") or "").strip()
+            description = (args.get("description") or "").strip()
+            if not title or not description:
+                return {"error": "title and description required"}
+            evidence = (args.get("evidence") or "").strip()
+            proposal_type = args.get("proposal_type", "intent_pattern")
+            prop_id = str(uuid.uuid4()).replace("-", "")
+            await db.execute(
+                """INSERT INTO evolution_proposals
+                   (id, title, description, evidence, type, status, proposed_at)
+                   VALUES ($1,$2,$3,$4,$5,'pending',$6)""",
+                prop_id, title, description, evidence, proposal_type, _time.time(),
+            )
+            multica_id = await sync_evolution_proposal_to_multica(
+                proposal_id=prop_id,
+                title=title,
+                description=description,
+                evidence=evidence,
+                proposal_type=proposal_type,
+            )
+            if multica_id:
+                await db.execute(
+                    "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
+                    multica_id, prop_id,
+                )
+            return {"ok": True, "proposal_id": prop_id, "multica_issue_id": multica_id}
+        except Exception as exc:
+            return {"error": f"create_evolution_proposal failed: {exc}"}
+
+    elif name == "flag_needs_human_review":
+        try:
+            from multica_client import get_multica_client  # type: ignore[import]
+            mc = get_multica_client()
+            issue_id = (args.get("issue_id") or "").strip()
+            reason = (args.get("reason") or "Flagged for human review").strip()
+            urgency = args.get("urgency", "normal")
+            if issue_id and mc.is_configured():
+                # Append reason to the issue description
+                async with httpx.AsyncClient(timeout=15) as hc:
+                    resp = await hc.get(
+                        f"{mc._base}/api/issues/{issue_id}",
+                        headers=mc._headers(),
+                    )
+                    current_desc = resp.json().get("description", "") if resp.status_code == 200 else ""
+                await mc.update_issue(issue_id, description=f"{current_desc}\n\n⚠️ Needs human review: {reason}")
+            # Fire a push notification
+            push_msg = f"{'🔴' if urgency == 'high' else '⚠️'} Zoe needs your input: {reason[:120]}"
+            try:
+                from proactive.engine import fire_notification  # type: ignore[import]
+                await fire_notification(
+                    user_id=user_id,
+                    message=push_msg,
+                    trigger_type="needs_human_review",
+                    item_id=issue_id or "board",
+                    context={"force_send": urgency == "high", "reason": reason, "issue_id": issue_id},
+                )
+            except Exception as push_exc:
+                _mcp_log.warning("flag_needs_human_review: push failed: %s", push_exc)
+            return {"ok": True, "issue_id": issue_id, "reason": reason, "push_sent": True}
+        except Exception as exc:
+            return {"error": f"flag_needs_human_review failed: {exc}"}
 
     else:
         return {"error": f"Unknown tool: {name}"}

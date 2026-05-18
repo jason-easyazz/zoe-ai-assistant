@@ -408,7 +408,56 @@ def build_openclaw_gateway_executor(openclaw_gateway_url: str) -> BrowserExecuto
     return _execute
 
 
+def build_cloak_executor() -> BrowserExecutor | None:
+    """Build a CloakBrowser executor for bot-protected targets, if installed.
+
+    CloakBrowser (pip install cloakbrowser) is a stealth Chromium with 49 source-level
+    fingerprint patches. Drop-in Playwright replacement — passes Cloudflare Turnstile,
+    FingerprintJS, and 30+ detection sites. ARM64 Linux supported (Jetson Orin NX).
+
+    Returns None if cloakbrowser is not installed (graceful degradation).
+    """
+    import importlib.util
+    if importlib.util.find_spec("cloakbrowser") is None:
+        return None
+
+    async def _execute(plan: BrowserActionPlan) -> dict[str, Any]:
+        try:
+            from cloakbrowser import launch_context_async  # type: ignore[import]
+            action_log: list[dict] = []
+            url = plan.params.get("url", "")
+            # launch_context_async returns a BrowserContext directly (not an async ctx manager)
+            context = await launch_context_async(headless=True)
+            try:
+                page = await context.new_page()
+                action_log.append({"action": "navigate", "url": url})
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                final_url = page.url
+                action_log.append({"action": "loaded", "url": final_url})
+                screenshot_bytes = await page.screenshot(type="png", full_page=False)
+                image_b64 = base64.b64encode(screenshot_bytes).decode()
+                evidence = BrowserEvidence(
+                    backend="harness",
+                    final_url=final_url,
+                    screenshots=[image_b64] if image_b64 else [],
+                    action_log=action_log,
+                    sources=[final_url],
+                    policy_decisions=[plan.policy_decision],
+                )
+                return {"ok": True, "image_base64": image_b64, "evidence": asdict(evidence)}
+            finally:
+                await context.close()
+        except Exception as exc:
+            return {"ok": False, "error": f"CloakBrowser executor failed: {exc}"}
+
+    return _execute
+
+
 def create_default_browser_broker(openclaw_gateway_url: str) -> BrowserBroker:
     broker = BrowserBroker(default_surface="openclawLocal")
     broker.register_executor("openclawLocal", build_openclaw_gateway_executor(openclaw_gateway_url))
+    # Register CloakBrowser as the "harness" surface if installed — used for bot-protected targets
+    cloak_exec = build_cloak_executor()
+    if cloak_exec is not None:
+        broker.register_executor("harness", cloak_exec)
     return broker

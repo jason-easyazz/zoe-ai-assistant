@@ -156,8 +156,10 @@ _HA_FULL_SETUP_RE = re.compile(
     r"^\s*(?:please\s+|can you\s+|could you\s+|will you\s+|help me\s+|i want to\s+|i need(?: you)? to\s+)?"
     r"(?:(?:setup|set up|configure|install)\s+home\s+(?:assistant|automation)|"
     r"home\s+(?:assistant|automation)\s+(?:setup|installation)|"
-    r"(?:setup|set up)\s+hass)\s*"
-    r"(?:please\s*)?[!?.…]*\s*$",
+    r"(?:setup|set up)\s+hass|"
+    r"(?:set up|create|add|make|build)\s+(?:a\s+)?(?:new\s+)?automation\s+in\s+home\s+assistant|"
+    r"(?:create|add|make|build)\s+(?:a\s+)?home\s+assistant\s+automation)\s*"
+    r"(?:for\s+me\s*)?(?:please\s*)?[!?.…]*\s*$",
     re.IGNORECASE,
 )
 
@@ -182,6 +184,15 @@ def _is_ha_full_setup_message(t: str) -> bool:
         "install home assistant",
         "set up hass",
         "setup hass",
+        # Automation creation within an existing HA instance → OpenClaw browser
+        "set up a new automation in home assistant",
+        "create an automation in home assistant",
+        "create a new automation in home assistant",
+        "add an automation in home assistant",
+        "make an automation in home assistant",
+        "set up automation in home assistant",
+        "create home assistant automation",
+        "new automation in home assistant",
     )
     s2 = s.rstrip(".!?…").strip()
     if s2 in cores:
@@ -432,9 +443,33 @@ _ZOE_VOICE_VOLUME_RE = re.compile(
     # ^you? handles STT artifact where recogniser prepends "you"
     r"|^(?:you\s+)?(?:make|set|put)\s+it\s+(?:to\s+|at\s+)?(\d{1,3})\s*%?"
     r"|^(?:set|put)\s+(?:the\s+)?volume\s+(?:to\s+|at\s+)?(\d{1,3})\s*%?"
-    r"|^(\d{1,3})\s*(?:percent|%)\b"
+    r"|^(\d{1,3})\s*(?:percent\b|%)"
     # "turn it up/down to X%" — catches "turn it up to 80%" before music_control does
     r"|(?:turn|bring)\s+it\s+(?:up|down)\s+to\s+(\d{1,3})\s*%?",
+    re.IGNORECASE,
+)
+
+
+# === TOUCH PANEL / KIOSK PROVISIONING ===
+_PANEL_SETUP_RE = re.compile(
+    r"\b(?:set\s?up|connect|pair|add|register|provision|onboard)\b.{0,30}\b(?:touch\s+panel|kiosk|screen|panel|display)\b"
+    r"|\b(?:touch\s+panel|kiosk|screen|panel|display)\b.{0,30}\b(?:set\s?up|connect|pair|add|register)\b",
+    re.IGNORECASE,
+)
+_PANEL_STATUS_RE = re.compile(
+    r"\b(?:status|check|ping|is it\s+(?:on|online|working)|health)\b.{0,30}\b(?:panel|kiosk|touch\s+screen|display)\b"
+    r"|\b(?:panel|kiosk|touch\s+screen|display)\b.{0,30}\b(?:status|check|online|working|ok)\b",
+    re.IGNORECASE,
+)
+_PANEL_LIST_RE = re.compile(
+    r"\b(?:list|show|what)\b.{0,20}\b(?:panels?|kiosks?|touch\s+screens?|screens?)\b"
+    r"|\bhow many\b.{0,15}\b(?:panels?|kiosks?|screens?)\b",
+    re.IGNORECASE,
+)
+# "connect panel A3F7K2" / "enter code A3F7K2 for the screen"
+_PANEL_ENTER_CODE_RE = re.compile(
+    r"\b(?:connect|pair|confirm|enter|use|activate)\b.{0,30}\b(?:code|panel)\b.{0,20}\b([A-Z0-9]{6})\b"
+    r"|\b([A-Z0-9]{6})\b.{0,30}\b(?:panel|kiosk|screen|display)\b",
     re.IGNORECASE,
 )
 
@@ -449,6 +484,18 @@ def detect_intent(
     # Full Home Assistant / automation setup → OpenClaw (execute_intent returns None; chat expands message)
     if _is_ha_full_setup_message(t):
         return Intent("ha_full_setup", {})
+
+    # Touch panel provisioning / status — chat.py renders AG-UI cards
+    if _PANEL_ENTER_CODE_RE.search(t):
+        m = _PANEL_ENTER_CODE_RE.search(t)
+        code = (m.group(1) or m.group(2) or "").upper()
+        return Intent("panel_confirm_code", {"code": code})
+    if _PANEL_SETUP_RE.search(t):
+        return Intent("panel_setup", {})
+    if _PANEL_STATUS_RE.search(t):
+        return Intent("panel_status", {})
+    if _PANEL_LIST_RE.search(t):
+        return Intent("panel_list", {})
 
     # "forget that" — retract the most recent memory write for the caller.
     # Matched very early so it never collides with other verbs.
@@ -575,8 +622,12 @@ def detect_intent(
             return Intent("calendar_show", {"qualifier": qualifier})
 
     # --- REMINDERS CREATE (keyword classifier → LLM fills slots via detect_and_extract_intent) ---
-    # Pattern 1: "remind me to X", "set a reminder for X", "reminder to X", "remember to X"
-    if re.match(r"^(?:remind me to|set a reminder (?:to|for)|reminder to|remember to) .+", t):
+    # Pattern 1: "remind me to/at/in/on/about X", "set a reminder to/for/at/in/on X",
+    #            "reminder to/for/at X", "remember to X"
+    if re.match(
+        r"^(?:remind me (?:to|at|in|on|about)|set a reminder (?:to|for|at|in|on)|reminder (?:to|for|at)|remember to) .+",
+        t,
+    ):
         return Intent("reminder_create", {"raw": text})
     # Pattern 2: "add/create/make a reminder for X"
     if re.match(r"^(?:add|create|make|schedule)\s+(?:a |an )?reminder\b.*", t):
@@ -890,12 +941,22 @@ def detect_intent(
     # --- SET VOLUME / TTS voice volume (ZOE-13) ---
     # Checked before _AUTOGEN_UNKNOWN_GAP so "speak louder / be quieter / your volume up"
     # routes to the system-audio path instead of the music media-player path.
-    if _ZOE_VOICE_VOLUME_RE.search(t):
+    _voice_vol_m = _ZOE_VOICE_VOLUME_RE.search(t)
+    if _voice_vol_m:
+        # Use capture groups from the matching alternative — patterns that contain \d{1,3}
+        # set group 1-4; patterns without a number leave all groups None.
+        _captured = next((g for g in _voice_vol_m.groups() if g is not None), None)
+        _level = int(_captured) if _captured else None
         _is_up = bool(re.search(r'\b(up|louder|raise|increase|higher|more\s+loudly)\b', t, re.IGNORECASE))
-        _lvl_m = re.search(r'\b(\d{1,3})\s*%', t)
-        _level = int(_lvl_m.group(1)) if _lvl_m else None
         direction = "set" if _level is not None else ("up" if _is_up else "down")
         return Intent("set_volume", {"direction": direction, "level": _level})
+
+    # Coreference before generic volume gap-fill — "turn it down a bit" / "a bit quieter"
+    # after a set_volume command should stay set_volume, not fall through to music_control.
+    if context is not None and context.is_fresh():
+        _ctx_name, _ctx_slots = context.resolve_coreference(t)
+        if _ctx_name:
+            return Intent(_ctx_name, _ctx_slots or {}, confidence=0.85)
 
     # Conversational volume phrases — covers polite/natural speech (zoe-self-improve 2026-05-11 refined)
     _AUTOGEN_UNKNOWN_GAP = re.compile(
@@ -961,6 +1022,36 @@ def detect_intent(
     )
     if _EVOLVE_REVIEW_RE.search(t):
         return Intent("evolution_proposals_review", {})
+
+    _BOARD_HEAL_RE = re.compile(
+        r"\b(?:fix|heal|triage|clean\s*up|review|sort\s*out)\b"
+        r".*\b(?:board|issues?|multica|problems?|proposals?)\b"
+        r"|\b(?:board|multica)\b.*\b(?:fix|heal|triage|clean\s*up|review|sort\s*out)\b"
+        r"|self.?heal\b|board\s+review\b|check\s+the\s+board\b",
+        re.I,
+    )
+    if _BOARD_HEAL_RE.search(t):
+        return Intent("board_heal", {})
+
+    # ── User issue / complaint reports ────────────────────────────────────────
+    _USER_ISSUE_RE = re.compile(
+        r'\byou\s+got\s+that\s+wrong\b'
+        r'|\byou\s+keep\s+(?:getting|messing)\b'
+        r'|\bthat\s+(?:didn\'?t|did\s+not)\s+work\b'
+        r'|\bthat\'?s?\s+not\s+working\b'
+        r'|\bthere\'?s?\s+(?:an?\s+)?(?:problem|issue|bug)\s+with\b'
+        r'|\bfix\s+(?:your|the)\b'
+        r'|\b\w+\s+(?:is\s+)?broken\b'
+        r'|\b\w+\s+doesn\'?t\s+work\b'
+        r'|\byou\s+should\s+know\s+that\b'
+        r'|\bi\s+keep\s+having\s+(?:issues?|problems?)\b'
+        r'|\byou\s+need\s+to\s+fix\b'
+        r'|\bthat\s+was\s+(?:wrong|incorrect)\b'
+        r'|\byou\s+(?:messed|failed)\b',
+        re.I,
+    )
+    if _USER_ISSUE_RE.search(t):
+        return Intent("user_issue_report", {"message": text})
 
     # Context-based coreference resolution (OVOS Adapt pattern)
     if context is not None and context.is_fresh():
@@ -1286,6 +1377,57 @@ async def execute_intent(intent: Intent, user_id: str = "family-admin") -> Optio
             logger.warning("evolution_proposals_review: %s", exc)
             return ("I couldn't load the evolution proposals right now. "
                     "They're stored at `/api/agent/evolution/proposals` if you want to check directly.")
+
+    # ── Board Heal ─────────────────────────────────────────────────────────────
+    if intent.name == "board_heal":
+        try:
+            from multica_client import get_multica_client as _get_mc  # type: ignore[import]
+            mc = _get_mc()
+            if not mc.is_configured():
+                return (
+                    "Multica isn't connected, so I can't check the board. "
+                    "The agents (Hermes, OpenClaw) have natural-language autopilots that will "
+                    "review and fix issues on the next scheduled run (every 15 minutes)."
+                )
+            todo_issues = await mc.list_issues(status="todo")
+            in_progress = await mc.list_issues(status="in_progress")
+            total_open = len(todo_issues) + len(in_progress)
+            if total_open == 0:
+                return "Board is clear — no open issues. The agents will keep it that way."
+            lines = [
+                f"**Board has {total_open} open issue(s).** Triggering the self-healing loop:\n",
+                f"- **{len(todo_issues)} todo** / **{len(in_progress)} in-progress**\n",
+                "The Board Review autopilot (OpenClaw, every 15 min) will triage and fix "
+                "eligible issues automatically. Issues needing credentials or human judgement "
+                "will trigger a push notification to you.\n",
+            ]
+            if todo_issues:
+                lines.append("\n**Oldest open items:**")
+                for item in todo_issues[:4]:
+                    lines.append(f"- {item.get('title','?')[:70]}")
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.warning("board_heal: %s", exc)
+            return "I couldn't read the board right now. Try again in a moment."
+
+    # ── User issue / complaint report ─────────────────────────────────────────
+    if intent.name == "user_issue_report":
+        import random as _random
+        _acks = [
+            "Got it, I've made a note of that.",
+            "Noted — I'll look into it.",
+            "Thanks for letting me know, I'll flag that for review.",
+            "I've logged that. I'll work on it.",
+        ]
+        try:
+            from evolution_notice import record_user_issue  # type: ignore[import]
+            await record_user_issue(
+                message=intent.slots.get("message", ""),
+                user_id=user_id,
+            )
+        except Exception as _exc:
+            logger.warning("user_issue_report: record failed: %s", _exc)
+        return _random.choice(_acks)
 
     if intent.name == "portrait_reveal":
         try:

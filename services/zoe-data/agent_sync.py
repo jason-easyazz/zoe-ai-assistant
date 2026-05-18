@@ -156,7 +156,7 @@ def _build_zoe_self_md(
         "- GET /api/agent/registry — list of registered peer agents (OpenClaw, Hermes)",
         "- GET /api/agent/squad — squad topology (capabilities, health)",
         "- GET /api/agent/runtimes — last probe timestamps per agent",
-        "- POST /api/agent/task — queue a task to OpenClaw via ACP",
+        "- POST /api/agent/tasks — queue a task to OpenClaw via ACP",
         "- MCP tool: a2a_delegate — delegate tasks to named agents from tool loop",
         "- Depth guard: MAX_REQUEST_DEPTH=3 in background_runner.py",
         "",

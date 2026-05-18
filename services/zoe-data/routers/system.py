@@ -631,7 +631,7 @@ def _build_agent_card() -> dict:
         {
             "tier": 1,
             "name": "zoe_agent",
-            "model": "Llama-3.2-3B-Instruct",
+            "model": os.environ.get("ZOE_LOCAL_MODEL", "Gemma 4 E2B"),
             "status": "online" if _RUNTIME_HEALTH.get("local_llm") else "offline",
         },
         {
@@ -1231,6 +1231,48 @@ async def get_evolution_proposals(
     }
 
 
+async def _hermes_review_proposal(proposal: dict) -> tuple[bool, str]:
+    """Ask Hermes to review an evolution proposal before OpenClaw implements it.
+
+    Returns (approved: bool, feedback: str).
+    Fails open — caller must catch all exceptions and proceed if Hermes is unavailable.
+    """
+    hermes_url = os.environ.get("HERMES_API_URL", "http://127.0.0.1:8642")
+    hermes_model = os.environ.get("HERMES_MODEL", "hermes-agent")
+    prompt = (
+        "Review this Zoe evolution proposal for implementation readiness.\n"
+        "Reply with APPROVED on the first line if safe to proceed, or REJECT if not.\n"
+        "If you have concerns, include a CONCERNS: section with concise actionable feedback.\n\n"
+        f"Title: {proposal.get('title', '')}\n\n"
+        f"Description: {proposal.get('description', '')}\n\n"
+        f"Evidence: {proposal.get('evidence', '')}"
+    )
+    async with httpx.AsyncClient(timeout=90) as client:
+        async with client.stream(
+            "POST",
+            f"{hermes_url}/v1/chat/completions",
+            json={
+                "model": hermes_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": True,
+            },
+            headers={"Content-Type": "application/json"},
+        ) as resp:
+            resp.raise_for_status()
+            content = ""
+            async for line in resp.aiter_lines():
+                if line.startswith("data: ") and "[DONE]" not in line:
+                    try:
+                        chunk = json.loads(line[6:])
+                        content += chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                    except Exception:
+                        pass
+    feedback = content.strip()
+    upper = feedback.upper()
+    approved = "APPROVED" in upper and "REJECT" not in upper and "CONCERNS:" not in upper
+    return approved, feedback
+
+
 @_agent_card_router.post("/evolution/proposals/{proposal_id}/action")
 async def evolution_proposal_action(
     proposal_id: str,
@@ -1294,6 +1336,41 @@ async def evolution_proposal_action(
                    WHERE id=$3""",
                 _time.time(), multica_issue_id, proposal_id,
             )
+            # Hermes code-review gate: ask Hermes to review before handing to OpenClaw.
+            # Fails open — if Hermes is unavailable we proceed normally.
+            try:
+                _h_approved, _h_feedback = await _hermes_review_proposal(proposal)
+                if not _h_approved and re.search(r"CONCERNS:|REJECT", _h_feedback, re.IGNORECASE):
+                    logger.info(
+                        "evolution_approve: Hermes flagged concerns for proposal %s", proposal_id
+                    )
+                    if multica_issue_id:
+                        try:
+                            from multica_client import get_multica_client  # type: ignore[import]
+                            _mc = get_multica_client()
+                            if _mc.is_configured():
+                                async with httpx.AsyncClient(timeout=30) as _hc:
+                                    _cur_desc = proposal.get("description", "")
+                                    await _hc.put(
+                                        f"{_mc._base}/api/issues/{multica_issue_id}",
+                                        json={"description": f"{_cur_desc}\n\nHermes review:\n{_h_feedback}"},
+                                        headers=_mc._headers(),
+                                    )
+                        except Exception as _exc:
+                            logger.warning(
+                                "evolution_approve: could not append Hermes feedback to Multica issue: %s", _exc
+                            )
+                    await db.execute(
+                        "UPDATE evolution_proposals SET status='pending' WHERE id=$1", proposal_id
+                    )
+                    return {"ok": True, "action": "hermes_review_required", "feedback": _h_feedback}
+                logger.info("evolution_approve: Hermes cleared proposal %s", proposal_id)
+            except Exception as exc:
+                logger.warning(
+                    "evolution_approve: Hermes review failed — proceeding without review for proposal %s: %s",
+                    proposal_id, exc,
+                )
+
             # Queue an OpenClaw background task to implement the proposal;
             # when it completes, the task runner will advance status → deployed.
             try:

@@ -32,7 +32,7 @@ CONFIDENCE_HINT_THRESHOLD    = 0.50
 SHORT_UTTERANCE_MAX_WORDS    = 20
 CLASSIFIER_TIMEOUT_S         = 2.0
 
-_LLAMA_BASE = os.environ.get("LLAMA_SERVER_URL", "http://localhost:8080")
+_LLAMA_BASE = os.environ.get("LLAMA_SERVER_URL", "http://127.0.0.1:11434/v1")
 
 _KNOWN_INTENTS = (
     "set_volume music_play music_control music_volume music_stop "

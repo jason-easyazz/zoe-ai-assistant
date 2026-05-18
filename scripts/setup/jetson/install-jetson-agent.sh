@@ -60,10 +60,10 @@ else
 
   # Remove any existing conflicting env declarations then add ours
   TMPFILE=$(mktemp)
-  grep -v "HERMES_FAST_PATH\|JETSON_AGENT_MODE\|GEMMA_SERVER_URL\|MEMPALACE_DATA_DIR\|ZOE_AGENT_LLM_TIMEOUT" "$SERVICE_FILE" > "$TMPFILE" || true
+  grep -v "HERMES_FAST_PATH\|JETSON_AGENT_MODE\|GEMMA_SERVER_URL\|MEMPALACE_DATA_DIR\|ZOE_AGENT_LLM_TIMEOUT\|ZOE_HERMES_AUTO_ESCALATE" "$SERVICE_FILE" > "$TMPFILE" || true
 
   # Insert new env lines after [Service] section
-  awk '/^\[Service\]/{print; print "Environment=HERMES_FAST_PATH=false"; print "Environment=JETSON_AGENT_MODE=true"; print "Environment=GEMMA_SERVER_URL=http://127.0.0.1:11434/v1"; print "Environment=MEMPALACE_DATA_DIR=/home/zoe/.mempalace"; print "Environment=ZOE_AGENT_LLM_TIMEOUT=30.0"; next}1' "$TMPFILE" > "$SERVICE_FILE"
+  awk '/^\[Service\]/{print; print "Environment=HERMES_FAST_PATH=false"; print "Environment=JETSON_AGENT_MODE=true"; print "Environment=GEMMA_SERVER_URL=http://127.0.0.1:11434/v1"; print "Environment=MEMPALACE_DATA_DIR=/home/zoe/.mempalace"; print "Environment=ZOE_AGENT_LLM_TIMEOUT=30.0"; print "Environment=ZOE_HERMES_AUTO_ESCALATE=true"; next}1' "$TMPFILE" > "$SERVICE_FILE"
   rm "$TMPFILE"
 
   systemctl --user daemon-reload

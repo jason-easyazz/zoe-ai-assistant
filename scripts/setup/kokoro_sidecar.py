@@ -62,6 +62,41 @@ _pipeline = None
 _device = "cpu"
 _pipeline_lock = asyncio.Lock()  # serialise inference; pipeline is not thread-safe
 
+# Pre-synthesised cache for common short phrases (populated during lifespan startup).
+# Keys are lowercased stripped text; values are WAV bytes.  Only hits when
+# voice == _VOICE and speed == 1.0 to guarantee audio quality matches.
+_phrase_cache: dict[str, bytes] = {}
+
+# Phrases to pre-warm at startup.  Chosen to cover the most frequent short Zoe
+# responses so they return in <1ms instead of ~450ms.
+_WARM_PHRASES = [
+    "Sure!",
+    "Done!",
+    "Got it!",
+    "Of course!",
+    "Turning on the lights.",
+    "Turning off the lights.",
+    "Lights are on.",
+    "Lights are off.",
+    "I'll remind you.",
+    "Reminder set.",
+    "I'm not sure about that.",
+    "Let me check.",
+    "I can help with that.",
+    "Playing music now.",
+    "Music paused.",
+    "Sorry, I didn't catch that.",
+    "Could you say that again?",
+    "I don't have access to that right now.",
+    "Good morning!",
+    "Good evening!",
+    "What can I help you with?",
+    "On it.",
+    "All done.",
+    "No problem!",
+    "Happy to help!",
+]
+
 
 # ─── Pipeline loading ─────────────────────────────────────────────────────────
 
@@ -97,6 +132,16 @@ async def lifespan(app: FastAPI):
         # request doesn't pay the ~500ms JIT compilation cost.
         logger.info("Warming up Kokoro CUDA graph…")
         await _run_synthesis("Zoe is ready.", _VOICE, speed=1.0)
+        logger.info("Kokoro CUDA graph warmed.  Pre-caching %d common phrases…", len(_WARM_PHRASES))
+        cached = 0
+        for phrase in _WARM_PHRASES:
+            try:
+                wav = await _run_synthesis(phrase, _VOICE, speed=1.0)
+                _phrase_cache[phrase.strip().lower()] = wav
+                cached += 1
+            except Exception as _cache_exc:
+                logger.warning("Phrase cache skip %r: %s", phrase, _cache_exc)
+        logger.info("Phrase cache ready: %d/%d phrases pre-synthesised.", cached, len(_WARM_PHRASES))
         logger.info("Kokoro sidecar ready on port %d (device=%s).", _PORT, _device)
     except Exception as exc:
         logger.error("Failed to initialise Kokoro: %s", exc)
@@ -218,6 +263,12 @@ async def synthesize(req: SynthRequest):
         raise HTTPException(status_code=503, detail="Kokoro model not loaded")
 
     voice = (req.voice or _VOICE).strip() or _VOICE
+
+    # Fast path: return pre-synthesised WAV for common short phrases
+    cache_key = text.lower()
+    if voice == _VOICE and req.speed == 1.0 and cache_key in _phrase_cache:
+        return Response(content=_phrase_cache[cache_key], media_type="audio/wav")
+
     try:
         wav_bytes = await _run_synthesis(text, voice, req.speed)
     except Exception as exc:

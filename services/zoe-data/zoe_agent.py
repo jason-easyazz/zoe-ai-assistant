@@ -83,7 +83,41 @@ _JETSON_MODE    = os.environ.get("JETSON_AGENT_MODE", "false").lower() == "true"
 _MAX_TOOL_ITERS   = int(os.environ.get("ZOE_AGENT_MAX_TOOL_ITERS", "5"))
 _LLM_TIMEOUT      = float(os.environ.get("ZOE_AGENT_LLM_TIMEOUT", "120.0"))
 _TOOL_TIMEOUT     = float(os.environ.get("ZOE_AGENT_TOOL_TIMEOUT", "10.0"))
-_HERMES_AUTO_ESCALATE = os.environ.get("ZOE_HERMES_AUTO_ESCALATE", "false").lower() == "true"
+# Hermes opt-out — set ZOE_HERMES_AUTO_ESCALATE=false to disable even when healthy.
+_HERMES_AUTO_ESCALATE = os.environ.get("ZOE_HERMES_AUTO_ESCALATE", "true").lower() != "false"
+
+
+def _hermes_available() -> bool:
+    """Return True if Hermes should be offered as an escalation target.
+
+    Checks runtime health lazily (populated by main.py _probe_runtimes at startup)
+    and the opt-out env var. Falls back to False if health dict not yet populated.
+    """
+    if not _HERMES_AUTO_ESCALATE:
+        return False
+    try:
+        from main import _RUNTIME_HEALTH  # lazy import — main is fully loaded by call time
+        return bool(_RUNTIME_HEALTH.get("hermes", False))
+    except Exception:
+        return _HERMES_AUTO_ESCALATE  # during tests / non-main contexts, use env flag
+
+
+# ── Agent registry — loaded from zoe_agent_registry.py ───────────────────────
+from zoe_agent_registry import (  # type: ignore[import]
+    load_agent_registry as _load_agent_registry,
+    build_agent_team_prompt as _build_agent_team_prompt_fn,
+    registry_tool_description as _registry_tool_description_fn,
+)
+
+_AGENT_REGISTRY = _load_agent_registry()
+
+
+def _build_agent_team_prompt() -> str:
+    return _build_agent_team_prompt_fn(_AGENT_REGISTRY)
+
+
+def _registry_tool_description(agent_id: str, fallback: str) -> str:
+    return _registry_tool_description_fn(_AGENT_REGISTRY, agent_id, fallback)
 
 
 def _llm_timeout_s(*, voice_mode: bool = False) -> float:
@@ -129,6 +163,18 @@ _BASH_ALLOWED_PREFIXES = (
 # loading all tools unconditionally. Use if skill classifier causes missed tool calls.
 _FORCE_FULL_CONTEXT = os.environ.get("FORCE_FULL_CONTEXT", "false").lower() == "true"
 
+# Requests that are purely generative/creative — suppress all tools so the model
+# generates directly without reaching for web_search or action_menu.
+_CREATIVE_WRITING_RE = re.compile(
+    r"\b(?:write|compose|make|give me|create|generate)\b.{0,40}"
+    r"\b(?:haiku|poem|sonnet|limerick|verse|stanza|rhyme|story|tale|fable|"
+    r"fiction|essay|joke|pun|riddle|song|lyric|lyrics|letter|speech|script|"
+    r"caption|slogan|tagline|blurb|summary|paraphrase|translation)\b"
+    r"|\b(?:haiku|poem|sonnet|limerick|rhyme)\b.{0,20}\babout\b",
+    re.IGNORECASE,
+)
+
+
 
 # ── SOUL.md system prompt for Zoe Agent ───────────────────────────────────────
 
@@ -161,7 +207,7 @@ TOOL ROUTING — call these tools proactively, do not ask for clarification firs
 VISUAL TOOLS — call these instead of describing the result in text:
 - show_map: any request about a place, location, address, directions, or "show on a map". Use your knowledge of lat/lng for cities and landmarks to populate markers directly.
 - show_chart: any request for a chart, graph, or when the user gives you data to visualise (e.g. "Mon 5mm, Tue 12mm"). Do not describe the chart — render it.
-- show_action_menu: when you want to offer the user 2-5 distinct next steps or choices.
+- show_action_menu: when you want to offer the user 2-5 distinct next steps or choices after completing a multi-step task or when a decision point requires user input. Do NOT call it after simple creative, factual, or single-shot responses (poems, trivia answers, calculations) — just deliver the answer directly.
 - setup_telegram: any request to set up, connect, or configure Telegram.
 - list_openclaw_plugins: any request about plugins, add-ons, or extensions.
 - list_openclaw_skills: any request about skills, workspace abilities, or what Zoe can do.
@@ -175,14 +221,59 @@ SELF-BUILDING:
 - If the user asks for a NEW widget, page, or capability that doesn't exist yet, do NOT say you can't — call list_openclaw_skills with the relevant builder highlight: "zoe-widget-builder" for widgets, "zoe-page-builder" for pages, "zoe-capability-extender" for new abilities. Then offer to escalate to OpenClaw to build it.
 - Before saying "I can't do X", consult the shared ZOE_SELF.md context below to see what Zoe actually has. If a capability gap is confirmed, escalate_to_openclaw.
 
-WEB SEARCH:
-- web_search: any request for current events, live prices, today's news, recent developments, or anything after your training cutoff. Call it and synthesize the result personally. Do not say "I don't have current information" — just call web_search and answer.
+WEB SEARCH — three tiers, pick the right one:
+
+TIER 1 — web_search (~3-5s, use for simple lookups):
+- Current events, today's news, recent developments
+- Single factual lookups: sports scores, stock prices, exchange rates, weather
+- One specific product at one named retailer
+- Anything one good search result can answer
+- DO NOT use for creative writing, maths, general knowledge you already have
+
+TIER 2 — deep_web_research (~60s, native — no OpenClaw needed):
+Use for ANY query with local intent OR requiring multiple sources:
+- PRICES: "cheapest X in [city]", "how much does X cost around here", multi-store comparison
+- EVENTS: "what's on this weekend in [city]", "concerts near me", "markets near [suburb]"
+- PLACES: "best Italian restaurant near me", "cafes open now in [suburb]", "bars in [city]"
+- SERVICES: "plumber near me", "dentist in [city]", "mechanic Ballarat VIC", "vet near me"
+- HOURS: "is the pharmacy open now", "opening hours for X in [city]"
+- JOBS: "jobs for nurses in [city]", "hiring electricians near me"
+- ACCOMMODATION: "hotels in [city] under $150", "motels near [town]"
+- TRANSPORT: "flights from Brisbane to Melbourne next week", "bus timetable [city]"
+- REVIEWS: "best rated plumber in [location]", "top restaurants near me"
+- STOCK: "where can I buy X near [city]", "in stock near [suburb]"
+ALWAYS include location in the query. If user said "near me" — use their home location from memory.
+ALWAYS tell the user what you're doing before calling: "Looking up prices across stores in [location]…"
+The tool handles Google Maps + CloakBrowser + postcode gates + site-internal search automatically.
+
+TIER 3 — escalate_to_openclaw (for tasks beyond web research):
+- Needs login or authenticated session
+- Multi-hour background workflows, code generation, HA automation setup
+- Tasks requiring persistent browser state across sessions
+
+QUERY CONSTRUCTION for web_search — write the best query before calling:
+  * Expand brand abbreviations (e.g. "emu export" → "Emu Export beer", "macca's" → "McDonald's")
+  * Include product type when ambiguous ("blocks" in liquor context → "carton slab 30 cans")
+  * Add location when the user mentions a city or region
+  * Add the current year for news/events queries
+  * Keep queries concise (4-8 words)
 
 ESCALATION RULES — read carefully:
-- DO NOT call escalate_to_openclaw for: geography, capitals, countries, history, science, maths, recipes, definitions, general knowledge, or any question you can answer from training data.
-- DO NOT call escalate_to_openclaw for simple web searches — use web_search tool instead.
-- DO call escalate_to_openclaw for: browser automation (logging into sites, form filling, scraping dynamic content, screenshots), multi-step file/exec work, long agent workflows, code generation, extended research needing multiple sources. OpenClaw has full Playwright browser — use it for anything that needs to interact with a real web page, not just read public content.
-- When unsure whether to escalate: answer from knowledge first, or call web_search. Only escalate if the task genuinely requires browser interaction or multi-step agentic work."""
+- DO NOT escalate for: geography, capitals, history, science, maths, recipes, definitions, or anything you can answer from training data.
+- DO NOT escalate for web research tasks — use web_search (fast) or deep_web_research (thorough) natively.
+- DO escalate for: login sessions, multi-hour agentic work, code generation, HA automation setup.
+- When unsure: try deep_web_research first for local queries. Only escalate if you need persistent login.
+
+TOUCH PANELS — physical kiosk screens running Chromium:
+- Default panel: zoe-touch-pi (IP 192.168.1.61, user pi). NEVER hardcode the IP — use the panel_* tools.
+- panel_navigate / panel_clear / panel_announce / panel_set_mode / panel_show_smart_home / panel_show_media: call directly for display/audio actions.
+- panel_ssh_exec(panel_id, command): SSH diagnostics — service status, log tailing, config reads, restarts. Use this before escalating.
+  Examples: panel_ssh_exec("zoe-touch-pi", "systemctl status zoe-kiosk")
+            panel_ssh_exec("zoe-touch-pi", "journalctl -u zoe-kiosk -n 30")
+            panel_ssh_exec("zoe-touch-pi", "cat /opt/TouchKio/config.json")
+            panel_ssh_exec("zoe-touch-pi", "sudo systemctl restart zoe-kiosk")
+- NEVER use zoe.the411.life from/for the panel — Cloudflare blocks it. Always use LAN IP 192.168.1.218 for the Zoe server.
+- For code changes (HTML, Python, scripts): escalate to OpenClaw."""
 
 
 def _load_zoe_self_summary(max_chars: int = 5500) -> str:
@@ -215,7 +306,7 @@ def _load_zoe_self_summary(max_chars: int = 5500) -> str:
     return ""
 
 
-_ZOE_SOUL_STATIC = _ZOE_SOUL_BASE + _load_zoe_self_summary()
+_ZOE_SOUL_STATIC = _ZOE_SOUL_BASE + _load_zoe_self_summary() + _build_agent_team_prompt()
 
 # Legacy alias — code that imports _ZOE_SOUL directly still works
 _ZOE_SOUL = _ZOE_SOUL_STATIC
@@ -258,10 +349,10 @@ _VOICE_TOOLS = [
     "open_touch_page",
     "web_search",
     "escalate_to_openclaw",
-    "show_action_menu",
     "show_map",
     "show_chart",
     "list_openclaw_skills",
+    "report_issue",
 ]
 _VOICE_ALWAYS_TOOLS = ["escalate_to_openclaw"]
 
@@ -318,13 +409,20 @@ def _voice_token_budget() -> int:
     return 128
 
 
-# Voice turns cap tool iterations at 2 (one tool call + one final answer).
+# Voice turns cap tool iterations at 3 (two tool calls + one final answer) —
+# raised from 2 to handle correction turns after parse errors or tool failures.
 # Full chat turns keep _MAX_TOOL_ITERS (5) for complex multi-step tasks.
-_VOICE_MAX_TOOL_ITERS = 2
+_VOICE_MAX_TOOL_ITERS = 3
 
 
 def _zoe_soul(username: str = "", user_id: str = "", voice_mode: bool = False) -> str:
-    """Build the Zoe Agent system prompt with live datetime and user identity stamped in."""
+    """Build the Zoe Agent system prompt with live datetime and user identity stamped in.
+
+    The static base is placed FIRST so the llama-server KV cache can reuse the
+    large static prefix across turns.  The small dynamic header (datetime + user,
+    ~20 tokens) is appended at the end — only those tokens need reprocessing per
+    turn instead of the full ~3 000-token base.
+    """
     import datetime
     now = datetime.datetime.now()
     dt_line = now.strftime("%A, %d %B %Y — %I:%M %p")
@@ -333,7 +431,7 @@ def _zoe_soul(username: str = "", user_id: str = "", voice_mode: bool = False) -
     )
     header = f"[{dt_line}]\n{user_line}".strip()
     base = _ZOE_SOUL_VOICE if voice_mode else _ZOE_SOUL_STATIC
-    return f"{header}\n\n{base}"
+    return f"{base}\n\n{header}"
 
 # OpenAI-compatible tool definitions sent in the API request.
 # llama.cpp routes these through delta.tool_calls, completely separate from text content.
@@ -558,7 +656,13 @@ _TOOLS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search the web using DuckDuckGo for current, real-time information. Use for: current events, live prices, today's news, recent developments, anything after your training cutoff. Call this instead of saying you don't know — just search and synthesize.",
+            "description": (
+                "Fast web search using DuckDuckGo (~3-5s). Use for: current events, live prices, "
+                "today's news, recent developments, single-source fact lookups. "
+                "Use deep_web_research instead for: local business discovery, price comparison across "
+                "multiple stores, finding events/services/restaurants near a location, "
+                "postcode-gated sites (BWS, Liquorland, Dan Murphy's), opening hours."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -571,8 +675,51 @@ _TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "deep_web_research",
+            "description": (
+                "Thorough multi-source research using a real stealth browser (CloakBrowser + Google Maps). "
+                "Use for ANY query with local intent or requiring multiple sources:\n"
+                "• Prices: 'cheapest X in [city]', 'how much does X cost near me'\n"
+                "• Events: 'what's on this weekend in [city]', 'concerts near me'\n"
+                "• Places: 'best Italian restaurant near me', 'cafes open now in [suburb]'\n"
+                "• Services: 'plumber near me', 'dentist in [city]', 'mechanic Ballarat VIC'\n"
+                "• Hours: 'is the pharmacy open now', 'opening hours for X in [city]'\n"
+                "• Jobs: 'jobs for nurses in Sydney', 'hiring electricians near me'\n"
+                "• Accommodation: 'hotels in Perth under $150', 'motels near Geraldton'\n"
+                "• Transport: 'flights Brisbane to Melbourne next week', 'buses from X to Y'\n"
+                "• Reviews: 'best rated plumber in [location]', 'top restaurants near me'\n"
+                "• Stock: 'where can I buy X near [city]', 'in stock Geraldton'\n"
+                "Takes ~60s. ALWAYS tell the user you're researching before calling. "
+                "Include full location in the query (city + state/country + postcode if known). "
+                "Example: 'cheapest Emu Export beer Geraldton WA 6530'"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Full research query including location context. "
+                            "E.g. 'cheapest Emu Export beer Geraldton WA 6530' or "
+                            "'Italian restaurants open now Fitzroy Melbourne' or "
+                            "'plumbers near Ballarat VIC reviews'"
+                        ),
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "escalate_to_openclaw",
-            "description": "Hand off to OpenClaw for: browser automation (login, form fill, screenshot), multi-step file/exec work, long agent workflows, code generation. Do NOT use for simple web searches (use web_search) or general knowledge.",
+            "description": _registry_tool_description(
+                "openclaw",
+                "Hand off to OpenClaw for: browser automation (login, form fill, screenshot), "
+                "multi-step file/exec work, long agent workflows, code generation. "
+                "Do NOT use for simple web searches (use web_search) or general knowledge.",
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -730,33 +877,54 @@ _TOOLS = [
             },
         },
     },
-]
-
-# Add escalate_to_hermes tool when opt-in flag is enabled
-if _HERMES_AUTO_ESCALATE:
-    _TOOLS.append({
+    {
         "type": "function",
         "function": {
-            "name": "escalate_to_hermes",
+            "name": "report_issue",
             "description": (
-                "Escalate to Hermes (GPT-5.4) for complex multi-step reasoning, "
-                "architectural analysis, code review, or long-form technical questions "
-                "that don't require browser or bash. Hermes has 128k context and deep "
-                "reasoning capabilities. Do NOT use if OpenClaw browser is needed."
+                "Log a problem, bug, or complaint the user has mentioned. "
+                "Call this when the user says something isn't working, was wrong, "
+                "or needs to be fixed — even if phrased casually. "
+                "Returns a short acknowledgement string."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "reason": {"type": "string", "description": "Why this needs Hermes"},
-                    "task": {"type": "string", "description": "Full task description for Hermes"},
+                    "description": {
+                        "type": "string",
+                        "description": "Short description of the issue in the user's own words",
+                    },
                 },
-                "required": ["reason", "task"],
+                "required": ["description"],
             },
         },
-    })
-    _ALWAYS_ON_TOOLS_HERMES = ["escalate_to_hermes"]
-else:
-    _ALWAYS_ON_TOOLS_HERMES = []
+    },
+]
+
+# Always define escalate_to_hermes in the master list; whether it's offered to
+# the model is determined dynamically by _hermes_available() in _build_tools.
+_HERMES_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "escalate_to_hermes",
+        "description": _registry_tool_description(
+            "hermes",
+            "Escalate to Hermes for complex multi-step reasoning, architectural analysis, "
+            "code review, or long-form technical questions that don't require browser or bash. "
+            "Do NOT use if OpenClaw browser automation is needed.",
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "Why this needs Hermes"},
+                "task": {"type": "string", "description": "Full task description for Hermes"},
+            },
+            "required": ["reason", "task"],
+        },
+    },
+}
+_TOOLS.append(_HERMES_TOOL)
+_ALWAYS_ON_TOOLS_HERMES: list[str] = ["escalate_to_hermes"]
 
 # After Gemma LoRA fine-tuning on Zoe's voice, _ZOE_SOUL shrinks to ~10 tokens.
 
@@ -769,7 +937,7 @@ else:
 # Tools in _ALWAYS_ON_TOOLS are always sent regardless of skill selection.
 
 _SKILL_TOOLS: dict[str, list[str]] = {
-    "memory":     ["mempalace_search", "mempalace_add"],
+    "memory":     ["mempalace_search", "mempalace_add", "memory_update"],
     "smart-home": ["ha_control"],
     "calendar":   ["calendar_today", "calendar_list_events", "calendar_create_event"],
     "reminders":  ["reminder_create", "reminder_list", "proactive_schedule"],
@@ -778,11 +946,11 @@ _SKILL_TOOLS: dict[str, list[str]] = {
     "touch":      ["open_touch_page"],
     "bash":       ["bash"],
     "visual":     ["show_map", "show_chart"],
-    "discovery":  ["list_openclaw_plugins", "list_openclaw_skills", "setup_telegram"],
+    "discovery":  ["list_openclaw_plugins", "list_openclaw_skills", "setup_telegram", "show_action_menu"],
 }
 
-# Always included regardless of query — escalation + action menu are universal.
-_ALWAYS_ON_TOOLS: list[str] = ["web_search", "escalate_to_openclaw", "show_action_menu"] + _ALWAYS_ON_TOOLS_HERMES
+# Always included regardless of query — escalation is universal; report_issue catches any complaint.
+_ALWAYS_ON_TOOLS: list[str] = ["web_search", "deep_web_research", "escalate_to_openclaw", "report_issue"] + _ALWAYS_ON_TOOLS_HERMES
 
 _SKILL_KEYWORDS: dict[str, list[str]] = {
     "memory": [
@@ -791,6 +959,12 @@ _SKILL_KEYWORDS: dict[str, list[str]] = {
         "my name", "my favourite", "my favorite", "my preference", "my details",
         "my wife", "my husband", "my partner", "my kid", "my dog", "my cat",
         "my birthday", "i am allergic", "i live in", "i work",
+        # Implicit disclosures — user is sharing info without asking to save it
+        "i am", "i'm", "i feel", "i love", "i hate", "i prefer", "i like",
+        "i don't like", "i never", "i always", "i usually", "i tend to",
+        "my job", "my family", "my health", "my diet", "my routine",
+        "i'm nervous", "i'm excited", "i'm worried", "i'm happy",
+        "actually", "by the way", "just so you know", "you should know",
     ],
     "smart-home": [
         "light", "lights", "fan", "switch", "heater", "aircon", "air con",
@@ -840,17 +1014,49 @@ _SKILL_KEYWORDS: dict[str, list[str]] = {
 }
 
 
+_INTENT_SKILL_MAP: dict[str, list[str]] = {
+    "set_volume": ["smart-home"],
+    "music_play": ["smart-home"], "music_control": ["smart-home"],
+    "music_volume": ["smart-home"], "music_stop": ["smart-home"],
+    "smart_home_control": ["smart-home"],
+    "timer_set": ["reminders"], "reminder_create": ["reminders"],
+    "calendar_add": ["calendar"],
+    "note_create": ["memory"], "list_add": ["lists"],
+    "weather_query": ["weather"],
+    "calculate": [],  # no tool needed — fast path
+    "greeting": [],
+    "general_question": [],
+}
+
+
 def _select_skills(message: str) -> set[str]:
     """Keyword-based classifier: returns skill names needed for this message.
 
     Falls back to loading all skills when FORCE_FULL_CONTEXT=true (rollback escape hatch).
     Returns 'discovery' as a minimal fallback when no specific skill matches, so the
     model always has list_openclaw_skills available to communicate capability gaps.
+
+    Also reads the [Intent hint: ...] prefix injected by Tier 0.5 classifier to pre-load
+    the correct skill groups without keyword scanning.
     """
     if _FORCE_FULL_CONTEXT:
         return set(_SKILL_TOOLS.keys())
-    msg = message.lower()
+
     skills: set[str] = set()
+
+    # Extract and use Tier 0.5 hint if present (fast path — no keyword scan needed)
+    _hint_match = re.match(r'^\[Intent hint:\s*(\w+),', message)
+    if _hint_match:
+        hint_intent = _hint_match.group(1)
+        mapped = _INTENT_SKILL_MAP.get(hint_intent)
+        if mapped is not None:
+            skills.update(mapped)
+            if not skills:
+                skills.add("discovery")
+            return skills
+        # Unknown intent — fall through to keyword scan
+
+    msg = message.lower()
     for skill, keywords in _SKILL_KEYWORDS.items():
         if any(kw in msg for kw in keywords):
             skills.add(skill)
@@ -860,8 +1066,14 @@ def _select_skills(message: str) -> set[str]:
 
 
 def _build_tools(skills: set[str]) -> list[dict]:
-    """Build filtered tool list: always-on tools + tools for selected skill groups."""
+    """Build filtered tool list: always-on tools + tools for selected skill groups.
+
+    escalate_to_hermes is gated dynamically — only included when Hermes is healthy
+    (checked via _hermes_available() which reads _RUNTIME_HEALTH from main.py).
+    """
     tool_names: set[str] = set(_ALWAYS_ON_TOOLS)
+    if _hermes_available():
+        tool_names.update(_ALWAYS_ON_TOOLS_HERMES)
     for skill in skills:
         tool_names.update(_SKILL_TOOLS.get(skill, []))
     return [t for t in _TOOLS if t["function"]["name"] in tool_names]
@@ -1427,7 +1639,7 @@ def _ddg_search_sync(query: str, max_results: int = 5, timeout_s: float = 10.0) 
     Falls back to HTML scraping if the library is unavailable.
     """
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         with DDGS(timeout=int(timeout_s)) as ddgs:
             return list(ddgs.text(query, max_results=max_results)) or []
     except Exception:
@@ -1504,29 +1716,828 @@ def _ddg_search_sync(query: str, max_results: int = 5, timeout_s: float = 10.0) 
     return []
 
 
-async def _web_search_ddg(query: str) -> str:
-    """Search the web using DuckDuckGo (no API key needed)."""
+# ── Location resolution ───────────────────────────────────────────────────────
+
+# Australian location: "Geraldton Western Australia" or "Geraldton WA"
+# No IGNORECASE — requires Title Case city names so lowercase product words
+# (e.g. "emu export blocks") don't get captured as part of the city.
+_AU_LOCATION_RE = re.compile(
+    r"\b(?P<city>[A-Z][a-zA-Z'-]+(?:\s+[A-Z][a-zA-Z'-]+){0,2})"
+    r"\s*,?\s*"
+    r"(?P<state>Western\s+Australia|New\s+South\s+Wales|South\s+Australia|"
+    r"Northern\s+Territory|Australian\s+Capital\s+Territory|"
+    r"Victoria|Queensland|Tasmania|WA|NSW|VIC|QLD|SA|TAS|NT|ACT)\b",
+)
+
+# Generic international: "London, UK" / "New York, NY" / "Paris, France"
+_INTL_LOCATION_RE = re.compile(
+    r"\b(?P<city>[A-Z][a-zA-Z\s]{2,25}?)"
+    r"\s*,\s*"
+    r"(?P<region>[A-Z][a-zA-Z\s]{1,20})\b",
+    re.IGNORECASE,
+)
+
+# "near me" / "nearby" / "near here" — location should come from MemPalace
+_NEAR_ME_RE = re.compile(
+    r"\b(near\s+me|nearby|near\s+here|in\s+my\s+area|around\s+me|locally|local)\b",
+    re.IGNORECASE,
+)
+
+_POSTCODE_RE = re.compile(r"\b([0-9]{4,5})\b")
+
+
+def _parse_ddg_result_urls(html: str, max_results: int = 6) -> list[str]:
+    """Extract real destination URLs from DuckDuckGo HTML search results."""
+    import re as _re
+    from urllib.parse import unquote as _uq
+
+    urls: list[str] = []
+    # DDG wraps links in uddg= redirect params
+    for m in _re.finditer(r'uddg=([^"&\s]+)', html):
+        url = _uq(m.group(1))
+        if url.startswith("http") and "y.js" not in url and url not in urls:
+            urls.append(url)
+            if len(urls) >= max_results:
+                break
+    # Fallback: bare href on result links
+    if not urls:
+        for m in _re.finditer(r'class="result__a"[^>]+href="([^"]+)"', html):
+            url = m.group(1)
+            if url.startswith("http") and url not in urls:
+                urls.append(url)
+                if len(urls) >= max_results:
+                    break
+    return urls
+
+
+async def _resolve_user_location(query: str, user_id: str = "") -> dict:
+    """Determine city + state/region + postcode from query text and/or MemPalace facts.
+
+    Handles AU locations, international "City, Country" format, and "near me" phrasing.
+    Returns a dict with keys: city, state, postcode (any may be empty string).
+    """
+    city = state = postcode = ""
+
+    # 1. "near me" / "nearby" — skip regex matching; rely on MemPalace below
+    near_me = bool(_NEAR_ME_RE.search(query))
+
+    if not near_me:
+        # 2a. Try AU-specific match first (most common for this deployment)
+        m = _AU_LOCATION_RE.search(query)
+        if m:
+            city = m.group("city").strip()
+            state = m.group("state").strip()
+        else:
+            # 2b. Try generic international "City, Region/Country" match
+            m2 = _INTL_LOCATION_RE.search(query)
+            if m2:
+                city = m2.group("city").strip()
+                state = m2.group("region").strip()
+
+    # 3. Extract postcode from the query (AU 4-digit or US/UK 5-digit)
+    pc = _POSTCODE_RE.search(query)
+    if pc:
+        postcode = pc.group(1)
+
+    # 4. If still missing city or postcode (or "near me"), consult MemPalace
+    if user_id and (not city or not postcode or near_me):
+        try:
+            facts = await _mempalace_search(
+                "home address location suburb postcode city", user_id=user_id, limit=4
+            )
+            for fact in facts:
+                text = fact.get("summary", "") if isinstance(fact, dict) else str(fact)
+                if not city:
+                    mf = _AU_LOCATION_RE.search(text) or _INTL_LOCATION_RE.search(text)
+                    if mf:
+                        city = mf.group("city").strip()
+                        state = mf.group("region" if "region" in mf.groupdict() else "state").strip()
+                if not postcode:
+                    pcf = _POSTCODE_RE.search(text)
+                    if pcf:
+                        postcode = pcf.group(1)
+        except Exception:
+            pass
+
+    logger.info("_resolve_user_location: city=%r state=%r postcode=%r near_me=%s",
+                city, state, postcode, near_me)
+    return {"city": city, "state": state, "postcode": postcode}
+
+
+async def _google_maps_local_search(
+    category: str,
+    location_str: str,
+    ctx,
+    max_results: int = 8,
+) -> list[dict]:
+    """Discover local businesses via Google Maps.
+
+    Returns a list of {name, address, website, phone} dicts for businesses
+    matching `category` near `location_str`. Uses CloakBrowser so Google's
+    JS-rendered results fully load. Much more complete than a DDG keyword
+    search — finds every listed business regardless of their web SEO.
+    """
+    import re as _re
+    from urllib.parse import quote_plus as _qp, unquote as _uq
+
+    search_url = f"https://www.google.com/maps/search/{_qp(category + ' near ' + location_str)}"
+    page = None
+    businesses: list[dict] = []
+
     try:
-        import asyncio as _asyncio
-        loop = _asyncio.get_event_loop()
-        results = await loop.run_in_executor(
-            None, lambda: _ddg_search_sync(query, max_results=5, timeout_s=10.0)
+        page = await ctx.new_page()
+        await page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
+        # Let the JS results panel render
+        await page.wait_for_timeout(3500)
+
+        # Scroll the results sidebar to load more listings
+        try:
+            await page.evaluate(
+                "document.querySelector('[role=feed]')?.scrollBy(0, 1500)"
+            )
+            await page.wait_for_timeout(1500)
+        except Exception:
+            pass
+
+        html = await page.content()
+
+        # Domains belonging to Google infrastructure — never a business website
+        _GOOGLE_DOMAINS = {
+            "google.com", "google.com.au", "googleapis.com", "gstatic.com",
+            "googleusercontent.com", "googlevideo.com", "accounts.google.com",
+            "support.google.com", "maps.google.com",
+        }
+
+        def _is_business_url(url: str) -> bool:
+            domain = _re.sub(r"^https?://(?:www\.)?", "", url).split("/")[0].lower()
+            # Reject any URL whose domain is or ends with a Google domain
+            for gd in _GOOGLE_DOMAINS:
+                if domain == gd or domain.endswith("." + gd):
+                    return False
+            # Must look like a real domain (has a dot, not empty, not a path fragment)
+            return bool(domain) and "." in domain and len(domain) > 4
+
+        # ── Extract website URLs from Maps result cards ────────────────────────
+        seen_domains: set[str] = set()
+        website_re = _re.compile(r'href="(https?://[^"]+)"', _re.I)
+        for m in website_re.finditer(html):
+            url = m.group(1)
+            if not _is_business_url(url):
+                continue
+            domain = _re.sub(r"^https?://(?:www\.)?", "", url).split("/")[0].lower()
+            if domain and domain not in seen_domains:
+                seen_domains.add(domain)
+                businesses.append({"website": url, "name": domain})
+            if len(businesses) >= max_results:
+                break
+
+        # ── Also try to extract structured name+address from aria labels ───────
+        name_re = _re.compile(r'aria-label="([^"]{3,80})"')
+        names = [m.group(1) for m in name_re.finditer(html)
+                 if not m.group(1).startswith(("Google", "Search", "Map", "Zoom", "Collapse",
+                                                "Menu", "Close", "Back", "Forward", "More"))]
+        for i, biz in enumerate(businesses):
+            if i < len(names):
+                biz["name"] = names[i]
+
+        # ── Fallback: generic DDG local-business search when Maps fails ────────
+        # Google Maps consistently serves a no-JS fallback to headless browsers.
+        # Fall back to two generic DDG queries that work for ANY product/category:
+        #   1. "{category} {location}" — finds stores that specifically mention the product
+        #   2. "{category} buy near {location}" — surfaces retailers/service providers
+        # No hardcoded store types, directories, or postcodes.
+        if len(businesses) < 2:
+            logger.info("_google_maps_local_search: Maps gave no results, trying DDG local-business fallback")
+            _fallback_queries = [
+                f"{category} {location_str}",
+                f"{category} buy near {location_str}",
+            ]
+            for fq in _fallback_queries:
+                if len(businesses) >= max_results:
+                    break
+                try:
+                    fb_page = await ctx.new_page()
+                    try:
+                        await fb_page.goto(
+                            f"https://html.duckduckgo.com/html/?q={_qp(fq)}",
+                            wait_until="domcontentloaded",
+                            timeout=12000,
+                        )
+                        fb_html = await fb_page.content()
+                    finally:
+                        await fb_page.close()
+
+                    for m2 in _re.finditer(r'uddg=([^"&\s]+)', fb_html):
+                        url2 = _uq(m2.group(1))
+                        if "duckduckgo.com" in url2 or "y.js" in url2:
+                            continue
+                        if not _is_business_url(url2):
+                            continue
+                        domain2 = _re.sub(r"^https?://(?:www\.)?", "", url2).split("/")[0].lower()
+                        if domain2 not in seen_domains:
+                            seen_domains.add(domain2)
+                            businesses.append({"website": url2, "name": domain2})
+                        if len(businesses) >= max_results:
+                            break
+                except Exception as _fb:
+                    logger.debug("_google_maps_local_search DDG fallback error %r: %s", fq, _fb)
+
+        logger.info(
+            "_google_maps_local_search: found %d businesses for %r near %r",
+            len(businesses), category, location_str,
         )
-        if not results:
-            return f"No current web results found for: {query}"
+    except Exception as e:
+        logger.warning("_google_maps_local_search error: %s", e)
+    finally:
+        if page:
+            try:
+                await page.close()
+            except Exception:
+                pass
+
+    return businesses
+
+
+async def _search_within_site(page, product_query: str) -> bool:
+    """Try to use a website's own search box to find a specific product.
+
+    Attempts common search input selectors, fills the product query, submits,
+    and waits for results. Returns True if a search was performed.
+    """
+    _SEARCH_SELECTORS = [
+        'input[type="search"]',
+        'input[placeholder*="search" i]',
+        'input[placeholder*="find" i]',
+        'input[aria-label*="search" i]',
+        'input[name="q"]',
+        'input[name="s"]',
+        'input[name="search"]',
+        'input[name="query"]',
+        '[role="search"] input',
+        '.search-input',
+        '#search-input',
+        '#searchInput',
+    ]
+    for sel in _SEARCH_SELECTORS:
+        try:
+            el = await page.query_selector(sel)
+            if el:
+                await el.fill(product_query)
+                await el.press("Enter")
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=6000)
+                except Exception:
+                    await page.wait_for_timeout(2500)
+                logger.info("_search_within_site: searched for %r using %s", product_query[:40], sel)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _web_research(query: str, user_id: str = "") -> str:
+    """General-purpose web research framework.
+
+    Works for any query — news, prices, local businesses, facts, comparisons.
+    Strategy is inferred from the query itself at runtime; nothing is hardcoded
+    per topic or domain.
+
+    Pipeline:
+    1. Classify the query → determines search depth (pages to visit)
+    2. Resolve location context from query text and/or MemPalace user facts
+    3. CloakBrowser search (stealth Chromium, reliable for all content types)
+    4. Optionally run a secondary "find local sources" search when location present
+    5. Visit pages up to the depth limit; auto-fill any location/postcode gate
+    6. Return extracted text so the LLM can synthesise the final answer
+    """
+    try:
+        from cloakbrowser import launch_context_async  # type: ignore[import]
+    except ImportError:
+        return ""
+
+    from urllib.parse import quote_plus as _qp  # noqa: PLC0415
+
+    # ── 1. Classify query depth ────────────────────────────────────────────────
+    # DEEP wins over QUICK — "what is the best restaurant near me" must get max_pages=5
+    _DEEP_RE = re.compile(
+        r"\b(?:"
+        # Prices & shopping
+        r"price|prices|cost|cheap|cheapest|buy|purchase|compare|comparison|how\s+much|deal|deals|"
+        r"in\s+stock|available|stock|"
+        # Local business discovery
+        r"near\s+(?:me|here|us)|nearby|local|closest|nearest|"
+        r"find\s+(?:a|all|me\b)|where\s+can\s+I|where\s+to\s+(?:buy|get|find)|"
+        r"stores?|shops?|outlets?|"
+        # Services
+        r"plumber|electrician|mechanic|dentist|doctor|pharmacy|vet|lawyer|"
+        r"tradesman|tradie|contractor|cleaner|handyman|"
+        # Food & hospitality
+        r"restaurant|cafe|coffee|pizza|takeaway|delivery|pub|bar|"
+        r"open\s+now|opening\s+hours|hours|closed|"
+        # Events & activities
+        r"events?|what.?s\s+on|happening|tonight|this\s+weekend|concert|show|"
+        r"movie|cinema|festival|market|markets|gig|"
+        # Accommodation & transport
+        r"hotel|motel|airbnb|accommodation|stay|"
+        r"flight|flights|bus|train|timetable|schedule|"
+        # Employment
+        r"job|jobs|work|hiring|vacancy|vacancies|"
+        # Reviews & ratings
+        r"review|reviews|rating|best|worst|recommended|"
+        # Real estate
+        r"rent|house|property|real\s+estate|for\s+sale|"
+        # Contact & location info
+        r"phone\s+number|address|directions|all\s+(?:the\s+)?(?:options|stores|shops|places)"
+        r")\b",
+        re.IGNORECASE,
+    )
+    # Signals that a single result is probably enough — checked AFTER DEEP
+    _QUICK_RE = re.compile(
+        r"\b(?:define|definition|what\s+is\s+a?\s*\w+|who\s+is|when\s+(?:did|was|is)|"
+        r"how\s+(?:do\s+you|to)\s|capital\s+of|population\s+of)\b",
+        re.IGNORECASE,
+    )
+    if _DEEP_RE.search(query):
+        max_pages = 5
+    elif _QUICK_RE.search(query):
+        max_pages = 1
+    else:
+        max_pages = 3
+
+    # ── 2. Resolve location context ────────────────────────────────────────────
+    loc = await _resolve_user_location(query, user_id)
+    city    = loc.get("city", "")
+    state   = loc.get("state", "")
+    postcode = loc.get("postcode", "")
+    location_str = " ".join(filter(None, [city, state]))
+
+    # Common selectors for location/postcode gates on AU (and general) retail sites
+    _LOCATION_SELECTORS = [
+        'input[placeholder*="postcode" i]',
+        'input[placeholder*="suburb" i]',
+        'input[placeholder*="location" i]',
+        'input[placeholder*="zip" i]',
+        'input[aria-label*="postcode" i]',
+        'input[aria-label*="suburb" i]',
+        'input[aria-label*="location" i]',
+        'input[name="postcode"]',
+        'input[name="suburb"]',
+        'input[name="location"]',
+        'input[id*="postcode" i]',
+        '#postcode',
+        '.location-input input',
+    ]
+
+    # ── 3. Build the product query keywords (stop-word filtered) ─────────────
+    _STOP = {
+        "cheapest", "cheap", "best", "find", "search", "get", "buy", "the",
+        "a", "an", "in", "at", "near", "for", "of", "and", "or", "price",
+        "prices", "cost", "how", "much", "what", "where", "please", "can",
+        "could", "would", "i", "me", "my", "want", "need", "looking",
+        # AU state names and abbreviations
+        "western", "australia", "wa", "nsw", "vic", "qld", "sa", "tas", "nt", "act",
+        # International location terms
+        "uk", "us", "usa", "eu", "nz", "england", "scotland", "ireland", "wales",
+        "ny", "nyc", "ca", "la", "dc", "ontario", "alberta", "bc",
+        # Generic glue words
+        "store", "stores", "shop", "shops", "nearby", "around", "local",
+        "area", "region", "city", "town", "suburb",
+        # Container/quantity terms (product-agnostic)
+        "blocks", "block", "cans", "can", "pack", "slab",
+    }
+    _loc_words = {w.lower() for w in re.split(r"\s+", location_str) if w}
+    _product_words = [
+        w for w in re.split(r"[\s,.\-?!]+", query.lower())
+        if w and w not in _STOP and w not in _loc_words and not _AU_LOCATION_RE.search(w)
+    ][:4]
+    product_kw = " ".join(_product_words)  # e.g. "emu export beer"
+
+    # ── 4. Collect candidate URLs from multiple discovery sources ─────────────
+    ctx = await launch_context_async(headless=True)
+    all_urls: list[str] = []
+
+    _SKIP_DOMAINS = {"facebook.com", "twitter.com", "instagram.com", "youtube.com",
+                     "reddit.com", "tiktok.com", "pinterest.com", "linkedin.com"}
+
+    def _add_urls(html: str, max_results: int = 8) -> None:
+        for u in _parse_ddg_result_urls(html, max_results=max_results):
+            domain = re.sub(r"^https?://(?:www\.)?", "", u).split("/")[0].lower()
+            if domain in _SKIP_DOMAINS or any(domain.endswith("." + d) for d in _SKIP_DOMAINS):
+                continue
+            if u not in all_urls:
+                all_urls.append(u)
+
+    try:
+        # Source A1: primary query — already contains location, finds national chains + local stores
+        # max_results=8 so local independents at positions 5-8 aren't cut off.
+        ddg_page = await ctx.new_page()
+        try:
+            await ddg_page.goto(
+                f"https://html.duckduckgo.com/html/?q={_qp(query)}",
+                wait_until="domcontentloaded",
+                timeout=20000,
+            )
+            _add_urls(await ddg_page.content(), max_results=8)
+        finally:
+            await ddg_page.close()
+
+        # Source A2: bare product+city search — anchors local stores that might
+        # rank lower in the full query. Runs concurrently with Maps (below) to
+        # avoid adding sequential latency.
+        if location_str and product_kw:
+            ddg_page2 = await ctx.new_page()
+            try:
+                await ddg_page2.goto(
+                    f"https://html.duckduckgo.com/html/?q={_qp(product_kw + ' ' + location_str)}",
+                    wait_until="domcontentloaded",
+                    timeout=20000,
+                )
+                _add_urls(await ddg_page2.content(), max_results=6)
+            finally:
+                await ddg_page2.close()
+
+        # Source B: Google Maps local search — finds ALL local businesses for the
+        # category near this location, regardless of their product-page SEO.
+        # This is what catches Con's Liquor, Bottlemart, etc.
+        # Maps URLs go FIRST so local independents aren't displaced by national-chain
+        # DDG results (Liquorland, BWS) which are Cloudflare-protected JS SPAs.
+        maps_urls: list[str] = []
+        if location_str and _DEEP_RE.search(query) and product_kw:
+            maps_businesses = await _google_maps_local_search(
+                product_kw, location_str, ctx, max_results=6
+            )
+            for biz in maps_businesses:
+                url = biz.get("website", "")
+                name = biz.get("name", "")
+                if url and url not in all_urls:
+                    maps_urls.append(url)
+                    logger.info("web_research: Maps business: %s → %s", name, url)
+            logger.info(
+                "web_research: Google Maps added %d local business URLs", len(maps_urls)
+            )
+
+        # Merge: Maps URLs first (local independents, more likely static HTML),
+        # then DDG results (national chains). This ensures Con's Liquor gets
+        # visited before Liquorland/BWS which are Cloudflare JS SPAs.
+        ordered_urls: list[str] = []
+        for u in maps_urls:
+            if u not in ordered_urls:
+                ordered_urls.append(u)
+        for u in all_urls:
+            if u not in ordered_urls:
+                ordered_urls.append(u)
+
+        target_urls = ordered_urls[:max_pages]
+        logger.info(
+            "web_research: visiting %d URLs (max_pages=%d)", len(target_urls), max_pages
+        )
+
+        # ── 5. Visit pages — with postcode fill AND site-internal search ───────
+        # For each URL: fill any location gate, then if we landed on a site
+        # homepage (no product in URL path), use the site's own search box
+        # to navigate to the right product page before extracting content.
+
+        async def _dismiss_overlays(page) -> None:
+            """Dismiss cookie banners and consent dialogs that block interaction."""
+            _dismiss_texts = ["accept", "accept all", "ok", "got it", "agree",
+                              "close", "dismiss", "continue", "i agree", "allow"]
+            try:
+                buttons = await page.query_selector_all("button, a[role='button']")
+                for btn in buttons[:20]:
+                    try:
+                        label = (await btn.inner_text()).strip().lower()
+                        if label in _dismiss_texts:
+                            await btn.click()
+                            await page.wait_for_timeout(800)
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        async def _page_text(page) -> str:
+            """Extract visible text from the current page state."""
+            html = await page.content()
+            text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.S | re.I)
+            text = re.sub(r"<[^>]+>", " ", text)
+            text = re.sub(r"[ \t]{2,}", " ", text)
+            text = re.sub(r"\n{3,}", "\n\n", text).strip()
+            return text[:2500]
+
+        async def _visit_with_search(url: str) -> str:
+            """Visit url, dismiss overlays, fill location gate with full store-selection
+            flow (postcode → dropdown → confirm), search within site if on a homepage."""
+            page = None
+            try:
+                page = await ctx.new_page()
+                await page.goto(url, wait_until="domcontentloaded", timeout=12000)
+                # Let JS settle before any interaction
+                await page.wait_for_timeout(800)
+                await _dismiss_overlays(page)
+
+                fill_value = postcode or city
+                if fill_value:
+                    # ── Step A: open a hidden store-selector if one exists ───
+                    # Some sites (e.g. BWS) hide the postcode input behind a
+                    # trigger button. Look for it BEFORE checking input fields.
+                    _OPEN_TEXTS = ["postcode", "suburb", "enter location",
+                                   "find store", "select store", "change store",
+                                   "my store", "set store", "your store"]
+                    try:
+                        for btn in await page.query_selector_all("button"):
+                            label = (await btn.inner_text()).strip().lower()
+                            if any(t in label for t in _OPEN_TEXTS):
+                                await btn.click()
+                                await page.wait_for_timeout(1200)
+                                logger.info(
+                                    "web_research: opened store selector via button %r on %s",
+                                    label[:30], url[:60],
+                                )
+                                break
+                    except Exception:
+                        pass
+
+                    for sel in _LOCATION_SELECTORS:
+                        try:
+                            el = await page.query_selector(sel)
+                            if not el:
+                                continue
+                            visible = await el.is_visible()
+                            if not visible:
+                                continue
+                            logger.info(
+                                "web_research: filling location gate (%s) on %s",
+                                sel, url[:60],
+                            )
+                            # Use type() so JS frameworks (Angular, React) get
+                            # keystroke events and trigger their change detection.
+                            await el.click()
+                            await el.type(fill_value, delay=50)
+                            await page.wait_for_timeout(1500)
+
+                            # ── Step B: click first suggestion in dropdown ───
+                            # Try framework-specific and generic suggestion selectors.
+                            # AngularJS ng-repeat, ARIA listbox, generic li items.
+                            _DROPDOWN_SELS = [
+                                '[ng-repeat]:not([style*="display: none"])',   # AngularJS
+                                '[role="option"]',
+                                'ul[role="listbox"] li',
+                                '[role="listbox"] [role="option"]',
+                                '.autocomplete-suggestions li',
+                                '.suggestions li',
+                                '.pac-item',              # Google Places
+                                '[data-testid*="suggestion"]',
+                                '[class*="suggestion"]:not(input)',
+                                '[class*="autocomplete-item"]',
+                                '[class*="dropdown"] li',
+                            ]
+                            clicked_dropdown = False
+                            for drop_sel in _DROPDOWN_SELS:
+                                try:
+                                    candidates = await page.query_selector_all(drop_sel)
+                                    for cand in candidates[:5]:
+                                        t = (await cand.inner_text()).strip()
+                                        # Skip empty / navigation items
+                                        if not t or len(t) < 3 or t.lower() in (
+                                            "skip to content", "skip to trolley",
+                                            "accessibility settings",
+                                        ):
+                                            continue
+                                        await cand.click()
+                                        clicked_dropdown = True
+                                        logger.info(
+                                            "web_research: clicked store suggestion %r (%s) on %s",
+                                            t[:40], drop_sel, url[:60],
+                                        )
+                                        await page.wait_for_timeout(1800)
+                                        break
+                                    if clicked_dropdown:
+                                        break
+                                except Exception:
+                                    continue
+
+                            if not clicked_dropdown:
+                                await el.press("Enter")
+
+                            # ── Step B2: second-level store list ─────────────
+                            # Some sites (BWS, Liquorland) show suburb → store
+                            # list → confirm. After clicking the suburb suggestion,
+                            # check if a new store-list appeared and pick the first.
+                            if clicked_dropdown:
+                                await page.wait_for_timeout(1500)
+                                for drop_sel2 in _DROPDOWN_SELS:
+                                    try:
+                                        candidates2 = await page.query_selector_all(drop_sel2)
+                                        for cand2 in candidates2[:8]:
+                                            t2 = (await cand2.inner_text()).strip()
+                                            if (not t2 or len(t2) < 3 or
+                                                    t2.lower() in ("skip to content",
+                                                                   "skip to trolley",
+                                                                   "accessibility settings")):
+                                                continue
+                                            # Don't re-click the same item we just clicked
+                                            if t2 == (await candidates2[0].inner_text()).strip() and len(candidates2) == 1:
+                                                break
+                                            await cand2.click()
+                                            logger.info(
+                                                "web_research: clicked store list item %r on %s",
+                                                t2[:40], url[:60],
+                                            )
+                                            await page.wait_for_timeout(1500)
+                                            break
+                                        else:
+                                            continue
+                                        break
+                                    except Exception:
+                                        continue
+
+                            # ── Step C: confirm/set-store button ────────────
+                            _CONFIRM_TEXTS = ["yes", "confirm", "set store",
+                                              "use this store", "select store",
+                                              "shop here", "set location",
+                                              "change store", "apply"]
+                            try:
+                                for btn in await page.query_selector_all("button"):
+                                    label = (await btn.inner_text()).strip().lower()
+                                    if any(t in label for t in _CONFIRM_TEXTS):
+                                        await btn.click()
+                                        logger.info(
+                                            "web_research: clicked confirm %r on %s",
+                                            label[:30], url[:60],
+                                        )
+                                        await page.wait_for_timeout(1800)
+                                        break
+                            except Exception:
+                                pass
+
+                            # Wait for prices to load after store selection
+                            try:
+                                await page.wait_for_load_state("networkidle", timeout=5000)
+                            except Exception:
+                                await page.wait_for_timeout(2000)
+                            break
+                        except Exception:
+                            continue
+
+                # If this looks like a homepage / category page (not a direct
+                # product URL), try the site's own search to find the product.
+                _path = re.sub(r"https?://[^/]+", "", url).strip("/")
+                _is_homepage = len(_path.split("/")) <= 1
+                if _is_homepage and product_kw:
+                    searched = await _search_within_site(page, product_kw)
+                    if searched:
+                        logger.info(
+                            "web_research: performed site search for %r on %s",
+                            product_kw[:40], url[:60],
+                        )
+                        # Wait for search results to render
+                        try:
+                            await page.wait_for_load_state("networkidle", timeout=6000)
+                        except Exception:
+                            await page.wait_for_timeout(2500)
+
+                return await _page_text(page)
+            except Exception as e:
+                logger.debug("web_research visit error %s: %s", url, e)
+                return ""
+            finally:
+                if page:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+
+        # Limit concurrent browser tabs — Jetson Orin NX has ~8GB free after the LLM.
+        # Default 5: Maps results are lightweight store websites, not SPAs.
+        # Reduce via ZOE_MAX_BROWSER_TABS env var if memory pressure is observed.
+        _max_tabs = int(os.environ.get("ZOE_MAX_BROWSER_TABS", "5"))
+        target_urls = target_urls[:_max_tabs]
+        page_tasks = [_visit_with_search(url) for url in target_urls]
+        raw_contents = await asyncio.gather(*page_tasks, return_exceptions=True)
+
+        findings: list[str] = []
+        for url, content in zip(target_urls, raw_contents):
+            if isinstance(content, Exception) or not content:
+                continue
+            findings.append(f"[{url}]\n{content}")
+
+    finally:
+        try:
+            await ctx.close()
+        except Exception:
+            pass
+
+    if not findings:
+        return ""
+
+    header = (
+        f"Web research results for '{query}'"
+        + (f" (location: {location_str}{' ' + postcode if postcode else ''})" if location_str else "")
+        + "\n\nIMPORTANT: Each section below is labelled [SOURCE URL]. "
+        "When reporting prices, ALWAYS state the exact store name from the URL, "
+        "NOT a guess. Do NOT attribute a price to a store unless that store's URL "
+        "is the section header for that price."
+    )
+    return header + "\n\n" + "\n\n---\n\n".join(findings)
+
+
+# _agentic_local_price_search removed — superseded by _web_research
+
+
+async def _cloak_search(query: str, max_results: int = 5, timeout_ms: int = 20000) -> list[dict]:
+    """CloakBrowser stealth search — async fallback when ddgs is blocked or empty.
+
+    Uses stealth Chromium (57 C++ source patches) to bypass bot detection. Slower than
+    ddgs (~5s vs ~3s) but succeeds where the API is rate-limited or Cloudflare-protected.
+
+    DDG HTML wraps result URLs in uddg= redirect params and sometimes serves ads first;
+    this function decodes the real URLs and skips ad results.
+    """
+    import re as _re
+    from urllib.parse import quote_plus as _qp, unquote as _uq
+    from cloakbrowser import launch_context_async  # type: ignore[import]
+
+    # Match organic result blocks: <h2 class="result__title">…<a class="result__a" href="…">title</a>
+    # followed by a snippet element.
+    _RESULT_RE = _re.compile(
+        r'<h2\s+class="result__title">'
+        r'.*?<a[^>]+class="result__a"[^>]+href="(?P<href>[^"]+)"[^>]*>(?P<title>[^<]+)</a>'
+        r'.*?class="result__snippet"[^>]*>(?P<snippet>[^<]{10,400})',
+        _re.S,
+    )
+
+    search_url = f"https://html.duckduckgo.com/html/?q={_qp(query)}"
+    ctx = await launch_context_async(headless=True)
+    try:
+        page = await ctx.new_page()
+        await page.goto(search_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        html = await page.content()
+    finally:
+        await ctx.close()
+
+    results: list[dict] = []
+    for m in _RESULT_RE.finditer(html):
+        if len(results) >= max_results:
+            break
+        raw_href = m.group("href")
+        # Decode DDG uddg= redirect to get the actual target URL
+        uddg = _re.search(r"uddg=([^&\"]+)", raw_href)
+        href = _uq(uddg.group(1)) if uddg else raw_href
+        # Skip ads (DDG ad redirects go through y.js)
+        if "y.js" in href or "ad_domain" in href or not href.startswith("http"):
+            continue
+        title   = _re.sub(r"<[^>]+>", "", m.group("title")).strip()
+        snippet = _re.sub(r"<[^>]+>", "", m.group("snippet")).strip()
+        if title and snippet:
+            results.append({"title": title, "body": snippet, "href": href})
+    return results
+
+
+async def _web_search_ddg(query: str, user_id: str = "") -> str:
+    """Fast web search backing the web_search tool.
+
+    Intentionally lightweight — ddgs primary (~2-3s), CloakBrowser stealth
+    as fallback only when ddgs returns zero results. No multi-step research,
+    no Google Maps, no site-internal search. `user_id` is accepted for API
+    consistency but is not used (location not needed for fast lookups).
+
+    For local business discovery, multi-store price comparison, or any task
+    requiring multiple site visits, use _web_research (backing deep_web_research).
+    """
+    import asyncio as _asyncio
+    import importlib.util as _ilu
+
+    def _fmt(results: list[dict]) -> str:
         lines = [f"Web search results for '{query}':"]
         for r in results:
-            # duckduckgo-search library returns title/href/body; HTML fallback returns name/value/url
-            title = r.get("title") or r.get("name", "")
-            snippet = r.get("body") or r.get("value", r.get("notes", ""))
-            url = r.get("href") or r.get("url", "")
-            line = f"- {title}: {snippet}"
-            if url:
-                line += f" ({url})"
-            lines.append(line)
+            title   = r.get("title") or r.get("name", "")
+            snippet = r.get("body")  or r.get("value", "")
+            url     = r.get("href")  or r.get("url", "")
+            lines.append(f"- {title}: {snippet}" + (f" ({url})" if url else ""))
         return "\n".join(lines)
+
+    # Primary: ddgs API — fast, no browser needed
+    try:
+        loop = _asyncio.get_event_loop()
+        results = await loop.run_in_executor(
+            None, lambda: _ddg_search_sync(query, max_results=6, timeout_s=10.0)
+        )
+        if results:
+            return _fmt(results)
     except Exception as exc:
-        return f"Web search unavailable: {exc}"
+        logger.info("web_search: ddgs failed (%s) — trying CloakBrowser", exc)
+
+    # Fallback: CloakBrowser when ddgs is blocked or returns nothing
+    _has_cloak = _ilu.find_spec("cloakbrowser") is not None
+    if _has_cloak:
+        try:
+            cloak_results = await _cloak_search(query)
+            if cloak_results:
+                return _fmt(cloak_results)
+        except Exception as exc:
+            logger.warning("web_search: CloakBrowser also failed: %s", exc)
+
+    return f"No web results found for: {query}"
 
 
 # ── Tool dispatch ─────────────────────────────────────────────────────────────
@@ -1621,7 +2632,10 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "family-admi
         return f"Memory stored: '{summary[:80]}'" if ok else "Memory storage failed."
 
     if tool_name == "web_search":
-        return await _web_search_ddg(args.get("query", ""))
+        return await _web_search_ddg(args.get("query", ""), user_id=user_id)
+
+    if tool_name == "deep_web_research":
+        return await _web_research(args.get("query", ""), user_id=user_id)
 
     if tool_name == "escalate_to_hermes":
         reason = args.get("reason", "complex task")
@@ -1722,6 +2736,17 @@ async def _dispatch_tool(tool_name: str, args: dict, user_id: str = "family-admi
             return json.dumps({"id": scheduled_id, "send_at": send_at_str, "status": "scheduled"})
         except Exception as _pe:
             return json.dumps({"error": f"proactive_schedule failed: {_pe}"})
+
+    if tool_name == "report_issue":
+        desc = (args.get("description") or "").strip()
+        if not desc:
+            return json.dumps({"error": "description is required"})
+        try:
+            from evolution_notice import record_user_issue  # type: ignore[import]
+            await record_user_issue(message=desc, user_id=user_id)
+        except Exception as _exc:
+            logger.warning("report_issue tool: %s", _exc)
+        return json.dumps({"status": "logged"})
 
     return f"[unknown tool: {tool_name}]"
 
@@ -2130,10 +3155,11 @@ async def _llm_call(
     if tool_calls:
         tc = tool_calls[0]
         tool_name = tc.get("function", {}).get("name")
+        raw_args = tc.get("function", {}).get("arguments", "{}")
         try:
-            tool_args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+            tool_args = json.loads(raw_args)
         except json.JSONDecodeError:
-            tool_args = {}
+            tool_args = {"__parse_error": True, "__raw_args": raw_args[:200]}
         return "", tool_name, tool_args
 
     raw = choice.get("content") or ""
@@ -2241,11 +3267,27 @@ async def run_zoe_agent(
             else "auto"
         )
 
-    # Build initial messages list
+    # Build initial messages list with token-budget-aware compaction.
+    # Gemma 4 E2B context window: 8192 tokens. Reserve ~2000 for the response.
+    # Rough token estimate: len(text) / 4 (conservative for mixed content).
+    _CTX_BUDGET = int(os.environ.get("ZOE_CONTEXT_TOKEN_BUDGET", "5500"))
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
-        # Use full window loaded from DB (matches Hermes full-session approach)
-        messages.extend(history[-12:])
+        # Start from the most recent end, add messages until budget is reached.
+        _sys_tokens = len(system_prompt) // 4 + len(user_message) // 4 + 50
+        _remaining = _CTX_BUDGET - _sys_tokens
+        trimmed: list[dict] = []
+        for msg in reversed(history[-12:]):
+            _msg_tokens = len(str(msg.get("content") or "")) // 4 + 10
+            if _remaining - _msg_tokens < 0:
+                logger.info(
+                    "zoe_agent: context compaction triggered — dropped %d/%d history messages",
+                    len(history[-12:]) - len(trimmed), len(history[-12:]),
+                )
+                break
+            trimmed.insert(0, msg)
+            _remaining -= _msg_tokens
+        messages.extend(trimmed)
     messages.append({"role": "user", "content": user_message})
 
     # Empathy tone prefix — prepended to the LLM reply, no LLM cost
@@ -2280,6 +3322,30 @@ async def run_zoe_agent(
             return "Something went wrong — I couldn't generate a response. Please try again."
 
         if tool_name and iteration < _max_iters:
+            # Detect parse error from _llm_call — inject error feedback instead of
+            # running the tool with empty/wrong args so Gemma can self-correct.
+            if tool_args and tool_args.get("__parse_error"):
+                raw = tool_args.get("__raw_args", "")
+                logger.warning(
+                    "zoe_agent: iter=%d tool=%s args parse error, raw=%r",
+                    iteration, tool_name, raw,
+                )
+                messages.append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{"id": f"call_{iteration}", "type": "function",
+                                    "function": {"name": tool_name, "arguments": raw}}],
+                })
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": f"call_{iteration}",
+                    "content": json.dumps({
+                        "error": f"Invalid JSON arguments for '{tool_name}' — please retry with valid JSON.",
+                        "raw_received": raw,
+                    }),
+                })
+                continue
+
             logger.info(
                 "zoe_agent: iter=%d tool=%s args=%s",
                 iteration, tool_name, json.dumps(tool_args)[:120],
@@ -2307,7 +3373,18 @@ async def run_zoe_agent(
                 "content": tool_result,
             })
         else:
-            # No tool call (or max iterations reached) — final response
+            # No tool call (or max iterations reached) — final response.
+            # If the model returned a tool call on the final iteration, response_text
+            # will be empty — surface an explicit step-limit message instead of silence.
+            if not response_text and tool_name:
+                response_text = (
+                    "I've used all my steps on that — let me hand it off. "
+                    "One moment while I escalate this for you."
+                )
+                logger.warning(
+                    "zoe_agent: hit iter limit with pending tool=%s, returning step-limit message",
+                    tool_name,
+                )
             elapsed = time.monotonic() - t0
             logger.info(
                 "zoe_agent: done session=%s iters=%d elapsed=%.1fs",
@@ -2558,6 +3635,12 @@ async def run_zoe_agent_streaming(
         system_prompt = _ZOE_SOUL_STATIC
         skills = _select_skills(message)
         active_tools = _build_tools(skills)
+        # Creative writing: strip all tools so the model generates directly
+        # without reaching for web_search or show_action_menu (3B model reliably
+        # mis-triggers both for poems, haikus, stories, etc.).
+        if _CREATIVE_WRITING_RE.search(message):
+            active_tools = []
+            logger.info("zoe_agent streaming: creative_writing detected — tools suppressed")
         user_message = _build_prompt(
             message,
             user_id=user_id,
@@ -2572,14 +3655,26 @@ async def run_zoe_agent_streaming(
         # Force tool call on iteration 0 when a real skill matched and tool list is small.
         _first_turn_choice = (
             "required"
-            if (skills - {"discovery"} and len(active_tools) <= 6)
+            if (skills - {"discovery"} and len(active_tools) <= 6 and active_tools)
             else "auto"
         )
 
     messages: list[dict] = [{"role": "system", "content": system_prompt}]
     if history:
-        # Use the full window loaded from DB (matches Hermes full-session approach)
-        messages.extend(history[-12:])
+        _sys_tokens = len(system_prompt) // 4 + len(user_message) // 4 + 50
+        _remaining = int(os.environ.get("ZOE_CONTEXT_TOKEN_BUDGET", "5500")) - _sys_tokens
+        trimmed_hist: list[dict] = []
+        for msg in reversed(history[-12:]):
+            _msg_tokens = len(str(msg.get("content") or "")) // 4 + 10
+            if _remaining - _msg_tokens < 0:
+                logger.info(
+                    "zoe_agent streaming: context compaction — dropped %d/%d history messages",
+                    len(history[-12:]) - len(trimmed_hist), len(history[-12:]),
+                )
+                break
+            trimmed_hist.insert(0, msg)
+            _remaining -= _msg_tokens
+        messages.extend(trimmed_hist)
     messages.append({"role": "user", "content": user_message})
 
     url = f"{_model_url()}/chat/completions"
@@ -2600,6 +3695,7 @@ async def run_zoe_agent_streaming(
     payload = _make_payload(messages, tool_choice=_first_turn_choice)
 
     _max_iters = _VOICE_MAX_TOOL_ITERS if voice_mode else _MAX_TOOL_ITERS
+    _seen_tool_calls: set[tuple[str, str]] = set()  # (tool_name, args_json) dedup
     for iteration in range(_max_iters + 1):
         collected = ""
         # Accumulate streaming tool_calls deltas (function name + arguments)
@@ -2657,18 +3753,68 @@ async def run_zoe_agent_streaming(
         # Tool call came through the API channel — parse and dispatch
         tool_name = streaming_tool_name
         tool_args: dict | None = None
+        _tool_args_parse_error = False
         if tool_name:
+            raw_streaming_args = streaming_tool_args_buf or "{}"
             try:
-                tool_args = json.loads(streaming_tool_args_buf) if streaming_tool_args_buf else {}
+                tool_args = json.loads(raw_streaming_args)
             except json.JSONDecodeError:
                 tool_args = {}
+                _tool_args_parse_error = True
 
         if tool_name and iteration < _max_iters:
+            # Deduplicate identical tool+(args) calls to prevent oscillation and
+            # duplicate side effects on non-idempotent tools (HA, reminders).
+            _dedup_key = (tool_name, json.dumps(tool_args, sort_keys=True))
+            if _dedup_key in _seen_tool_calls:
+                logger.warning(
+                    "zoe_agent streaming: skipping duplicate tool call iter=%d tool=%s",
+                    iteration, tool_name,
+                )
+                messages.append({"role": "tool", "tool_call_id": f"call_{iteration}",
+                                  "content": json.dumps({"note": "duplicate call skipped"})})
+                payload = _make_payload(messages, tool_choice="auto")
+                continue
+            _seen_tool_calls.add(_dedup_key)
+
+            # Propagate parse errors back to the model instead of running with empty args
+            if _tool_args_parse_error:
+                logger.warning(
+                    "zoe_agent streaming: iter=%d tool=%s args parse error, raw=%r",
+                    iteration, tool_name, raw_streaming_args[:200],
+                )
+                messages.append({
+                    "role": "assistant", "content": collected or None,
+                    "tool_calls": [{"id": f"call_{iteration}", "type": "function",
+                                    "function": {"name": tool_name, "arguments": raw_streaming_args}}],
+                })
+                messages.append({
+                    "role": "tool", "tool_call_id": f"call_{iteration}",
+                    "content": json.dumps({
+                        "error": f"Invalid JSON arguments for '{tool_name}' — please retry with valid JSON.",
+                        "raw_received": raw_streaming_args[:200],
+                    }),
+                })
+                payload = _make_payload(messages, tool_choice="auto")
+                continue
+
             if on_tool_start:
                 try:
                     await on_tool_start(tool_name, tool_args or {})
                 except Exception:
                     pass
+
+            # Yield start markers so chat.py can stream an immediate status line
+            # to the user before the tool's delay becomes noticeable.
+            if tool_name == "web_search":
+                _sq = (tool_args or {}).get("query", "")
+                yield f"__SEARCH_START__:{_sq}"
+            elif tool_name == "deep_web_research":
+                _dq = (tool_args or {}).get("query", "")
+                yield f"__DEEP_RESEARCH_START__:{_dq}"
+
+            # Emit a lightweight thinking marker so chat.py can surface tool activity
+            yield f"__THINKING__:{tool_name}"
 
             logger.info("zoe_agent streaming: iter=%d tool=%s args=%s",
                         iteration, tool_name, json.dumps(tool_args)[:120])

@@ -25,6 +25,7 @@ from routers import (
     voice_tts_router,
     user_profile_router,
     panel_auth_router,
+    panel_provision_router,
     capability_matrix_router,
     music_router,
 )
@@ -273,6 +274,26 @@ async def lifespan(app: FastAPI):
                 client = MULClient()
                 if not client.is_configured():
                     continue
+                # Fast-path: auto-close stale autopilot tracker todos (no agent needed)
+                stale_todos = await client.list_issues(status="todo")
+                _now_ts = _t.time()
+                for _stale in stale_todos or []:
+                    _stale_title = _stale.get("title", "")
+                    _stale_id = _stale.get("id")
+                    if not _stale_id or not _stale_title.startswith("Autopilot:"):
+                        continue
+                    _created = _stale.get("created_at", "")
+                    try:
+                        import datetime as _dt
+                        _age_h = (_dt.datetime.now(_dt.timezone.utc) - _dt.datetime.fromisoformat(
+                            _created.replace("Z", "+00:00")
+                        )).total_seconds() / 3600
+                        if _age_h >= 2:
+                            await client.update_issue(_stale_id, status="done")
+                            logger.info("multica_poll: auto-closed stale todo '%s'", _stale_title[:50])
+                    except Exception as _se:
+                        logger.debug("multica_poll: stale-todo close error: %s", _se)
+
                 issues = await client.list_issues(status="in_progress")
                 for issue in issues or []:
                     # Check if linked background task completed
@@ -312,10 +333,11 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_multica_poll_loop(), name="multica_poll")
         logger.info("Multica board polling loop started (30s interval)")
 
-    # LiveKit HTTP-API mode: no server-side WebRTC agent; audio upload endpoint handles processing.
+    # Start the LiveKit server-side voice agent (connects to the LiveKit room and handles VAD/STT/TTS).
     try:
         from routers.voice_livekit import start_livekit_agent
-        start_livekit_agent()  # synchronous no-op that just logs
+        asyncio.create_task(start_livekit_agent(), name="livekit_agent")
+        logger.info("LiveKit voice agent task created")
     except Exception as _lk_exc:
         logger.warning("LiveKit setup (non-fatal): %s", _lk_exc)
 
@@ -420,6 +442,7 @@ app.include_router(stubs_router)
 app.include_router(push_router)
 app.include_router(proactive_router)
 app.include_router(panel_auth_router)
+app.include_router(panel_provision_router)
 app.include_router(capability_matrix_router)
 app.include_router(music_router)
 

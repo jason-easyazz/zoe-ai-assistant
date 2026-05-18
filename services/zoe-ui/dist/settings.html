@@ -592,6 +592,7 @@ const NAV = [
   { group: 'Integrations', items: [
     { id: 'openclaw',   icon: '🧠', label: 'OpenClaw / ChatGPT' },
     { id: 'music',      icon: '🎵', label: 'Music' },
+    { id: 'touch-panels', icon: '📺', label: 'Touch Panels' },
   ]},
   { group: 'Intelligence', items: [
     { id: 'evolution',  icon: '🔬', label: 'Evolution Proposals' },
@@ -947,6 +948,41 @@ function buildSections() {
     </div>
   </div>
 
+  <!-- Touch Panels -->
+  <div class="section" id="sec-touch-panels">
+    <div class="section-title">Touch Panels</div>
+    <div class="section-desc">Manage Zoe kiosk screens. Register, SSH-test, restart, or re-provision panels.</div>
+
+    <div class="card">
+      <div class="card-header">Registered panels</div>
+      <div id="panels-list"><div class="empty"><span class="spinner"></span></div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">Add a new panel</div>
+      <div class="row">
+        <div class="row-info">
+          <div class="row-label">First-boot provisioning</div>
+          <div class="row-sub">Power on a fresh Raspberry Pi — it creates a WiFi hotspot, guides you through setup, then shows a QR code to scan.</div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-info">
+          <div class="row-label">Enter a code manually</div>
+          <div class="row-sub">If the panel shows a 6-character code you can type it below.</div>
+        </div>
+      </div>
+      <div style="padding: 0 12px 12px">
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="text" id="panel-code-input" placeholder="A3F7K2" maxlength="6"
+            style="flex:1;text-transform:uppercase;letter-spacing:2px;font-size:18px;text-align:center;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text)">
+          <button class="btn btn-primary" onclick="confirmPanelCode()">Confirm</button>
+        </div>
+        <div id="panel-code-msg" style="margin-top:6px;font-size:12px;color:var(--text-muted)"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Evolution Proposals -->
   <div class="section" id="sec-evolution">
     <div class="section-title">Evolution Proposals</div>
@@ -967,19 +1003,20 @@ function buildSections() {
 
 /* ── Section loaders ──────────────────────────────────────── */
 const sectionLoaders = {
-  profile:   loadProfile,
-  sessions:  loadSessions,
-  pin:       loadPIN,
-  display:   loadDisplayPrefs,
-  voice:     loadVoiceProfiles,
-  push:      loadPush,
-  proactive: loadReminders,
-  openclaw:  loadOpenClaw,
-  users:     loadUsers,
-  system:    loadSystemInfo,
-  theme:     loadTheme,
-  music:     loadMusicStatus,
-  evolution: loadEvolutionProposals,
+  profile:        loadProfile,
+  sessions:       loadSessions,
+  pin:            loadPIN,
+  display:        loadDisplayPrefs,
+  voice:          loadVoiceProfiles,
+  push:           loadPush,
+  proactive:      loadReminders,
+  openclaw:       loadOpenClaw,
+  users:          loadUsers,
+  system:         loadSystemInfo,
+  theme:          loadTheme,
+  music:          loadMusicStatus,
+  evolution:      loadEvolutionProposals,
+  'touch-panels': loadTouchPanels,
 };
 
 /* ── Profile ──────────────────────────────────────────────── */
@@ -1799,6 +1836,82 @@ async function evoReject(proposalId) {
     toast('Proposal rejected', 'info');
     loadEvolutionProposals();
   } catch (e) { toast('Failed to reject: ' + e.message, 'error'); }
+}
+
+/* ── Touch Panels ─────────────────────────────────────────── */
+async function loadTouchPanels() {
+  const listEl = document.getElementById('panels-list');
+  if (!listEl) return;
+  listEl.innerHTML = '<div class="empty"><span class="spinner"></span></div>';
+  try {
+    const data = await apiCall('GET', '/api/panels');
+    const panels = data.panels || [];
+    if (!panels.length) {
+      listEl.innerHTML = '<div class="empty">No panels registered yet. Power on a new panel to start the first-boot setup.</div>';
+      return;
+    }
+    listEl.innerHTML = panels.map(p => {
+      const dot = p.is_active ? '🟢' : '🔴';
+      const ip = escHtml(p.ip_address || 'unknown IP');
+      const loc = p.location ? ` · ${escHtml(p.location)}` : '';
+      const last = p.last_seen_at ? new Date(p.last_seen_at).toLocaleString() : 'never';
+      return `<div class="row" style="flex-wrap:wrap;gap:8px;">
+        <div class="row-info" style="flex:1;min-width:180px;">
+          <div class="row-label">${dot} ${escHtml(p.name || p.panel_id)}</div>
+          <div class="row-sub"><code>${escHtml(p.panel_id)}</code>${loc} · ${ip} · last seen ${last}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          <button class="btn btn-ghost btn-sm" onclick="panelSSHTest('${escHtml(p.panel_id)}')">SSH Test</button>
+          <button class="btn btn-ghost btn-sm" onclick="panelRestart('${escHtml(p.panel_id)}')">Restart Kiosk</button>
+          <button class="btn btn-ghost btn-sm" onclick="panelLogs('${escHtml(p.panel_id)}')">Logs</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    listEl.innerHTML = `<div class="empty" style="color:#ef4444;">Failed to load panels: ${escHtml(e.message)}</div>`;
+  }
+}
+
+async function panelSSHTest(panelId) {
+  try {
+    toast(`Testing SSH on ${panelId}…`, 'info');
+    const data = await apiCall('GET', `/api/panels/${encodeURIComponent(panelId)}/status`);
+    const ok = data.ssh_reachable;
+    toast(`SSH to ${panelId}: ${ok ? '✅ reachable' : '❌ unreachable'}`, ok ? 'success' : 'error');
+  } catch (e) { toast('SSH test failed: ' + e.message, 'error'); }
+}
+
+async function panelRestart(panelId) {
+  if (!confirm(`Restart the kiosk service on ${panelId}?`)) return;
+  try {
+    toast(`Restarting kiosk on ${panelId}…`, 'info');
+    await apiCall('POST', '/api/tools/call', { name: 'panel_ssh_exec', arguments: { panel_id: panelId, command: 'sudo systemctl restart zoe-kiosk' } });
+    toast('Kiosk restarted', 'success');
+  } catch (e) { toast('Restart failed: ' + e.message, 'error'); }
+}
+
+async function panelLogs(panelId) {
+  try {
+    toast(`Fetching logs from ${panelId}…`, 'info');
+    const r = await apiCall('POST', '/api/tools/call', { name: 'panel_ssh_exec', arguments: { panel_id: panelId, command: 'journalctl -u zoe-kiosk -n 40 --no-pager' } });
+    const logs = (r.result && r.result.stdout) || JSON.stringify(r);
+    alert(`Logs from ${panelId}:\n\n${logs.substring(0, 3000)}`);
+  } catch (e) { toast('Failed to fetch logs: ' + e.message, 'error'); }
+}
+
+async function confirmPanelCode() {
+  const input = document.getElementById('panel-code-input');
+  const msgEl = document.getElementById('panel-code-msg');
+  const code = (input.value || '').trim().toUpperCase();
+  if (code.length !== 6) { msgEl.textContent = 'Enter a 6-character code'; return; }
+  msgEl.textContent = 'Looking up…';
+  try {
+    const pub = await apiCall('GET', `/api/panels/provision/${encodeURIComponent(code)}/public`);
+    if (pub.status === 'expired') { msgEl.textContent = '⚠️ Code has expired — the panel will generate a new one.'; return; }
+    if (pub.status === 'confirmed') { msgEl.textContent = '✅ Already confirmed!'; return; }
+    window.open(`/touch/pair.html?code=${encodeURIComponent(code)}`, '_blank');
+    msgEl.textContent = '✅ Pairing page opened — confirm in the new tab.';
+  } catch (e) { msgEl.textContent = '❌ ' + e.message; }
 }
 
 /* ── Modal helpers ────────────────────────────────────────── */

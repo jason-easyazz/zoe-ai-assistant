@@ -449,9 +449,12 @@ let audioCtx = null;
 let analyser = null;
 let silenceTimer = null;
 let silenceThreshold = 0.01;
-let silenceMs = 1800;  // stop after 1.8s of silence
-let convMode = false;  // continued conversation mode
-let speaking = false;  // true while Zoe TTS is playing
+let silenceMs = 1800;      // stop after 1.8s of silence
+let maxRecordedRms = 0;    // peak RMS during current recording (silence filter)
+let convMode = false;      // continued conversation mode
+let speaking = false;      // true while Zoe TTS is playing
+let serverBusy = false;    // true while server is processing a turn
+let _silentCycles = 0;     // consecutive silent-discarded recordings
 
 // ── WebSocket connection ──────────────────────────────────────────────────
 function connectLocalVoice() {
@@ -469,6 +472,8 @@ function connectLocalVoice() {
 
   localWS.onclose = () => {
     wsReady = false;
+    serverBusy = false;    // safety: unblock in case server was mid-response
+    setOrbState('ambient');
     setStatus('Reconnecting…');
     wsReconnectTimer = setTimeout(connectLocalVoice, 3000);
   };
@@ -490,12 +495,24 @@ function handleVoiceEvent(msg) {
     if (s === 'wake' || s === 'listening') setOrbState('listening');
     else if (s === 'processing' || s === 'thinking') setOrbState('thinking');
     else if (s === 'responding' || s === 'speaking') setOrbState('responding');
-    else { setOrbState('ambient'); if (convMode && !speaking) scheduleAutoListen(); }
+    // In livekit mode the server owns the listen cycle — don't scheduleAutoListen
+    else { setOrbState('ambient'); if (MODE !== 'livekit' && convMode && !speaking) scheduleAutoListen(); }
   } else if (type === 'transcript') {
+    if (msg.text) _silentCycles = 0;  // real speech detected — reset back-off
     addTranscriptLine(msg.role || 'zoe', msg.text || '');
   } else if (type === 'audio') {
     playAudioBase64(msg.audio_base64, msg.content_type || 'audio/wav', () => {
-      if (convMode) scheduleAutoListen();
+      if (MODE === 'livekit' && liveKitRoom) {
+        // Signal the server agent that audio has finished playing so it
+        // re-enables VAD listening for the next user utterance
+        try {
+          liveKitRoom.localParticipant.publishData(
+            _lkEncoder.encode(JSON.stringify({ type: 'playback_done' })), { reliable: true }
+          );
+        } catch(_e) {}
+      } else if (convMode) {
+        scheduleAutoListen();
+      }
     });
   } else if (type === 'text') {
     // Fallback if no TTS audio is returned
@@ -503,6 +520,7 @@ function handleVoiceEvent(msg) {
   } else if (type === 'agui' || type === 'ui_component') {
     showAguiCard(msg.data || msg);
   } else if (type === 'done') {
+    serverBusy = false;
     if (!convMode) setOrbState('ambient');
   }
 }
@@ -533,27 +551,31 @@ function playAudioBase64(b64, mimeType, onDone) {
 
 // ── Mic capture & silence detection ──────────────────────────────────────
 async function startRecording() {
-  if (isRecording || speaking) return;
+  if (isRecording || speaking || serverBusy) return;
 
-  // ── LiveKit mode: unmute published track + signal server via data channel ──
+  // ── LiveKit mode: browser-side VAD + HTTP audio upload ───────────────────
+  // The server-side WebRTC agent subscribes to the track when available; the
+  // HTTP upload path (POST /api/voice/livekit-audio) is the current fallback.
   if (MODE === 'livekit' && liveKitRoom) {
     try {
-      // Set up AudioContext + analyser from the LiveKit mic track for silence detection
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      if (micStream) {
+      // Build analyser once; skip on subsequent calls to avoid AudioContext node buildup
+      if (!analyser && micStream) {
         const source = audioCtx.createMediaStreamSource(micStream);
         analyser = audioCtx.createAnalyser();
         analyser.fftSize = 512;
         source.connect(analyser);
       }
-      if (localMicTrack) await localMicTrack.unmute();
-      liveKitRoom.localParticipant.publishData(
-        _lkEncoder.encode(JSON.stringify({ type: 'ptt_start' })), { reliable: true }
-      );
+      // Track is always-on (unmuted on connect); ensure it's not accidentally muted
+      if (localMicTrack && localMicTrack.isMuted) localMicTrack.unmute().catch(() => {});
+      // Start MediaRecorder to capture audio for HTTP upload
+      audioChunks = [];
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus' : 'audio/webm';
+      mediaRecorder = new MediaRecorder(micStream, { mimeType });
+      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+      mediaRecorder.start(100);
       isRecording = true;
-      const pttBtn = document.getElementById('pttBtn');
-      pttBtn.classList.add('recording');
-      pttBtn.textContent = '●';
       setOrbState('listening');
       if (analyser) startSilenceDetection();
     } catch(e) {
@@ -604,14 +626,16 @@ function stopRecording() {
   pttBtn.classList.remove('recording');
   pttBtn.textContent = '🎤';
 
-  // ── LiveKit mode: mute track + signal server ───────────────────────────
+  // ── LiveKit mode: stop recording and upload via HTTP ─────────────────────
   if (MODE === 'livekit' && liveKitRoom) {
-    if (localMicTrack) localMicTrack.mute().catch(() => {});
-    try {
-      liveKitRoom.localParticipant.publishData(
-        _lkEncoder.encode(JSON.stringify({ type: 'ptt_stop' })), { reliable: true }
-      );
-    } catch(e) {}
+    // Keep track unmuted (always-on); just stop the MediaRecorder and upload
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.onstop = sendLiveKitAudioToServer;
+      mediaRecorder.stop();
+    } else {
+      // No recording was captured; go back to listening
+      setTimeout(() => scheduleAutoListen(), 300);
+    }
     setOrbState('thinking');
     return;
   }
@@ -622,6 +646,7 @@ function stopRecording() {
 }
 
 function startSilenceDetection() {
+  maxRecordedRms = 0;  // reset peak for this recording session
   const buf = new Float32Array(analyser.fftSize);
   function check() {
     if (!isRecording) return;
@@ -629,6 +654,7 @@ function startSilenceDetection() {
     let rms = 0;
     for (let i = 0; i < buf.length; i++) rms += buf[i] * buf[i];
     rms = Math.sqrt(rms / buf.length);
+    maxRecordedRms = Math.max(maxRecordedRms, rms);  // track peak
     if (rms < silenceThreshold) {
       if (!silenceTimer) {
         silenceTimer = setTimeout(() => {
@@ -646,25 +672,93 @@ function startSilenceDetection() {
 
 async function sendRecordingToServer() {
   if (audioChunks.length === 0 || !wsReady) return;
+
+  // Silence filter: discard ambient noise / accidental mic triggers.
+  if (maxRecordedRms < 0.008) {
+    audioChunks = [];
+    _silentCycles++;
+    setOrbState('ambient');
+    if (convMode) {
+      const delay = _silentCycles >= 3 ? 10000 : 600;
+      clearTimeout(autoListenTimer);
+      autoListenTimer = setTimeout(() => {
+        if (!speaking && !isRecording && !serverBusy) startRecording();
+      }, delay);
+    }
+    return;
+  }
+  _silentCycles = 0;
+
   setOrbState('thinking');
+  serverBusy = true;
   try {
     const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
     const arrayBuf = await blob.arrayBuffer();
     localWS.send(arrayBuf);
   } catch(e) {
     console.error('Failed to send audio:', e);
+    serverBusy = false;
     setOrbState('ambient');
   }
   audioChunks = [];
 }
 
+// ── LiveKit HTTP audio upload ─────────────────────────────────────────────
+// Called by stopRecording() in LiveKit mode when MediaRecorder stops.
+// Sends audio to /api/voice/livekit-audio, plays back TTS, then re-enables VAD.
+async function sendLiveKitAudioToServer() {
+  if (!audioChunks || audioChunks.length === 0) {
+    setOrbState('ambient');
+    scheduleAutoListen();
+    return;
+  }
+  const mimeType = (mediaRecorder && mediaRecorder.mimeType) || 'audio/webm';
+  const blob = new Blob(audioChunks, { type: mimeType });
+  audioChunks = [];
+  const formData = new FormData();
+  formData.append('audio', blob, 'audio.webm');
+  formData.append('session_id', getSessionId());
+  try {
+    const resp = await fetch('/api/voice/livekit-audio', {
+      method: 'POST',
+      headers: { 'X-Session-ID': getSessionId() },
+      body: formData,
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    if (!data.ok || data.cancelled) {
+      setOrbState('ambient');
+      scheduleAutoListen();
+      return;
+    }
+    if (data.transcript) addTranscriptLine('user', data.transcript);
+    if (data.response_text) addTranscriptLine('zoe', data.response_text);
+    if (data.audio_base64) {
+      playAudioBase64(data.audio_base64, data.content_type || 'audio/wav', () => {
+        setOrbState('ambient');
+        scheduleAutoListen();
+      });
+    } else {
+      setOrbState('ambient');
+      scheduleAutoListen();
+    }
+  } catch(e) {
+    console.error('LiveKit audio upload failed:', e);
+    setOrbState('ambient');
+    setTimeout(() => scheduleAutoListen(), 1000);
+  }
+}
+
 // ── Continued conversation mode ───────────────────────────────────────────
 let autoListenTimer = null;
 function scheduleAutoListen() {
-  if (!convMode || speaking) return;
+  // In livekit mode: always auto-listen after a response (always-on VAD, no convMode gate)
+  // In local mode: only auto-listen if convMode is on
+  if (MODE !== 'livekit' && !convMode) return;
+  if (speaking || serverBusy) return;
   clearTimeout(autoListenTimer);
   autoListenTimer = setTimeout(() => {
-    if (convMode && !speaking && !isRecording) startRecording();
+    if (!speaking && !isRecording && !serverBusy) startRecording();
   }, 600);
 }
 
@@ -767,14 +861,25 @@ async function connectLiveKitVoice() {
 
     await room.connect(url, token);
 
-    // Publish mic track — start muted, PTT unmutes it
+    // Publish mic track — always-on (VAD handles end-of-speech server-side)
     localMicTrack = await LivekitClient.createLocalAudioTrack({
       echoCancellation: true,
       noiseSuppression: true,
       autoGainControl: true,
     });
-    await localMicTrack.mute();
+    // Do NOT mute — server-side VAD needs the live audio stream immediately
     await room.localParticipant.publishTrack(localMicTrack);
+
+    // Send identity so the agent knows which user is speaking
+    try {
+      room.localParticipant.publishData(
+        _lkEncoder.encode(JSON.stringify({
+          type: 'identify',
+          user_id: (window._ZOE_USER_ID || ''),
+          session_id: getSessionId(),
+        })), { reliable: true }
+      );
+    } catch(_e) {}
 
     // Expose the underlying MediaStream for silence detection analyser
     micStream = new MediaStream([localMicTrack.mediaStreamTrack]);
@@ -783,7 +888,12 @@ async function connectLiveKitVoice() {
     wsReady = true;
     setOrbState('ambient');
     setStatus('');
-    showPttButton();
+    // In livekit mode: hide PTT button (VAD is always-on, no button needed)
+    // In local WS mode: showPttButton() is called by connectLocalVoice
+    if (MODE !== 'livekit') showPttButton();
+    else document.getElementById('pttBtn').style.display = 'none';
+    // Auto-start recording immediately in livekit mode (always-on VAD)
+    if (MODE === 'livekit') setTimeout(() => startRecording(), 500);
   } catch(e) {
     console.warn('LiveKit connect failed, falling back to local WS:', e);
     setStatus('Falling back to local mode…');
@@ -818,10 +928,28 @@ document.addEventListener('keyup', (e) => {
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
 if (!isIOS) { startVoice(); }
 
-// ── Broadcast channel: voice events from service worker ──────────────────
+// ── Handle server-pushed auto-start (e.g. from "let's chat" wake word) ────
+window.handleStartConversation = function(delayMs) {
+  const delay = typeof delayMs === 'number' ? delayMs : 2500;
+  setTimeout(() => {
+    if (convMode && !isRecording && !serverBusy && !speaking) {
+      _silentCycles = 0;
+      startRecording();
+    }
+  }, delay);
+};
+
+// ── Broadcast channel: voice events + start_conversation signals ──────────
 try {
   const bc = new BroadcastChannel('zoe-voice');
-  bc.onmessage = (ev) => handleVoiceEvent(ev.data || {});
+  bc.onmessage = (ev) => {
+    const d = ev.data || {};
+    if (d.type === 'voice:start_conversation') {
+      window.handleStartConversation(d.delay_ms);
+    } else {
+      handleVoiceEvent(d);
+    }
+  };
 } catch(e) {}
 </script>
 

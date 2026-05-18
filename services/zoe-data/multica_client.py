@@ -102,16 +102,20 @@ class MULClient:
             logger.warning("Multica list_issues failed: %s", exc)
             return []
 
-    async def update_issue(self, issue_id: str, status: str) -> dict:
-        """Update the status of an issue."""
+    async def update_issue(self, issue_id: str, status: str | None = None, **kwargs) -> dict:
+        """Update an issue's status and/or other fields (description, title, etc.)."""
         if not self.is_configured():
             return {}
         url = f"{self._base}/api/issues/{issue_id}"
+        payload: dict = {}
+        if status is not None:
+            payload["status"] = status
+        payload.update(kwargs)
+        if not payload:
+            return {}
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-                resp = await client.put(
-                    url, json={"status": status}, headers=self._headers()
-                )
+                resp = await client.put(url, json=payload, headers=self._headers())
                 resp.raise_for_status()
                 return resp.json()
         except Exception as exc:
@@ -189,6 +193,7 @@ async def sync_evolution_proposal_to_multica(
     description: str,
     evidence: str,
     proposal_type: str,
+    label_name: str = "evolution-proposal",
 ) -> str | None:
     """Create a Multica issue for a new evolution proposal.
 
@@ -235,7 +240,7 @@ async def sync_evolution_proposal_to_multica(
             issue = resp.json()
             issue_id: str = issue.get("id", "")
 
-            # Attach evolution-proposal label
+            # Attach label (defaults to "evolution-proposal"; user-reported issues use "user-feedback")
             labels_resp = await http.get(
                 f"{client._base}/api/labels",
                 headers=headers,
@@ -244,15 +249,31 @@ async def sync_evolution_proposal_to_multica(
             if labels_resp.status_code == 200:
                 labels = labels_resp.json()
                 if isinstance(labels, list):
+                    label_id: str | None = None
                     for lbl in labels:
-                        if lbl.get("name") == "evolution-proposal":
-                            await http.post(
-                                f"{client._base}/api/issues/{issue_id}/labels",
-                                json={"label_id": lbl["id"]},
+                        if lbl.get("name") == label_name:
+                            label_id = lbl["id"]
+                            break
+                    if label_id is None:
+                        # Create label on first use
+                        try:
+                            create_resp = await http.post(
+                                f"{client._base}/api/labels",
+                                json={"name": label_name},
                                 headers=headers,
                                 params=params,
                             )
-                            break
+                            if create_resp.status_code in (200, 201):
+                                label_id = create_resp.json().get("id")
+                        except Exception:
+                            pass
+                    if label_id:
+                        await http.post(
+                            f"{client._base}/api/issues/{issue_id}/labels",
+                            json={"label_id": label_id},
+                            headers=headers,
+                            params=params,
+                        )
 
             logger.info(
                 "Multica: synced evolution proposal '%s' → issue %s",

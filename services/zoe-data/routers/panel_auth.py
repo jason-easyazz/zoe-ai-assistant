@@ -134,6 +134,7 @@ async def load_device_tokens(db) -> None:
 async def list_panels(admin: dict = Depends(_require_admin), db=Depends(get_db)):
     cur = await db.execute(
         """SELECT p.panel_id, p.name, p.location, p.panel_type, p.is_active, p.allow_guest,
+                  p.ip_address, p.ssh_user, p.ssh_key_path, p.ssh_port,
                   p.last_seen_at, p.created_at,
                   (SELECT user_id FROM panel_user_bindings b
                      WHERE b.panel_id = p.panel_id AND b.binding_type = 'default' LIMIT 1) AS default_user_id,
@@ -163,6 +164,58 @@ async def panel_public_info(panel_id: str, db=Depends(get_db)):
     return dict(row)
 
 
+@router.get("/{panel_id}/status")
+async def panel_status(panel_id: str, admin: dict = Depends(_require_admin), db=Depends(get_db)):
+    """Live status for a panel: last_seen_at, SSH reachability, active kiosk URL, default user."""
+    row = await (await db.execute(
+        """SELECT p.panel_id, p.name, p.location, p.is_active, p.ip_address,
+                  p.ssh_user, p.ssh_port, p.last_seen_at,
+                  (SELECT user_id FROM panel_user_bindings b
+                     WHERE b.panel_id = p.panel_id AND b.binding_type = 'default' LIMIT 1) AS default_user_id
+             FROM panels p WHERE p.panel_id = ?""",
+        (panel_id,),
+    )).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Panel not found")
+
+    data = dict(row)
+    ip = data.get("ip_address")
+    ssh_port = data.get("ssh_port") or 22
+
+    ssh_reachable: Optional[bool] = None
+    if ip:
+        try:
+            proc = await asyncio.wait_for(
+                asyncio.create_subprocess_exec(
+                    "ssh",
+                    "-o", "ConnectTimeout=5",
+                    "-o", "StrictHostKeyChecking=no",
+                    "-o", "BatchMode=yes",
+                    "-p", str(ssh_port),
+                    f"{data.get('ssh_user') or 'pi'}@{ip}",
+                    "echo ok",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                ),
+                timeout=8.0,
+            )
+            await proc.communicate()
+            ssh_reachable = proc.returncode == 0
+        except Exception:
+            ssh_reachable = False
+
+    return {
+        "panel_id": panel_id,
+        "name": data.get("name"),
+        "location": data.get("location"),
+        "is_active": bool(data.get("is_active")),
+        "ip_address": ip,
+        "ssh_reachable": ssh_reachable,
+        "last_seen_at": data.get("last_seen_at"),
+        "default_user_id": data.get("default_user_id"),
+    }
+
+
 @router.post("/register")
 async def register_panel(payload: dict, admin: dict = Depends(_require_admin), db=Depends(get_db)):
     """Register a new panel (kiosk device)."""
@@ -173,15 +226,19 @@ async def register_panel(payload: dict, admin: dict = Depends(_require_admin), d
     panel_type = payload.get("panel_type") or "kiosk"
     notes = payload.get("notes") or None
     allow_guest = 1 if payload.get("allow_guest", True) else 0
+    ssh_user = payload.get("ssh_user") or "pi"
+    ssh_key_path = payload.get("ssh_key_path") or None
+    ssh_port = int(payload.get("ssh_port") or 22)
 
     existing = await (await db.execute("SELECT panel_id FROM panels WHERE panel_id = ?", (panel_id,))).fetchone()
     if existing:
         raise HTTPException(status_code=409, detail=f"Panel '{panel_id}' already registered")
 
     await db.execute(
-        """INSERT INTO panels (panel_id, name, location, ip_address, panel_type, notes, allow_guest)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (panel_id, name, location, ip, panel_type, notes, allow_guest),
+        """INSERT INTO panels (panel_id, name, location, ip_address, panel_type, notes, allow_guest,
+                               ssh_user, ssh_key_path, ssh_port)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (panel_id, name, location, ip, panel_type, notes, allow_guest, ssh_user, ssh_key_path, ssh_port),
     )
     await db.commit()
     logger.info("panel_auth: registered panel %s", panel_id)

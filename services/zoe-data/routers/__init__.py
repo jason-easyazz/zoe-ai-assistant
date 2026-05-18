@@ -14,6 +14,7 @@ from .ui_actions import router as ui_router
 from .voice_tts import router as voice_tts_router
 from .user_profile import router as user_profile_router
 from .panel_auth import router as panel_auth_router
+from .panel_provision import router as panel_provision_router
 from .capability_matrix import router as capability_matrix_router
 from .music import router as music_router
 
@@ -34,6 +35,7 @@ __all__ = [
     "voice_tts_router",
     "user_profile_router",
     "panel_auth_router",
+    "panel_provision_router",
     "capability_matrix_router",
     "music_router",
 ]

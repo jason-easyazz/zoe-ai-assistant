@@ -239,6 +239,7 @@ from zoe_acp_client import openclaw_acp_stream as _acp_stream
 from zoe_agent import (
     run_zoe_agent, run_zoe_agent_streaming,
     _mempalace_load_user_facts, _mempalace_add, _fire_memory_capture,
+    _build_memory_context,
 )
 from auth import get_current_user
 from database import get_db
@@ -497,6 +498,99 @@ async def _restart_hermes() -> None:
         logger.warning("Hermes restart after token write failed: %s", exc)
 
 
+async def _build_panel_intent_card(intent, db, user_id: str) -> str:
+    """Build an AG-UI markdown status card for touch panel intents."""
+    import httpx as _httpx
+
+    if intent.name == "panel_list":
+        cur = await db.execute(
+            "SELECT panel_id, name, location, ip_address, is_active, last_seen_at FROM panels ORDER BY created_at DESC"
+        )
+        rows = await cur.fetchall()
+        if not rows:
+            return (
+                "**Touch Panels** — none registered yet.\n\n"
+                "To set up your first panel, say **\"set up touch panel\"** or scan the QR code on the panel screen."
+            )
+        lines = ["**Touch Panels**\n"]
+        for r in rows:
+            dot = "🟢" if r["is_active"] else "🔴"
+            ip = r["ip_address"] or "unknown IP"
+            last = r["last_seen_at"] or "never"
+            name = r["name"] or r["panel_id"]
+            loc = f" · {r['location']}" if r["location"] else ""
+            lines.append(f"{dot} **{name}** (`{r['panel_id']}`){loc} — {ip} · last seen {last}")
+        lines.append("\n[Manage panels](/settings.html#touch-panels)")
+        return "\n".join(lines)
+
+    elif intent.name == "panel_status":
+        cur = await db.execute(
+            "SELECT panel_id, name, ip_address, last_seen_at, ssh_user, ssh_port FROM panels WHERE is_active = 1 ORDER BY created_at DESC LIMIT 5"
+        )
+        rows = await cur.fetchall()
+        if not rows:
+            return "No active panels registered. Say **\"set up touch panel\"** to add one."
+        lines = ["**Panel Status**\n"]
+        for r in rows:
+            ip = r["ip_address"]
+            reachable = None
+            if ip:
+                try:
+                    import asyncio as _aio
+                    proc = await _aio.wait_for(
+                        _aio.create_subprocess_exec(
+                            "ssh", "-o", "ConnectTimeout=4", "-o", "StrictHostKeyChecking=no",
+                            "-o", "BatchMode=yes", "-p", str(r["ssh_port"] or 22),
+                            f"{r['ssh_user'] or 'pi'}@{ip}", "echo ok",
+                            stdout=_aio.subprocess.PIPE, stderr=_aio.subprocess.PIPE,
+                        ),
+                        timeout=6.0,
+                    )
+                    await proc.communicate()
+                    reachable = proc.returncode == 0
+                except Exception:
+                    reachable = False
+            ssh_dot = ("🟢 SSH ok" if reachable else "🔴 SSH unreachable") if reachable is not None else "⚪ no IP"
+            lines.append(f"**{r['name'] or r['panel_id']}** · {ip or 'no IP'} · {ssh_dot} · last seen {r['last_seen_at'] or 'never'}")
+        return "\n".join(lines)
+
+    elif intent.name == "panel_setup":
+        return (
+            "**Set up a new touch panel**\n\n"
+            "1. Power on the Raspberry Pi (fresh image)\n"
+            "2. A WiFi hotspot named **ZoeTouch-Setup-XXXX** will appear\n"
+            "3. Connect your phone to that hotspot\n"
+            "4. Select your home WiFi and tap **Connect**\n"
+            "5. The panel will auto-update, then show a **QR code**\n"
+            "6. Scan the QR code with your phone — confirm the name/location\n"
+            "7. Your panel is live!\n\n"
+            "Or enter a 6-character code here: say **\"connect panel XXXXXX\"**\n\n"
+            "[Manage panels](/settings.html#touch-panels)"
+        )
+
+    elif intent.name == "panel_confirm_code":
+        code = (intent.slots or {}).get("code", "").upper()
+        if not code:
+            return "What's the 6-character code shown on the panel screen?"
+        # Look up the code in DB and confirm it
+        row = await (await db.execute(
+            "SELECT code, device_id, status, expires_at FROM panel_provision_codes WHERE code = ?",
+            (code,),
+        )).fetchone()
+        if not row:
+            return f"Code **{code}** wasn't found. Make sure the panel is showing the code and hasn't expired."
+        if row["status"] == "expired":
+            return f"Code **{code}** has expired. The panel will generate a new code — scan the updated QR."
+        if row["status"] == "confirmed":
+            return f"Code **{code}** was already confirmed. The panel should be connecting now."
+        return (
+            f"Code **{code}** found. Open this link on your phone to name and confirm the panel:\n\n"
+            f"[Pair panel →](/touch/pair.html?code={code})"
+        )
+
+    return "I couldn't build a panel card for that intent."
+
+
 async def _chatgpt_connect_flow(emit, enc, recorder, assistant_message_id, tool_call_id, label):  # noqa: ARG001
     """Full OpenAI Codex device-code OAuth flow, streamed as AG-UI events.
 
@@ -704,24 +798,35 @@ def _extract_memory_candidates(user_message: str, assistant_response: str):
 async def _persist_memory_candidates(user_id: str, session_id: str, user_message: str, assistant_response: str):
     """Single post-turn memory hook.
 
-    Delegates to ``memory_extractor.extract_and_ingest`` which enforces the
-    one-extractor-one-writer contract. Previously we ran two regex passes
-    (this router's and ``zoe_agent._fast_memory_extract``) with overlapping
-    pattern sets, dual-writing to SQLite ``memory_items`` and MemPalace.
-    Both old paths now funnel through this single call.
+    Runs two passes in parallel:
+    1. Regex extraction  — zero-latency, catches explicit patterns immediately.
+    2. LLM turn digest   — background Gemma call, catches nuanced facts the
+                           regex misses (relationships, pets, life events, etc.)
+                           within seconds rather than waiting for the 3am batch.
     """
     if user_id == "guest":
         return
     try:
         from memory_extractor import extract_and_ingest
+        from memory_digest import run_turn_digest
 
-        await extract_and_ingest(
-            user_message,
-            assistant_response,
-            user_id=user_id,
-            session_id=session_id,
-            source="chat_regex",
-            auto_approve=_MEMORY_AUTO_INGEST,
+        await asyncio.gather(
+            extract_and_ingest(
+                user_message,
+                assistant_response,
+                user_id=user_id,
+                session_id=session_id,
+                source="chat_regex",
+                auto_approve=_MEMORY_AUTO_INGEST,
+            ),
+            run_turn_digest(
+                user_id,
+                user_message,
+                assistant_response,
+                session_id=session_id,
+                source="turn_digest",
+            ),
+            return_exceptions=True,
         )
     except Exception as e:
         logger.warning("Memory candidate persistence failed: %s", e)
@@ -1522,6 +1627,22 @@ async def chat_stream_generator(
                     asyncio.ensure_future(_save_chat_message(session_id, "assistant", _blurb))
                 return  # skip the standard execute_intent path
 
+            # ── Touch Panel intents: AG-UI status cards ───────────────────────
+            if intent.name in ("panel_setup", "panel_status", "panel_list", "panel_confirm_code"):
+                logger.info("intent_outcome=panel_%s", intent.name)
+                try:
+                    panel_card_md = await _build_panel_intent_card(intent, db, user_id)
+                except Exception as _pe:
+                    logger.warning("panel intent card error: %s", _pe)
+                    panel_card_md = "I had trouble fetching panel status. Check `/api/panels` for details."
+                yield emit(TextMessageStartEvent(type=EventType.TEXT_MESSAGE_START, message_id=assistant_message_id, role="assistant"))
+                async for line in iter_text_message_chunks(enc, recorder, assistant_message_id, panel_card_md):
+                    yield line
+                yield emit(TextMessageEndEvent(type=EventType.TEXT_MESSAGE_END, message_id=assistant_message_id))
+                yield emit(RunFinishedEvent(type=EventType.RUN_FINISHED, thread_id=session_id, run_id=run_id))
+                asyncio.ensure_future(_save_chat_message(session_id, "assistant", panel_card_md))
+                return
+
             # ── ChatGPT connect: full device-code OAuth flow inline ────────────
             if intent.name == "connect_chatgpt":
                 logger.info("intent_outcome=chatgpt_connect_flow")
@@ -1667,11 +1788,12 @@ async def chat_stream_generator(
                             },
                         )
                     )
-                    _oc_portrait, _oc_intent_fallback_mem = await asyncio.gather(
+                    _oc_portrait, _oc_intent_fallback_mem, _oc_semantic = await asyncio.gather(
                         _safe_load_portrait(user_id),
                         _mempalace_load_user_facts(user_id),
+                        _build_memory_context(message_for_processing, user_id=user_id),
                     )
-                    _oc_full_mem = "\n\n".join(filter(None, [_oc_portrait, _oc_intent_fallback_mem]))
+                    _oc_full_mem = "\n\n".join(filter(None, [_oc_portrait, _oc_intent_fallback_mem, _oc_semantic]))
                     task = asyncio.create_task(
                         run_openclaw_agent(
                             oc_message,
@@ -1772,6 +1894,70 @@ async def chat_stream_generator(
                     if chunk.startswith("__ESCALATE__:") or chunk.startswith("__ESCALATE_BG__:") or chunk.startswith("__ESCALATE_HERMES__:"):
                         escalate_signal = chunk
                         break
+                    if chunk.startswith("__SEARCH_START__:"):
+                        # Web search is about to execute — immediately stream a status line
+                        # so the user sees activity instead of silence during the search delay.
+                        _sq = chunk[len("__SEARCH_START__:"):]
+                        _search_notice = (
+                            f"Searching the web for *{_sq}*…\n\n" if _sq
+                            else "Searching the web…\n\n"
+                        )
+                        full_response += _search_notice
+                        yield recorder.emit(
+                            enc,
+                            TextMessageChunkEvent(
+                                type=EventType.TEXT_MESSAGE_CHUNK,
+                                message_id=assistant_message_id,
+                                role="assistant",
+                                delta=_search_notice,
+                            ),
+                        )
+                        continue
+                    if chunk.startswith("__DEEP_RESEARCH_START__:"):
+                        # Deep research (~60s) — stream a context-aware status so the
+                        # user knows what's happening and doesn't see a blank screen.
+                        _dq = chunk[len("__DEEP_RESEARCH_START__:"):]
+                        _dq_l = _dq.lower()
+                        if re.search(r'\b(price|prices|cheap|cheapest|cost|buy|stock)\b', _dq_l):
+                            _action = "Comparing prices across local stores"
+                        elif re.search(r'\b(event|concert|festival|show|movie|cinema|gig|market|what.?s on)\b', _dq_l):
+                            _action = "Checking what's on"
+                        elif re.search(r'\b(restaurant|cafe|coffee|pizza|eat|food|pub|bar|takeaway)\b', _dq_l):
+                            _action = "Finding local dining options"
+                        elif re.search(r'\b(plumber|electrician|mechanic|dentist|doctor|pharmacy|vet|tradie|tradesman|cleaner|handyman)\b', _dq_l):
+                            _action = "Finding local service providers"
+                        elif re.search(r'\b(hotel|motel|airbnb|accommodation|stay)\b', _dq_l):
+                            _action = "Checking accommodation"
+                        elif re.search(r'\b(flight|flights|bus|train|timetable|schedule)\b', _dq_l):
+                            _action = "Checking transport options"
+                        elif re.search(r'\b(job|jobs|work|hiring|vacancy)\b', _dq_l):
+                            _action = "Searching job listings"
+                        else:
+                            _action = "Researching"
+                        # Extract a capitalised location from the query for the message
+                        _loc_m = re.search(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b', _dq)
+                        _loc_part = f" in {_loc_m.group(1)}" if _loc_m else ""
+                        _dr_notice = f"{_action}{_loc_part} — visiting multiple sources, this takes ~60s…\n\n"
+                        full_response += _dr_notice
+                        yield recorder.emit(
+                            enc,
+                            TextMessageChunkEvent(
+                                type=EventType.TEXT_MESSAGE_CHUNK,
+                                message_id=assistant_message_id,
+                                role="assistant",
+                                delta=_dr_notice,
+                            ),
+                        )
+                        continue
+                    if chunk.startswith("__THINKING__:"):
+                        # Tool activity hint — emit as a transient state snapshot (not message text)
+                        _thinking_tool = chunk[len("__THINKING__:"):]
+                        _tool_label = _thinking_tool.replace("_", " ").title()
+                        yield emit(StateSnapshotEvent(
+                            type=EventType.STATE_SNAPSHOT,
+                            snapshot={"status": "generating", "phase": "tool", "detail": f"Using {_tool_label}…"},
+                        ))
+                        continue
                     if chunk.startswith("__UI__:"):
                         # Zoe Agent visual tool — emit via the same zoe.ui_component CUSTOM
                         # event used by every other component path in chat.py. The frontend
@@ -1850,6 +2036,24 @@ async def chat_stream_generator(
                     else:
                         # Zoe Agent requested escalation to OpenClaw — stream via ACP channel
                         logger.info("chat: Zoe Agent escalating to OpenClaw (ACP) — reason=%s", reason.strip())
+                        # Bridging message so the user isn't left staring at silence while
+                        # OpenClaw spins up (typically 3-10s before first token).
+                        _bridge_id = str(uuid.uuid4())
+                        yield emit(TextMessageStartEvent(
+                            type=EventType.TEXT_MESSAGE_START,
+                            message_id=_bridge_id,
+                            role="assistant",
+                        ))
+                        yield emit(TextMessageChunkEvent(
+                            type=EventType.TEXT_MESSAGE_CHUNK,
+                            message_id=_bridge_id,
+                            role="assistant",
+                            delta="On it — let me work through this properly for you.",
+                        ))
+                        yield emit(TextMessageEndEvent(
+                            type=EventType.TEXT_MESSAGE_END,
+                            message_id=_bridge_id,
+                        ))
                         yield emit(
                             StateSnapshotEvent(
                                 type=EventType.STATE_SNAPSHOT,
@@ -1936,11 +2140,12 @@ async def chat_stream_generator(
                         },
                     )
                 )
-                _oc2_portrait, oc_db_memory = await asyncio.gather(
+                _oc2_portrait, oc_db_memory, _oc2_semantic = await asyncio.gather(
                     _safe_load_portrait(user_id),
                     _mempalace_load_user_facts(user_id),
+                    _build_memory_context(message_for_processing, user_id=user_id),
                 )
-                _oc2_full_mem = "\n\n".join(filter(None, [_oc2_portrait, oc_db_memory]))
+                _oc2_full_mem = "\n\n".join(filter(None, [_oc2_portrait, oc_db_memory, _oc2_semantic]))
                 task = asyncio.create_task(
                     run_openclaw_agent(
                         oc_message,
@@ -2161,16 +2366,18 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
     if stream:
         # Hermes Agent path — direct OpenAI-compat streaming to localhost:8642
         if force_agent == "hermes":
-            _h_portrait, _h_facts = await asyncio.gather(
+            _h_portrait, _h_facts, _h_semantic = await asyncio.gather(
                 _safe_load_portrait(user_id),
                 _mempalace_load_user_facts(user_id),
+                _build_memory_context(message, user_id=user_id),
             )
+            _h_combined_facts = "\n\n".join(filter(None, [_h_facts, _h_semantic]))
             return StreamingResponse(
                 _hermes_stream_generator(
                     message, session_id, user_id,
                     username=user.get("username", ""),
                     portrait=_h_portrait,
-                    facts=_h_facts,
+                    facts=_h_combined_facts,
                 ),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
@@ -2310,12 +2517,13 @@ async def chat(request: Request, user: dict = Depends(get_current_user), stream:
 
         response_text = ""
         try:
-            # Load portrait + facts concurrently for all non-streaming branches
-            ns_portrait, ns_db_memory = await asyncio.gather(
+            # Load portrait + facts + semantic recall concurrently for all non-streaming branches
+            ns_portrait, ns_db_memory, ns_semantic = await asyncio.gather(
                 _safe_load_portrait(user_id),
                 _mempalace_load_user_facts(user_id),
+                _build_memory_context(message_for_processing, user_id=user_id),
             )
-            ns_full_mem = "\n\n".join(filter(None, [ns_portrait, ns_db_memory]))
+            ns_full_mem = "\n\n".join(filter(None, [ns_portrait, ns_db_memory, ns_semantic]))
             if _USE_ZOE_AGENT:
                 # Use original (pre-suffix) message for agent so fast-path checks work
                 _agent_msg = _original_message_for_agent if is_voice_mode else message_for_processing

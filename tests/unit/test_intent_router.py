@@ -153,6 +153,47 @@ class TestEvolutionProposalsIntent:
             )
 
 
+# ── User issue report intent ──────────────────────────────────────────────────
+
+class TestUserIssueReportIntent:
+    POSITIVE = [
+        "you got that wrong",
+        "that didn't work",
+        "that's not working",
+        "there's a problem with the weather card",
+        "there's an issue with reminders",
+        "fix your music controls",
+        "you should know that the lights aren't responding",
+        "I keep having issues with reminders",
+        "you need to fix the calendar",
+        "that was wrong",
+        "that was incorrect",
+        "you messed up the timer",
+    ]
+    NEGATIVE = [
+        "what time is it",
+        "play some music",
+        "add milk to shopping list",
+        "show the evolution proposals",
+        "review evolution proposals",
+        "hello",
+    ]
+
+    def test_positive_cases(self, ir):
+        for msg in self.POSITIVE:
+            name = _intent_name(ir, msg)
+            assert name == "user_issue_report", (
+                f"Expected user_issue_report for: {msg!r}, got: {name!r}"
+            )
+
+    def test_negative_cases(self, ir):
+        for msg in self.NEGATIVE:
+            name = _intent_name(ir, msg)
+            assert name != "user_issue_report", (
+                f"False positive user_issue_report for: {msg!r}"
+            )
+
+
 # ── General intent smoke test: no crashes ────────────────────────────────────
 
 class TestNoCrash:

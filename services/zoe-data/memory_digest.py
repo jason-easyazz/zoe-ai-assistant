@@ -82,6 +82,139 @@ Conversation (user turns only):
 """
 
 
+_TURN_EXTRACTION_PROMPT = """\
+You are extracting personal facts from a single chat exchange. Only extract facts the user explicitly stated about themselves, their family, pets, preferences, or life. Do NOT infer or assume anything not stated directly.
+
+Return ONLY a JSON array (no preamble). Each item:
+  "type": one of "profile" | "preference" | "habit" | "event" | "relationship" | "health" | "pet"
+  "fact": a single concise sentence in third-person (max 120 chars, e.g. "User's dog is named Teddy")
+
+If nothing personal was stated, return: []
+
+User said: {user_message}
+"""
+
+
+async def run_turn_digest(
+    user_id: str,
+    user_message: str,
+    assistant_response: str = "",
+    *,
+    session_id: str | None = None,
+    source: str = "turn_digest",
+) -> dict:
+    """LLM fact extraction on a single conversation exchange.
+
+    Runs in the background after every chat/voice turn. Catches nuanced facts
+    that regex patterns miss without waiting for the nightly batch digest.
+
+    Returns a summary dict: {"new": N, "skipped_duplicates": N, "error": ...}
+    """
+    result: dict = {"user_id": user_id, "new": 0, "skipped_duplicates": 0}
+
+    if not user_message or len(user_message.split()) < 4:
+        return result
+    # Skip purely procedural messages that can't contain personal facts.
+    _skip_starts = ("what is", "what are", "how do", "explain", "tell me about",
+                    "what time", "what's the", "search for", "play ", "set a timer",
+                    "set timer", "remind me to", "add to my", "what's")
+    msg_lower = user_message.lower().strip()
+    if any(msg_lower.startswith(s) for s in _skip_starts):
+        return result
+
+    try:
+        from memory_service import get_memory_service, MemoryServiceError  # type: ignore[import]
+        svc = get_memory_service()
+
+        prompt = _TURN_EXTRACTION_PROMPT.format(user_message=user_message[:600])
+        payload = {
+            "model": os.environ.get("MEMORY_DIGEST_MODEL", "gemma-4-E2B-it-Q4_K_M.gguf"),
+            "messages": [
+                {"role": "system", "content": "You are a precise fact extractor. Return ONLY valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": 256,
+            "temperature": 0.1,
+            "stream": False,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.post(f"{_GEMMA_URL}/v1/chat/completions", json=payload)
+                resp.raise_for_status()
+                raw = resp.json()["choices"][0]["message"]["content"].strip()
+        except Exception as exc:
+            logger.debug("turn_digest: LLM call failed for %s: %s", user_id, exc)
+            return result
+
+        # Parse JSON array from response
+        try:
+            start = raw.find("[")
+            end = raw.rfind("]") + 1
+            if start == -1 or end == 0:
+                return result
+            facts = json.loads(raw[start:end])
+            if not isinstance(facts, list):
+                return result
+        except (json.JSONDecodeError, ValueError):
+            return result
+
+        if not facts:
+            return result
+
+        # Light dedup: load existing facts as a text blob for word-overlap check
+        try:
+            from zoe_agent import _mempalace_load_user_facts  # type: ignore[import]
+            existing_text = await _mempalace_load_user_facts(user_id, limit=50)
+            existing_lower = existing_text.lower()
+        except Exception:
+            existing_lower = ""
+
+        import hashlib as _hashlib
+        base_turn_id = _hashlib.sha1(user_message.encode("utf-8", "ignore")).hexdigest()[:16]
+
+        for idx, item in enumerate(facts):
+            fact = (item.get("fact") or "").strip()
+            if not fact or len(fact) < 8:
+                continue
+            # Word-overlap dedup (same as nightly digest)
+            fact_words = set(fact.lower().split())
+            overlap = sum(1 for w in fact_words if w in existing_lower) / max(len(fact_words), 1)
+            if overlap > 0.7:
+                result["skipped_duplicates"] += 1
+                continue
+            try:
+                ref = await svc.ingest(
+                    fact,
+                    user_id=user_id,
+                    source=source,
+                    session_id=session_id,
+                    user_turn_id=f"{base_turn_id}-td{idx}",
+                    memory_type=item.get("type", "fact"),
+                    confidence=0.82,
+                    status="approved",
+                    tags=["turn_digest", "auto_extract"],
+                )
+                if ref is not None:
+                    result["new"] += 1
+                    logger.info("turn_digest: stored for %s: %s", user_id, fact[:80])
+            except MemoryServiceError as exc:
+                logger.debug("turn_digest: ingest failed for %s: %s", user_id, exc)
+
+    except Exception as exc:
+        logger.warning("turn_digest: unexpected error for %s: %s", user_id, exc)
+        result["error"] = str(exc)
+
+    if result.get("new", 0) > 0:
+        try:
+            from zoe_agent import _invalidate_user_facts_cache
+            _invalidate_user_facts_cache(user_id)
+        except Exception:
+            pass
+
+    return result
+
+
 async def run_memory_digest(user_id: str, db=None) -> dict:
     """Extract facts from today's chat history and write to MemPalace + memory_items.
 

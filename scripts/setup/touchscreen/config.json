@@ -1,6 +1,8 @@
 {
+  "server_url": "https://192.168.1.218",
   "url": "https://192.168.1.218/touch/dashboard.html?panel_id=zoe-touch-pi&kiosk=1",
   "panel_id": "zoe-touch-pi",
+  "token": "",
   "kiosk": true,
   "browser": "chromium",
   "user_data_dir": "/home/pi/.config/chromium-kiosk",

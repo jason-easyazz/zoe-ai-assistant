@@ -331,6 +331,22 @@ window.ZoeWebSockets = {
             }
         });
 
+        // ── Voice: start conversation signal (sent after "let's chat" intent) ──
+        // Forwarded to the voice page via BroadcastChannel so the page can
+        // open the mic after the TTS echo has settled, without relying on ?conv=1.
+        this.push.on('voice:start_conversation', (data) => {
+            const payload = unwrapPayload(data);
+            const delayMs = (payload && typeof payload.delay_ms === 'number') ? payload.delay_ms : 2500;
+            if (typeof window.handleStartConversation === 'function') {
+                window.handleStartConversation(delayMs);
+            }
+            try {
+                const bc = new BroadcastChannel('zoe-voice');
+                bc.postMessage({ type: 'voice:start_conversation', delay_ms: delayMs });
+                setTimeout(() => bc.close(), 500);
+            } catch(_) {}
+        });
+
         // ── Voice state machine ────────────────────────────────────────────
         this.push.on('voice:listening_started', () => {
             if (window._zoeSetOrbMode) window._zoeSetOrbMode('listening');

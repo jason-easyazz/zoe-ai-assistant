@@ -1,20 +1,31 @@
 """voice_livekit.py — Server-side LiveKit agent for voice.html?mode=livekit.
 
-Joins the "zoe-voice" LiveKit room as the "zoe-agent" participant, then:
-  1. Waits for PTT data messages ({"type":"ptt_start"} / {"type":"ptt_stop"}) from browser clients
-  2. On ptt_stop: buffers the audio frames that arrived during PTT → WAV → STT → LLM → TTS
-  3. Sends the TTS audio back via data channel as {"type":"audio","audio_base64":...}
-     which voice.html handles via playAudioBase64() — same as the local WS path
-  4. Sends state/transcript/done events so the orb and transcript panel stay in sync
+Joins the "zoe-voice" LiveKit room as the "zoe-agent" participant, then runs
+server-side energy VAD on the incoming audio track to detect when the user has
+finished speaking.  No button press required — always listening.
 
-API notes (livekit Python SDK v1.x):
-  - Room events: "participant_connected"(p), "participant_disconnected"(p),
-    "track_subscribed"(track, pub, p), "data_received"(data_packet)
-  - data_packet.data: bytes, data_packet.participant: RemoteParticipant|None
-  - Audio collection: rtc.AudioStream(track) as async iterator → AudioFrameEvent
-  - LocalParticipant.publish_data(payload: bytes|str, *, reliable: bool)
+Pipeline per participant:
+  IDLE → (speech energy detected) → LISTENING → (600ms silence) → PROCESSING
+  → (STT → LLM → TTS, audio sent via data channel) → COOLDOWN
+  → (playback_done from browser OR 3s timeout) → IDLE
 
-Requires: pip install livekit>=0.14
+PTT fallback: if the browser sends ptt_start / ptt_stop the old PTT path is
+still honoured — VAD only fires when no ptt_start has been received for this
+participant since their last IDLE state.
+
+Data channel messages sent to browser:
+  {"type": "state",      "state": "listening"|"thinking"|"responding"|"ambient"}
+  {"type": "transcript", "role": "user"|"zoe", "text": "..."}
+  {"type": "audio",      "audio_base64": "...", "content_type": "audio/wav"}
+  {"type": "done"}
+
+Data channel messages accepted from browser:
+  {"type": "identify",       "user_id": "...", "session_id": "..."}
+  {"type": "ptt_start"}       — explicit PTT start (disables VAD for this turn)
+  {"type": "ptt_stop"}        — explicit PTT stop (triggers processing)
+  {"type": "playback_done"}   — browser finished playing audio, re-enable listening
+
+Requires: pip install livekit>=0.14  (livekit-api is separate, not needed here)
 """
 from __future__ import annotations
 
@@ -22,28 +33,57 @@ import asyncio
 import base64
 import json
 import logging
+import math
 import os
 import struct
 import tempfile
 import time
 import uuid
+from enum import Enum, auto
 from typing import Optional
+
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
 # ── Agent configuration ───────────────────────────────────────────────────────
-# Use the internal host:port — the server agent connects server-to-server,
-# not through nginx/Cloudflare. LIVEKIT_URL is the browser-facing WSS URL.
+# Internal host:port — the agent connects server-to-server, not through nginx.
 _LIVEKIT_INTERNAL_URL = "ws://127.0.0.1:7880"
 _ROOM_NAME = "zoe-voice"
 _AGENT_IDENTITY = "zoe-agent"
 
-# Per-participant PTT state: sid → state dict
-_ptt_state: dict[str, dict] = {}
+# ── VAD configuration (tunable via env) ──────────────────────────────────────
+# RMS energy threshold on int16 samples.  Ambient silence is typically 50–200;
+# soft speech ~600–1200; normal speech ~1000–4000.
+_VAD_ENERGY_THRESHOLD = int(os.environ.get("ZOE_LK_ENERGY_THRESHOLD", "400"))
+# How many consecutive below-threshold frames (each ~30ms) trigger end-of-speech.
+_VAD_SILENCE_FRAMES = int(os.environ.get("ZOE_LK_SILENCE_FRAMES", "20"))  # ~600ms
+# Minimum number of above-threshold frames to count as real speech (not noise).
+_VAD_MIN_SPEECH_FRAMES = int(os.environ.get("ZOE_LK_MIN_SPEECH_FRAMES", "5"))  # ~150ms
+# Seconds to wait in COOLDOWN before auto-returning to IDLE if no playback_done.
+_COOLDOWN_TIMEOUT_S = float(os.environ.get("ZOE_LK_COOLDOWN_TIMEOUT_S", "4.0"))
+
+
+class _ParticipantState(Enum):
+    IDLE = auto()        # waiting for speech to start
+    LISTENING = auto()   # speech detected, accumulating frames
+    PROCESSING = auto()  # STT → LLM → TTS running
+    COOLDOWN = auto()    # audio sent, waiting for playback_done
+
+
+def _rms(frame_data: bytes) -> float:
+    """Compute RMS energy of a raw int16-LE PCM frame."""
+    if len(frame_data) < 2:
+        return 0.0
+    n = len(frame_data) // 2
+    # Unpack all int16 samples at once
+    samples = struct.unpack_from(f"<{n}h", frame_data)
+    return math.sqrt(sum(s * s for s in samples) / n)
 
 
 def _mint_agent_token() -> str:
-    """Mint a LiveKit JWT for the server-side agent (no livekit-server-sdk needed)."""
+    """Mint a LiveKit JWT for the server-side agent."""
     import jwt as _jwt
 
     api_key = os.environ.get("LIVEKIT_API_KEY", "").strip()
@@ -68,7 +108,7 @@ def _mint_agent_token() -> str:
     return _jwt.encode(payload, api_secret, algorithm="HS256")
 
 
-def _pcm_frames_to_wav(frames: list[bytes], sample_rate: int = 48000, channels: int = 1) -> bytes:
+def _pcm_frames_to_wav(frames: list[bytes], sample_rate: int = 16000, channels: int = 1) -> bytes:
     """Concatenate raw int16-LE PCM frames and wrap in a WAV header."""
     raw = b"".join(frames)
     bits = 16
@@ -93,18 +133,8 @@ async def _send_data(local_participant, payload: dict) -> None:
         logger.debug("LiveKit data send error: %s", exc)
 
 
-async def _handle_ptt_stop(local_participant, sender_sid: str) -> None:
-    """STT → LLM → TTS pipeline triggered when PTT is released."""
-    state = _ptt_state.get(sender_sid)
-    if not state or not state.get("frames"):
-        await _send_data(local_participant, {"type": "state", "state": "ambient"})
-        return
-
-    frames = list(state["frames"])
-    state["frames"] = []
-    user_id = state.get("user_id", "family-admin")
-    session_id = state.get("session_id") or f"livekit-{sender_sid[:8]}"
-
+async def _run_pipeline(local_participant, frames: list[bytes], user_id: str, session_id: str) -> None:
+    """STT → LLM → TTS pipeline, called once end-of-speech is detected."""
     await _send_data(local_participant, {"type": "state", "state": "thinking"})
 
     # ── STT ──────────────────────────────────────────────────────────────────
@@ -145,7 +175,6 @@ async def _handle_ptt_stop(local_participant, sender_sid: str) -> None:
     await _send_data(local_participant, {"type": "transcript", "role": "zoe", "text": response})
 
     # ── TTS → send audio via data channel ────────────────────────────────────
-    # voice.html handleVoiceEvent handles type="audio" with playAudioBase64()
     try:
         from routers.voice_tts import synthesize as _synth
         tts_resp = await _synth({"text": response}, caller={"source": "livekit", "user_id": user_id})
@@ -159,140 +188,322 @@ async def _handle_ptt_stop(local_participant, sender_sid: str) -> None:
         await _send_data(local_participant, {"type": "text", "content": response})
 
     await _send_data(local_participant, {"type": "done"})
-    await _send_data(local_participant, {"type": "state", "state": "ambient"})
 
 
-async def _collect_audio_stream(track, sid: str) -> None:
-    """Background task: read AudioStream frames and buffer them during active PTT."""
+async def _collect_audio_stream(
+    track,
+    sid: str,
+    participant_state: dict,
+    local_participant,
+) -> None:
+    """Background task: run energy VAD on incoming audio frames.
+
+    Maintains per-participant state in `participant_state[sid]`:
+      state        — _ParticipantState
+      frames       — accumulated speech frames (cleared on PROCESSING)
+      speech_count — consecutive above-threshold frames (resets on silence)
+      silence_count— consecutive below-threshold frames (resets on speech)
+      ptt_active   — True while a ptt_start has been received but not ptt_stop
+      pipeline_task— the currently running asyncio.Task for the pipeline
+    """
     try:
-        from livekit import rtc as lk_rtc  # type: ignore
-        audio_stream = lk_rtc.AudioStream(track, sample_rate=16000, num_channels=1)
+        # Support both livekit.rtc tracks (livekit-ffi) and aiortc tracks
+        from livekit_aiortc import _RemoteAudioTrack as _AiortcTrack, make_audio_stream
+        if isinstance(track, _AiortcTrack):
+            audio_stream = make_audio_stream(track, sample_rate=16000, num_channels=1)
+        else:
+            from livekit import rtc as lk_rtc  # type: ignore
+            audio_stream = lk_rtc.AudioStream(track, sample_rate=16000, num_channels=1)
         async for frame_event in audio_stream:
-            state = _ptt_state.get(sid)
-            if state and state.get("buffering"):
-                # frame_event.frame.data is a memoryview of int16-LE PCM samples
-                state["frames"].append(bytes(frame_event.frame.data))
+            ps = participant_state.get(sid)
+            if ps is None:
+                break
+
+            raw = bytes(frame_event.frame.data)
+            energy = _rms(raw)
+            state = ps["state"]
+
+            # ── PTT override path ─────────────────────────────────────────
+            if ps.get("ptt_active"):
+                # Old PTT logic: just buffer frames, pipeline triggered by ptt_stop
+                ps["frames"].append(raw)
+                continue
+
+            # ── VAD path ──────────────────────────────────────────────────
+            if state == _ParticipantState.IDLE:
+                if energy >= _VAD_ENERGY_THRESHOLD:
+                    ps["speech_count"] = ps.get("speech_count", 0) + 1
+                    ps["frames"].append(raw)
+                    if ps["speech_count"] >= _VAD_MIN_SPEECH_FRAMES:
+                        ps["state"] = _ParticipantState.LISTENING
+                        ps["silence_count"] = 0
+                        logger.debug("LiveKit VAD [%s]: IDLE → LISTENING (energy=%.0f)", sid[:8], energy)
+                        await _send_data(local_participant, {"type": "state", "state": "listening"})
+                else:
+                    ps["speech_count"] = 0
+                    ps["frames"] = []  # discard sub-threshold noise
+
+            elif state == _ParticipantState.LISTENING:
+                ps["frames"].append(raw)
+                if energy >= _VAD_ENERGY_THRESHOLD:
+                    ps["silence_count"] = 0
+                else:
+                    ps["silence_count"] = ps.get("silence_count", 0) + 1
+                    if ps["silence_count"] >= _VAD_SILENCE_FRAMES:
+                        # End of speech — kick off pipeline
+                        logger.debug(
+                            "LiveKit VAD [%s]: LISTENING → PROCESSING (frames=%d)",
+                            sid[:8], len(ps["frames"]),
+                        )
+                        ps["state"] = _ParticipantState.PROCESSING
+                        frames_snapshot = list(ps["frames"])
+                        ps["frames"] = []
+                        ps["speech_count"] = 0
+                        ps["silence_count"] = 0
+                        task = asyncio.ensure_future(
+                            _run_pipeline(
+                                local_participant,
+                                frames_snapshot,
+                                ps.get("user_id", "guest"),
+                                ps.get("session_id", f"livekit-{sid[:8]}"),
+                            )
+                        )
+                        ps["pipeline_task"] = task
+                        task.add_done_callback(
+                            lambda _t, _sid=sid, _ps=ps: _on_pipeline_done(_sid, _ps)
+                        )
+
+            # PROCESSING and COOLDOWN: ignore incoming frames (no buffering)
+
     except asyncio.CancelledError:
         raise
     except Exception as exc:
         logger.debug("LiveKit audio stream ended for %s: %s", sid, exc)
 
 
-async def _agent_loop() -> None:
-    """Main loop: connect to LiveKit room and process PTT/audio events."""
-    try:
-        from livekit import rtc as lk_rtc  # type: ignore
-    except ImportError:
-        logger.warning(
-            "livekit Python SDK not installed — LiveKit agent disabled. "
-            "Run: pip install livekit>=0.14"
-        )
-        return
+def _on_pipeline_done(sid: str, ps: dict) -> None:
+    """Called when the pipeline task finishes — move to COOLDOWN."""
+    if ps.get("state") == _ParticipantState.PROCESSING:
+        ps["state"] = _ParticipantState.COOLDOWN
+        ps["cooldown_deadline"] = time.monotonic() + _COOLDOWN_TIMEOUT_S
+        logger.debug("LiveKit VAD [%s]: PROCESSING → COOLDOWN", sid[:8])
 
-    backoff = 2.0
+
+async def _cooldown_watchdog(participant_state: dict) -> None:
+    """Periodic task that auto-expires COOLDOWN states whose deadline has passed."""
+    while True:
+        await asyncio.sleep(1.0)
+        now = time.monotonic()
+        for sid, ps in list(participant_state.items()):
+            if ps.get("state") == _ParticipantState.COOLDOWN:
+                if now >= ps.get("cooldown_deadline", now):
+                    ps["state"] = _ParticipantState.IDLE
+                    ps["speech_count"] = 0
+                    ps["silence_count"] = 0
+                    logger.debug("LiveKit VAD [%s]: COOLDOWN → IDLE (timeout)", sid[:8])
+
+
+def _make_participant_state(sid: str) -> dict:
+    return {
+        "state": _ParticipantState.IDLE,
+        "frames": [],
+        "speech_count": 0,
+        "silence_count": 0,
+        "ptt_active": False,
+        "pipeline_task": None,
+        "cooldown_deadline": 0.0,
+        "user_id": "guest",
+        "session_id": f"livekit-{sid[:8]}",
+    }
+
+
+def _build_room_handlers(room, participant_state: dict, audio_tasks: dict) -> None:
+    """Attach event handlers to a room object (works with both livekit.rtc and aiortc rooms)."""
+
+    @room.on("participant_connected")
+    def on_participant_connected(participant) -> None:
+        logger.info("LiveKit: participant joined %s (%s)", participant.identity, participant.sid[:8])
+        participant_state[participant.sid] = _make_participant_state(participant.sid)
+
+    @room.on("participant_disconnected")
+    def on_participant_disconnected(participant) -> None:
+        logger.info("LiveKit: participant left %s", participant.identity)
+        participant_state.pop(participant.sid, None)
+        task = audio_tasks.pop(participant.sid, None)
+        if task and not task.done():
+            task.cancel()
+
+    @room.on("track_subscribed")
+    def on_track_subscribed(track, publication, participant) -> None:
+        from livekit_aiortc import _TrackKind
+        kind = getattr(track, "kind", None)
+        # Accept both livekit.rtc.TrackKind.KIND_AUDIO (int 1) and our _TrackKind
+        if kind not in (1, _TrackKind.KIND_AUDIO):
+            try:
+                from livekit import rtc as lk_rtc
+                if kind != lk_rtc.TrackKind.KIND_AUDIO:
+                    return
+            except Exception:
+                return
+        old = audio_tasks.pop(participant.sid, None)
+        if old and not old.done():
+            old.cancel()
+        if participant.sid not in participant_state:
+            participant_state[participant.sid] = _make_participant_state(participant.sid)
+        audio_tasks[participant.sid] = asyncio.ensure_future(
+            _collect_audio_stream(
+                track,
+                participant.sid,
+                participant_state,
+                room.local_participant,
+            )
+        )
+        logger.info("LiveKit: subscribed to audio track for %s (native WebRTC active)", participant.identity)
+
+    @room.on("data_received")
+    def on_data_received(data_packet) -> None:
+        participant = data_packet.participant
+        if participant is None or participant.identity == _AGENT_IDENTITY:
+            return
+        try:
+            msg = json.loads(data_packet.data.decode())
+        except Exception:
+            return
+
+        msg_type = msg.get("type", "")
+        sid = participant.sid
+
+        if sid not in participant_state:
+            participant_state[sid] = _make_participant_state(sid)
+        ps = participant_state[sid]
+
+        if msg_type == "identify":
+            ps["user_id"] = msg.get("user_id") or "guest"
+            ps["session_id"] = msg.get("session_id") or ps["session_id"]
+
+        elif msg_type == "ptt_start":
+            ps["ptt_active"] = True
+            ps["frames"] = []
+            ps["state"] = _ParticipantState.LISTENING
+            logger.debug("LiveKit: PTT start from %s", participant.identity)
+
+        elif msg_type == "ptt_stop":
+            if not ps.get("ptt_active"):
+                return
+            ps["ptt_active"] = False
+            frames_snapshot = list(ps["frames"])
+            ps["frames"] = []
+            if not frames_snapshot:
+                ps["state"] = _ParticipantState.IDLE
+                return
+            ps["state"] = _ParticipantState.PROCESSING
+            task = asyncio.ensure_future(
+                _run_pipeline(
+                    room.local_participant,
+                    frames_snapshot,
+                    ps.get("user_id", "guest"),
+                    ps.get("session_id", f"livekit-{sid[:8]}"),
+                )
+            )
+            ps["pipeline_task"] = task
+            task.add_done_callback(
+                lambda _t, _sid=sid, _ps=ps: _on_pipeline_done(_sid, _ps)
+            )
+            logger.debug("LiveKit: PTT stop from %s, processing %d frames",
+                         participant.identity, len(frames_snapshot))
+
+        elif msg_type == "playback_done":
+            if ps["state"] in (_ParticipantState.COOLDOWN, _ParticipantState.PROCESSING):
+                ps["state"] = _ParticipantState.IDLE
+                ps["speech_count"] = 0
+                ps["silence_count"] = 0
+                logger.debug("LiveKit VAD [%s]: playback_done → IDLE", sid[:8])
+
+
+async def _agent_loop() -> None:
+    """Main loop: connect to LiveKit room and manage VAD/audio for all participants.
+
+    Tries livekit-ffi (native WebRTC) first.  On platforms where livekit-ffi
+    cannot initialise a PeerConnection (e.g. Jetson ARM64 Tegra kernel), falls
+    back automatically to the pure-Python aiortc backend.
+    """
+    participant_state: dict[str, dict] = {}
     audio_tasks: dict[str, asyncio.Task] = {}
+    backoff = 2.0
+    # ZOE_LK_USE_AIORTC=1 skips livekit-ffi entirely (set in .env on Jetson)
+    use_aiortc = os.environ.get("ZOE_LK_USE_AIORTC", "0") == "1"
+
+    asyncio.ensure_future(_cooldown_watchdog(participant_state))
 
     while True:
-        room: Optional[lk_rtc.Room] = None
+        room = None
         try:
             token = _mint_agent_token()
-            room = lk_rtc.Room()
 
-            @room.on("participant_connected")
-            def on_participant_connected(participant: lk_rtc.RemoteParticipant) -> None:
-                logger.info("LiveKit: participant joined %s", participant.identity)
-                _ptt_state[participant.sid] = {
-                    "buffering": False,
-                    "frames": [],
-                    "user_id": "family-admin",
-                    "session_id": f"livekit-{participant.sid[:8]}",
-                }
+            if use_aiortc:
+                # ── aiortc backend (pure Python, no livekit-ffi) ──────────
+                from livekit_aiortc import make_room, _ConnState
+                room = make_room()
+                _build_room_handlers(room, participant_state, audio_tasks)
+                logger.info("LiveKit agent connecting via aiortc backend to %s room=%s",
+                            _LIVEKIT_INTERNAL_URL, _ROOM_NAME)
+                await room.connect(_LIVEKIT_INTERNAL_URL, token)
+                logger.info("LiveKit agent connected (aiortc) as '%s'", _AGENT_IDENTITY)
+                backoff = 2.0
 
-            @room.on("participant_disconnected")
-            def on_participant_disconnected(participant: lk_rtc.RemoteParticipant) -> None:
-                _ptt_state.pop(participant.sid, None)
-                task = audio_tasks.pop(participant.sid, None)
-                if task and not task.done():
-                    task.cancel()
+                for p in room.remote_participants.values():
+                    if p.sid not in participant_state:
+                        participant_state[p.sid] = _make_participant_state(p.sid)
 
-            @room.on("track_subscribed")
-            def on_track_subscribed(
-                track: lk_rtc.RemoteAudioTrack,
-                publication: lk_rtc.RemoteTrackPublication,
-                participant: lk_rtc.RemoteParticipant,
-            ) -> None:
-                if track.kind != lk_rtc.TrackKind.KIND_AUDIO:
-                    return
-                # Cancel any existing stream task for this participant
-                old = audio_tasks.pop(participant.sid, None)
-                if old and not old.done():
-                    old.cancel()
-                audio_tasks[participant.sid] = asyncio.ensure_future(
-                    _collect_audio_stream(track, participant.sid)
-                )
+                while room.connection_state == _ConnState.CONN_CONNECTED:
+                    await asyncio.sleep(5)
 
-            @room.on("data_received")
-            def on_data_received(data_packet) -> None:
-                # data_packet.data: bytes, data_packet.participant: RemoteParticipant|None
-                participant = data_packet.participant
-                if participant is None or participant.identity == _AGENT_IDENTITY:
-                    return
+            else:
+                # ── livekit-ffi native backend (preferred) ─────────────────
                 try:
-                    msg = json.loads(data_packet.data.decode())
-                except Exception:
-                    return
+                    from livekit import rtc as lk_rtc  # type: ignore
+                except ImportError:
+                    logger.warning(
+                        "livekit SDK not installed — falling back to aiortc backend"
+                    )
+                    use_aiortc = True
+                    continue
 
-                msg_type = msg.get("type", "")
-                sid = participant.sid
+                room = lk_rtc.Room()
+                _build_room_handlers(room, participant_state, audio_tasks)
+                logger.info("LiveKit agent connecting via livekit-ffi to %s room=%s",
+                            _LIVEKIT_INTERNAL_URL, _ROOM_NAME)
+                await room.connect(_LIVEKIT_INTERNAL_URL, token)
+                logger.info("LiveKit agent connected (livekit-ffi) as '%s'", _AGENT_IDENTITY)
+                backoff = 2.0
 
-                if msg_type == "ptt_start":
-                    if sid not in _ptt_state:
-                        _ptt_state[sid] = {
-                            "buffering": False, "frames": [],
-                            "user_id": "family-admin",
-                            "session_id": f"livekit-{sid[:8]}",
-                        }
-                    _ptt_state[sid]["buffering"] = True
-                    _ptt_state[sid]["frames"] = []
+                for p in room.remote_participants.values():
+                    if p.sid not in participant_state:
+                        participant_state[p.sid] = _make_participant_state(p.sid)
 
-                elif msg_type == "ptt_stop":
-                    if sid in _ptt_state:
-                        _ptt_state[sid]["buffering"] = False
-                        asyncio.ensure_future(
-                            _handle_ptt_stop(room.local_participant, sid)
-                        )
-
-                elif msg_type == "identify":
-                    if sid in _ptt_state:
-                        _ptt_state[sid]["user_id"] = msg.get("user_id", "family-admin")
-                        _ptt_state[sid]["session_id"] = (
-                            msg.get("session_id") or _ptt_state[sid]["session_id"]
-                        )
-
-            logger.info("LiveKit agent connecting to %s room=%s", _LIVEKIT_INTERNAL_URL, _ROOM_NAME)
-            await room.connect(_LIVEKIT_INTERNAL_URL, token)
-            logger.info("LiveKit agent connected as '%s'", _AGENT_IDENTITY)
-            backoff = 2.0
-
-            # Seed state for any participants already in the room
-            for participant in room.remote_participants.values():
-                if participant.sid not in _ptt_state:
-                    _ptt_state[participant.sid] = {
-                        "buffering": False, "frames": [],
-                        "user_id": "family-admin",
-                        "session_id": f"livekit-{participant.sid[:8]}",
-                    }
-
-            # Block until disconnected
-            while room.connection_state == lk_rtc.ConnectionState.CONN_CONNECTED:
-                await asyncio.sleep(5)
+                while room.connection_state == lk_rtc.ConnectionState.CONN_CONNECTED:
+                    await asyncio.sleep(5)
 
         except asyncio.CancelledError:
             break
         except Exception as exc:
-            logger.warning("LiveKit agent error: %s — reconnecting in %.0fs", exc, backoff)
+            err_str = str(exc)
+            if not use_aiortc and (
+                "internal webrtc failure" in err_str.lower()
+                or "failed to initialize pc" in err_str.lower()
+            ):
+                # Native livekit-ffi can't initialise WebRTC on this platform.
+                # Switch permanently to the aiortc backend — no more log spam.
+                use_aiortc = True
+                backoff = 2.0
+                logger.warning(
+                    "LiveKit: livekit-ffi WebRTC failed (%s). "
+                    "Switching to aiortc pure-Python backend permanently.",
+                    exc,
+                )
+            else:
+                logger.warning("LiveKit agent error: %s — reconnecting in %.0fs", exc, backoff)
         finally:
-            # Cancel all audio collection tasks
             for task in list(audio_tasks.values()):
                 if not task.done():
                     task.cancel()
@@ -308,10 +519,128 @@ async def _agent_loop() -> None:
 
 
 async def start_livekit_agent() -> None:
-    """Entry point called from main.py lifespan."""
+    """Entry point called from main.py lifespan via asyncio.create_task()."""
     api_key = os.environ.get("LIVEKIT_API_KEY", "").strip()
     if not api_key:
         logger.info("LIVEKIT_API_KEY not set — LiveKit agent not started")
         return
-    logger.info("Starting LiveKit voice agent")
+    logger.info("Starting LiveKit voice agent (VAD mode)")
     await _agent_loop()
+
+
+# ── HTTP fallback endpoints ───────────────────────────────────────────────────
+# These handle the browser-side VAD + HTTP upload path used when the native
+# WebRTC agent cannot join the room (e.g. platform incompatibility).
+# Also used by touch/voice.html which uses this HTTP approach by design.
+
+router = APIRouter(prefix="/api/voice")
+
+# In-flight cancel tokens: "user_id:session_id" → True
+_pending_cancel: set[str] = set()
+
+
+async def _get_current_user_soft(request: Request) -> dict:
+    """Resolve user from request without hard-failing (returns guest on error)."""
+    try:
+        from auth import get_current_user
+        from fastapi.security.utils import get_authorization_scheme_param
+        async def _gen():
+            yield request
+        gen = _gen()
+        db_gen = None
+        return await get_current_user(request)
+    except Exception:
+        return {"user_id": "guest", "role": "guest"}
+
+
+@router.post("/livekit-audio")
+async def livekit_audio(
+    request: Request,
+    audio: UploadFile = File(...),
+    session_id: str = Form(""),
+) -> JSONResponse:
+    """Browser-side VAD HTTP upload endpoint.
+
+    Receives a recorded audio blob from voice.html (LiveKit mode), runs the
+    full STT → LLM → TTS pipeline, and returns the result as JSON.
+    Also used by touch/voice.html.
+    """
+    user = await _get_current_user_soft(request)
+    user_id = user.get("user_id", "guest")
+    sid = session_id or f"lk-http-{user_id}"
+    cancel_key = f"{user_id}:{sid}"
+
+    audio_bytes = await audio.read()
+    if not audio_bytes:
+        return JSONResponse({"ok": False, "error": "empty audio"})
+
+    content_type = audio.content_type or ""
+    suffix = ".webm" if "webm" in content_type else (".ogg" if "ogg" in content_type else ".wav")
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tf:
+        tf.write(audio_bytes)
+        tmp_path = tf.name
+
+    try:
+        from routers.voice_tts import _transcribe_audio
+        transcript = await _transcribe_audio(tmp_path)
+    except Exception as exc:
+        logger.warning("LiveKit HTTP STT failed: %s", exc)
+        return JSONResponse({"ok": False, "error": "STT failed"})
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    if not transcript:
+        return JSONResponse({"ok": True, "transcript": "", "audio_base64": None})
+
+    if cancel_key in _pending_cancel:
+        _pending_cancel.discard(cancel_key)
+        return JSONResponse({"ok": True, "cancelled": True})
+
+    try:
+        from zoe_agent import run_zoe_agent
+        response_text = await run_zoe_agent(transcript, sid, user_id, voice_mode=True)
+    except Exception as exc:
+        logger.error("LiveKit HTTP LLM error: %s", exc)
+        response_text = "Sorry, I had trouble processing that."
+
+    if cancel_key in _pending_cancel:
+        _pending_cancel.discard(cancel_key)
+        return JSONResponse({"ok": True, "cancelled": True})
+
+    audio_b64 = None
+    resp_content_type = "audio/wav"
+    try:
+        from routers.voice_tts import synthesize as _synth
+        tts_resp = await _synth(
+            {"text": response_text},
+            caller={"source": "livekit-http", "user_id": user_id},
+        )
+        audio_b64 = base64.b64encode(tts_resp.body).decode("ascii")
+        resp_content_type = tts_resp.media_type
+    except Exception as exc:
+        logger.warning("LiveKit HTTP TTS failed: %s", exc)
+
+    return JSONResponse({
+        "ok": True,
+        "transcript": transcript,
+        "response_text": response_text,
+        "audio_base64": audio_b64,
+        "content_type": resp_content_type,
+    })
+
+
+@router.post("/livekit-cancel")
+async def livekit_cancel(request: Request) -> JSONResponse:
+    """Cancel a pending livekit-audio pipeline request."""
+    user = await _get_current_user_soft(request)
+    user_id = user.get("user_id", "guest")
+    try:
+        body = await request.json()
+        sid = body.get("session_id", f"lk-http-{user_id}")
+    except Exception:
+        sid = f"lk-http-{user_id}"
+    _pending_cancel.add(f"{user_id}:{sid}")
+    return JSONResponse({"ok": True})

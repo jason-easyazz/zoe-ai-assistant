@@ -198,7 +198,18 @@ async def get_db() -> AsyncpgCompat:
     """
     pool = get_pool()
     async with pool.acquire() as conn:
-        yield AsyncpgCompat(conn)
+        try:
+            yield AsyncpgCompat(conn)
+        except Exception:
+            # On abrupt cancellation or early return asyncpg raises InterfaceError
+            # ("another operation is in progress") during generator cleanup.
+            # Roll back any open transaction so the connection returns cleanly to the pool.
+            try:
+                if conn.is_in_transaction():
+                    await conn.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
 
 
 @asynccontextmanager

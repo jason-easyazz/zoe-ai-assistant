@@ -22,6 +22,11 @@ _MISS_PATH = Path.home() / "training" / "data" / "intent-misses.jsonl"
 _LOOKBACK_DAYS = 7
 _MIN_CLUSTER_SIZE = 3
 
+# If > 0, proposals whose cluster size >= this value are auto-approved (skips human review).
+# Low-risk pattern additions (e.g., 10+ identical misses) can be approved automatically.
+# Set ZOE_AUTO_APPROVE_THRESHOLD=0 to require human review for all proposals.
+_AUTO_APPROVE_THRESHOLD = int(os.environ.get("ZOE_AUTO_APPROVE_THRESHOLD", "0"))
+
 
 def _load_recent_misses(days: int = _LOOKBACK_DAYS) -> list[str]:
     """Load intent miss texts from the last N days."""
@@ -131,6 +136,14 @@ async def run_evolution_notice() -> dict:
             )
             created += 1
             logger.info("evolution_notice: proposed intent gap '%s' (%d hits)", rep[:60], len(members))
+
+            # Auto-approve if cluster is large enough and threshold is set
+            if _AUTO_APPROVE_THRESHOLD > 0 and len(members) >= _AUTO_APPROVE_THRESHOLD:
+                await db.execute(
+                    "UPDATE evolution_proposals SET status='approved' WHERE id=$1", prop_id
+                )
+                logger.info("evolution_notice: auto-approved '%s' (%d hits >= threshold %d)",
+                            rep[:60], len(members), _AUTO_APPROVE_THRESHOLD)
 
             # Sync to Multica board
             multica_id = await sync_evolution_proposal_to_multica(
@@ -254,6 +267,61 @@ async def record_frustration_signal(
             description=description,
             evidence=evidence,
             proposal_type="user_frustration",
+        )
+        if multica_id:
+            await db.execute(
+                "UPDATE evolution_proposals SET multica_issue_id=$1 WHERE id=$2",
+                multica_id, prop_id,
+            )
+
+
+async def record_user_issue(message: str, user_id: str) -> None:
+    """Write a user-reported issue proposal (called from intent handler or agent tool).
+
+    Unlike record_frustration_signal, this fires on a single explicit report —
+    no repeat threshold required. Deduplicates by title so the same complaint
+    phrased identically won't create multiple issues.
+    """
+    from db_pool import get_db_ctx
+    from multica_client import sync_evolution_proposal_to_multica
+
+    title = f"User report: '{message[:60]}'"
+    async with get_db_ctx() as db:
+        rows = await db.fetch(
+            """SELECT id FROM evolution_proposals
+               WHERE type='user_issue_report' AND title=$1
+               AND status NOT IN ('rejected','validated','failed')""",
+            title,
+        )
+        if rows:
+            return  # already tracked
+
+        prop_id = uuid.uuid4().hex
+        description = f"User {user_id} explicitly reported a problem: {message}"
+        evidence = json.dumps({"user_id": user_id, "message": message})
+        await db.execute(
+            """INSERT INTO evolution_proposals
+               (id, type, title, description, evidence, target_patterns, status, proposed_at)
+               VALUES ($1,'user_issue_report',$2,$3,$4,$5,'pending',$6)""",
+            prop_id,
+            title,
+            description,
+            evidence,
+            json.dumps([message]),
+            time.time(),
+        )
+        logger.info(
+            "evolution_notice: user issue report from user=%s message='%s'",
+            user_id, message[:60],
+        )
+
+        multica_id = await sync_evolution_proposal_to_multica(
+            proposal_id=prop_id,
+            title=title,
+            description=description,
+            evidence=evidence,
+            proposal_type="user_issue_report",
+            label_name="user-feedback",
         )
         if multica_id:
             await db.execute(

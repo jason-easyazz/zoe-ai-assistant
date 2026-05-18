@@ -27,12 +27,22 @@ PUBLIC_HOUSEHOLD_INTENTS: frozenset[str] = frozenset({
     "timer_create",
     "general_knowledge",
     "greeting",
+    "good_morning",
+    "good_evening",
     "set_volume",
     "calculate",
     "smart_home",
     # Shared household operations.
     "list_show",
     "calendar_show",
+    # Music — generic playback is household-safe.
+    "music_play",
+    "music_control",
+    "music_volume",
+    # Voice navigation / conversation mode (no personal data involved).
+    "lets_talk",
+    # Anyone in the household can report a problem to Zoe.
+    "user_issue_report",
 })
 
 # Intent names that should always require user identity.
@@ -46,6 +56,16 @@ USER_SCOPED_INTENTS: frozenset[str] = frozenset({
     "memory_forget_last", "memory_remember", "memory_recall",
     "daily_briefing", "agenda_show",
     "build_widget", "build_page", "extend_capability", "ha_full_setup",
+    # Panel/board admin intents — need identity.
+    "board_heal", "board_status", "evolution_proposals_review",
+    "self_improve", "portrait_refresh", "portrait_reveal",
+    "a2a_federation_status",
+    # Music with personal library.
+    "music_setup",
+    # Panel setup/auth flows.
+    "panel_confirm_code", "panel_list", "panel_setup", "panel_status",
+    # External integrations requiring user credentials.
+    "connect_chatgpt",
 })
 
 
@@ -306,7 +326,14 @@ async def can_use_voice_intent(db, user: Mapping[str, Any] | None, intent_name: 
         matrix = default_capability_matrix().get(role, default_capability_matrix()["guest"])
     else:
         matrix = await get_matrix_for_role(db, role)
-    return bool(matrix.get("voice_intents", {}).get(str(intent_name or ""), False))
+    voice_intents = matrix.get("voice_intents", {})
+    key = str(intent_name or "")
+    if key in voice_intents:
+        return bool(voice_intents[key])
+    # Intent not in the capability matrix (new intent added after matrix was last updated).
+    # Privileged roles (admin, user) get allow-by-default so new features are accessible
+    # without needing a matrix update. Guest remains deny-by-default.
+    return role != "guest"
 
 
 async def can_use_ui_action(db, user: Mapping[str, Any] | None, action_type: str) -> bool:

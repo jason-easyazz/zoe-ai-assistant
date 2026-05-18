@@ -49,10 +49,10 @@ class EvolutionWeeklyDigestTrigger(ProactiveTrigger):
         # Get active users (anyone who chatted in last 7 days)
         try:
             async with db.execute(
-                """SELECT DISTINCT cs.user_id, u.username
+                """SELECT DISTINCT cs.user_id, u.name AS username
                    FROM chat_sessions cs
                    LEFT JOIN users u ON u.id = cs.user_id
-                   WHERE cs.started_at > datetime('now', '-7 days')"""
+                   WHERE cs.created_at > datetime('now', '-7 days')"""
             ) as cur:
                 users = [(row[0], row[1] or "") async for row in cur]
         except Exception as exc:

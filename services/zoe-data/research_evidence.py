@@ -134,7 +134,9 @@ def missing_brief_fields(message: str) -> list[str]:
         )
     ) and not has_location_phrase:
         missing.append("location")
-    if not any(k in msg for k in ("$", "budget", "under ", "max ", "minimum", "price")):
+    if not any(k in msg for k in ("$", "budget", "under ", "max ", "minimum", "price",
+                                   "cheapest", "cheap", "affordable", "cost", "how much",
+                                   "best deal", "lowest", "free")):
         missing.append("budget")
     if not any(
         k in msg

@@ -26,8 +26,8 @@ async def _build_morning_context(db, user_id: str, today: str) -> dict:
         async with db.execute(
             """SELECT loop_text, follow_up_hint, emotional_weight
                FROM open_loops
-               WHERE user_id=? AND resolved=0
-                 AND (follow_up_after IS NULL OR follow_up_after <= datetime('now', '+1 day'))
+               WHERE user_id=? AND resolved = false
+                 AND (follow_up_after IS NULL OR follow_up_after <= CURRENT_TIMESTAMP + INTERVAL '1 day')
                ORDER BY emotional_weight DESC, created_at ASC
                LIMIT 3""",
             (user_id,),
@@ -89,7 +89,7 @@ async def _build_morning_context(db, user_id: str, today: str) -> dict:
     # Portrait snippet (first 200 chars — enough for personal note)
     try:
         async with db.execute(
-            "SELECT portrait_text FROM user_portraits WHERE user_id=? ORDER BY created_at DESC LIMIT 1",
+            "SELECT portrait_text FROM user_portraits WHERE user_id=? ORDER BY last_generated DESC LIMIT 1",
             (user_id,),
         ) as cur:
             row = await cur.fetchone()
@@ -97,6 +97,23 @@ async def _build_morning_context(db, user_id: str, today: str) -> dict:
             ctx["portrait_snippet"] = row[0][:300]
     except Exception as exc:
         log.debug("morning_checkin: portrait load failed (non-fatal): %s", exc)
+
+    # Multica board summary: pending proposals + flagged review items
+    try:
+        from multica_client import get_multica_client  # type: ignore[import]
+        mc = get_multica_client()
+        if mc.is_configured():
+            todo_issues = await mc.list_issues(status="todo")
+            in_prog = await mc.list_issues(status="in_progress")
+            pending_count = len(todo_issues)
+            in_prog_count = len(in_prog)
+            if pending_count + in_prog_count > 0:
+                ctx["board_summary"] = {
+                    "pending": pending_count,
+                    "in_progress": in_prog_count,
+                }
+    except Exception as exc:
+        log.debug("morning_checkin: board summary load failed (non-fatal): %s", exc)
 
     return ctx
 
@@ -135,9 +152,18 @@ def _compose_morning_message(ctx: dict, user_name: str, day_str: str) -> str:
     if emo and not loops:  # avoid double-stacking with loop follow-up
         parts.append(f"I've been thinking about you — {emo[0][:60]}...")
 
+    # Multica board summary
+    board = ctx.get("board_summary")
+    if board and (board["pending"] + board["in_progress"]) > 0:
+        total = board["pending"] + board["in_progress"]
+        parts.append(
+            f"There {'is' if total == 1 else 'are'} {total} open item{'s' if total > 1 else ''} "
+            f"on the board — agents will triage automatically."
+        )
+
     # Portrait-informed personal note (fallback generic)
     portrait = ctx.get("portrait_snippet", "")
-    if not calendar and not loops and not emo:
+    if not calendar and not loops and not emo and not board:
         if portrait:
             parts.append("Ready to start the day? I can check your calendar or help you plan.")
         else:
@@ -159,17 +185,17 @@ class MorningCheckInTrigger(ProactiveTrigger):
 
         # Check already fired today for each active user
         async with db.execute(
-            "SELECT user_id FROM proactive_pending WHERE trigger_type=? AND DATE(created_at)=? AND claimed=0",
-            ("morning_checkin", today),
+            "SELECT user_id FROM proactive_pending WHERE trigger_type=? AND created_at::date = CURRENT_DATE AND claimed=0",
+            ("morning_checkin",),
         ) as cur:
             already_fired = {row[0] async for row in cur}
 
         # Get active users with their display names (anyone who chatted in last 7 days)
         async with db.execute(
-            """SELECT DISTINCT cs.user_id, u.username
+            """SELECT DISTINCT cs.user_id, u.name AS username
                FROM chat_sessions cs
                LEFT JOIN users u ON u.id = cs.user_id
-               WHERE cs.started_at > datetime('now', '-7 days')"""
+               WHERE cs.created_at > datetime('now', '-7 days')"""
         ) as cur:
             users = [(row[0], row[1] or "") async for row in cur]
 

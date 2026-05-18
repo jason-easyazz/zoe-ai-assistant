@@ -244,11 +244,35 @@ async def _fire_autopilot_job(
 
     1. Creates a Multica issue (if mode == 'create_issue').
     2. Runs the matching Zoe task function if one is mapped.
+    3. Marks the issue done on success or cancelled on failure.
     """
     logger.info(
         "autopilot fire: id=%s title=%r mode=%s",
         autopilot_id, autopilot_title, mode,
     )
+
+    issue_id: str | None = None
+
+    async def _update_issue_status(status: str) -> None:
+        if not issue_id or not _is_configured():
+            return
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                resp = await client.put(
+                    f"{_MULTICA_BASE_URL}/api/issues/{issue_id}",
+                    json={"status": status},
+                    headers=_headers(),
+                )
+                resp.raise_for_status()
+                logger.info(
+                    "autopilot: updated issue %s to status=%s for %r",
+                    issue_id, status, autopilot_title,
+                )
+        except Exception as exc:
+            logger.warning(
+                "autopilot: failed to update issue %s to status=%s for %r: %s",
+                issue_id, status, autopilot_title, exc,
+            )
 
     if mode == "create_issue" and _is_configured():
         try:
@@ -269,9 +293,10 @@ async def _fire_autopilot_job(
                 )
                 resp.raise_for_status()
                 issue = resp.json()
+                issue_id = issue.get("id") or issue.get("identifier")
                 logger.info(
                     "autopilot: created issue %s for %r",
-                    issue.get("id") or issue.get("identifier"), autopilot_title,
+                    issue_id, autopilot_title,
                 )
         except Exception as exc:
             logger.warning(
@@ -282,7 +307,9 @@ async def _fire_autopilot_job(
     if task_fn is not None:
         try:
             await task_fn()
+            await _update_issue_status("done")
         except Exception as exc:
+            await _update_issue_status("cancelled")
             logger.warning(
                 "autopilot: task function for %r raised: %s", autopilot_title, exc
             )

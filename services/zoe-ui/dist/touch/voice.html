@@ -363,6 +363,7 @@ let maxRecordedRms   = 0;   // peak RMS during current recording (silence filter
 let convMode         = true;   // always on in touch/phone-call mode
 let speaking         = false;
 let serverBusy       = false;  // true while server is processing a turn
+let _silentCycles    = 0;      // consecutive silent-discarded recordings
 
 // ── Audio queue ───────────────────────────────────────────────────────────
 let audioQueue   = [];
@@ -438,6 +439,8 @@ function connectLocalVoice() {
   // Touch: on disconnect navigate home instead of reconnecting
   localWS.onclose = () => {
     wsReady = false;
+    serverBusy = false;   // safety: unblock in case server was mid-response
+    setOrbState('ambient');
     if (convMode) {
       setTimeout(endCall, 5000);
     }
@@ -470,6 +473,7 @@ function handleVoiceEvent(msg) {
       }
     }
   } else if (type === 'transcript') {
+    if (msg.text) _silentCycles = 0;  // real speech — reset back-off
     addTranscriptLine(msg.role || 'zoe', msg.text || '');
     // Goodbye detection: user says farewell → end call after brief delay
     if (msg.role === 'user' && _GOODBYE_RE.test(msg.text || '')) {
@@ -673,11 +677,21 @@ async function sendRecordingToServer() {
   // Prevents Whisper hallucinations from silent blobs.
   if (maxRecordedRms < 0.008) {
     audioChunks = [];
+    _silentCycles++;
     setOrbState('ambient');
     resetTouchIdle();
-    if (convMode) scheduleAutoListen();
+    if (convMode) {
+      // After 3 consecutive silent cycles, back off for 10 s to avoid
+      // rapid orb-state flashing in a quiet room. Resets when speech arrives.
+      const delay = _silentCycles >= 3 ? 10000 : TOUCH_AUTOLISTEN_DELAY;
+      clearTimeout(autoListenTimer);
+      autoListenTimer = setTimeout(() => {
+        if (convMode && !speaking && !isRecording && !serverBusy) startRecording();
+      }, delay);
+    }
     return;
   }
+  _silentCycles = 0;  // speech detected — reset back-off counter
 
   setOrbState('thinking');
   serverBusy = true;   // block new recordings until 'done' arrives
@@ -820,14 +834,45 @@ document.addEventListener('keyup', (e) => {
 // ── Auto-start immediately (kiosk — no iOS tap gate needed) ──────────────
 startVoice();
 
+// ── Auto-start listening triggered by server (not URL params) ────────────
+// Called when the server sends voice:start_conversation after routing a
+// "let's chat" intent. Uses a longer delay (2.5 s default) to allow the
+// TTS echo ("Sure, let's talk!") to settle before the mic opens.
+// Exposed on window so websocket-sync.js can call it directly when already
+// on this page (avoiding the BroadcastChannel round-trip).
+window.handleStartConversation = function(delayMs) {
+  const delay = typeof delayMs === 'number' ? delayMs : 2500;
+  setTimeout(() => {
+    if (convMode && !isRecording && !serverBusy && !speaking) {
+      _silentCycles = 0;   // reset back-off so first listen isn't penalised
+      startRecording();
+    }
+  }, delay);
+};
+
 // ── Broadcast channel: voice events from service worker ──────────────────
 try {
   const bc = new BroadcastChannel('zoe-voice');
-  bc.onmessage = (ev) => handleVoiceEvent(ev.data || {});
+  bc.onmessage = (ev) => {
+    const d = ev.data || {};
+    if (d.type === 'voice:start_conversation') {
+      handleStartConversation(d.delay_ms);
+    } else {
+      handleVoiceEvent(d);
+    }
+  };
 } catch(e) {}
 
 // ── Initialise touch nav menu ─────────────────────────────────────────────
 if (typeof TouchMenu !== 'undefined') TouchMenu.init({ page: 'voice' });
+
+// ── Legacy: ?conv=1 URL param (kept for direct-link use) ─────────────────
+// When the server navigates here it no longer uses ?conv=1 — it sends a
+// transient voice:start_conversation push event instead. But keep this
+// as a fallback for bookmarked links or manual navigation.
+if (convFromQuery) {
+  handleStartConversation(2500);
+}
 </script>
 
 </body>
