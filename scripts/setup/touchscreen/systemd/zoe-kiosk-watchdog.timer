@@ -1,0 +1,9 @@
+[Unit]
+Description=Zoe Kiosk Watchdog Timer
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=60s
+
+[Install]
+WantedBy=timers.target

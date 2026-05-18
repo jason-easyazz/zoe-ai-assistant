@@ -1447,18 +1447,55 @@ async def _build_memory_context(message: str, user_id: str = "family-admin") -> 
 
     Only runs for messages containing _MEMORY_TRIGGER_WORDS.
     The fast _mempalace_load_user_facts() is called separately and always runs.
+
+    Additionally, if a proper name appears in the message, performs a targeted
+    entity-type-filtered search to pull person-specific facts.
     """
     if not _message_needs_memory(message):
         return ""
     _mp_timeout = 5.0 if _JETSON_MODE else 3.0
+
+    # Standard semantic search
     memories = await _mempalace_search(message, user_id=user_id, limit=5, timeout_s=_mp_timeout)
-    if not memories:
+
+    # Person-entity search: if a proper name is mentioned, pull their facts
+    person_ctx = ""
+    try:
+        name_match = re.search(r'\b([A-Z][a-z]{2,20})\b', message)
+        if name_match:
+            person_name = name_match.group(1)
+            # Skip common non-names
+            _skip = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+                     "January", "February", "March", "April", "June", "July", "August",
+                     "September", "October", "November", "December", "Zoe"}
+            if person_name not in _skip:
+                person_mems = await _mempalace_search(
+                    person_name, user_id=user_id, limit=5, timeout_s=_mp_timeout
+                )
+                person_facts = [
+                    m for m in (person_mems or [])
+                    if m.get("entity_type") in ("person", "person_pending")
+                    and person_name.lower() in (m.get("text") or "").lower()
+                ]
+                if person_facts:
+                    lines = [f"## What I know about {person_name}:"]
+                    lines += [f"- {(m.get('text') or str(m))[:200]}" for m in person_facts]
+                    person_ctx = "\n".join(lines)
+    except Exception:
+        pass
+
+    if not memories and not person_ctx:
         return ""
-    lines = ["## Relevant memories (semantic match):"]
-    for m in memories:
-        content = m.get("text") or m.get("content") or m.get("summary") or str(m)
-        lines.append(f"- {content[:200]}")
-    return "\n".join(lines)
+
+    result_lines = []
+    if memories:
+        result_lines.append("## Relevant memories (semantic match):")
+        for m in memories:
+            content = m.get("text") or m.get("content") or m.get("summary") or str(m)
+            result_lines.append(f"- {content[:200]}")
+    if person_ctx:
+        result_lines.append(person_ctx)
+    return "\n".join(result_lines)
 
 
 async def _load_open_loops(user_id: str, limit: int = 5) -> str:

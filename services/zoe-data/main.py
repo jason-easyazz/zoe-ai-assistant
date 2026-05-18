@@ -226,10 +226,14 @@ async def lifespan(app: FastAPI):
         from proactive.triggers.morning_checkin import MorningCheckInTrigger
         from proactive.triggers.evening_windown import EveningWindDownTrigger
         from proactive.triggers.openclaw_trigger import OpenClawTrigger
+        from proactive.triggers.people_health import PeopleHealthTrigger
+        from proactive.triggers.people_birthday import PeopleBirthdayTrigger
         register_trigger(ReminderScanTrigger())
         register_trigger(MorningCheckInTrigger())
         register_trigger(EveningWindDownTrigger())
         register_trigger(OpenClawTrigger())
+        register_trigger(PeopleHealthTrigger())
+        register_trigger(PeopleBirthdayTrigger())
         # EvolutionWeeklyDigestTrigger registered after evolve-weekly-digest is built
         try:
             from proactive.triggers.evolution_weekly_digest import EvolutionWeeklyDigestTrigger

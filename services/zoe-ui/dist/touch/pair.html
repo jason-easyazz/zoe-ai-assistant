@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connect to Zoe</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f1117;
+      color: #e8eaf0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 16px;
+      padding: 32px 24px;
+      max-width: 420px;
+      width: 100%;
+    }
+    .logo { text-align: center; margin-bottom: 24px; }
+    .logo-circle {
+      width: 56px; height: 56px;
+      background: linear-gradient(135deg, #6c63ff, #4fa8ff);
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      margin-bottom: 12px;
+    }
+    h1 { font-size: 22px; font-weight: 700; text-align: center; margin-bottom: 6px; }
+    .subtitle { font-size: 14px; color: #8b8fa8; text-align: center; margin-bottom: 28px; }
+    .code-badge {
+      background: #0d1118;
+      border: 1px solid #2a2d3a;
+      border-radius: 8px;
+      padding: 8px 16px;
+      text-align: center;
+      font-family: monospace;
+      font-size: 24px;
+      letter-spacing: 6px;
+      font-weight: 700;
+      color: #a5b4fc;
+      margin-bottom: 24px;
+    }
+    label { font-size: 13px; color: #8b8fa8; font-weight: 500; margin-bottom: 6px; display: block; }
+    input[type="text"] {
+      width: 100%;
+      background: #0d1118;
+      border: 1px solid #2a2d3a;
+      border-radius: 8px;
+      color: #e8eaf0;
+      font-size: 15px;
+      padding: 10px 12px;
+      margin-bottom: 16px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input[type="text"]:focus { border-color: #6c63ff; }
+    .btn {
+      width: 100%;
+      background: linear-gradient(135deg, #6c63ff, #4fa8ff);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 600;
+      padding: 12px;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      margin-top: 4px;
+    }
+    .btn:hover { opacity: 0.9; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .msg { margin-top: 16px; font-size: 14px; text-align: center; min-height: 20px; }
+    .msg.success { color: #22c55e; }
+    .msg.error   { color: #ef4444; }
+    .msg.info    { color: #8b8fa8; }
+    .divider { height: 1px; background: #2a2d3a; margin: 20px 0; }
+    .spinner {
+      display: inline-block;
+      width: 16px; height: 16px;
+      border: 2px solid #8b8fa8;
+      border-top-color: #6c63ff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading-view { text-align: center; color: #8b8fa8; }
+    #error-view { text-align: center; }
+    #success-view { text-align: center; }
+    .success-icon { font-size: 56px; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="logo-circle">Z</div>
+  </div>
+
+  <!-- Loading -->
+  <div id="loading-view">
+    <span class="spinner"></span> Checking pairing code…
+  </div>
+
+  <!-- Error -->
+  <div id="error-view" style="display:none">
+    <h1>Code not found</h1>
+    <div class="subtitle" id="error-msg">This pairing code may have expired or already been used.</div>
+    <div style="margin-top:20px;font-size:13px;color:#8b8fa8;">
+      The panel will generate a new QR code automatically. Scan it again to retry.
+    </div>
+  </div>
+
+  <!-- Form -->
+  <div id="form-view" style="display:none">
+    <h1>Connect to Zoe</h1>
+    <div class="subtitle">A new screen wants to join your Zoe setup.</div>
+    <div class="code-badge" id="code-display"></div>
+
+    <label>Panel name</label>
+    <input type="text" id="panel-name" placeholder="e.g. Living Room" maxlength="40"
+      oninput="updatePanelId()">
+
+    <label>Location (optional)</label>
+    <input type="text" id="panel-location" placeholder="e.g. Kitchen, Bedroom" maxlength="60">
+
+    <label>Panel ID</label>
+    <input type="text" id="panel-id" placeholder="living-room-panel" maxlength="40"
+      style="font-family:monospace;font-size:13px;">
+
+    <button class="btn" id="confirm-btn" onclick="confirmPairing()">Connect to Zoe</button>
+    <div class="msg" id="form-msg"></div>
+  </div>
+
+  <!-- Success -->
+  <div id="success-view" style="display:none">
+    <div class="success-icon">🎉</div>
+    <h1 id="success-title">Panel connected!</h1>
+    <div class="subtitle" id="success-msg">Your panel is now paired with Zoe and will come online shortly.</div>
+    <div class="divider"></div>
+    <a href="/settings.html#touch-panels" style="color:#a5b4fc;font-size:14px;text-decoration:none;">
+      → View panel settings
+    </a>
+  </div>
+</div>
+
+<script>
+const params = new URLSearchParams(window.location.search);
+const CODE = (params.get('code') || '').toUpperCase();
+
+function slugify(s) {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+function updatePanelId() {
+  const name = document.getElementById('panel-name').value;
+  const idField = document.getElementById('panel-id');
+  const slug = slugify(name);
+  if (slug) idField.value = slug + '-panel';
+  else idField.value = '';
+}
+
+function showView(id) {
+  ['loading-view', 'error-view', 'form-view', 'success-view'].forEach(v => {
+    document.getElementById(v).style.display = v === id ? '' : 'none';
+  });
+}
+
+function setMsg(msg, type) {
+  const el = document.getElementById('form-msg');
+  el.textContent = msg;
+  el.className = 'msg ' + (type || '');
+}
+
+async function init() {
+  if (!CODE || CODE.length !== 6) {
+    document.getElementById('error-msg').textContent = 'No valid code in URL. Scan the QR code on the panel.';
+    showView('error-view');
+    return;
+  }
+
+  document.getElementById('code-display').textContent = CODE;
+
+  try {
+    const r = await fetch(`/api/panels/provision/${encodeURIComponent(CODE)}/public`);
+    if (!r.ok) throw new Error('Code not found');
+    const data = await r.json();
+
+    if (data.status === 'expired') {
+      document.getElementById('error-msg').textContent = 'This code has expired. The panel will generate a new QR code.';
+      showView('error-view');
+      return;
+    }
+    if (data.status === 'confirmed') {
+      document.getElementById('success-title').textContent = 'Already connected!';
+      document.getElementById('success-msg').textContent = 'This panel has already been paired with Zoe.';
+      showView('success-view');
+      return;
+    }
+
+    showView('form-view');
+  } catch (e) {
+    document.getElementById('error-msg').textContent = e.message;
+    showView('error-view');
+  }
+}
+
+async function confirmPairing() {
+  const name = document.getElementById('panel-name').value.trim();
+  const location = document.getElementById('panel-location').value.trim();
+  const panelId = document.getElementById('panel-id').value.trim();
+
+  if (!name) { setMsg('Please give the panel a name', 'error'); return; }
+  if (!panelId) { setMsg('Panel ID is required', 'error'); return; }
+
+  const btn = document.getElementById('confirm-btn');
+  btn.disabled = true;
+  setMsg('Connecting…', 'info');
+
+  try {
+    const r = await fetch(`/api/panels/provision/${encodeURIComponent(CODE)}/confirm`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, location, panel_id: panelId }),
+    });
+
+    if (r.status === 401 || r.status === 403) {
+      // Not logged in — redirect to auth, come back after
+      window.location.href = '/login.html?next=' + encodeURIComponent(window.location.href);
+      return;
+    }
+
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || data.error || 'Failed to connect panel');
+
+    document.getElementById('success-title').textContent = `${name} connected!`;
+    document.getElementById('success-msg').textContent = data.message || 'Your panel is paired with Zoe and will come online shortly.';
+    showView('success-view');
+  } catch (e) {
+    setMsg('❌ ' + e.message, 'error');
+    btn.disabled = false;
+  }
+}
+
+init();
+</script>
+</body>
+</html>

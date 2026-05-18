@@ -809,6 +809,7 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
     try:
         from memory_extractor import extract_and_ingest
         from memory_digest import run_turn_digest
+        from person_extractor import process_text as _person_extract
 
         await asyncio.gather(
             extract_and_ingest(
@@ -825,6 +826,12 @@ async def _persist_memory_candidates(user_id: str, session_id: str, user_message
                 assistant_response,
                 session_id=session_id,
                 source="turn_digest",
+            ),
+            _person_extract(
+                f"{user_message}\n{assistant_response}",
+                user_id=user_id,
+                source="conversation",
+                session_id=session_id,
             ),
             return_exceptions=True,
         )

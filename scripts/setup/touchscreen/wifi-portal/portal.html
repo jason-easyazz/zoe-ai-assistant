@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zoe Screen Setup</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f1117;
+      color: #e8eaf0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 16px;
+      padding: 28px 20px;
+      max-width: 400px;
+      width: 100%;
+    }
+    .logo { text-align: center; margin-bottom: 20px; }
+    .logo-circle {
+      width: 52px; height: 52px;
+      background: linear-gradient(135deg, #6c63ff, #4fa8ff);
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+      margin-bottom: 10px;
+    }
+    h1 { font-size: 20px; font-weight: 700; text-align: center; margin-bottom: 6px; }
+    .subtitle { font-size: 13px; color: #8b8fa8; text-align: center; margin-bottom: 24px; }
+    label { font-size: 12px; color: #8b8fa8; font-weight: 500; display: block; margin-bottom: 5px; }
+    select, input[type="text"], input[type="password"] {
+      width: 100%;
+      background: #0d1118;
+      border: 1px solid #2a2d3a;
+      border-radius: 8px;
+      color: #e8eaf0;
+      font-size: 14px;
+      padding: 9px 11px;
+      margin-bottom: 14px;
+      outline: none;
+    }
+    select:focus, input:focus { border-color: #6c63ff; }
+    .btn {
+      width: 100%;
+      background: linear-gradient(135deg, #6c63ff, #4fa8ff);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 600;
+      padding: 11px;
+      cursor: pointer;
+      margin-top: 4px;
+    }
+    .btn:hover { opacity: 0.9; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .msg { margin-top: 14px; font-size: 13px; text-align: center; }
+    .msg.success { color: #22c55e; }
+    .msg.error   { color: #ef4444; }
+    .msg.info    { color: #8b8fa8; }
+    .spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid #8b8fa8;
+      border-top-color: #6c63ff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 5px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .scan-btn {
+      background: none;
+      border: 1px solid #2a2d3a;
+      border-radius: 6px;
+      color: #8b8fa8;
+      font-size: 12px;
+      padding: 4px 10px;
+      cursor: pointer;
+      margin-bottom: 6px;
+    }
+    .scan-btn:hover { color: #e8eaf0; border-color: #6c63ff; }
+    #zoe-url-row { display: none; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="logo-circle">Z</div>
+    <h1>Zoe Screen Setup</h1>
+    <div class="subtitle">Connect your Zoe screen to WiFi to get started.</div>
+  </div>
+
+  <label>WiFi Network</label>
+  <button type="button" class="scan-btn" onclick="scanNetworks()">
+    <span id="scan-spinner" class="spinner" style="display:none"></span>Scan for networks
+  </button>
+  <select id="ssid-select" onchange="onSsidSelect()">
+    <option value="">Select a network…</option>
+  </select>
+  <input type="text" id="ssid-manual" placeholder="Or type network name" style="display:none">
+
+  <label>Password</label>
+  <input type="password" id="wifi-password" placeholder="WiFi password (leave blank if open)">
+
+  <div id="zoe-url-row">
+    <label>Zoe server address <span style="color:#6b7280;">(auto-detected after connecting)</span></label>
+    <input type="text" id="zoe-url" placeholder="https://192.168.1.218">
+  </div>
+
+  <button class="btn" id="connect-btn" onclick="connectWifi()">Connect</button>
+  <div class="msg" id="msg"></div>
+</div>
+
+<script>
+let selectedSsid = '';
+
+function setMsg(text, type) {
+  const el = document.getElementById('msg');
+  el.textContent = text;
+  el.className = 'msg ' + (type || '');
+}
+
+async function scanNetworks() {
+  const spinner = document.getElementById('scan-spinner');
+  spinner.style.display = 'inline-block';
+  setMsg('Scanning…', 'info');
+  try {
+    const data = await fetch('/scan').then(r => r.json());
+    const sel = document.getElementById('ssid-select');
+    sel.innerHTML = '<option value="">Select a network…</option>';
+    (data.networks || []).forEach(n => {
+      const opt = document.createElement('option');
+      opt.value = n.ssid;
+      opt.textContent = n.ssid + (n.security ? ' 🔒' : '') + ' (' + n.signal + '%)';
+      sel.appendChild(opt);
+    });
+    const other = document.createElement('option');
+    other.value = '__other__';
+    other.textContent = 'Other (type manually)…';
+    sel.appendChild(other);
+    setMsg('', '');
+  } catch(e) {
+    setMsg('Scan failed: ' + e.message, 'error');
+  } finally {
+    spinner.style.display = 'none';
+  }
+}
+
+function onSsidSelect() {
+  const sel = document.getElementById('ssid-select');
+  const manual = document.getElementById('ssid-manual');
+  if (sel.value === '__other__') {
+    manual.style.display = 'block';
+    selectedSsid = '';
+  } else {
+    manual.style.display = 'none';
+    selectedSsid = sel.value;
+  }
+}
+
+async function connectWifi() {
+  const ssid = selectedSsid || document.getElementById('ssid-manual').value.trim() || document.getElementById('ssid-select').value;
+  const password = document.getElementById('wifi-password').value;
+  const zoeUrl = document.getElementById('zoe-url').value.trim();
+
+  if (!ssid || ssid === '__other__') {
+    setMsg('Please select or enter a WiFi network name', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('connect-btn');
+  btn.disabled = true;
+  setMsg('Connecting to ' + ssid + '…', 'info');
+
+  try {
+    const r = await fetch('/connect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ssid, password, zoe_url: zoeUrl }),
+    });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error || 'Connection failed');
+    setMsg('✅ Connected! Your screen is setting up — this may take a minute…', 'success');
+  } catch(e) {
+    setMsg('❌ ' + e.message, 'error');
+    btn.disabled = false;
+  }
+}
+
+// Auto-scan on load
+window.addEventListener('load', () => setTimeout(scanNetworks, 500));
+</script>
+</body>
+</html>

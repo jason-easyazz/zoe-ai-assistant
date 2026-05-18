@@ -142,6 +142,22 @@ async def create_note(
     await db.commit()
 
     await broadcaster.broadcast("notes", "note_created", note)
+
+    # Person CRM: extract person facts from note content in background
+    import asyncio as _aio
+    _note_content = (body.content or "") if hasattr(body, "content") else ""
+    if _note_content and user_id not in ("guest", ""):
+        try:
+            from person_extractor import process_text as _person_extract
+            _aio.ensure_future(_person_extract(
+                _note_content,
+                user_id=user_id,
+                source="notes",
+                session_id=None,
+            ))
+        except Exception:
+            pass
+
     return note
 
 

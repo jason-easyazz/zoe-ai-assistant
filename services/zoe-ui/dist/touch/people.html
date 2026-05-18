@@ -193,6 +193,153 @@
         }
         .person-hint { opacity: 0.7; }
 
+        /* ── CRM additions ──────────────────────────────────────── */
+        /* Health dot */
+        .health-dot {
+            width: 10px; height: 10px; border-radius: 50%;
+            position: absolute; top: 10px; right: 10px;
+        }
+        .health-good  { background: #48BB78; box-shadow: 0 0 6px rgba(72,187,120,0.6); }
+        .health-fair  { background: #ECC94B; box-shadow: 0 0 6px rgba(236,201,75,0.5); }
+        .health-low   { background: #FC8181; box-shadow: 0 0 6px rgba(252,129,129,0.6); }
+
+        /* Inner circle gold ring */
+        .person-card.inner-circle .avatar {
+            box-shadow: 0 0 0 3px #F6E05E, 0 0 12px rgba(246,224,94,0.5);
+        }
+
+        /* Notification badge */
+        .notif-badge {
+            position: absolute; top: 8px; left: 10px;
+            background: #FC8181; color: #fff;
+            font-size: 10px; font-weight: 700;
+            padding: 2px 6px; border-radius: 999px;
+            line-height: 1.4;
+        }
+
+        /* Last seen label */
+        .person-last-seen {
+            font-size: 11px; color: var(--text-mute); margin-top: 3px;
+        }
+
+        /* Person card must be position:relative for absolute children */
+        .person-card { position: relative; }
+
+        /* ── 4-tab Detail panel ──────────────────────────────────── */
+        .detail-overlay {
+            position: fixed; inset: 0;
+            background: radial-gradient(ellipse at top, rgba(123,97,255,0.18) 0%, rgba(0,0,0,0.6) 70%);
+            backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+            z-index: 3500; display: none;
+            align-items: flex-start; justify-content: center;
+            padding: 0;
+        }
+        .detail-overlay.open { display: flex; }
+        .detail-sheet {
+            background: var(--bg); width: 100%; height: 100dvh;
+            display: flex; flex-direction: column; overflow: hidden;
+        }
+
+        .detail-header {
+            display: flex; align-items: center; gap: 14px;
+            padding: 14px 18px 10px;
+            border-bottom: 1px solid var(--border);
+            background: var(--card); flex-shrink: 0;
+        }
+        .detail-back {
+            background: none; border: none; color: var(--primary);
+            font-size: 18px; cursor: pointer; padding: 8px; min-width: 40px;
+        }
+        .detail-avatar {
+            width: 52px; height: 52px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 20px; font-weight: 800; color: #fff; flex-shrink: 0;
+        }
+        .detail-header-info { flex: 1; min-width: 0; }
+        .detail-name { font-size: 20px; font-weight: 700; color: var(--text); }
+        .detail-rel  { font-size: 13px; color: var(--text-mute); }
+        .detail-edit-btn {
+            background: none; border: 1.5px solid var(--border);
+            border-radius: 10px; padding: 8px 14px;
+            font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer;
+        }
+        .detail-intro-btn {
+            background: var(--gradient); border: none; border-radius: 10px;
+            padding: 8px 14px; font-size: 13px; font-weight: 700; color: #fff; cursor: pointer;
+        }
+
+        .tab-bar {
+            display: flex; border-bottom: 1px solid var(--border);
+            background: var(--card); flex-shrink: 0;
+        }
+        .tab-btn {
+            flex: 1; padding: 12px 4px; border: none; background: none;
+            font-size: 13px; font-weight: 600; color: var(--text-mute);
+            cursor: pointer; border-bottom: 3px solid transparent;
+            transition: all 0.2s;
+        }
+        .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+        .tab-panel { display: none; flex: 1; overflow-y: auto; padding: 16px; }
+        .tab-panel.active { display: block; }
+
+        /* Activity timeline */
+        .activity-item {
+            display: flex; gap: 12px; padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .activity-dot {
+            width: 10px; height: 10px; border-radius: 50%;
+            background: var(--primary); margin-top: 5px; flex-shrink: 0;
+        }
+        .activity-desc { font-size: 14px; color: var(--text); }
+        .activity-meta { font-size: 12px; color: var(--text-mute); margin-top: 2px; }
+
+        /* Contact action buttons */
+        .contact-actions { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+        .contact-btn {
+            display: inline-flex; align-items: center; gap: 6px;
+            padding: 10px 16px; border-radius: 12px;
+            border: 1.5px solid var(--border); background: var(--card);
+            font-size: 14px; font-weight: 600; color: var(--text); cursor: pointer;
+            text-decoration: none;
+        }
+        .contact-btn:hover { background: var(--card-soft); }
+
+        /* Gift / bucket chips */
+        .gift-chip {
+            display: inline-block; padding: 3px 10px; border-radius: 999px;
+            font-size: 12px; font-weight: 700;
+        }
+        .chip-idea      { background: rgba(123,97,255,0.15); color: var(--primary); }
+        .chip-purchased { background: rgba(72,187,120,0.15); color: #38A169; }
+        .chip-given     { background: rgba(90,224,224,0.15); color: #2C7A7B; }
+
+        .section-title {
+            font-size: 14px; font-weight: 700; color: var(--text-soft);
+            text-transform: uppercase; letter-spacing: 0.05em;
+            margin: 16px 0 8px;
+        }
+
+        .date-row, .gift-row, .bucket-row {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 10px 0; border-bottom: 1px solid var(--border);
+            font-size: 14px;
+        }
+        .bucket-done { text-decoration: line-through; opacity: 0.5; }
+
+        .add-item-row { margin-top: 12px; display: flex; gap: 8px; }
+        .add-item-input {
+            flex: 1; padding: 10px 14px; border: 1.5px solid var(--border);
+            border-radius: 12px; background: var(--card); color: var(--text);
+            font-size: 14px; outline: none;
+        }
+        .add-item-input:focus { border-color: var(--primary); }
+        .add-item-btn {
+            padding: 10px 16px; border-radius: 12px; border: none;
+            background: var(--primary); color: #fff; font-weight: 700; cursor: pointer;
+        }
+
         .empty-state {
             text-align: center; padding: 60px 20px; color: var(--text-mute);
             grid-column: 1 / -1;
@@ -273,10 +420,15 @@
     <div class="page-wrap">
         <header class="page-header">
             <h1 class="page-title">People</h1>
-            <button class="btn-primary" onclick="openEditor()">
-                <span style="font-size:18px;line-height:1">+</span>
-                New Person
-            </button>
+            <div style="display:flex;gap:8px;align-items:center">
+                <button class="btn-primary" style="background:transparent;border:1.5px solid var(--primary);color:var(--primary);box-shadow:none" onclick="introducePrompt()">
+                    👋 Introduce
+                </button>
+                <button class="btn-primary" onclick="openEditor()">
+                    <span style="font-size:18px;line-height:1">+</span>
+                    New Person
+                </button>
+            </div>
         </header>
 
         <div class="search-row">
@@ -289,6 +441,52 @@
 
         <div id="groupsContainer">
             <div class="empty-state"><div class="empty-state-icon">⏳</div><div>Loading…</div></div>
+        </div>
+    </div>
+
+    <!-- 4-tab Detail Panel -->
+    <div class="detail-overlay" id="detailOverlay">
+        <div class="detail-sheet">
+            <div class="detail-header">
+                <button class="detail-back" onclick="closeDetail()">&#8592;</button>
+                <div class="detail-avatar" id="detailAvatar"></div>
+                <div class="detail-header-info">
+                    <div class="detail-name" id="detailName"></div>
+                    <div class="detail-rel" id="detailRel"></div>
+                </div>
+                <button class="detail-intro-btn" onclick="introduceFromDetail()">👋</button>
+                <button class="detail-edit-btn" onclick="editFromDetail()">Edit</button>
+            </div>
+            <div class="tab-bar">
+                <button class="tab-btn active" data-tab="timeline">Timeline</button>
+                <button class="tab-btn" data-tab="about">About</button>
+                <button class="tab-btn" data-tab="dates">Dates &amp; Gifts</button>
+                <button class="tab-btn" data-tab="together">Together</button>
+            </div>
+            <div id="tab-timeline" class="tab-panel active">
+                <div id="timeline-content"><p style="color:var(--text-mute);text-align:center;padding:40px">Loading…</p></div>
+                <div class="add-item-row">
+                    <input class="add-item-input" id="logActivityInput" placeholder="Log a meeting, note, event…" />
+                    <button class="add-item-btn" onclick="logActivity()">Log</button>
+                </div>
+            </div>
+            <div id="tab-about" class="tab-panel">
+                <div id="about-content"></div>
+            </div>
+            <div id="tab-dates" class="tab-panel">
+                <div id="dates-content"></div>
+                <div class="add-item-row">
+                    <input class="add-item-input" id="addGiftInput" placeholder="Gift idea for this person…" />
+                    <button class="add-item-btn" onclick="addGift()">Add</button>
+                </div>
+            </div>
+            <div id="tab-together" class="tab-panel">
+                <div id="together-content"></div>
+                <div class="add-item-row">
+                    <input class="add-item-input" id="addBucketInput" placeholder="Something you want to do together…" />
+                    <button class="add-item-btn" onclick="addBucketItem()">Add</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -443,8 +641,12 @@
             const res = await fetch(`${API}/people/?limit=500`);
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
-            state.people = (data.people || []).map(p => ({ ...p, _circle: deriveCircle(p) }));
+            state.people = (data.people || []).map(p => ({
+                ...p,
+                _circle: p.circle || deriveCircle(p),
+            }));
             render();
+            window.dispatchEvent(new CustomEvent('people-loaded'));
         } catch (err) {
             console.error(err);
             document.getElementById('groupsContainer').innerHTML =
@@ -528,23 +730,48 @@
         }
 
         container.querySelectorAll('.person-card').forEach(c => {
-            c.addEventListener('click', () => openEditor(c.getAttribute('data-id')));
+            c.addEventListener('click', () => openDetail(c.getAttribute('data-id')));
         });
     }
 
+    function healthLevel(score) {
+        const s = parseFloat(score) || 0.5;
+        if (s >= 0.6) return 'good';
+        if (s >= 0.35) return 'fair';
+        return 'low';
+    }
+
+    function lastSeenLabel(lastContactedAt) {
+        if (!lastContactedAt) return '';
+        try {
+            const dt = new Date(lastContactedAt);
+            const days = Math.floor((Date.now() - dt) / 86400000);
+            if (days === 0) return 'Seen today';
+            if (days === 1) return 'Seen yesterday';
+            if (days < 7) return `Seen ${days}d ago`;
+            const weeks = Math.floor(days / 7);
+            if (weeks < 8) return `Seen ${weeks}w ago`;
+            const months = Math.floor(days / 30);
+            return `Seen ${months}mo ago`;
+        } catch { return ''; }
+    }
+
     function cardHtml(p) {
-        const hints = [];
-        if (p.phone) hints.push('📞');
-        if (p.email) hints.push('✉️');
-        if (p.birthday) hints.push('🎂');
-        if (p.notes) hints.push('📝');
         const safeName = (p.name || 'Unknown').replace(/</g, '&lt;');
+        const circle = p.circle || p._circle || 'acquaintance';
+        const innerClass = circle === 'inner' ? ' inner-circle' : '';
+        const hlevel = healthLevel(p.health_score);
+        const badge = (p.notification_count > 0)
+            ? `<span class="notif-badge">${p.notification_count}</span>` : '';
+        const lastSeen = lastSeenLabel(p.last_contacted_at);
         return `
-            <div class="person-card" data-id="${p.id}">
+            <div class="person-card${innerClass}" data-id="${p.id}">
+                <span class="health-dot health-${hlevel}"></span>
+                ${badge}
                 <div class="avatar" style="background:${avatarGradient(p.name)}">${initials(p.name)}</div>
                 <div class="person-name">${safeName}</div>
                 ${p.relationship ? `<div class="person-rel">${p.relationship.replace(/</g, '&lt;')}</div>` : ''}
-                ${hints.length ? `<div class="person-hints">${hints.map(h => `<span class="person-hint">${h}</span>`).join('')}</div>` : ''}
+                ${lastSeen ? `<div class="person-last-seen">${lastSeen}</div>` : ''}
             </div>`;
     }
 
@@ -580,7 +807,7 @@
                 document.getElementById('fPhone').value = p.phone || '';
                 document.getElementById('fBday').value  = p.birthday || '';
                 document.getElementById('fNotes').value = p.notes || '';
-                const circleOverride = p.custom_fields?.circle || p.preferences?.circle || '';
+                const circleOverride = p.circle || p.custom_fields?.circle || p.preferences?.circle || '';
                 document.getElementById('fCircle').value = circleOverride;
             }
         } else {
@@ -610,7 +837,7 @@
         };
         const circleOverride = document.getElementById('fCircle').value;
         if (circleOverride) {
-            payload.preferences = { circle: circleOverride };
+            payload.circle = circleOverride;
         }
 
         const btn = document.getElementById('saveBtn');
@@ -653,6 +880,286 @@
             console.error('deletePerson failed', err);
         }
     }
+
+    // ─────────────────────────────────────────────
+    // Introduce
+    function introducePrompt() {
+        const name = prompt('Who would you like to introduce to Zoe?', '');
+        if (!name) return;
+        if (window.zoeChat && typeof window.zoeChat.send === 'function') {
+            window.zoeChat.send(`Zoe, meet ${name}`);
+        } else {
+            // fallback: post via API
+            fetch(`${API}/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: `Zoe, meet ${name}` }),
+            }).catch(() => {});
+        }
+    }
+
+    function introduceFromDetail() {
+        const person = state.people.find(p => p.id === state.detailId);
+        if (!person) return;
+        if (window.zoeChat && typeof window.zoeChat.send === 'function') {
+            window.zoeChat.send(`Zoe, meet ${person.name}`);
+        }
+    }
+
+    // ─────────────────────────────────────────────
+    // 4-tab Detail Panel
+    state.detailId = null;
+    state.detailTab = 'timeline';
+
+    // Tab switching
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const tab = btn.getAttribute('data-tab');
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+            btn.classList.add('active');
+            document.getElementById(`tab-${tab}`).classList.add('active');
+            state.detailTab = tab;
+            loadDetailTab(tab);
+        });
+    });
+
+    async function openDetail(personId) {
+        state.detailId = personId;
+        const p = state.people.find(x => x.id === personId);
+        if (!p) return;
+
+        // Header
+        const av = document.getElementById('detailAvatar');
+        av.style.background = avatarGradient(p.name);
+        av.textContent = initials(p.name);
+        document.getElementById('detailName').textContent = p.name || '';
+        document.getElementById('detailRel').textContent = [p.relationship, p.circle].filter(Boolean).join(' · ');
+
+        // Reset tabs
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(pan => pan.classList.remove('active'));
+        document.querySelector('.tab-btn[data-tab="timeline"]').classList.add('active');
+        document.getElementById('tab-timeline').classList.add('active');
+        state.detailTab = 'timeline';
+
+        document.getElementById('detailOverlay').classList.add('open');
+
+        // Mark notifications read
+        if (p.notification_count > 0) {
+            fetch(`${API}/people/${personId}/mark-read`, { method: 'PUT' }).catch(() => {});
+            p.notification_count = 0;
+        }
+
+        loadDetailTab('timeline');
+    }
+
+    function closeDetail() {
+        document.getElementById('detailOverlay').classList.remove('open');
+        state.detailId = null;
+    }
+
+    function editFromDetail() {
+        closeDetail();
+        openEditor(state.detailId);
+    }
+
+    async function loadDetailTab(tab) {
+        const id = state.detailId;
+        if (!id) return;
+        if (tab === 'timeline') await loadTimeline(id);
+        else if (tab === 'about') renderAbout(id);
+        else if (tab === 'dates') await loadDatesGifts(id);
+        else if (tab === 'together') await loadBucket(id);
+    }
+
+    async function loadTimeline(id) {
+        const el = document.getElementById('timeline-content');
+        try {
+            const res = await fetch(`${API}/people/${id}/activities?limit=50`);
+            const data = await res.json();
+            const acts = data.activities || [];
+            if (!acts.length) {
+                el.innerHTML = '<p style="color:var(--text-mute);text-align:center;padding:40px 0">No activity yet.</p>';
+                return;
+            }
+            el.innerHTML = acts.map(a => {
+                const d = a.created_at ? new Date(a.created_at).toLocaleDateString(undefined, {month:'short',day:'numeric',year:'numeric'}) : '';
+                return `<div class="activity-item">
+                    <div class="activity-dot"></div>
+                    <div>
+                        <div class="activity-desc">${(a.description||'').replace(/</g,'&lt;')}</div>
+                        <div class="activity-meta">${d}${a.source ? ' · ' + a.source : ''}</div>
+                    </div>
+                </div>`;
+            }).join('');
+        } catch (e) {
+            el.innerHTML = '<p style="color:#FC8181;text-align:center;padding:20px">Failed to load</p>';
+        }
+    }
+
+    async function logActivity() {
+        const inp = document.getElementById('logActivityInput');
+        const desc = inp.value.trim();
+        if (!desc || !state.detailId) return;
+        try {
+            await fetch(`${API}/people/${state.detailId}/activities`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ activity_type: 'note', description: desc, source: 'manual' }),
+            });
+            inp.value = '';
+            await loadTimeline(state.detailId);
+            await loadPeople();
+        } catch (e) { console.error(e); }
+    }
+
+    function renderAbout(id) {
+        const p = state.people.find(x => x.id === id);
+        if (!p) return;
+        const el = document.getElementById('about-content');
+        const phone = p.phone ? `<a class="contact-btn" href="tel:${p.phone}">📞 ${p.phone}</a>` : '';
+        const email = p.email ? `<a class="contact-btn" href="mailto:${p.email}">✉️ ${p.email}</a>` : '';
+        const bday  = p.birthday ? `<div class="date-row"><span>Birthday</span><span>${p.birthday}</span></div>` : '';
+        const hs = parseFloat(p.health_score||0.5);
+        const hBar = `<div style="height:6px;border-radius:3px;background:var(--border);margin-top:4px">
+            <div style="height:6px;border-radius:3px;width:${Math.round(hs*100)}%;background:${hs>=0.6?'#48BB78':hs>=0.35?'#ECC94B':'#FC8181'}"></div></div>`;
+        el.innerHTML = `
+            ${(phone||email) ? `<div class="contact-actions">${phone}${email}</div>` : ''}
+            ${bday}
+            <div class="section-title">Relationship Health</div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--text-mute)">
+                <span>Score: ${Math.round(hs*100)}%</span>
+                <span>Circle: ${p.circle||'acquaintance'}</span>
+            </div>${hBar}
+            ${p.notes ? `<div class="section-title">Notes</div><p style="font-size:14px;color:var(--text)">${p.notes.replace(/</g,'&lt;')}</p>` : ''}
+        `;
+    }
+
+    async function loadDatesGifts(id) {
+        const el = document.getElementById('dates-content');
+        try {
+            const [dr, gr] = await Promise.all([
+                fetch(`${API}/people/${id}/important-dates`).then(r=>r.json()),
+                fetch(`${API}/people/${id}/gift-ideas`).then(r=>r.json()),
+            ]);
+            const dates = dr.dates || [];
+            const gifts = gr.gifts || [];
+            let html = '';
+            if (dates.length) {
+                html += '<div class="section-title">Important Dates</div>';
+                html += dates.map(d => `<div class="date-row">
+                    <span>${(d.label||'').replace(/</g,'&lt;')}</span>
+                    <span style="color:var(--text-mute)">${[d.month,d.day].filter(Boolean).join('/')}</span>
+                </div>`).join('');
+            }
+            if (gifts.length) {
+                html += '<div class="section-title">Gift Ideas</div>';
+                html += gifts.map(g => {
+                    const chip = { idea:'chip-idea', purchased:'chip-purchased', given:'chip-given' }[g.status] || 'chip-idea';
+                    return `<div class="gift-row">
+                        <span>${(g.description||'').replace(/</g,'&lt;')}</span>
+                        <span class="gift-chip ${chip}">${g.status||'idea'}</span>
+                    </div>`;
+                }).join('');
+            }
+            if (!html) html = '<p style="color:var(--text-mute);text-align:center;padding:40px 0">No dates or gifts yet.</p>';
+            el.innerHTML = html;
+        } catch(e) {
+            el.innerHTML = '<p style="color:#FC8181;text-align:center;padding:20px">Failed to load</p>';
+        }
+    }
+
+    async function addGift() {
+        const inp = document.getElementById('addGiftInput');
+        const desc = inp.value.trim();
+        if (!desc || !state.detailId) return;
+        try {
+            await fetch(`${API}/people/${state.detailId}/gift-ideas`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ description: desc }),
+            });
+            inp.value = '';
+            await loadDatesGifts(state.detailId);
+        } catch(e) { console.error(e); }
+    }
+
+    async function loadBucket(id) {
+        const el = document.getElementById('together-content');
+        try {
+            const data = await fetch(`${API}/people/${id}/bucket-list`).then(r=>r.json());
+            const items = data.items || [];
+            if (!items.length) {
+                el.innerHTML = '<p style="color:var(--text-mute);text-align:center;padding:40px 0">Nothing yet. What would you like to do together?</p>';
+                return;
+            }
+            el.innerHTML = items.map(it => `<div class="bucket-row">
+                <span class="${it.done ? 'bucket-done' : ''}">${(it.description||'').replace(/</g,'&lt;')}</span>
+                ${!it.done ? `<button onclick="markBucketDone('${it.id}')" style="background:none;border:none;cursor:pointer;font-size:18px">✓</button>` : '<span style="opacity:0.4;font-size:12px">done</span>'}
+            </div>`).join('');
+        } catch(e) {
+            el.innerHTML = '<p style="color:#FC8181;text-align:center;padding:20px">Failed to load</p>';
+        }
+    }
+
+    async function addBucketItem() {
+        const inp = document.getElementById('addBucketInput');
+        const desc = inp.value.trim();
+        if (!desc || !state.detailId) return;
+        try {
+            await fetch(`${API}/people/${state.detailId}/bucket-list`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ description: desc }),
+            });
+            inp.value = '';
+            await loadBucket(state.detailId);
+        } catch(e) { console.error(e); }
+    }
+
+    async function markBucketDone(itemId) {
+        if (!state.detailId) return;
+        try {
+            await fetch(`${API}/people/${state.detailId}/bucket-list/${itemId}/done`, { method: 'PUT' });
+            await loadBucket(state.detailId);
+        } catch(e) { console.error(e); }
+    }
+
+    // ─────────────────────────────────────────────
+    // WebSocket: reload card on people:updated
+    function initPeopleWS() {
+        const wsUrl = (location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws';
+        const ws = new WebSocket(wsUrl);
+        ws.onmessage = async (evt) => {
+            try {
+                const msg = JSON.parse(evt.data);
+                const type = msg.type || msg.event;
+                if (['people:updated', 'people:created', 'people:deleted'].includes(type)) {
+                    await loadPeople();
+                    // If detail panel is open for this person, refresh its current tab
+                    const pid = (msg.data||msg).person_id || (msg.data||msg).id;
+                    if (pid && state.detailId === pid && document.getElementById('detailOverlay').classList.contains('open')) {
+                        loadDetailTab(state.detailTab);
+                    }
+                }
+            } catch(e) {}
+        };
+        ws.onclose = () => setTimeout(initPeopleWS, 5000);
+    }
+    try { initPeopleWS(); } catch(e) {}
+
+    // Check URL params for intro flow (open detail panel after load)
+    (function() {
+        const p = new URLSearchParams(location.search);
+        const _introPid = p.get('person');
+        if (p.get('intro') === '1' && _introPid) {
+            window.addEventListener('people-loaded', function handler() {
+                window.removeEventListener('people-loaded', handler);
+                setTimeout(() => openDetail(_introPid), 100);
+            });
+        }
+    })();
 
     // Boot
     loadPeople();

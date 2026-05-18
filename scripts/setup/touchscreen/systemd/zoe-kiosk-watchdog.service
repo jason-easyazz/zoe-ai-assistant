@@ -1,0 +1,9 @@
+[Unit]
+Description=Zoe Kiosk Watchdog
+After=zoe-kiosk.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/zoe-kiosk-watchdog.sh
+StandardOutput=journal
+StandardError=journal

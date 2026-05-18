@@ -190,36 +190,63 @@
         .person-text { font-size: 14px; color: var(--text-primary); line-height: 1.5; }
         .person-action { margin-top: 8px; font-size: 13px; color: var(--purple); font-weight: 500; }
         
-        /* Canvas Container */
-        .canvas-container { flex: 1; position: relative; overflow: hidden; }
-        #peopleCanvas { width: 100%; height: 100%; cursor: grab; }
-        #peopleCanvas.dragging { cursor: grabbing; }
-        
-        .canvas-legend {
-            position: absolute; bottom: 24px; left: 24px;
-            background: var(--glass-bg); backdrop-filter: blur(20px);
-            border: 1px solid var(--glass-border); border-radius: 12px;
-            padding: 16px; box-shadow: var(--shadow-md);
+        /* Card Grid (replaces canvas) */
+        .card-grid-container {
+            flex: 1; overflow-y: auto; padding: 24px;
         }
-        .legend-title {
-            font-size: 12px; font-weight: 600; text-transform: uppercase;
-            letter-spacing: 0.5px; color: var(--text-tertiary); margin-bottom: 12px;
+        .people-card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 16px;
         }
-        .legend-item { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; font-size: 13px; }
-        .legend-circle { width: 16px; height: 16px; border-radius: 50%; border: 2px solid; }
-        
-        .canvas-controls { position: absolute; top: 24px; right: 24px; display: flex; gap: 8px; }
-        .control-btn {
-            width: 40px; height: 40px; background: var(--glass-bg);
-            backdrop-filter: blur(20px); border: 1px solid var(--glass-border);
-            border-radius: 10px; display: flex; align-items: center;
-            justify-content: center; cursor: pointer; transition: all 0.2s;
-            font-size: 18px; color: var(--text-primary);
+        @media (min-width: 1400px) {
+            .people-card-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
         }
-        .control-btn:hover {
-            background: rgba(255, 255, 255, 0.9);
-            transform: translateY(-2px); box-shadow: var(--shadow-md);
+        .person-card-new {
+            background: var(--glass-bg); border: 1px solid var(--glass-border);
+            border-radius: 16px; padding: 18px 12px; text-align: center;
+            cursor: pointer; transition: all 0.2s; position: relative;
+            backdrop-filter: blur(10px);
         }
+        .person-card-new:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
+        .pcard-avatar {
+            width: 56px; height: 56px; border-radius: 50%; margin: 0 auto 10px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 20px; font-weight: 800; color: #fff;
+        }
+        .pcard-name { font-size: 14px; font-weight: 700; color: var(--text-primary); margin-bottom: 2px; }
+        .pcard-rel  { font-size: 12px; color: var(--text-tertiary); text-transform: capitalize; }
+        .pcard-last { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; }
+        /* Health dot */
+        .pcard-health {
+            position: absolute; top: 10px; right: 10px;
+            width: 10px; height: 10px; border-radius: 50%;
+        }
+        .pcard-health.good  { background: #10b981; box-shadow: 0 0 6px rgba(16,185,129,0.5); }
+        .pcard-health.fair  { background: #f59e0b; }
+        .pcard-health.low   { background: #ef4444; box-shadow: 0 0 6px rgba(239,68,68,0.5); }
+        /* Inner circle gold ring */
+        .person-card-new.inner .pcard-avatar { box-shadow: 0 0 0 3px #fbbf24, 0 0 10px rgba(251,191,36,0.4); }
+        /* Badge */
+        .pcard-badge {
+            position: absolute; top: 8px; left: 10px;
+            background: #ef4444; color: #fff; font-size: 10px; font-weight: 700;
+            padding: 2px 6px; border-radius: 999px;
+        }
+        .circle-group-section { margin-bottom: 28px; }
+        .circle-group-title {
+            font-size: 13px; font-weight: 700; text-transform: uppercase;
+            letter-spacing: 0.06em; color: var(--text-tertiary);
+            margin-bottom: 12px; display: flex; align-items: center; gap: 8px;
+        }
+        /* Desktop detail panel tab buttons */
+        .dp-tab-btn {
+            flex: 1; padding: 11px 4px; border: none; background: none;
+            font-size: 13px; font-weight: 600; color: rgba(255,255,255,0.5);
+            cursor: pointer; border-bottom: 2px solid transparent;
+        }
+        .dp-tab-btn.active { color: #fff; border-bottom-color: #7B61FF; }
+        .dp-tab-panel { overflow-y: auto; max-height: calc(100vh - 200px); }
         
         /* Floating Add Button */
         .floating-add-btn { 
@@ -657,15 +684,10 @@
             <div id="peopleList"></div>
         </div>
         
-        <div class="canvas-container">
-            <canvas id="peopleCanvas"></canvas>
-            
-            <div class="canvas-controls">
-                <div class="control-btn" onclick="resetView()" title="Reset View">⟲</div>
-                <div class="control-btn" onclick="zoomIn()" title="Zoom In">+</div>
-                <div class="control-btn" onclick="zoomOut()" title="Zoom Out">−</div>
+        <div class="card-grid-container">
+            <div id="people-grid">
+                <div style="text-align:center;padding:60px;color:var(--text-tertiary)">Loading people…</div>
             </div>
-            <div class="canvas-legend" id="canvasLegend"></div>
         </div>
     </div>
     
@@ -722,10 +744,41 @@
         <div class="detail-header">
             <button class="detail-close" onclick="closeDetail()">×</button>
             <div class="detail-avatar" id="detailIcon"></div>
-            <h1 class="detail-name" id="detailName"></h1>
-            <div class="detail-subtitle" id="detailSubtitle"></div>
+            <div style="flex:1;min-width:0">
+                <h1 class="detail-name" id="detailName"></h1>
+                <div class="detail-subtitle" id="detailSubtitle"></div>
+            </div>
+            <button onclick="editFromDesktopDetail()" style="background:none;border:1.5px solid rgba(255,255,255,0.3);color:#fff;border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px">Edit</button>
         </div>
-        <div class="detail-content" id="detailContent"></div>
+        <!-- 4 tabs -->
+        <div style="display:flex;border-bottom:1px solid rgba(255,255,255,0.1);background:var(--glass-bg)">
+            <button class="dp-tab-btn active" data-tab="timeline" onclick="dpSwitchTab(this,'timeline')">Timeline</button>
+            <button class="dp-tab-btn" data-tab="about" onclick="dpSwitchTab(this,'about')">About</button>
+            <button class="dp-tab-btn" data-tab="dates" onclick="dpSwitchTab(this,'dates')">Dates &amp; Gifts</button>
+            <button class="dp-tab-btn" data-tab="together" onclick="dpSwitchTab(this,'together')">Together</button>
+        </div>
+        <div id="dp-tab-timeline" class="dp-tab-panel" style="display:block">
+            <div id="dp-timeline-content" style="padding:16px"></div>
+            <div style="padding:0 16px 16px;display:flex;gap:8px">
+                <input id="dp-log-input" style="flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:#fff;font-size:14px" placeholder="Log a meeting or note…" />
+                <button onclick="dpLogActivity()" style="padding:10px 16px;border-radius:10px;border:none;background:var(--purple);color:#fff;font-weight:700;cursor:pointer">Log</button>
+            </div>
+        </div>
+        <div id="dp-tab-about"    class="dp-tab-panel" style="display:none"><div id="dp-about-content"   style="padding:16px"></div></div>
+        <div id="dp-tab-dates"    class="dp-tab-panel" style="display:none">
+            <div id="dp-dates-content" style="padding:16px"></div>
+            <div style="padding:0 16px 16px;display:flex;gap:8px">
+                <input id="dp-gift-input" style="flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:#fff;font-size:14px" placeholder="Gift idea…" />
+                <button onclick="dpAddGift()" style="padding:10px 16px;border-radius:10px;border:none;background:var(--purple);color:#fff;font-weight:700;cursor:pointer">Add</button>
+            </div>
+        </div>
+        <div id="dp-tab-together" class="dp-tab-panel" style="display:none">
+            <div id="dp-together-content" style="padding:16px"></div>
+            <div style="padding:0 16px 16px;display:flex;gap:8px">
+                <input id="dp-bucket-input" style="flex:1;padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.08);color:#fff;font-size:14px" placeholder="Something to do together…" />
+                <button onclick="dpAddBucket()" style="padding:10px 16px;border-radius:10px;border:none;background:var(--purple);color:#fff;font-weight:700;cursor:pointer">Add</button>
+            </div>
+        </div>
     </div>
     
     <!-- Mobile Navigation Menu -->
@@ -1980,9 +2033,9 @@
             updateAPIStatus();
             await loadPeopleFieldSchema();
             await loadUserProfile();
-            await loadPeople();
+            await loadPeopleAndRender();
             updateSidebar();
-            updateLegend();
+            try { updateLegend(); } catch(e) {}
             updateNavTime();
             setInterval(updateNavTime, 30000);
         });
@@ -2003,9 +2056,263 @@
             }
         }
         
-        window.addEventListener('resize', resizeCanvas);
-        resizeCanvas();
-        animate();
+        // ── Card Grid Renderer (replaces canvas) ──────────────────
+        const _CIRC_ORDER = ['inner','friends','family','work','acquaintance','public'];
+        const _CIRC_META = {
+            inner: { label: 'Inner Circle', emoji: '💜' },
+            friends: { label: 'Friends', emoji: '🤝' },
+            family: { label: 'Family', emoji: '👨‍👩‍👧' },
+            work: { label: 'Work', emoji: '💼' },
+            acquaintance: { label: 'Acquaintances', emoji: '🌐' },
+            public: { label: 'Public', emoji: '🌍' },
+        };
+
+        function _pcardGradient(name) {
+            const colors = [
+                ['#7B61FF','#5AE0E0'],['#FF6B6B','#FFD93D'],['#6BCB77','#4D96FF'],
+                ['#FF9A3C','#FF6B9D'],['#A8EDEA','#FED6E3'],['#5AE0E0','#7B61FF'],
+            ];
+            let h = 0;
+            for (let i = 0; i < (name||'').length; i++) h = (h * 31 + (name||'').charCodeAt(i)) & 0xFFFFFF;
+            const pair = colors[Math.abs(h) % colors.length];
+            return `linear-gradient(135deg, ${pair[0]} 0%, ${pair[1]} 100%)`;
+        }
+        function _pcardInitials(name) {
+            if (!name) return '?';
+            const p = name.trim().split(/\s+/);
+            return (p[0][0] + (p.length > 1 ? p[p.length-1][0] : '')).toUpperCase();
+        }
+        function _pcardHealthLevel(score) {
+            const s = parseFloat(score) || 0.5;
+            return s >= 0.6 ? 'good' : s >= 0.35 ? 'fair' : 'low';
+        }
+        function _pcardLastSeen(ts) {
+            if (!ts) return '';
+            try {
+                const days = Math.floor((Date.now() - new Date(ts)) / 86400000);
+                if (days === 0) return 'Today';
+                if (days === 1) return 'Yesterday';
+                if (days < 7) return `${days}d ago`;
+                const w = Math.floor(days/7);
+                return w < 8 ? `${w}w ago` : `${Math.floor(days/30)}mo ago`;
+            } catch { return ''; }
+        }
+
+        function renderCardGrid() {
+            const grid = document.getElementById('people-grid');
+            if (!grid) return;
+            const allPeople = people.map(p => ({
+                ...p,
+                _cid: p.circle || _deriveCircle(p),
+            }));
+
+            let html = '';
+            for (const cid of _CIRC_ORDER) {
+                const group = allPeople.filter(p => p._cid === cid);
+                if (!group.length) continue;
+                const meta = _CIRC_META[cid] || { label: cid, emoji: '' };
+                const cards = group.map(p => {
+                    const innerClass = cid === 'inner' ? ' inner' : '';
+                    const hl = _pcardHealthLevel(p.health_score);
+                    const badge = (p.notification_count > 0)
+                        ? `<span class="pcard-badge">${p.notification_count}</span>` : '';
+                    const ls = _pcardLastSeen(p.last_contacted_at);
+                    return `<div class="person-card-new${innerClass}" onclick="dpOpenCard('${p.id || p.raw_id}')">
+                        <span class="pcard-health ${hl}"></span>
+                        ${badge}
+                        <div class="pcard-avatar" style="background:${_pcardGradient(p.name)}">${_pcardInitials(p.name)}</div>
+                        <div class="pcard-name">${(p.name||'').replace(/</g,'&lt;')}</div>
+                        ${p.relationshipType||p.relationship ? `<div class="pcard-rel">${(p.relationshipType||p.relationship||'').replace(/</g,'&lt;')}</div>` : ''}
+                        ${ls ? `<div class="pcard-last">${ls}</div>` : ''}
+                    </div>`;
+                }).join('');
+                html += `<div class="circle-group-section">
+                    <div class="circle-group-title">${meta.emoji} ${meta.label} <span style="opacity:0.5">${group.length}</span></div>
+                    <div class="people-card-grid">${cards}</div>
+                </div>`;
+            }
+            if (!html) html = '<div style="text-align:center;padding:80px;color:var(--text-tertiary)">No people yet. Click + to add.</div>';
+            grid.innerHTML = html;
+        }
+
+        function _deriveCircle(p) {
+            if (p.circle) return p.circle;
+            if (p.category) return p.category;
+            const rel = (p.relationshipType || p.relationship || '').toLowerCase();
+            if (/inner|partner|spouse|wife|husband/.test(rel)) return 'inner';
+            if (/family|parent|sibling|child/.test(rel)) return 'family';
+            if (/friend|buddy|mate/.test(rel)) return 'friends';
+            if (/work|colleague|client/.test(rel)) return 'work';
+            return 'acquaintance';
+        }
+
+        // ── Desktop detail panel CRM tabs ──────────────────────────
+        let _dpCurrentId = null;
+
+        function dpSwitchTab(btn, tab) {
+            document.querySelectorAll('.dp-tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.dp-tab-panel').forEach(p => p.style.display = 'none');
+            btn.classList.add('active');
+            document.getElementById(`dp-tab-${tab}`).style.display = 'block';
+            if (_dpCurrentId) dpLoadTab(tab, _dpCurrentId);
+        }
+
+        async function dpOpenCard(rawId) {
+            const id = String(rawId).replace(/^p/, '');
+            _dpCurrentId = id;
+            const person = people.find(p => String(p.id || p.raw_id).replace(/^p/,'') === id || p.id === rawId);
+            if (!person) return;
+
+            document.getElementById('detailIcon').textContent = _pcardInitials(person.name);
+            document.getElementById('detailIcon').style.background = _pcardGradient(person.name);
+            document.getElementById('detailName').textContent = person.name || '';
+            document.getElementById('detailSubtitle').textContent = [person.relationship || person.relationshipType, person.circle||person._cid].filter(Boolean).join(' · ');
+
+            // Reset to timeline tab
+            document.querySelectorAll('.dp-tab-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.dp-tab-panel').forEach(p => p.style.display = 'none');
+            const firstTab = document.querySelector('.dp-tab-btn[data-tab="timeline"]');
+            if (firstTab) firstTab.classList.add('active');
+            document.getElementById('dp-tab-timeline').style.display = 'block';
+
+            const panel = document.getElementById('detailPanel');
+            panel.classList.add('open');
+            if (person.notification_count > 0) {
+                fetch(`/api/people/${id}/mark-read`, { method: 'PUT' }).catch(() => {});
+            }
+            await dpLoadTab('timeline', id);
+        }
+
+        async function dpLoadTab(tab, id) {
+            if (tab === 'timeline') {
+                const el = document.getElementById('dp-timeline-content');
+                try {
+                    const data = await apiRequest(`/api/people/${id}/activities?limit=50`);
+                    const acts = data.activities || [];
+                    if (!acts.length) { el.innerHTML = '<p style="opacity:0.5;text-align:center;padding:30px">No activity yet.</p>'; return; }
+                    el.innerHTML = acts.map(a => {
+                        const dt = a.created_at ? new Date(a.created_at).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}) : '';
+                        return `<div style="padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.1)">
+                            <div style="font-size:14px;color:#fff">${(a.description||'').replace(/</g,'&lt;')}</div>
+                            <div style="font-size:12px;opacity:0.5;margin-top:2px">${dt}${a.source?' · '+a.source:''}</div>
+                        </div>`;
+                    }).join('');
+                } catch { el.innerHTML = '<p style="color:#FC8181">Failed to load</p>'; }
+            } else if (tab === 'about') {
+                const person = people.find(p => String(p.id||p.raw_id).replace(/^p/,'') === id || String(p.id||'') === id);
+                const el = document.getElementById('dp-about-content');
+                if (!person) return;
+                const hs = parseFloat(person.health_score||0.5);
+                el.innerHTML = `
+                    ${person.phone ? `<a href="tel:${person.phone}" style="display:inline-block;margin:0 8px 8px 0;padding:8px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);color:#fff;text-decoration:none;font-size:13px">📞 ${person.phone}</a>` : ''}
+                    ${person.email ? `<a href="mailto:${person.email}" style="display:inline-block;margin:0 8px 8px 0;padding:8px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.2);color:#fff;text-decoration:none;font-size:13px">✉️ ${person.email}</a>` : ''}
+                    <div style="margin-top:12px;font-size:12px;opacity:0.6;text-transform:uppercase;letter-spacing:0.05em">Relationship Health</div>
+                    <div style="height:6px;border-radius:3px;background:rgba(255,255,255,0.1);margin-top:6px">
+                        <div style="height:6px;border-radius:3px;width:${Math.round(hs*100)}%;background:${hs>=0.6?'#48BB78':hs>=0.35?'#ECC94B':'#FC8181'}"></div>
+                    </div>
+                    ${person.notes ? `<div style="margin-top:14px;font-size:14px;opacity:0.8">${(person.notes||'').replace(/</g,'&lt;')}</div>` : ''}
+                `;
+            } else if (tab === 'dates') {
+                const el = document.getElementById('dp-dates-content');
+                try {
+                    const [dr,gr] = await Promise.all([
+                        apiRequest(`/api/people/${id}/important-dates`),
+                        apiRequest(`/api/people/${id}/gift-ideas`),
+                    ]);
+                    let html = '';
+                    (dr.dates||[]).forEach(d => {
+                        html += `<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.08);font-size:14px;color:#fff">
+                            <span>${(d.label||'').replace(/</g,'&lt;')}</span><span style="opacity:0.5">${[d.month,d.day].filter(Boolean).join('/')}</span></div>`;
+                    });
+                    (gr.gifts||[]).forEach(g => {
+                        const chip = {idea:'#7B61FF',purchased:'#48BB78',given:'#5AE0E0'}[g.status]||'#7B61FF';
+                        html += `<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.08);font-size:14px;color:#fff;align-items:center">
+                            <span>${(g.description||'').replace(/</g,'&lt;')}</span>
+                            <span style="background:${chip}33;color:${chip};padding:2px 8px;border-radius:999px;font-size:12px;font-weight:700">${g.status||'idea'}</span></div>`;
+                    });
+                    if (!html) html = '<p style="opacity:0.4;text-align:center;padding:30px">Nothing yet.</p>';
+                    el.innerHTML = html;
+                } catch { el.innerHTML = '<p style="color:#FC8181">Failed to load</p>'; }
+            } else if (tab === 'together') {
+                const el = document.getElementById('dp-together-content');
+                try {
+                    const data = await apiRequest(`/api/people/${id}/bucket-list`);
+                    const items = data.items || [];
+                    el.innerHTML = items.length ? items.map(it =>
+                        `<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.08);font-size:14px;color:#fff;align-items:center">
+                            <span style="${it.done?'text-decoration:line-through;opacity:0.4':''}">${(it.description||'').replace(/</g,'&lt;')}</span>
+                            ${!it.done?`<button onclick="dpMarkBucketDone('${it.id}')" style="background:none;border:none;color:#7B61FF;cursor:pointer;font-size:18px">✓</button>`:''}
+                        </div>`).join('')
+                        : '<p style="opacity:0.4;text-align:center;padding:30px">Nothing planned yet.</p>';
+                } catch { el.innerHTML = '<p style="color:#FC8181">Failed to load</p>'; }
+            }
+        }
+
+        async function dpLogActivity() {
+            const inp = document.getElementById('dp-log-input');
+            const desc = inp.value.trim();
+            if (!desc || !_dpCurrentId) return;
+            try {
+                await apiRequest(`/api/people/${_dpCurrentId}/activities`, {
+                    method: 'POST',
+                    body: JSON.stringify({ activity_type: 'note', description: desc, source: 'manual' }),
+                });
+                inp.value = '';
+                await dpLoadTab('timeline', _dpCurrentId);
+                await loadPeople();
+                renderCardGrid();
+            } catch(e) { console.error(e); }
+        }
+
+        async function dpAddGift() {
+            const inp = document.getElementById('dp-gift-input');
+            const desc = inp.value.trim();
+            if (!desc || !_dpCurrentId) return;
+            try {
+                await apiRequest(`/api/people/${_dpCurrentId}/gift-ideas`, {
+                    method: 'POST',
+                    body: JSON.stringify({ description: desc }),
+                });
+                inp.value = '';
+                await dpLoadTab('dates', _dpCurrentId);
+            } catch(e) { console.error(e); }
+        }
+
+        async function dpAddBucket() {
+            const inp = document.getElementById('dp-bucket-input');
+            const desc = inp.value.trim();
+            if (!desc || !_dpCurrentId) return;
+            try {
+                await apiRequest(`/api/people/${_dpCurrentId}/bucket-list`, {
+                    method: 'POST',
+                    body: JSON.stringify({ description: desc }),
+                });
+                inp.value = '';
+                await dpLoadTab('together', _dpCurrentId);
+            } catch(e) { console.error(e); }
+        }
+
+        async function dpMarkBucketDone(itemId) {
+            if (!_dpCurrentId) return;
+            try {
+                await apiRequest(`/api/people/${_dpCurrentId}/bucket-list/${itemId}/done`, { method: 'PUT' });
+                await dpLoadTab('together', _dpCurrentId);
+            } catch(e) { console.error(e); }
+        }
+
+        function editFromDesktopDetail() {
+            if (_dpCurrentId) openAddPersonModal(_dpCurrentId);
+        }
+
+        // Override the existing loadPeople to also render card grid
+        const _origLoadPeople = loadPeople;
+        async function loadPeopleAndRender() {
+            await _origLoadPeople();
+            renderCardGrid();
+        }
+
+        window.addEventListener('resize', () => {});
+
     </script>
     <script src="js/websocket-sync.js"></script>
     <script>

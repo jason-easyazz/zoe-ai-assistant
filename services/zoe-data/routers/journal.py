@@ -165,6 +165,22 @@ async def create_entry(
     await db.commit()
 
     await broadcaster.broadcast("journal", "entry_created", entry)
+
+    # Person CRM: extract person facts from journal entry in background
+    import asyncio as _aio
+    _content = (body.content or "") if hasattr(body, "content") else ""
+    if _content and user_id not in ("guest", ""):
+        try:
+            from person_extractor import process_text as _person_extract
+            _aio.ensure_future(_person_extract(
+                _content,
+                user_id=user_id,
+                source="journal",
+                session_id=None,
+            ))
+        except Exception:
+            pass
+
     return entry
 
 

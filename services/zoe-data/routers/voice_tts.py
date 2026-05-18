@@ -35,6 +35,11 @@ _VOICE_SESSION_TTL_S = 5 * 60  # Reset after 5 min silence
 # Dict: panel_id → {pending_id, transcript, session_id, expire_at}
 _PENDING_VOICE_IDENT: dict[str, dict] = {}
 
+# Introduction flow state: panel_id → {person_id, person_name, step, expires}
+# step 0 = greeted, awaiting job/interest answer
+# step 1 = collected first answer, asking follow-up
+_INTRO_STATE: dict[str, dict] = {}
+
 
 def _get_or_create_voice_session(panel_id: str) -> str:
     """Return the existing session_id for this panel, or create a new one."""
@@ -1619,6 +1624,51 @@ async def voice_transcribe(payload: dict, caller: dict = Depends(_require_voice_
         raise HTTPException(status_code=500, detail="Transcription failed") from exc
 
 
+async def _handle_introduce_intent(
+    name: str, user_id: str, panel_id: str, session_id: str, turn_key: str, db
+) -> str:
+    """Create or find a person record, navigate the touch panel to their card, return person_id."""
+    person_id: str = ""
+    try:
+        # Try to find existing person
+        cursor = await db.execute(
+            "SELECT id FROM people WHERE user_id=? AND deleted=0 AND lower(name) LIKE lower(?) LIMIT 1",
+            (user_id, f"%{name}%"),
+        )
+        row = await cursor.fetchone()
+        if row:
+            person_id = row[0]
+        else:
+            # Create a new contact
+            import uuid as _uuid
+            person_id = str(_uuid.uuid4())
+            await db.execute(
+                "INSERT INTO people (id, user_id, name, relationship, circle, visibility) VALUES (?,?,?,?,?,?)",
+                (person_id, user_id, name, "acquaintance", "acquaintance", "family"),
+            )
+            await db.commit()
+    except Exception as exc:
+        logger.warning("_handle_introduce_intent: DB error: %s", exc)
+        import uuid as _uuid2
+        person_id = str(_uuid2.uuid4())
+
+    # Navigate touch panel to their people card
+    try:
+        from push import broadcaster as _bc_intro
+        await _bc_intro.broadcast("all", "ui_action", {
+            "action": {
+                "action": "panel_navigate",
+                "url": f"/touch/people.html?person={person_id}&intro=1",
+            },
+            "panel_id": panel_id,
+            "turn_key": turn_key,
+        })
+    except Exception:
+        pass
+
+    return person_id
+
+
 async def _schedule_voice_chat_save(
     session_id: str, user_text: str, reply: str, user_id: str
 ) -> None:
@@ -2067,6 +2117,38 @@ async def voice_command(
                     _quick_intent = None
             except Exception:
                 pass
+        if _quick_intent and _quick_intent.name == "people_introduce":
+            try:
+                intro_name = (_quick_intent.slots or {}).get("name", "").strip()
+                if intro_name:
+                    person_id = await _handle_introduce_intent(
+                        intro_name, effective_user, panel_id, session_id, _turn_key, db
+                    )
+                    reply_text = (
+                        f"Hi {intro_name}, I'm Zoe. So nice to meet you! "
+                        f"What do you do for work, or what are you passionate about?"
+                    )
+                    _INTRO_STATE[panel_id] = {
+                        "person_id": person_id,
+                        "person_name": intro_name,
+                        "step": 0,
+                        "expires": time.monotonic() + 120,
+                    }
+                    _intro_audio = await synthesize({"text": reply_text}, caller=caller)
+                    await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
+                    asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+                    return {
+                        "ok": True,
+                        "panel_id": panel_id,
+                        "reply": reply_text,
+                        "audio_base64": base64.b64encode(_intro_audio.body).decode("ascii"),
+                        "content_type": _intro_audio.media_type,
+                        "intent": "people_introduce",
+                        "person_id": person_id,
+                    }
+            except Exception as _intro_exc:
+                logger.warning("voice/command people_introduce failed: %s", _intro_exc)
+
         if _quick_intent and _quick_intent.name == "list_add":
             # Show the shopping list action-form panel with the item pre-filled.
             # The panel's Done button POSTs to /api/ui/panel/form/confirm which
@@ -2984,6 +3066,17 @@ async def voice_command(
     if reply_text and effective_user and effective_user not in ("guest", "voice-daemon"):
         await _schedule_voice_chat_save(session_id, text, reply_text, effective_user)
         asyncio.ensure_future(_run_voice_memory_passes(text, reply_text, effective_user, session_id))
+        # Person CRM: extract person facts (dual fan-out to DB + MemPalace)
+        try:
+            from person_extractor import process_text as _person_extract
+            asyncio.ensure_future(_person_extract(
+                f"{text}\n{reply_text}",
+                user_id=effective_user,
+                source="voice",
+                session_id=session_id,
+            ))
+        except Exception:
+            pass
 
     return {
         "ok": True,

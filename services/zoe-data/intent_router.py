@@ -644,6 +644,16 @@ def detect_intent(
         if re.match(pattern, t):
             return Intent("reminder_list", {})
 
+    # --- CONTACTS INTRODUCE ---
+    _PEOPLE_INTRODUCE_RE = re.compile(
+        r'\b(?:zoe[,\s]+)?(?:meet|this is|introduce you to|say hi to|meet my|i\'d like you to meet)\s+'
+        r'([A-Z][a-z]{1,30}(?:\s[A-Z][a-z]{1,20})?)',
+        re.IGNORECASE,
+    )
+    m_intro = _PEOPLE_INTRODUCE_RE.search(t)
+    if m_intro:
+        return Intent("people_introduce", {"name": m_intro.group(1).strip()})
+
     # --- CONTACTS CREATE ---
     m = re.match(
         r"^(?:add|create|save) (?:a )?(?:contact|person|entry) (?:for |named )?(.+)$", t

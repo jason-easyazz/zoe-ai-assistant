@@ -68,6 +68,7 @@ class ListItemUpdate(BaseModel):
 class PersonCreate(BaseModel):
     name: str
     relationship: Optional[str] = None
+    circle: str = "acquaintance"
     email: Optional[str] = None
     phone: Optional[str] = None
     birthday: Optional[str] = None
@@ -80,6 +81,7 @@ class PersonCreate(BaseModel):
 class PersonUpdate(BaseModel):
     name: Optional[str] = None
     relationship: Optional[str] = None
+    circle: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     birthday: Optional[str] = None

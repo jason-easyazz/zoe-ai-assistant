@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Connecting to Zoe…</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f1117;
+      color: #e8eaf0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+      text-align: center;
+    }
+    .logo-circle {
+      width: 72px; height: 72px;
+      background: linear-gradient(135deg, #6c63ff, #4fa8ff);
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 36px;
+      margin-bottom: 20px;
+    }
+    h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+    .sub { font-size: 16px; color: #8b8fa8; margin-bottom: 32px; }
+    #qr-container { margin-bottom: 24px; }
+    #qr-container canvas, #qr-container img { border-radius: 12px; border: 4px solid #fff; }
+    .code-badge {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 8px;
+      padding: 10px 20px;
+      font-family: monospace;
+      font-size: 32px;
+      letter-spacing: 8px;
+      font-weight: 700;
+      color: #a5b4fc;
+      margin-bottom: 16px;
+      display: inline-block;
+    }
+    .hint { font-size: 14px; color: #8b8fa8; margin-bottom: 32px; }
+    .timer { font-size: 13px; color: #6b7280; margin-bottom: 24px; }
+    .spinner {
+      width: 48px; height: 48px;
+      border: 4px solid #2a2d3a;
+      border-top-color: #6c63ff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 20px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* No-Zoe-found section */
+    #no-zoe-section {
+      display: none;
+      max-width: 480px;
+      width: 100%;
+    }
+    .no-zoe-card {
+      background: #1a1d27;
+      border: 1px solid #2a2d3a;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+      text-align: left;
+    }
+    .no-zoe-card h3 { font-size: 15px; font-weight: 600; margin-bottom: 8px; color: #a5b4fc; }
+    .no-zoe-card p  { font-size: 13px; color: #8b8fa8; line-height: 1.5; }
+    .url-row { display: flex; gap: 8px; margin-top: 12px; }
+    .url-row input {
+      flex: 1;
+      background: #0d1118;
+      border: 1px solid #2a2d3a;
+      border-radius: 6px;
+      color: #e8eaf0;
+      font-size: 14px;
+      padding: 8px 10px;
+      outline: none;
+    }
+    .url-row input:focus { border-color: #6c63ff; }
+    .btn-sm {
+      background: #6c63ff;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 14px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .btn-sm:hover { opacity: 0.9; }
+    .or-divider { text-align: center; color: #4b5563; font-size: 12px; margin: 6px 0; }
+    .inline-code {
+      font-family: monospace;
+      font-size: 18px;
+      letter-spacing: 4px;
+      font-weight: 700;
+      color: #a5b4fc;
+    }
+  </style>
+</head>
+<body>
+
+<div class="logo-circle">Z</div>
+
+<!-- Discovering Zoe... -->
+<div id="discovering-view">
+  <h1>Setting up your screen</h1>
+  <div class="sub">Looking for Zoe on your network…</div>
+  <div class="spinner"></div>
+  <div id="discover-status" style="font-size:13px;color:#8b8fa8;">Scanning…</div>
+</div>
+
+<!-- QR provisioning -->
+<div id="qr-view" style="display:none">
+  <h1>Scan to connect</h1>
+  <div class="sub">Open the QR code on your phone to name and activate this screen.</div>
+  <div id="qr-container"></div>
+  <div class="code-badge" id="code-text"></div>
+  <div class="hint">Or on your phone, go to your Zoe and say:<br>
+    <strong>"connect panel <span id="code-hint"></span>"</strong>
+  </div>
+  <div class="timer" id="countdown"></div>
+</div>
+
+<!-- No Zoe found -->
+<div id="no-zoe-section">
+  <h1 style="margin-bottom:8px;">Zoe not found on network</h1>
+  <div class="sub">No Zoe unit was detected. Here are your options:</div>
+
+  <div class="no-zoe-card">
+    <h3>Option 1 — Enter your Zoe's address</h3>
+    <p>If your Zoe is on the local network, enter its IP or hostname:</p>
+    <div class="url-row">
+      <input type="text" id="manual-url" placeholder="https://192.168.1.218 or http://zoe.local" />
+      <button class="btn-sm" onclick="useManualUrl()">Use this</button>
+    </div>
+    <div id="manual-url-msg" style="font-size:12px;color:#ef4444;margin-top:6px;"></div>
+  </div>
+
+  <div class="no-zoe-card">
+    <h3>Option 2 — Connect via the411.life</h3>
+    <p>If you have an account on the411.life, scan this QR to provision over the cloud:</p>
+    <div id="cloud-qr-container" style="text-align:center;margin-top:12px;"></div>
+    <div style="margin-top:8px;font-size:13px;color:#8b8fa8;">
+      Or visit <a href="https://the411.life" style="color:#a5b4fc;">the411.life</a> and enter code: <span class="inline-code" id="cloud-code-text"></span>
+    </div>
+  </div>
+
+  <div class="no-zoe-card">
+    <h3>Option 3 — Enter code on your Zoe</h3>
+    <p>Go to your Zoe unit and say:</p>
+    <p style="margin-top:8px;font-size:16px;">
+      <strong>"connect panel <span class="inline-code" id="zoe-voice-code"></span>"</strong>
+    </p>
+    <p style="margin-top:8px;">Or go to Zoe → Settings → Touch Panels and enter the code.</p>
+  </div>
+</div>
+
+<!-- Loading spinner fallback -->
+<div id="waiting-view" style="display:none">
+  <div class="spinner"></div>
+  <p style="color:#8b8fa8;">Waiting for confirmation…</p>
+</div>
+
+<script src="/static/qrcode.min.js"></script>
+<script>
+let currentCode = null;
+let expiresAt   = null;
+let pollTimer   = null;
+let countdownTimer = null;
+let serverUrl   = null;
+let deviceId    = null;
+
+function show(id) {
+  ['discovering-view','qr-view','no-zoe-section','waiting-view'].forEach(v => {
+    const el = document.getElementById(v);
+    if (el) el.style.display = (v === id) ? '' : 'none';
+  });
+}
+
+async function init() {
+  show('discovering-view');
+  // Get config
+  try {
+    const cfg = await fetchLocal('/config');
+    serverUrl = cfg.server_url || '';
+    deviceId  = cfg.device_id || '';
+  } catch(e) {
+    deviceId = 'unknown';
+  }
+
+  // Discover Zoe if no server_url
+  if (!serverUrl) {
+    document.getElementById('discover-status').textContent = 'Scanning network for Zoe…';
+    try {
+      const disc = await fetchLocal('/discover');
+      if (disc.found) serverUrl = disc.server_url;
+    } catch(e) {}
+  }
+
+  if (serverUrl) {
+    await requestCode();
+  } else {
+    // No Zoe found — show three-path fallback
+    await showNoZoe();
+  }
+}
+
+async function requestCode() {
+  try {
+    const data = await fetchLocal('/proxy/provision/request', 'POST', { device_id: deviceId });
+    if (data.error) throw new Error(data.error);
+    currentCode = data.code;
+    expiresAt   = Date.now() + (data.expires_in || 300) * 1000;
+    renderQR(data.pair_url, data.code);
+    startPolling(data.code);
+    startCountdown();
+  } catch(e) {
+    // Could not reach Zoe server — show no-Zoe fallback
+    await showNoZoe();
+  }
+}
+
+function renderQR(pairUrl, code) {
+  show('qr-view');
+  const container = document.getElementById('qr-container');
+  container.innerHTML = '';
+  new QRCode(container, {
+    text: pairUrl,
+    width: 240,
+    height: 240,
+    colorDark: '#000000',
+    colorLight: '#ffffff',
+    correctLevel: QRCode.CorrectLevel.M,
+  });
+  document.getElementById('code-text').textContent = code;
+  document.getElementById('code-hint').textContent = code;
+}
+
+async function showNoZoe() {
+  // Generate a local device_id based code to show in cloud + voice paths
+  const fallbackCode = deviceId ? deviceId.replace(/:/g,'').toUpperCase().slice(-6) : 'XXXXXX';
+  document.getElementById('cloud-code-text').textContent = fallbackCode;
+  document.getElementById('zoe-voice-code').textContent  = fallbackCode;
+
+  // Try to render a cloud QR for the411.life
+  const cloudUrl = `https://the411.life/pair?device=${encodeURIComponent(deviceId || fallbackCode)}`;
+  try {
+    const cloudContainer = document.getElementById('cloud-qr-container');
+    cloudContainer.innerHTML = '';
+    new QRCode(cloudContainer, {
+      text: cloudUrl, width: 180, height: 180,
+      colorDark: '#000', colorLight: '#fff',
+      correctLevel: QRCode.CorrectLevel.M,
+    });
+  } catch(e) {}
+
+  show('no-zoe-section');
+}
+
+async function useManualUrl() {
+  const input = document.getElementById('manual-url').value.trim();
+  const msgEl = document.getElementById('manual-url-msg');
+  if (!input) { msgEl.textContent = 'Please enter a URL'; return; }
+  msgEl.textContent = 'Testing connection…';
+  try {
+    const r = await fetch(`/proxy/check?url=${encodeURIComponent(input)}`).then(r => r.json()).catch(() => null);
+    // Even if probe fails, save URL and try provisioning — user knows their network
+    serverUrl = input;
+    await fetchLocal('/save-config', 'POST', { server_url: input });
+    msgEl.textContent = '✓ Saved. Requesting pairing code…';
+    document.getElementById('no-zoe-section').style.display = 'none';
+    show('discovering-view');
+    document.getElementById('discover-status').textContent = 'Connecting to ' + input + '…';
+    setTimeout(requestCode, 500);
+  } catch(e) {
+    msgEl.textContent = '✗ ' + e.message;
+  }
+}
+
+function startPolling(code) {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const data = await fetchLocal(`/proxy/provision/${encodeURIComponent(code)}`);
+      if (data.status === 'confirmed') {
+        clearInterval(pollTimer);
+        clearInterval(countdownTimer);
+        show('waiting-view');
+        // Save token and redirect
+        await fetchLocal('/save-token', 'POST', { token: data.token, panel_id: data.panel_id });
+        const cfg = await fetchLocal('/config');
+        const redirectUrl = (cfg.server_url || serverUrl) + '/touch/dashboard.html?panel_id=' + encodeURIComponent(data.panel_id || 'zoe-panel') + '&kiosk=1';
+        window.location.replace(redirectUrl);
+      } else if (data.status === 'expired') {
+        clearInterval(pollTimer);
+        clearInterval(countdownTimer);
+        // Auto-request new code
+        setTimeout(requestCode, 1000);
+      }
+    } catch(e) { /* ignore transient poll errors */ }
+  }, 3000);
+}
+
+function startCountdown() {
+  if (countdownTimer) clearInterval(countdownTimer);
+  const el = document.getElementById('countdown');
+  countdownTimer = setInterval(() => {
+    const remaining = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
+    el.textContent = remaining > 0 ? `Code expires in ${remaining}s` : 'Refreshing…';
+  }, 1000);
+}
+
+async function fetchLocal(path, method = 'GET', body = null) {
+  const opts = { method, headers: {} };
+  if (body) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const r = await fetch(path, opts);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+
+init();
+</script>
+</body>
+</html>

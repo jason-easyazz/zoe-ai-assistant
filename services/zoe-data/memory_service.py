@@ -935,6 +935,40 @@ class MemoryService:
         col.upsert(ids=[audit_id], documents=[summary], metadatas=[metadata])
 
 
+    async def archive_by_entity(self, entity_id: str, user_id: str) -> int:
+        """Archive all MemPalace facts for a given entity (e.g. when a person is deleted).
+
+        Queries Chroma for documents whose metadata has entity_id=<entity_id> and
+        user_id=<user_id>, then archives each one. Returns count archived.
+        """
+        col = self._col()
+        try:
+            results = col.get(
+                where={"$and": [
+                    {"user_id": {"$eq": user_id}},
+                    {"entity_id": {"$eq": entity_id}},
+                ]},
+                include=["metadatas"],
+            )
+            ids = results.get("ids", []) if results else []
+            archived = 0
+            for mem_id in ids:
+                try:
+                    await self.review(
+                        mem_id,
+                        decision="archive",
+                        actor="system",
+                        note="entity_deleted",
+                    )
+                    archived += 1
+                except Exception as exc:
+                    logger.debug("archive_by_entity: skip %s: %s", mem_id, exc)
+            return archived
+        except Exception as exc:
+            logger.warning("archive_by_entity failed for entity %s: %s", entity_id, exc)
+            return 0
+
+
 _service_singleton: Optional[MemoryService] = None
 
 
